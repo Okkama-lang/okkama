@@ -359,6 +359,9 @@ impl Runtime {
             if !self.is_driver(frame) && self.sole_awaiter(awaited, frame) {
                 set(task, FLAGS, get(task, FLAGS) | CANCEL_DELIVERED);
                 set(frame, FLAGS, get(frame, FLAGS) | DELIVER_NOW);
+                // Champ's await receipt (draft 3 §4.1): this waiter stays to see its own child settle.
+                #[cfg(feature = "champ-abi")]
+                set(frame, FLAGS, get(frame, FLAGS) | crate::champ::CHILD_CANCEL);
                 self.cancel_running(awaited);
                 return;
             }
@@ -542,7 +545,9 @@ impl Runtime {
 pub(crate) mod champ_flags {
     pub(crate) const SPAWNED: u64 = super::SPAWNED;
     pub(crate) const OBSERVED: u64 = super::OBSERVED;
+    #[cfg(test)]
     pub(crate) const CANCEL_REQUESTED: u64 = super::CANCEL_REQUESTED;
+    #[cfg(test)]
     pub(crate) const CANCEL_DELIVERED: u64 = super::CANCEL_DELIVERED;
     pub(crate) const SHIELDED: u64 = super::SHIELDED;
     /// Draft 3's WAITED, with Tomato's meaning (#663).

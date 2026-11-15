@@ -120,6 +120,21 @@ pub fn is_native_failure(module: &Module, decl: DeclId) -> bool {
             && field.default.is_none() && !field.once && module.types.get(field.ty) == Ok(&crate::Type::Str))
 }
 
+/// The system `Cancelled` (#724): the payload a cancellation binds in `catch e is Cancelled`, an object without
+/// fields that source never constructs.
+pub const CANCELLED: &str = "Cancelled";
+/// The text of [`CANCELLED`]'s `text()`, as Tomato gives it.
+pub const CANCELLED_TEXT: &str = "Operation was cancelled";
+
+/// Whether `decl` is the system Cancelled: exactly its name, no fields, type parameters, roles, destroy or builtin
+/// capability. A declaration of another shape is an ordinary object.
+pub fn is_cancelled(module: &Module, decl: DeclId) -> bool {
+    let Ok(declaration) = module.declarations.get(decl) else { return false };
+    matches!(&declaration.kind, DeclarationKind::Object { fields, witnesses, destroy: None, builtin: false }
+        if fields.is_empty() && witnesses.is_empty())
+        && declaration.name == CANCELLED && declaration.type_params.is_empty()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComputedField {
     pub name: String,

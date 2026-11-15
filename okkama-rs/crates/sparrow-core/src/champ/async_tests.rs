@@ -1086,6 +1086,28 @@ impl Activation {
                 self.write(operands[0], &[0]);
                 vec![vec![], vec![slot.failure], vec![slot.pending.record]]
             }
+            O::Catch => {
+                let failure = self.word(operands[0]);
+                let descriptor = arguments.iter().find_map(|argument| match argument {
+                    A::Object(id) => Some(u64::from(*id)),
+                    _ => None,
+                }).unwrap_or(u64::MAX);
+                let payload = self.call(|ctx| machine::rt_machine_catch(ctx, failure, descriptor));
+                return Err(if payload != 0 {
+                    self.outcome(flow, Tag::Some, &[vec![payload]])
+                } else {
+                    self.outcome(flow, Tag::None, &[])
+                });
+            }
+            O::CleanupDeliverCancel => {
+                let mut input = CleanupSlot { record: self.word(operands[0]) };
+                let mut slot = CleanupSlot::default();
+                let frame = self.frame;
+                let delivered = self.call(|ctx| rt_cleanup_deliver_cancel(ctx, frame, &mut input, &mut slot));
+                assert_eq!(delivered, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
+                self.write(operands[0], &[0]);
+                vec![vec![slot.record]]
+            }
             O::ExitDispatch => return Err(self.exit_dispatch(arguments, &operands, flow)),
             O::ExitCommit => self.exit_commit(arguments, &operands, flow),
             O::FuturePublish => self.publish(arguments, &operands),
@@ -1954,7 +1976,8 @@ fn champ_v8_cancel_request_follows_tomato_and_await_unwind_and_deliver_cancel_fi
         assert_eq!((task, receipt, scope.record), (0, 0, 0));
         assert_eq!((post.state.record, post.failure), (record, failure));
         assert_eq!((get(other, tasks::WAITER), get(parked, tasks::AWAITING)), (0, 0));
-        // deliver_cancel: a request of the body's task becomes the primary of a close without one.
+        // deliver_cancel delivers nothing at the final exit (ruling #601 K2, Tomato parity): a pending request
+        // neither becomes the close's primary nor is marked delivered.
         let tail = tail(&runtime, parked);
         let emergency = get(parked, tail + EMERGENCY);
         // Decision L2 (4c152ad02): the delivery follows the settle phase and the first plan.
@@ -1977,9 +2000,9 @@ fn champ_v8_cancel_request_follows_tomato_and_await_unwind_and_deliver_cancel_fi
         assert_eq!(deliver(&mut ctx, &mut busy, failure), failure, "a primary keeps the request for later");
         assert_eq!(get(parked, tasks::FLAGS) & tasks::champ_flags::CANCEL_DELIVERED, 0);
         let mut last = owner(&mut ctx);
-        assert_eq!(deliver(&mut ctx, &mut last, 0), emergency);
-        assert_ne!(get(parked, tasks::FLAGS) & tasks::champ_flags::CANCEL_DELIVERED, 0);
-        assert_eq!(get(parked, tail + EMERGENCY), 0);
+        assert_eq!(deliver(&mut ctx, &mut last, 0), 0, "the request stays pending");
+        assert_eq!(get(parked, tasks::FLAGS) & tasks::champ_flags::CANCEL_DELIVERED, 0);
+        assert_eq!(get(parked, tail + EMERGENCY), emergency);
         traces.record(configuration, &runtime);
     }
     traces.agree();
@@ -2320,8 +2343,10 @@ fn execute(ctx: &mut Ctx, cleanup: &mut CleanupSlot) -> Vec<u64> {
     }
 }
 
+/// The D18 step of a final exit keeps its place and its once-only rule (decision L2), and it delivers nothing: a
+/// pending request leaves the result to commit (ruling #601 K2, Tomato parity; the step goes with #727).
 #[test]
-fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() {
+fn champ_v10_d18_step_runs_once_between_the_plans_and_leaves_the_result() {
     for (stress, requested) in [(false, true), (true, true), (false, false), (true, false)] {
         let mut runtime = load(stress, Engine::Jit);
         let mut ctx = context(&mut runtime);
@@ -2334,7 +2359,6 @@ fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() 
         if requested {
             set(body, tasks::FLAGS, get(body, tasks::FLAGS) | tasks::champ_flags::CANCEL_REQUESTED);
         }
-        let emergency = get(body, tail(&runtime, body) + EMERGENCY);
         let (r, mut packet) = resource(&mut ctx, scope_owner);
         let serial = runtime.heap.champ_identity(r).unwrap().serial;
         let returned = ExitInputs { kind: 0, boundary: 0, value: 0, value_repr: 0, packet: &mut packet, selection: 0 };
@@ -2369,7 +2393,7 @@ fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() 
         assert_eq!(rt_cleanup_plan(&mut ctx, &mut cleanup, direct, &mut cleanup), OUTCOME_STOP);
         assert!(runtime.fatal.take().unwrap().contains("its own executor plan"));
         ctx.status = OK;
-        // The aborted reserve's plan destroys R when the cancellation was delivered; otherwise R stays pending.
+        // The second plan finds no aborted reserve: R stays pending, requested or not.
         step(&runtime, rt_cleanup_plan(&mut ctx, &mut cleanup, second, &mut cleanup));
         let destroyed = execute(&mut ctx, &mut cleanup);
         assert_eq!(rt_cleanup_plan(&mut ctx, &mut cleanup, second, &mut cleanup), OUTCOME_STOP, "never a third");
@@ -2377,35 +2401,30 @@ fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() 
         ctx.status = OK;
         let mut finished = FinishPost::default();
         step(&runtime, rt_cleanup_finish(&mut ctx, &mut cleanup, &mut finished));
-        let delivered = get(body, tasks::FLAGS) & tasks::champ_flags::CANCEL_DELIVERED != 0;
-        if requested {
-            assert_eq!((destroyed, finished.failure, finished.pending.record), (vec![serial], emergency, 0));
-            assert_eq!(kind(&runtime, emergency), "Cancelled");
-            assert!(delivered);
-        } else {
-            assert_eq!((destroyed, finished.failure), (vec![], 0));
-            assert!(!delivered);
-            // The reserve commits to the caller and closes there.
-            let mut kept = finished.pending;
-            let destination = ExitDestination {
-                holder: runtime.champ_new_holder().unwrap(), owner: runtime.champ_new_owner().unwrap(),
-            };
-            let mut committed = CommitPost::default();
-            step(&runtime, rt_exit_commit(&mut ctx, &mut kept, &destination, &mut committed));
-            let inputs = CloseInputs {
-                scope: std::ptr::null_mut(), packet: &mut committed.packet, pending: std::ptr::null_mut(), failure: 0,
-                settlements: 0,
-            };
-            let mut caller = CleanupSlot::default();
-            step(&runtime, rt_cleanup_begin(&mut ctx, &inputs, &mut caller));
-            step(&runtime, rt_cleanup_settle_empty(&mut ctx, &mut caller, &mut caller));
-            let plain = runtime.champ_register_cleanup_plan(CleanupPlan { reserve: false, ..plan });
-            step(&runtime, rt_cleanup_plan(&mut ctx, &mut caller, plain, &mut caller));
-            assert_eq!(execute(&mut ctx, &mut caller), [serial]);
-            let mut closed = FinishPost::default();
-            step(&runtime, rt_cleanup_finish(&mut ctx, &mut caller, &mut closed));
-            assert_eq!(closed.failure, 0);
-        }
+        let flags = get(body, tasks::FLAGS);
+        assert_eq!(flags & tasks::champ_flags::CANCEL_DELIVERED, 0);
+        assert_eq!(flags & tasks::champ_flags::CANCEL_REQUESTED != 0, requested, "a request stays pending");
+        assert_eq!((destroyed, finished.failure), (vec![], 0));
+        // The reserve commits to the caller and closes there.
+        let mut kept = finished.pending;
+        let destination = ExitDestination {
+            holder: runtime.champ_new_holder().unwrap(), owner: runtime.champ_new_owner().unwrap(),
+        };
+        let mut committed = CommitPost::default();
+        step(&runtime, rt_exit_commit(&mut ctx, &mut kept, &destination, &mut committed));
+        let inputs = CloseInputs {
+            scope: std::ptr::null_mut(), packet: &mut committed.packet, pending: std::ptr::null_mut(), failure: 0,
+            settlements: 0,
+        };
+        let mut caller = CleanupSlot::default();
+        step(&runtime, rt_cleanup_begin(&mut ctx, &inputs, &mut caller));
+        step(&runtime, rt_cleanup_settle_empty(&mut ctx, &mut caller, &mut caller));
+        let plain = runtime.champ_register_cleanup_plan(CleanupPlan { reserve: false, ..plan });
+        step(&runtime, rt_cleanup_plan(&mut ctx, &mut caller, plain, &mut caller));
+        assert_eq!(execute(&mut ctx, &mut caller), [serial]);
+        let mut closed = FinishPost::default();
+        step(&runtime, rt_cleanup_finish(&mut ctx, &mut caller, &mut closed));
+        assert_eq!(closed.failure, 0);
         assert_eq!(runtime.champ.destroy_events, [serial]);
         assert_eq!(runtime.heap.champ_identity(r).unwrap().life, Life::Dead);
     }
@@ -2413,3 +2432,6 @@ fn champ_v10_d18_delivers_between_the_first_plan_and_the_aborted_reserve_plan() 
 
 #[path = "async_resources_tests.rs"]
 mod resources;
+
+#[path = "async_cancel_tests.rs"]
+mod cancel;

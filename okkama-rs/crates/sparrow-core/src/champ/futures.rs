@@ -32,6 +32,10 @@ const TAIL_WORDS: usize = 4;
 /// a suspended await (#663); that bit is draft 3's WAITED and keeps Tomato's meaning.
 pub const CHAMP: u64 = 512;
 pub const DETACHED: u64 = 1024;
+/// A delivered cancellation reached this waiter as the sole awaiter of its spawned child (#147): the child was
+/// cancelled and the waiter stays registered until it settles. Set with DELIVER_NOW by Tomato's `deliver_cancel`
+/// and consumed with it by the await, whose receipt it decides: ChildCancelled with it, Withdrawn without.
+pub const CHILD_CANCEL: u64 = 2048;
 /// `CacheRecord::flags`: the cache duty has been settled.
 pub const RELEASED: u64 = 1;
 /// `CacheRecord::flags`: the cache duty is a receipt in an exit reserve (draft 3 §12): custody stays with the
@@ -545,17 +549,6 @@ impl Runtime {
         Ok(())
     }
 
-    /// The Cancelled carrier preallocated with `frame`, or a new one.
-    pub(super) fn champ_take_emergency(&mut self, frame: Word) -> Result<Word, Error> {
-        let tail = self.champ_tail(frame)?;
-        let failure = get(frame, tail + EMERGENCY);
-        if failure == 0 {
-            return Ok(self.failure_new(FailureKind::Cancelled));
-        }
-        set(frame, tail + EMERGENCY, 0);
-        Ok(failure)
-    }
-
     #[cfg(test)]
     pub(crate) fn champ_event(&mut self, step: FutureStep, frame: Word) {
         let function = self.function_of(frame);
@@ -665,20 +658,7 @@ fn await_entry(ctx: *mut Ctx, frame_pointer: u64, this: Word, future: Word) -> A
     runtime.count(|_| "await".into());
     // A collection at every entry, the first and each re-entry: operands are rooted by the caller.
     runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
-    let current = get(this, tasks::FLAGS);
-    // A cancellation delivered to this waiting frame: Tomato's structured await keeps a sole awaiter of a
-    // spawned child registered until the child settles; any other waiter was withdrawn.
-    let structured = get(future, tasks::FLAGS) & flags::SPAWNED != 0
-        && matches!(get(future, tasks::STATE), tasks::DONE | tasks::FAILURE_STATE);
-    let delivered = if structured { RECEIPT_CHILD_CANCELLED } else { RECEIPT_WITHDRAWN };
-    let cancel = if current & flags::AWAIT_SUSPENDED != 0 {
-        set(this, tasks::FLAGS, current & !(flags::AWAIT_SUSPENDED | tasks::DELIVER_NOW));
-        (current & tasks::DELIVER_NOW != 0).then(|| (runtime.cancelled_failure(), delivered))
-    } else {
-        let receipt = if current & tasks::DELIVER_NOW != 0 { delivered } else { RECEIPT_NOT_STARTED };
-        runtime.champ_deliverable_cancel().map(|failure| (failure, receipt))
-    };
-    if let Some((failure, receipt)) = cancel {
+    if let Some((failure, receipt)) = take_cancel(runtime, this) {
         return Awaited::Cancelled(failure, receipt);
     }
     set(future, tasks::FLAGS, get(future, tasks::FLAGS) | flags::OBSERVED);
@@ -689,6 +669,25 @@ fn await_entry(ctx: *mut Ctx, frame_pointer: u64, this: Word, future: Word) -> A
         }
     }
     Awaited::Ready
+}
+
+/// The cancellation an await of the running frame `this` raises, with its receipt, exactly as Tomato's `rt_await`
+/// (#546, #663): re-entered after a settle wake, only a delivered cancellation; otherwise a deliverable one of
+/// the frames on this stack or of the task above it (#670).
+fn take_cancel(runtime: &mut Runtime, this: Word) -> Option<(Word, u64)> {
+    let current = get(this, tasks::FLAGS);
+    // A cancellation delivered to this waiting frame: Tomato's structured await kept the sole awaiter of a spawned
+    // child registered until the child settled (CHILD_CANCEL); any other waiter was withdrawn, even when the child
+    // it left has settled since.
+    let delivered = if current & CHILD_CANCEL != 0 { RECEIPT_CHILD_CANCELLED } else { RECEIPT_WITHDRAWN };
+    if current & flags::AWAIT_SUSPENDED != 0 {
+        set(this, tasks::FLAGS, current & !(flags::AWAIT_SUSPENDED | tasks::DELIVER_NOW | CHILD_CANCEL));
+        (current & tasks::DELIVER_NOW != 0).then(|| (runtime.cancelled_failure(), delivered))
+    } else {
+        let receipt = if current & tasks::DELIVER_NOW != 0 { delivered } else { RECEIPT_NOT_STARTED };
+        set(this, tasks::FLAGS, current & !CHILD_CANCEL);
+        runtime.champ_deliverable_cancel().map(|failure| (failure, receipt))
+    }
 }
 
 /// A running Future: register `this` as its waiter and suspend (draft 3 §4.1).
@@ -814,6 +813,11 @@ pub extern "C" fn rt_await_unwind(ctx: *mut Ctx, this: Word, state: *mut ScopeSl
     })();
     if let Err(failure) = checked {
         return stop(ctx, failure);
+    }
+    #[cfg(test)]
+    {
+        let function = runtime.function_of(this);
+        runtime.champ.receipts.push((function, unsafe { *receipt }));
     }
     if get(this, tasks::AWAITING) == child {
         runtime.remove_waiter(child, this);
@@ -948,16 +952,20 @@ pub extern "C" fn rt_machine_future_destination(ctx: *mut Ctx, frame: Word, post
     }
 }
 
-/// `invoke.defer` of an async defer entry in an async body `this` (draft 3 §11, ABI C-6), class S: the entry runs
-/// as a shielded child Future (`SHIELDED | OBSERVED`, its own task) on this stack, and `this` listens to it
-/// (§5: `listen` only, so a cancellation of `this` stays requested). The child is the frame's STEP until it
-/// settles; re-entered with the same operands, the step continues with it. A success is Continue (ordinal 0) and
-/// a failure is Unwind (ordinal 1) with the child's carrier, captured by the caller (G1 §5.3). Replace does not
-/// exist in 0.6.0: the registration has no labels.
+/// `invoke.defer` of an async defer entry in an async body `this` (draft 3 §11, ABI C-6), class S. A `defer await`
+/// is not shielded (ruling #601 K2 in OIR-2 async ABI, Tomato parity): it is an await of a child Future started on
+/// this stack as a frame of the caller's task, which `this` awaits, so a cancellation of the task reaches the
+/// child's own wait, and the step raises a cancellation exactly where Tomato's await of the deferred call raises
+/// it: before the child starts, or when the child has settled and `this` resumes with the request not yet
+/// delivered. The child is the frame's STEP until it settles; re-entered with the same operands, the step
+/// continues with it. A success is Continue (ordinal 0) and a failure or a cancellation is Unwind (ordinal 1) with
+/// its carrier, captured by the caller (G1 §5.3). Replace does not exist in 0.6.0: the registration has no labels.
 ///
 /// The first entry moves the defer's input packet into the child's continuation 0 and leaves the operand an empty
 /// packet, so PENDING consumes no operand (class S, §1.1); the completion consumes it. `entry` is the function
-/// index of the defer body; `args` are its continuation-0 values (arguments, then captures).
+/// index of the defer body; `args` are its continuation-0 values (arguments, then captures). A cancellation raised
+/// before the start needs an empty input packet: a non-empty one has nobody to close it then (#728), so the child
+/// starts and raises at its own first await.
 pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, args: *const Word, argc: u64,
     io: *mut super::CallOwn, registration: *const super::RegistrationMap, post: *mut super::DeferPost) -> Outcome
 {
@@ -972,9 +980,22 @@ pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, a
         Err(failure) => return stop(ctx, failure),
     };
     runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
-    if get(this, tail + STEP) == 0 {
+    let started = get(this, tail + STEP) != 0;
+    let input = unsafe { (*io).input.record };
+    let empty = match packet(runtime, input) {
+        Ok(offered) => offered.is_empty(),
+        Err(failure) => return stop(ctx, failure),
+    };
+    // The await of the deferred call checks for a cancellation first (`rt_await`); a child that still runs has
+    // not woken `this`, so a re-entry finds one only after the child settled.
+    let cancel = if started || empty { take_cancel(runtime, this).map(|(failure, _)| failure) } else { None };
+    if let (Some(failure), false) = (cancel, started) {
+        consume(runtime, input);
+        unsafe { (*io).input.record = 0 };
+        return defer_unwind(ctx, post, failure);
+    }
+    if !started {
         let args = if argc == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(args, argc as usize) } };
-        let input = unsafe { (*io).input.record };
         let prepared = (|| {
             if unsafe { (*registration).replacements } != 0 {
                 return Err(error("an async defer has no replacement labels (ABI C-6)"));
@@ -1007,9 +1028,9 @@ pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, a
         replace(runtime, accepted, Data::Packet(moved));
         replace(runtime, input, Data::Packet(Packet::default()));
         runtime.champ_write_start(child, args, accepted);
-        set(child, tasks::FLAGS, get(child, tasks::FLAGS) | flags::SHIELDED | flags::OBSERVED);
+        set(child, tasks::FLAGS, get(child, tasks::FLAGS) | flags::OBSERVED);
         set(this, tail + STEP, child);
-        runtime.champ_future_start(ctx, 0, child);
+        runtime.champ_future_start(ctx, this, child);
         if unsafe { (*ctx).status } != OK {
             return OUTCOME_STOP;
         }
@@ -1017,10 +1038,15 @@ pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, a
     let child = get(this, tail + STEP);
     let state = get(child, tasks::STATE);
     if state == tasks::RUNNING {
-        // A re-entry while the child still runs listens once.
-        if !runtime.champ_listens(child, this) {
-            runtime.listen(child, this);
+        // A delivery reaches the child's own wait (#147); `this` is woken only when the child settles.
+        if cancel.is_some() {
+            return stop(ctx, error("a cancellation reached an async defer step while its child runs"));
         }
+        // `this` awaits the child, once, as `rt_await` registers a waiter.
+        if !runtime.champ_listens(child, this) {
+            runtime.champ_add_waiter(child, this);
+        }
+        set(this, tasks::FLAGS, get(this, tasks::FLAGS) | flags::AWAIT_SUSPENDED);
         runtime.safepoint(frame_pointer, unsafe { &*ctx }, &[]);
         return OUTCOME_PENDING;
     }
@@ -1051,11 +1077,18 @@ pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, a
     }
     set(this, tail + STEP, 0);
     unsafe { (*io).input.record = 0 };
+    if let Some(failure) = cancel {
+        return defer_unwind(ctx, post, failure);
+    }
     if state == tasks::DONE {
         unsafe { post.write(super::DeferPost::default()) };
         return NORMAL;
     }
-    let failure = get(child, tasks::FAILURE);
+    defer_unwind(ctx, post, get(child, tasks::FAILURE))
+}
+
+/// The Unwind of an async defer step with `failure`, for the caller to capture.
+fn defer_unwind(ctx: *mut Ctx, post: *mut super::DeferPost, failure: Word) -> Outcome {
     unsafe {
         (*ctx).failure = failure;
         (*ctx).status = FAILED;

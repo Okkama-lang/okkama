@@ -4,7 +4,7 @@
 
 mod champ_support;
 
-use champ_support::{case_dir, compile, run};
+use champ_support::{case_dir, compile, run, run_source};
 use okkama_compiler::SourceFile;
 use serde_json::Value;
 
@@ -59,4 +59,37 @@ full_check! {
     w1_order_across_suspension => "L08.order.across-suspension",
     w1_order_lazy_branches => "L08.order.lazy-branches",
     w1_void_await_for_effect => "L08.void.await-for-effect",
+    k2_future_cancel_unstarted => "L08.future.cancel-unstarted",
+}
+
+/// `catch e is Cancelled` compiles through OIR-2 and SPB 17 and lets every other failure pass (#724, language spec
+/// 9.5): the expected stdout is Tomato's for this program. Raising a cancellation from source needs `fut.cancel`
+/// in own (K1, #688); Champ's match of a cancellation is tested in `sparrow-core` (`champ_k2_*`).
+#[test]
+fn k2_catch_cancelled_compiles_and_lets_other_failures_pass() {
+    let run = run_source(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "enum Broken is Error = (broken);\n",
+        "object Job {\n",
+        "    has result is int;\n",
+        "    Job(:result);\n",
+        "    async run() is int { result; }\n",
+        "    fails() is int { throw Broken.broken; }\n",
+        "}\n",
+        "async main() is int {\n",
+        "    let out = Stdout();\n",
+        "    let r = try { await Job(result: 7).run(); } catch e is Cancelled { out.writeln(e.text()); -1; };\n",
+        "    out.writeln(r.string());\n",
+        "    let s = try {\n",
+        "        try { Job(result: 1).fails(); }\n",
+        "        catch e is Cancelled { out.writeln(\"cancelled \" + e.text()); -1; };\n",
+        "    } catch e is Broken {\n",
+        "        -2;\n",
+        "    };\n",
+        "    out.writeln(s.string());\n",
+        "    0;\n",
+        "}\n",
+    )).unwrap();
+    assert_eq!((run.stdout.as_str(), run.result), ("7\n-2\n", Ok(0)));
 }

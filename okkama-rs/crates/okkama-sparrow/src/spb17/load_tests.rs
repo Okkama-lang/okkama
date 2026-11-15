@@ -690,3 +690,63 @@ fn a_catch_may_name_the_system_native_failure() {
         reject(&p, &NoExternalContracts, "CATCH_TYPE");
     }
 }
+
+/// The system Cancelled declaration: an object without fields.
+fn cancelled_object() -> Object {
+    Object {
+        name: CANCELLED.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
+        implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
+        layout: ObjectRuntimeLayout {
+            storage_fields: vec![], allocation_words: 2, identity_offset: None, has_destroy: false,
+            may_reach_resource: false, may_async_destroy: false, trace_layout: vec![], selection_layout: vec![],
+        },
+    }
+}
+
+/// `(failure) -> bool`: whether `failure` is caught as object 0.
+fn cancelled_catch(object: Object) -> Program {
+    use Location::Register as R;
+    let mut f = empty_function();
+    f.registers = vec![Type::Failure, Type::Object(0), Type::Bool, Type::Bool];
+    f.params = vec![R(0)];
+    f.results = vec![Type::Bool];
+    f.blocks = vec![Block { pc: 0, params: vec![R(0)] }, Block { pc: 1, params: vec![R(1)] },
+        Block { pc: 3, params: vec![] }];
+    f.code = vec![
+        Instruction::Champ { op: Opcode::Catch, arguments: vec![Argument::Location(R(0)), Argument::Object(0)],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Some, edge: Edge { target_pc: 1, assignments: vec![Assignment {
+                    destination: R(1), source: Source::ProducedSlot(0),
+                }] } },
+                Outcome { tag: Tag::None, edge: Edge { target_pc: 3, assignments: vec![] } },
+            ]) },
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(2),
+            immediate: Immediate::Constant(Constant::Bool(true)) },
+        Instruction::Ret(vec![2]),
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(3),
+            immediate: Immediate::Constant(Constant::Bool(false)) },
+        Instruction::Ret(vec![3]),
+    ];
+    refresh(&mut f);
+    Program { objects: vec![object], functions: vec![f], ..Program::default() }
+}
+
+/// `catch e is Cancelled` (#724, language spec 9.5): a catch may name the system Cancelled, whose objects the runtime
+/// binds to a caught cancellation; another object of its name but not its shape is no catch type.
+#[test]
+fn a_catch_may_name_the_system_cancelled() {
+    let p = cancelled_catch(cancelled_object());
+    assert_eq!(cancelled(&p), Some(0));
+    verify_load(&p, &NoExternalContracts).unwrap();
+    let mut fielded = cancelled_object();
+    fielded.fields = vec![Field { name: "reason".into(), storage: 0, once: false }];
+    fielded.layout.storage_fields = vec![Type::Str];
+    fielded.layout.trace_layout = vec![0];
+    let mut other = cancelled_object();
+    other.name = "app.Cancelled".into();
+    for object in [fielded, other] {
+        let p = cancelled_catch(object);
+        assert_eq!(cancelled(&p), None);
+        reject(&p, &NoExternalContracts, "CATCH_TYPE");
+    }
+}
