@@ -530,6 +530,51 @@ fn oir2_w1_every_case_reaches_verified_coro() {
     assert_eq!(W1_CORO, W1);
 }
 
+/// High → own → coro → low (OIR-2 §12, plan V4), with the full verifier after each pass.
+fn w1_high_to_low(id: &str) -> Result<ir::Module, String> {
+    let coro = w1_high_to_coro(id)?;
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&coro)
+        .map_err(|error| format!("contracts_coro: {error:?}"))?;
+    let low = ir::low::lower_cleanup(coro, &ir::low::LowOptions::default()).map_err(|error| format!("low: {error}"))?;
+    // Owner decision O3 (plan §6.1): a gate over budget raises the work limit of the gate profile and never skips a
+    // module. The main of order.lazy-branches needs about 114M verifier steps in Low (26M in coro), above the
+    // default 50M.
+    let limits = ir::verify::VerifyLimits { steps: 200_000_000, ..Default::default() };
+    let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, limits, ..Default::default() };
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_low_with(&low, &verify, context).map_err(|error| format!("verify_low: {error:?}"))?;
+    Ok(low)
+}
+
+macro_rules! w1_reaches_verified_low {
+    ($($test:ident => $id:literal,)*) => {
+        /// The W1 cases that have an end-to-end test through low below.
+        const W1_LOW: [&str; 8] = [$($id,)*];
+        $(
+            #[test]
+            fn $test() {
+                w1_high_to_low($id).unwrap_or_else(|error| panic!("{}: {error}", $id));
+            }
+        )*
+    };
+}
+
+w1_reaches_verified_low! {
+    oir2_w1_await_in_async_main_reaches_verified_low => "L08.await.in-async-main",
+    oir2_w1_failure_rethrown_at_every_await_reaches_verified_low => "L08.failure.rethrown-at-every-await",
+    oir2_w1_future_lazy_and_cached_reaches_verified_low => "L08.future.lazy-and-cached",
+    oir2_w1_future_never_awaited_reaches_verified_low => "L08.future.never-awaited",
+    oir2_w1_future_passed_and_awaited_elsewhere_reaches_verified_low => "L08.future.passed-and-awaited-elsewhere",
+    oir2_w1_order_across_suspension_reaches_verified_low => "L08.order.across-suspension",
+    oir2_w1_order_lazy_branches_reaches_verified_low => "L08.order.lazy-branches",
+    oir2_w1_void_await_for_effect_reaches_verified_low => "L08.void.await-for-effect",
+}
+
+#[test]
+fn oir2_w1_every_case_reaches_verified_low() {
+    assert_eq!(W1_LOW, W1);
+}
+
 fn services(module: &ir::Module) -> Vec<ir::ProtocolDecl> {
     module.protocols.iter().filter(|(_, protocol)| protocol.kind == ir::ProtocolKind::Services)
         .map(|(_, protocol)| protocol.clone()).collect()

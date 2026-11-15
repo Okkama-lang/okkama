@@ -16,9 +16,11 @@ macro_rules! golden {
     };
 }
 
-const CANCEL: &str = include_str!("../../tests/fixtures/async/low-input/low-final-deliver-cancel.oir");
+const SUSPENDING: &str = include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir");
 
-/// The V3 coro goldens and the hand-written D18 input, with their Low goldens.
+/// The reconciled coro goldens (V2's own output through coro) and the V3-form input whose closes suspend, with
+/// their Low goldens. Every async body ends in a D18 close with `cancel=true`; the fixed-root mains close without
+/// a reserve.
 const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("async-plain-await"),
     golden!("async-await-failure"),
@@ -27,10 +29,13 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("async-repeated-await"),
     golden!("async-never-awaited"),
     golden!("coro-start-continuation"),
+    golden!("coro-start-descriptors"),
     golden!("coro-nested-cold-await"),
     golden!("coro-schedule-duty-live-across-await"),
-    ("low-final-deliver-cancel", CANCEL, include_str!("../../tests/fixtures/async/low/low-final-deliver-cancel.oir")),
+    ("low-suspending-close", SUSPENDING, include_str!("../../tests/fixtures/async/low/low-suspending-close.oir")),
 ];
+const PLAIN: usize = 0;
+const NEVER: usize = 5;
 
 /// verify(coro) → low → verify(low) (OIR-2 §12), with a stable text round trip and the producer plan check.
 fn lowered(name: &str, source: &str) -> Module {
@@ -96,7 +101,7 @@ fn low_goldens_of_the_plain_async_inputs() {
 /// Plan §3.4: Own input stays synchronous; its async rejections did not move.
 #[test]
 fn own_input_keeps_the_synchronous_rejections() {
-    let own = include_str!("../../tests/fixtures/async/own/async-plain-await.oir");
+    let own = include_str!("../own/tests/async-goldens/async-plain-await.oir");
     let error = lower_cleanup(parsed(own), &LowOptions::default()).unwrap_err();
     assert!(matches!(error, LowError::Unsupported { .. }), "{error:?}");
     let mut high = parsed(own);
@@ -146,7 +151,7 @@ fn later_slices_keep_named_rejections() {
 /// B10.4, D21 §3.3: the root map of a suspension site survives the suspension.
 #[test]
 fn suspension_root_maps_survive_the_suspension() {
-    let (name, coro, _) = GOLDENS[0];
+    let (name, coro, _) = GOLDENS[PLAIN];
     let mut output = lowered(name, coro);
     let body = function_mut(&mut output, "main");
     let layout = body.frame_layout.clone().unwrap();
@@ -163,13 +168,14 @@ fn suspension_root_maps_survive_the_suspension() {
 }
 
 /// Champ draft 3 §5: a delivery is conditional, so the pending exit after it is checked as well as the Cancelled
-/// failure. Dropping the commit on the not-delivered path leaves the reserve unconsumed.
+/// failure. Dropping the commit of `work` on the not-delivered path leaves its reserve unconsumed.
 #[test]
 fn the_pending_exit_after_a_conditional_delivery_is_checked() {
-    let commit = "    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int\n    \
-        fut.publish %fr0, success(value=%r, packet=%p, deps=%rd)\n";
-    let dropped = edited(CANCEL, commit, "    %p: own = own.empty\n    %rd: deps = deps.of %n\n    \
-        fut.publish %fr0, success(value=%n, packet=%p, deps=%rd)\n");
+    let (_, coro, _) = GOLDENS[PLAIN];
+    let commit = "    (%15: int, %16: own, %17: deps) = exit.commit %13, destination caller, result int\n    \
+        fut.publish %1, success(value=%15, packet=%16, deps=%17)\n";
+    let dropped = edited(coro, commit, "    %16: own = own.empty\n    %17: deps = deps.of %14\n    \
+        fut.publish %1, success(value=%14, packet=%16, deps=%17)\n");
     let output = lower_cleanup(parsed(&dropped), &LowOptions::default()).unwrap();
     let work = function_id(&output, "work");
     let body = output.functions.get(work).unwrap().body.as_ref().unwrap();
@@ -189,7 +195,7 @@ fn the_pending_exit_after_a_conditional_delivery_is_checked() {
 /// OIR-2 §9.3 step 6: in a D21 body the delivery runs once, after the plan has drained.
 #[test]
 fn cancellation_is_delivered_after_the_plan_drains() {
-    let (name, coro, _) = GOLDENS[9];
+    let (name, coro, _) = GOLDENS[PLAIN];
     let mut output = lowered(name, coro);
     let body = function_mut(&mut output, "work");
     let (plan, _) = body.insts.iter().find(|(_, inst)| matches!(inst.op,
@@ -221,35 +227,29 @@ fn cancellation_is_delivered_after_the_plan_drains() {
     assert!(found, "{:?}", diagnostics(&output));
 }
 
-/// D20 §2.6: a close that holds a plain Future neither suspends nor fails in Low when nothing else does
-/// (async ABI D24.2), so the exact envelope that own emits for it (`failures=[]`, `suspends=false`) verifies.
+/// D20 §2.6, D24.2: a close that holds a plain Future neither suspends nor fails in Low when nothing else does,
+/// so the exact envelopes that own emits (`failures=[]`, `suspends=false`) verify, for a sync and an async owner.
 #[test]
 fn a_plain_future_needs_no_suspension_or_failure_at_its_close() {
-    let source = include_str!("../../tests/fixtures/async/coro/async-never-awaited.oir");
-    let source = edited(source, "        slot 1: scope<SM> linear\n        slot 2: pending linear\n        \
-        slot 3: cache-state linear\n", "");
-    let source = edited(&source, "    continuation 1 at ^entry saves [] operands [1, 2, 3]\n", "");
-    let close = "    %fr1: frame<@main> = frame.save %fr0, continuation 1\n    \
-        invoke.own scope.end %q2, reserve %pending, \
-        effects scope_effects(failures=[thrown, program, panic, native],\n        suspends=true, cancel=false)\n\
-        \x20       normal ^done($closed, $pending)\n        unwind ^close_failed($closed, $failure)\n\
-        ^done(%closed: closed, %reserved: pending) in SM:\n    \
-        %fr2: frame<@main> = frame.resume %fr1, continuation 1\n";
-    let exact = "    (%closed: closed, %reserved: pending) = scope.end %q2, reserve %pending, \
-        effects scope_effects(failures=[],\n        suspends=false, cancel=false)\n";
-    let source = edited(&source, close, exact);
-    let source = edited(&source, "    fut.publish %fr2, success(packet=%p, deps=%pd)\n    ret\n\
-        ^close_failed(%closed2: closed, %close_failure: failure) in SM:\n    \
-        %fr3: frame<@main> = frame.resume %fr1, continuation 1\n    fut.publish %fr3, failure(%close_failure)\n",
-        "    fut.publish %fr0, success(packet=%p, deps=%pd)\n");
-    let output = lower_cleanup(parsed(&source), &LowOptions::default()).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(rules(&output), Vec::<RuleId>::new(), "{}", text::print(&output).unwrap());
+    for index in [NEVER, PLAIN] {
+        let (name, coro, _) = GOLDENS[index];
+        let output = lowered(name, coro);
+        let main = function_id(&output, "main");
+        let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
+        let settled: Vec<CleanupCloseId> = body.cleanup.schedules.iter()
+            .filter(|(_, schedule)| !schedule.holders.is_empty()).map(|(_, schedule)| schedule.close).collect();
+        assert!(!settled.is_empty(), "{name}");
+        for close in settled {
+            let effects = &body.cleanup.closes.get(close).unwrap().effects;
+            assert!(effects.failures.is_empty() && !effects.suspends, "{name}: {effects:?}");
+        }
+    }
 }
 
 /// B10.6, D16: a static duty inventory names its Services protocol; the runtime dictionary is optional.
 #[test]
 fn a_duty_schedule_names_its_protocol() {
-    let (name, coro, _) = GOLDENS[5];
+    let (name, coro, _) = GOLDENS[NEVER];
     let output = lowered(name, coro);
     let main = function_id(&output, "main");
     let schedule = output.functions.get(main).unwrap().body.as_ref().unwrap().cleanup.schedules.iter()
@@ -265,7 +265,7 @@ fn a_duty_schedule_names_its_protocol() {
 /// Async ABI D20, D24.2 and Champ draft 3 §14.4 (opcode 21): `cleanup.settle` neither suspends nor fails outward.
 #[test]
 fn settle_is_class_l() {
-    let (name, coro, _) = GOLDENS[5];
+    let (name, coro, _) = GOLDENS[NEVER];
     let output = lowered(name, coro);
     let main = function_id(&output, "main");
     let body = output.functions.get(main).unwrap().body.as_ref().unwrap();
@@ -276,30 +276,20 @@ fn settle_is_class_l() {
 }
 
 /// D20 §2.6 narrows only the settle of a Future: its outcome identities keep the cleanup effects of the result
-/// type, so a Future of a resource whose destroy throws still needs its failures in the close envelope.
+/// type, so a Future of a resource whose destroy throws needs those failures in the exact envelope of its close.
 #[test]
 fn a_future_keeps_the_cleanup_effects_of_its_outcome() {
-    let source = include_str!("../../tests/fixtures/async/coro/async-never-awaited.oir");
-    let source = edited(source, "scope SW action in @work\n", "object Res {\n    destroy @destroy\n}\n\
-        summary Md internal parameters [parameter_effect(convention=borrow, destination=none)] contract\n    \
+    let (_, coro, _) = GOLDENS[NEVER];
+    let source = edited(coro, "scope S0 action in @explode\n", "object Res {\n    destroy @destroy\n}\n\
+        summary Md internal parameters [parameter_effect(convention=borrow, destination=none)] contract \
         call_contract(failures=[thrown], publication=atomic)\n\
         func @destroy(%self: Res) -> void [extern \"fixture.destroy\", destroy Res] summary(Md);\n\
-        scope SW action in @work\n");
-    let source = edited(&source, "    (%f: future<int> facts(managed(deps=d0)), %c: cache-state,",
-        "    (%f: future<Res> facts(managed(deps=d0)), %c: cache-state,");
-    let source = edited(&source, "        function=@work, arguments=[%seven], descriptors=[]), result int, owner SM",
-        "        function=@work, arguments=[%seven], descriptors=[]), result Res, owner SM");
-    let mut output = lower_cleanup(parsed(&source), &LowOptions::default()).unwrap();
-    let body = function_mut(&mut output, "main");
-    let exact = ScopeEffectEnvelope { failures: vec![], suspends: false, cancel: false };
-    for (_, close) in body.cleanup.closes.iter_mut() {
-        close.effects.failures = exact.failures.clone();
-    }
-    for (_, inst) in body.insts.iter_mut() {
-        if let Operation::Cleanup(CleanupOp::Begin { effects, .. }) = &mut inst.op {
-            effects.failures = exact.failures.clone();
-        }
-    }
+        scope S0 action in @explode\n");
+    let source = edited(&source, "(%7: future<int> facts(managed(deps=d0))",
+        "(%7: future<Res> facts(managed(deps=d0))");
+    let source = edited(&source, "environment deferred(function=@explode), result int, owner S1",
+        "environment deferred(function=@explode), result Res, owner S1");
+    let output = lower_cleanup(parsed(&source), &LowOptions::default()).unwrap();
     assert!(rules(&output).contains(&RuleId::B104), "{:?}", rules(&output));
 }
 
@@ -307,7 +297,7 @@ fn a_future_keeps_the_cleanup_effects_of_its_outcome() {
 /// dispatch only one of the two outcomes.
 #[test]
 fn an_open_delivery_is_decided_before_finish() {
-    let (name, coro, _) = GOLDENS[9];
+    let (name, coro, _) = GOLDENS[PLAIN];
     let mut output = lowered(name, coro);
     let body = function_mut(&mut output, "work");
     let (deliver_block, planned) = body.blocks.iter().find_map(|(id, block)| {

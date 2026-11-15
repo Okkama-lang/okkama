@@ -68,7 +68,7 @@ mod tests {
     /// Unplaced instructions and their results go; the text round trip needs every value placed.
     #[test]
     fn unplaced_instructions_and_their_values_go() {
-        let source = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+        let source = include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir");
         let mut module = text::parse(source).unwrap();
         let (function, _) = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap();
         let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();
@@ -85,7 +85,7 @@ mod tests {
     /// A use of a removed value is an invalid output, not a silent renaming.
     #[test]
     fn a_use_of_a_removed_value_is_rejected() {
-        let source = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+        let source = include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir");
         let mut module = text::parse(source).unwrap();
         let (function, _) = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap();
         let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();

@@ -155,7 +155,7 @@ mod tests {
     /// the await and of `await.unwind` stay; the frame published after the close is the frame before it.
     #[test]
     fn close_brackets_go_and_await_brackets_stay() {
-        let mut module = parsed(include_str!("../../tests/fixtures/async/coro/async-plain-await.oir"));
+        let mut module = parsed(include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir"));
         let body = main(&mut module);
         assert_eq!(brackets(body), [1, 2, 3, 4]);
         let options = LowOptions::default();
@@ -184,10 +184,23 @@ mod tests {
         }
     }
 
+    /// With exact envelopes (D24.2) coro brackets no close, so the narrowing leaves the body as it is.
+    #[test]
+    fn exact_envelopes_leave_nothing_to_narrow() {
+        let source = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+        let mut module = parsed(source);
+        let before = main(&mut module).clone();
+        let options = LowOptions::default();
+        let mut budget = Budget { options: &options, steps: 0, blocks: 0, roots: 0 };
+        let body = main(&mut module);
+        assert!(closes(body, &mut budget).unwrap().is_empty());
+        assert_eq!(*body, before);
+    }
+
     /// A resume that restores a slot its save did not store is invalid input.
     #[test]
     fn resume_of_an_unsaved_slot_is_invalid() {
-        let source = include_str!("../../tests/fixtures/async/coro/coro-nested-cold-await.oir");
+        let source = include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir");
         let mut module = parsed(source);
         let body = main(&mut module);
         let (save, _) = body.insts.iter().find(|(_, inst)| matches!(inst.op,

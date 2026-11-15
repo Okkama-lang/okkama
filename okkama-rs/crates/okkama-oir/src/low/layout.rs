@@ -114,7 +114,7 @@ mod tests {
     /// close, goes and the later slots move down.
     #[test]
     fn remaining_continuations_and_slots_are_renumbered() {
-        let source = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+        let source = include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir");
         let mut module = text::parse(source).unwrap();
         let (function, _) = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap();
         let options = LowOptions::default();
@@ -140,7 +140,7 @@ mod tests {
     /// A frame.save of a continuation that the layout lost is an invalid output.
     #[test]
     fn a_save_of_a_removed_continuation_is_rejected() {
-        let source = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+        let source = include_str!("../../tests/fixtures/async/low-input/low-suspending-close.oir");
         let mut module = text::parse(source).unwrap();
         let (function, _) = module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap();
         let options = LowOptions::default();
