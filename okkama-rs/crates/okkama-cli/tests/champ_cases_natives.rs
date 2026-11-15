@@ -18,6 +18,8 @@ fn champ_natives_list() {
 #[test]
 fn champ_cases_natives() {
     check(&["L06.native.missing-provider", "L09.unicode.normalization"]);
+    // Its std catches the provider's NativeFailure (#673).
+    check(&["L10.random.secure-invariants"]);
 }
 
 fn expect_output(source: &str, stdout: &str) {
@@ -98,6 +100,37 @@ fn champ_natives_wrapper_destroy_closes_the_handle() {
         "    0;\n",
         "}\n",
     ), "close true\n3\n");
+}
+
+/// `catch failure is NativeFailure` binds the provider's failure, whose getters read its fields (#673,
+/// language spec 9.5). The expected stdout is Tomato's for this program.
+#[test]
+fn champ_natives_native_failure_is_caught() {
+    expect_output(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "import \"runtime/json\" take json_parse_state, json_parse_root, json_node_text;\n",
+        "object Probe {\n",
+        "    Probe();\n",
+        "    text(source is string) is string {\n",
+        "        let root = json_parse_root(json_parse_state(source, 64));\n",
+        "        try {\n",
+        "            json_node_text(root);\n",
+        "        }\n",
+        "        catch failure is NativeFailure {\n",
+        "            Stdout().writeln(failure.domain() + \"/\" + failure.code() + \"/\" + failure.operation());\n",
+        "            Stdout().writeln((failure.text() == failure.message()).string());\n",
+        "            \"not text\";\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+        "main() is int {\n",
+        "    let out = Stdout();\n",
+        "    out.writeln(Probe().text(\"\\\"ok\\\"\"));\n",
+        "    out.writeln(Probe().text(\"1\"));\n",
+        "    0;\n",
+        "}\n",
+    ), "ok\ncore.json/invalid_input/runtime/json@1::json_node_text/1\ntrue\nnot text\n");
 }
 
 /// A provider refusal is a NativeFailure; uncaught, it ends the run after earlier effects.

@@ -181,7 +181,7 @@ impl BodyLowerer<'_, '_> {
         match catch {
             thir::CatchType::Variant(id) => self.ty(&Ty::Variant(*id, vec![]), span),
             thir::CatchType::Role(id, args) => self.ty(&Ty::Role(*id, args.clone()), span),
-            _ => Err(LowerError::unsupported(span, "catch type outside plain Error enums")),
+            thir::CatchType::Object(id, args) => self.ty(&Ty::Object(*id, args.clone()), span),
         }
     }
 

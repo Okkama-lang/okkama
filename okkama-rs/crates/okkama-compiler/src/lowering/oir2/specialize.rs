@@ -723,6 +723,11 @@ impl Specializer<'_, '_> {
             }
             E::Call { callee, args } => {
                 match callee {
+                    // The system NativeFailure's getters are field reads: no body to specialize.
+                    thir::Callee::Method { receiver, object, .. }
+                        if *object == self.input.registry.system.native_failure => {
+                        self.expr(receiver, env)?;
+                    }
                     thir::Callee::Method { receiver, object, method } => {
                         let original = *object;
                         let args = match receiver.ty.as_ref().map(|ty| ty.taken().subst(env)) {

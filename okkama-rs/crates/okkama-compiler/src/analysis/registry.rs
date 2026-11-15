@@ -341,6 +341,9 @@ const RUNTIME_CONSTRUCTED: [(&str, &str); 3] = [
     ("async/barrier", "BarrierState"),
 ];
 
+/// The actions of the system `NativeFailure`, in method order: field getters, and `text()` (its message).
+pub const NATIVE_FAILURE_METHODS: [&str; 5] = ["domain", "code", "operation", "message", "text"];
+
 impl<'a> Registry<'a> {
     pub fn build(sources: Vec<SourceModule<'a>>) -> Registry<'a> {
         Self::build_files(sources, 1)
@@ -750,10 +753,7 @@ impl<'a> Registry<'a> {
             decl: None,
         };
         for (name, methods) in [
-            (
-                "NativeFailure",
-                vec!["domain", "code", "operation", "message", "text"],
-            ),
+            ("NativeFailure", NATIVE_FAILURE_METHODS.to_vec()),
             ("Cancelled", vec!["text"]),
         ] {
             self.objects.push(ObjectInfo {

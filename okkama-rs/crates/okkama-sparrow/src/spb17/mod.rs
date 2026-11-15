@@ -301,6 +301,28 @@ impl ArrayType {
     }
 }
 
+/// The system `NativeFailure` (language spec 9.5): the payload of a native failure, four plain strings.
+pub const NATIVE_FAILURE: &str = "NativeFailure";
+/// Its fields, in storage order.
+pub const NATIVE_FAILURE_FIELDS: [&str; 4] = ["domain", "code", "operation", "message"];
+
+/// The declaration of the system NativeFailure, the first object of exactly its name and shape: four public
+/// `str` fields in storage order, no cases, roles, handle, destroy or resource. The runtime gives native failure
+/// payloads this descriptor, and `catch` may name it (`CATCH_TYPE`).
+pub fn native_failure(p: &Program) -> Option<u32> {
+    p.objects.iter().position(|object| {
+        let layout = &object.layout;
+        object.name == NATIVE_FAILURE && object.error_cases.is_empty() && object.enum_cases == 0
+            && object.variant_cases.is_empty() && !object.handle && !object.any_box && object.role.is_none()
+            && object.implements.is_empty() && layout.storage_fields == [Type::Str; 4]
+            && !layout.has_destroy && !layout.may_reach_resource && !layout.may_async_destroy
+            && layout.selection_layout.is_empty() && object.fields.len() == NATIVE_FAILURE_FIELDS.len()
+            && object.fields.iter().zip(NATIVE_FAILURE_FIELDS).enumerate().all(|(storage, (field, name))| {
+                field.name == name && field.storage == storage as u32 && !field.once
+            })
+    }).map(|id| id as u32)
+}
+
 /// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
 /// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
 pub fn transfer_admissible(arguments: &[Argument]) -> bool {

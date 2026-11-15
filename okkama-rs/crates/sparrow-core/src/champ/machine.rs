@@ -185,6 +185,7 @@ impl Runtime {
         }
         // This declaration view serves existing descriptors, diagnostics and heap layout consumers only.
         // No old bytecode is generated or executed.
+        let declared_failure = s::native_failure(source);
         for object in &source.objects {
             let fields = object.layout.storage_fields.iter().enumerate().map(|(index, &ty)| {
                 let id = okkama_sparrow::TypeRef(legacy.types.len() as u32);
@@ -195,8 +196,9 @@ impl Runtime {
             let destroy = source.functions.iter().position(|function| {
                 function.proofs.entry.as_ref().is_some_and(|entry| entry.destroy == Some(descriptor))
             }).map(|index| okkama_sparrow::FuncRef(index as u32));
+            // The program's NativeFailure is the payload of its native failures, as in Tomato.
             legacy.objects.push(okkama_sparrow::ObjectDecl {
-                name: object.name.clone(), fields, does: vec![], destroy, builtin: false,
+                name: object.name.clone(), fields, does: vec![], destroy, builtin: declared_failure == Some(descriptor),
             });
         }
         for function in &source.functions {
@@ -218,17 +220,19 @@ impl Runtime {
                 registers, params, result: None, code: vec![], handlers: vec![],
             });
         }
-        // Native diagnostics use Sparrow's existing four-string NativeFailure carrier.
-        // This private runtime descriptor is never a source object or a resource identity.
-        let native_failure = legacy.objects.len() as u32;
-        let text = okkama_sparrow::TypeRef(legacy.types.len() as u32);
-        legacy.types.push(okkama_sparrow::Type::Str);
-        legacy.objects.push(okkama_sparrow::ObjectDecl {
-            name: "NativeFailure".into(),
-            fields: ["domain", "code", "operation", "message"].into_iter()
-                .map(|name| (name.into(), text)).collect(),
-            does: vec![], destroy: None, builtin: true,
-        });
+        // Native diagnostics use Sparrow's existing four-string NativeFailure carrier: the program's own
+        // declaration when it names one (`catch e is NativeFailure` matches its payloads), otherwise a private
+        // runtime descriptor that is never a source object or a resource identity.
+        let native_failure = declared_failure.unwrap_or(legacy.objects.len() as u32);
+        if declared_failure.is_none() {
+            let text = okkama_sparrow::TypeRef(legacy.types.len() as u32);
+            legacy.types.push(okkama_sparrow::Type::Str);
+            legacy.objects.push(okkama_sparrow::ObjectDecl {
+                name: s::NATIVE_FAILURE.into(),
+                fields: s::NATIVE_FAILURE_FIELDS.into_iter().map(|name| (name.into(), text)).collect(),
+                does: vec![], destroy: None, builtin: true,
+            });
+        }
         let mut runtime = Self::new(crate::program::Loaded::new(legacy))?;
         let mut layouts = source.objects.iter().map(|object| {
             let layout = &object.layout;
@@ -238,8 +242,10 @@ impl Runtime {
                 may_async_destroy: layout.may_async_destroy,
             }, layout.selection_layout.iter().map(|&index| index as usize).collect())
         }).collect::<Result<Vec<_>, _>>().map_err(|error| Error(error.to_string()))?;
-        layouts.push(ObjectRuntimeLayout::new(vec![Repr::Ref; 4], LayoutFacts::default(), vec![])
-            .map_err(|error| Error(error.to_string()))?);
+        if declared_failure.is_none() {
+            layouts.push(ObjectRuntimeLayout::new(vec![Repr::Ref; 4], LayoutFacts::default(), vec![])
+                .map_err(|error| Error(error.to_string()))?);
+        }
         // An async body's frame is traced by its frame map, not by Tomato's register layout.
         let frames = (0..source.functions.len()).map(|index| super::FrameMap::new(source, index)).collect::<Vec<_>>();
         let mut heap_layouts = runtime.loaded.layouts();
