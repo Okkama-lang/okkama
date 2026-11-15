@@ -453,11 +453,15 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
         }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Variant(decl) => {
-            // An Error variant is a variant too: its values are its case objects, which are Error values.
-            if !matches!(module.declarations.get(*decl)?.kind, o::DeclarationKind::Variant { .. }) {
+            let o::DeclarationKind::Variant { cases, is_error } = &module.declarations.get(*decl)?.kind else {
                 return Err(GenerateError("variant type references non-variant declaration".into()));
+            };
+            // A one-case Error variant is its case object (#703); an Error variant with several cases is a
+            // variant whose values are its case objects, which are Error values (#705).
+            match cases.as_slice() {
+                [case] if *is_error => s::Type::Object(case.layout.as_u32()),
+                _ => s::Type::Variant(decl.as_u32()),
             }
-            s::Type::Variant(decl.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Handle(decl) => {

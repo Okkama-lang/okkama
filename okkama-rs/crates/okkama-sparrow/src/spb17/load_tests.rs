@@ -632,7 +632,7 @@ fn a_transfer_admission_filter_is_one_true_flag_after_its_selection() {
 fn native_failure_object() -> Object {
     Object {
         name: NATIVE_FAILURE.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
-        role: None, implements: vec![], any_box: false,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
         fields: NATIVE_FAILURE_FIELDS.iter().enumerate()
             .map(|(storage, name)| Field { name: (*name).into(), storage: storage as u32, once: false }).collect(),
         layout: ObjectRuntimeLayout {
