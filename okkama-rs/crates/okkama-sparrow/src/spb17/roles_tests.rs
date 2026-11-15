@@ -503,14 +503,22 @@ fn role_values_compare_within_one_role() {
 }
 
 #[test]
-fn role_arrays_and_fields_are_closed_plain() {
-    // ARRAY_PLAIN: a role array is plain only when every implementation is closed plain data.
+fn role_arrays_are_closed_plain_or_managed() {
+    // ARRAY_PLAIN: a role array is closed plain data when every implementation is.
     let array = Type::Array(ArrayType { leaf: ArrayLeaf::Role(0), depth: 1 });
     let mut p = plain_main(vec![array], vec![undef(0)], 0);
     p.functions[0].code = vec![Instruction::Data { op: DataOp::ArrayNew, inputs: vec![], output: Some(0),
         immediate: Immediate::None }, Instruction::Ret(vec![])];
     seal(&mut p.functions[0]);
     accept(&p);
+    // An implementation that is neither plain data nor a resource leaves the array neither plain nor managed.
+    let mut failing = p.clone();
+    failing.objects[1].layout = layout(vec![Type::Failure]);
+    failing.objects[1].layout.trace_layout = vec![0];
+    failing.objects[1].fields = vec![Field { name: "f0".into(), storage: 0, once: false }];
+    reject(&failing, "ARRAY_PLAIN");
+    // #711: an implementation that reaches a resource makes the array managed: it refers to the objects
+    // without owning them.
     let resource = with_resource(&mut p);
     p.objects[resource as usize].implements = vec![RoleImpl { role: 0, slots: vec![2] }];
     // The implementation must take the resource object; reuse Box.name's body under a new receiver.
@@ -519,7 +527,9 @@ fn role_arrays_and_fields_are_closed_plain() {
     seal(&mut name);
     p.objects[resource as usize].implements[0].slots = vec![p.functions.len() as u32];
     p.functions.push(name);
-    reject(&p, "ARRAY_PLAIN");
+    // The structure admits it; this plain entry may then not return with it (`RETURN_PLAIN_PACKET`).
+    verify(&p).unwrap();
+    reject(&p, "RETURN_PLAIN_PACKET");
 }
 
 #[test]

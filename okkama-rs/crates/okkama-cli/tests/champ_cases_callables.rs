@@ -1,8 +1,7 @@
 #![cfg(feature = "champ-abi")]
 //! #569 C3b (open action invocation) conformance cases, run end to end in Champ in
-//! process and compared with their case.json. A case the SPB 17 backend does not take
-//! yet is checked through own and Low (`through_low!`); a case that stops before Low is
-//! ignored with its ticket. The C6 (`any`) cases are in `champ_cases_any.rs`.
+//! process and compared with their case.json; a case that stops before Low is ignored
+//! with its ticket. The C6 (`any`) cases are in `champ_cases_any.rs`.
 //! Only pure language cases: no processes, workers, network or test mode.
 
 use okkama_compiler::lowering::{LoadedModule, ModuleLoader, RootFile, oir2};
@@ -91,31 +90,6 @@ fn check(id: &str) {
     assert_eq!(observed.exit, expected.exit, "{id}: exit");
 }
 
-/// Stages after verify_low belong to the SPB 17 / Champ lane.
-const BACKEND: [&str; 4] = ["layout", "compile_low", "verify_load", "encode"];
-
-/// The case passes own and low; it runs in Champ once the backend accepts it.
-fn check_through_low(id: &str) {
-    let directory = case_directory(id);
-    let text = std::fs::read_to_string(directory.join("main.ok")).unwrap();
-    match compile(&directory, &text) {
-        Ok(_) => check(id),
-        Err(oir2::PipelineError::Phase { phase, message }) if BACKEND.contains(&phase) => {
-            println!("{id}: own and low passed; stops in {phase}: {message}");
-        }
-        Err(error) => panic!("{id}: {error}"),
-    }
-}
-
-macro_rules! through_low {
-    ($name:ident, $id:literal) => {
-        #[test]
-        fn $name() {
-            check_through_low($id);
-        }
-    };
-}
-
 macro_rules! case {
     ($name:ident, $id:literal) => {
         #[test]
@@ -148,8 +122,8 @@ case!(open_invariant_escaped_self_bound_action, "L04.invariant.escaped-self-boun
 case!(open_privacy_closure_reads_self_field, "L04.privacy.closure-reads-self-field");
 case!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked");
 case!(open_successor_closure_transferred, "L04.successor.closure-transferred");
-// compile_low: a managed array and map of role values that reach resources.
-through_low!(open_regions_role_instances, "L07.regions.role-instances");
+// Managed arrays and maps of role values that reach resources (#711).
+case!(open_regions_role_instances, "L07.regions.role-instances");
 stops_before_low!(open_collections_ordered_sets, "L09.collections.ordered-sets",
     "#687: low cleanup inventory inference exceeds the step budget");
 

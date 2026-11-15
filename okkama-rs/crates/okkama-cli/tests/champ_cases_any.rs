@@ -122,3 +122,41 @@ main() is int {
     0;
 }"#, "4 2\n4\n");
 }
+
+/// #711: one box holds a resource, so `any` collections are managed: a holder of one refers to the boxed resource
+/// without owning it, and the scope that owns the box destroys it once. Plain role arrays and plain `any` values
+/// keep working beside it. Tomato prints the same.
+#[test]
+fn a_managed_any_collection_refers_to_a_boxed_resource() {
+    expect_output(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Shape { area() is int; }
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+object Holder {
+    has items is @any;
+    Holder(:items);
+    count() is int { items.size(); }
+}
+main() is int {
+    let out = Stdout();
+    let shapes is @Shape = [Square(side: 2), Square(side: 3)];
+    let plain is @any = [1, "two"];
+    {
+        let mixed is @any = [Res(name: "boxed"), 7, "text"];
+        let holder = Holder(items: mixed);
+        out.writeln(holder.count().string() + " " + shapes.size().string() + " " + plain.size().string());
+    }
+    out.writeln("area " + shapes[1].area().string());
+    out.writeln("end");
+    0;
+}"#, "3 2 2\ndestroy boxed\narea 9\nend\n");
+}
