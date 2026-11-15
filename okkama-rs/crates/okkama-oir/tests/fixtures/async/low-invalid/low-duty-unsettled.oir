@@ -1,5 +1,5 @@
 oir 2 low
-// expect OIR2-B10.6 instruction:1:17
+// expect OIR2-B10.6 instruction:1:16
 // low/coro-schedule-duty-live-across-await.oir whose settle of the duty of g at the final close is replaced by a
 // no-op step: the plan starts while a scheduled duty is outstanding (OIR-2 §9.3 step 3, B10.6).
 module coro_schedule_duty_live_across_await
@@ -303,11 +303,6 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
         root_binding(value=%50, trace=value(frame<@main>)), root_binding(value=%28, trace=cleanup_activation)]),
         root_requirement(boundary=before_instruction(i17), bindings=[root_binding(value=%19, trace=value(int)),
         root_binding(value=%24, trace=full_dependencies), root_binding(value=%50, trace=value(frame<@main>)),
-        root_binding(value=%27, trace=cleanup_activation)]), root_requirement(boundary=after_instruction(i16),
-        bindings=[root_binding(value=%19, trace=value(int)), root_binding(value=%24, trace=full_dependencies),
-        root_binding(value=%50, trace=value(frame<@main>)), root_binding(value=%27, trace=cleanup_activation)]),
-        root_requirement(boundary=before_instruction(i16), bindings=[root_binding(value=%19, trace=value(int)),
-        root_binding(value=%24, trace=full_dependencies), root_binding(value=%50, trace=value(frame<@main>)),
         root_binding(value=%26, trace=cleanup_activation)]), root_requirement(boundary=after_instruction(i15),
         bindings=[root_binding(value=%19, trace=value(int)), root_binding(value=%24, trace=full_dependencies),
         root_binding(value=%50, trace=value(frame<@main>)), root_binding(value=%26, trace=cleanup_activation)]),
@@ -537,8 +532,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     [i14] %25: cleanup-state = cleanup.begin %22, close 0, effects scope_effects(failures=[], suspends=false,
         cancel=true)
     [i15] %26: cleanup-state = cleanup.settle %25, %53, protocol P0
-    [i16] %27: cleanup-state = cleanup.shield %26
-    [i17] %28: cleanup-state = cleanup.plan %27, plan 0
+    [i17] %28: cleanup-state = cleanup.plan %26, plan 0
     br ^b8(%28)
     ^b3(%29: failure, %30: task-state, %31: receipt, %32: scope<S1>) in S1:
     [i18] %33: frame<@main> = frame.save %58, slots [frame_slot(slot=2, value=%61, mode=consume), frame_slot(slot=3,

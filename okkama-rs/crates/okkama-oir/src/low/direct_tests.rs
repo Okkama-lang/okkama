@@ -306,9 +306,6 @@ fn semantic_verifier_checks_proof_links_and_cleanup_roots() {
     binding.trace = RootTrace::ExitReserve;
     rejected_after_roundtrip(&wrong_trace, RuleId::B105);
 
-    assert!(body(&output).insts.iter().all(|(_, inst)| {
-        !matches!(inst.op, Operation::Cleanup(CleanupOp::Shield { .. }))
-    }));
     let mut coro = output;
     coro.profile = Profile::Coro;
     rejected_after_roundtrip(&coro, RuleId::B114);

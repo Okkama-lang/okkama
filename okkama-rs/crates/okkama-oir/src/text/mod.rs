@@ -1388,7 +1388,6 @@ opcodes!(CleanupOp {
     Destroy { cleanup, key } => "cleanup.destroy",
     DestroyDirect { cleanup, identity, descriptor, destroy } => "destroy.direct",
     RecordFailure { cleanup, failure } => "cleanup.failure",
-    Shield { cleanup } => "cleanup.shield",
     DeliverCancel { cleanup } => "cleanup.deliver_cancel",
     Finish { cleanup } => "cleanup.finish",
     CellNew { value, ty } => "cell.new",

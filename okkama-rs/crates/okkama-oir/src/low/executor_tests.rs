@@ -190,7 +190,6 @@ impl Executor {
                         }
                         vec![Value::State(state)]
                     }
-                    Operation::Cleanup(CleanupOp::Shield { cleanup }) => vec![Value::State(self.state(*cleanup))],
                     Operation::Cleanup(CleanupOp::SettleEmpty { cleanup, schedule }) => {
                         assert!(body.cleanup.schedules.get(*schedule).unwrap().holders.is_empty());
                         let mut state = self.state(*cleanup);

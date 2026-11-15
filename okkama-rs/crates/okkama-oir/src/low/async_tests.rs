@@ -622,3 +622,22 @@ fn k1_a_cancel_edge_without_its_adapter_is_rejected_in_low() {
         assert!(rules(&output).contains(&RuleId::B91), "{:?}", diagnostics(&output));
     }
 }
+
+/// #690, plan §3.4, Champ draft 3 §5: the shield is a property of every close, not an operation, so Low has no
+/// `cleanup.shield` step. The close of `work` verifies without one, and the text form no longer has the opcode.
+#[test]
+fn the_shield_is_a_property_of_every_close() {
+    let (_, _, golden) = GOLDENS[PLAIN];
+    let mut lines: Vec<String> = golden.lines().map(str::to_owned).collect();
+    let begin = lines.iter().position(|line| line.contains("= cleanup.begin ")).unwrap();
+    let (name, _) = lines[begin].trim_start().split_once(':').unwrap();
+    let name = name.rsplit(' ').next().unwrap().to_owned();
+    // The step goes after the whole begin, whose continuation lines are indented further.
+    let after = (begin + 1..lines.len()).find(|index| !lines[*index].starts_with("        ")).unwrap();
+    lines.insert(after, format!("    %shielded: cleanup-state = cleanup.shield {name}"));
+    let shielded = lines.join("\n");
+    let error = text::parse(&shielded).unwrap_err();
+    assert_eq!(error.kind, text::DiagnosticKind::Syntax, "{error}");
+    assert!(error.to_string().contains("unknown opcode"), "{error}");
+    assert!(diagnostics(&parsed(golden)).is_empty());
+}

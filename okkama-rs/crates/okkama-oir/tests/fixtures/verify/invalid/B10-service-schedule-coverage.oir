@@ -44,13 +44,9 @@ func @f(%0: frame<@f>) -> void [async] summary(M0) {
         root_requirement(boundary=after_instruction(i6), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
         root_binding(value=%6, trace=full_dependencies), root_binding(value=%10, trace=cleanup_activation)],
         through_suspend=true), root_requirement(boundary=before_instruction(i6), bindings=[root_binding(value=%1,
-        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%9,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i5),
-        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
-        root_binding(value=%9, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=before_instruction(i5), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
-        root_binding(value=%6, trace=full_dependencies), root_binding(value=%8, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i4), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%8,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i4),
+        bindings=[root_binding(value=%1,
         trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%8,
         trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i4),
         bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)),
@@ -133,8 +129,7 @@ func @f(%0: frame<@f>) -> void [async] summary(M0) {
     [i3] %7: scope<S0> = scope.begin S0
     [i4] %8: cleanup-state = cleanup.begin %7, close 0, effects scope_effects(failures=[thrown, program, panic, native],
         suspends=true, cancel=true)
-    [i5] %9: cleanup-state = cleanup.shield %8
-    [i6] %10: cleanup-state = cleanup.settle %9, %3, protocol P0
+    [i6] %10: cleanup-state = cleanup.settle %8, %3, protocol P0
     [i7] %11: cleanup-state = cleanup.settle %10, %4, protocol P0
     [i8] %12: cleanup-state = cleanup.plan %11, plan 0
     [i9] %13: cleanup-state = cleanup.deliver_cancel %12

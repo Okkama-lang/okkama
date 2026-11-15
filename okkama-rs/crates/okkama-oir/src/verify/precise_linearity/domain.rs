@@ -116,7 +116,6 @@ pub(super) fn provenance_bit(provenance: AdmissionProvenance) -> u8 {
 pub(super) struct CleanupFact {
     pub aborted: bool,
     pub phase: u8,
-    pub shield: bool,
     pub pending: bool,
     pub reserve: BTreeSet<Piece>,
     pub inventory: BTreeSet<Piece>,
