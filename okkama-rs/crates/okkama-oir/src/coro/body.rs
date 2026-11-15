@@ -108,6 +108,7 @@ impl Lowering<'_, '_> {
                     &Variable { original: value, versions, implicit }, self.budget)?;
                 repaired.insert(value, found);
             }
+            self.recheck_proofs()?;
             self.schedules(&schedules, &duties, &closes, &repaired)?;
             self.body.frame_layout = Some(FrameLayout { slots: slots.decls, continuations });
         } else {
@@ -121,8 +122,11 @@ impl Lowering<'_, '_> {
             return Err(self.invalid("an Own body declares no frame layout"));
         }
         let declaration = self.module.functions.get(self.function)?;
-        if is_async && declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
-            return Err(self.unsupported("async defer entries (C-6) are lowered by slice D1"));
+        // C-6: an async defer entry is an async body; a replacement (a `return` inside it) is forbidden.
+        let defer_entry = declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
+        if is_async && defer_entry && self.body.blocks.iter().any(|(_, block)| matches!(block.term.kind,
+            TermKind::RetDefer { tag: DeferReturnTag::Replace(_), .. })) {
+            return Err(self.invalid("an async defer entry has no replacement (C-6, async-defer-replace)"));
         }
         for (_, block) in self.body.blocks.iter() {
             // A block unwind leaves from any point of its block, so no frame version may change there.
@@ -295,12 +299,10 @@ impl Lowering<'_, '_> {
     fn terminator_suspends(&self, term: &TermKind) -> Result<bool, CoroError> {
         match term {
             TermKind::InvokeOwn { op, .. } => self.suspends(op),
+            // C-6: `invoke.defer` of an async defer entry runs it as a shielded child frame and suspends.
             TermKind::InvokeDefer { function, .. } => {
                 let target = self.module.functions.get(*function)?;
-                if target.attrs.contains(&FunctionAttr::Async) {
-                    return Err(self.unsupported("async defer invocations (C-6) are lowered by slice D1"));
-                }
-                Ok(false)
+                Ok(target.attrs.contains(&FunctionAttr::Async))
             }
             _ => Ok(false),
         }
@@ -355,6 +357,16 @@ impl Lowering<'_, '_> {
                         EdgeArg::Value(value) => forwarded.push(*value),
                     }
                 }
+                // #715: a target parameter's dependency names the target's own parameters, which the landing
+                // does not see; its landing parameter depends on the values that the landing forwards for them.
+                let substitution: BTreeMap<_, _> = target_params.iter().copied().zip(forwarded.iter().copied())
+                    .collect();
+                for &param in &params {
+                    if let ValueFacts::Managed { deps } = self.body.values.get(param)?.facts {
+                        let deps = self.substituted_deps(deps, &substitution)?;
+                        self.body.values.get_mut(param)?.facts = ValueFacts::Managed { deps };
+                    }
+                }
                 let data = self.body.blocks.get_mut(landing)?;
                 data.params = params;
                 data.term.kind = TermKind::Br(Target { block: target, args: forwarded });
@@ -364,6 +376,87 @@ impl Lowering<'_, '_> {
             self.body.blocks.get_mut(block)?.term.kind = term;
         }
         Ok(())
+    }
+
+    /// The dependency `deps` with every value of `substitution` replaced. An expression that names none of
+    /// them is shared; a changed one is a new expression.
+    fn substituted_deps(&mut self, deps: DepExprId, substitution: &BTreeMap<ValueId, ValueId>)
+        -> Result<DepExprId, CoroError> {
+        self.budget.step(1)?;
+        let swap = |value: ValueId| substitution.get(&value).copied().unwrap_or(value);
+        let expression = self.body.deps.get(deps)?.clone();
+        let changed = match &expression {
+            DepExpr::Empty => return Ok(deps),
+            DepExpr::Key(key) => DepExpr::Key(self.substituted_key(*key, substitution)?),
+            DepExpr::Union(parts) => {
+                let mut substituted = Vec::with_capacity(parts.len());
+                for part in parts {
+                    substituted.push(self.substituted_deps(*part, substitution)?);
+                }
+                DepExpr::Union(substituted)
+            }
+            DepExpr::FromSsa(value) => DepExpr::FromSsa(swap(*value)),
+            DepExpr::Retention { value, selection } => DepExpr::Retention {
+                value: swap(*value),
+                selection: self.substituted_selection(*selection, substitution)?,
+            },
+        };
+        if changed == expression {
+            return Ok(deps);
+        }
+        Ok(self.body.deps.alloc(changed)?)
+    }
+
+    fn substituted_selection(&mut self, selection: SelectionId, substitution: &BTreeMap<ValueId, ValueId>)
+        -> Result<SelectionId, CoroError> {
+        self.budget.step(1)?;
+        let swap = |value: ValueId| substitution.get(&value).copied().unwrap_or(value);
+        let expression = self.body.selections.get(selection)?.clone();
+        let changed = match &expression {
+            SelectionExpr::Value(value) => SelectionExpr::Value(swap(*value)),
+            SelectionExpr::OwnerGraph(value) => SelectionExpr::OwnerGraph(swap(*value)),
+            SelectionExpr::ViewOwner(value) => SelectionExpr::ViewOwner(swap(*value)),
+            SelectionExpr::Descriptor { descriptor, value } => {
+                SelectionExpr::Descriptor { descriptor: swap(*descriptor), value: swap(*value) }
+            }
+            SelectionExpr::Projection(projection) => SelectionExpr::Projection(match projection {
+                Projection::Field { value, field } => Projection::Field { value: swap(*value), field: *field },
+                Projection::Index { value, index } => Projection::Index { value: swap(*value), index: swap(*index) },
+                Projection::Slice { value, start, end } => {
+                    Projection::Slice { value: swap(*value), start: swap(*start), end: swap(*end) }
+                }
+                Projection::Map { value, keys } => Projection::Map { value: swap(*value), keys: swap(*keys) },
+            }),
+            SelectionExpr::Admissible(inner) => {
+                SelectionExpr::Admissible(self.substituted_selection(*inner, substitution)?)
+            }
+            SelectionExpr::Union(parts) => {
+                let mut substituted = Vec::with_capacity(parts.len());
+                for part in parts {
+                    substituted.push(self.substituted_selection(*part, substitution)?);
+                }
+                SelectionExpr::Union(substituted)
+            }
+        };
+        if changed == expression {
+            return Ok(selection);
+        }
+        Ok(self.body.selections.alloc(changed)?)
+    }
+
+    fn substituted_key(&mut self, key: KeyExprId, substitution: &BTreeMap<ValueId, ValueId>)
+        -> Result<KeyExprId, CoroError> {
+        let swap = |value: ValueId| substitution.get(&value).copied().unwrap_or(value);
+        let expression = self.body.keys.get(key)?.clone();
+        let changed = match &expression {
+            KeyExpr::Created { site, instance } => KeyExpr::Created { site: *site, instance: swap(*instance) },
+            KeyExpr::ServiceOf { value, kind } => KeyExpr::ServiceOf { value: swap(*value), kind: *kind },
+            KeyExpr::Runtime(value) => KeyExpr::Runtime(swap(*value)),
+        };
+        if changed == expression {
+            return Ok(key);
+        }
+        Ok(self.body.keys.alloc(changed)?)
     }
 
     /// C-2: the body takes its frame and restores the receiver, the arguments, the descriptors and the
@@ -416,8 +509,24 @@ impl Lowering<'_, '_> {
     /// the outcome that its `exit.commit` moved to the Future's cache; a failure exit publishes it.
     fn exits(&mut self, frame: ValueId) -> Result<(), CoroError> {
         let blocks: Vec<BlockId> = self.body.blocks.iter().map(|(block, _)| block).collect();
+        let mut continue_deps = None;
         for block in blocks {
             self.budget.step(1)?;
+            let data = self.body.blocks.get(block)?;
+            if let TermKind::RetDefer { tag: DeferReturnTag::Continue, values } = &data.term.kind {
+                if !values.is_empty() {
+                    return Err(self.invalid("an async defer entry continues without values (C-6)"));
+                }
+                let deps = match continue_deps {
+                    Some(deps) => deps,
+                    None => *continue_deps.insert(self.continue_deps()?),
+                };
+                let own = self.intern(Type::Service(ServiceType::Own))?;
+                let end = self.body.blocks.get(block)?.insts.len();
+                let packet = self.emit(block, end, own, Operation::Ownership(OwnershipOp::Empty {}))?;
+                self.publish(block, frame, PublishOutcome::Success { value: None, packet, deps })?;
+                continue;
+            }
             let data = self.body.blocks.get(block)?;
             let outcome = match &data.term.kind {
                 TermKind::Ret { values } if self.fixed_root => {
@@ -433,15 +542,39 @@ impl Lowering<'_, '_> {
                 }
                 _ => continue,
             };
-            let publish = self.body.insts.alloc(Instruction {
-                results: Vec::new(), op: Operation::Async(AsyncOp::FuturePublish { frame, outcome }),
-                facts: InstructionFacts::default(), loc: None,
-            })?;
-            let data = self.body.blocks.get_mut(block)?;
-            data.insts.push(publish);
-            data.term.kind = TermKind::Ret { values: Vec::new() };
+            self.publish(block, frame, outcome)?;
         }
         Ok(())
+    }
+
+    /// End `block` with the publication of `outcome` and a return.
+    fn publish(&mut self, block: BlockId, frame: ValueId, outcome: PublishOutcome) -> Result<(), CoroError> {
+        let publish = self.body.insts.alloc(Instruction {
+            results: Vec::new(), op: Operation::Async(AsyncOp::FuturePublish { frame, outcome }),
+            facts: InstructionFacts::default(), loc: None,
+        })?;
+        let data = self.body.blocks.get_mut(block)?;
+        data.insts.push(publish);
+        data.term.kind = TermKind::Ret { values: Vec::new() };
+        Ok(())
+    }
+
+    /// C-6: the Continue of an async defer entry publishes an empty packet with empty deps. Only exit forms
+    /// run after a close (B4.2), so the deps are taken at the entry, right after the input packet's acceptance.
+    fn continue_deps(&mut self) -> Result<ValueId, CoroError> {
+        let entry = self.body.entry;
+        let insts = self.body.blocks.get(entry)?.insts.clone();
+        let mut position = 1;
+        for (index, inst) in insts.iter().enumerate() {
+            if matches!(self.body.insts.get(*inst)?.op, Operation::Ownership(OwnershipOp::Accept { .. })) {
+                position = index + 1;
+                break;
+            }
+        }
+        let int = self.intern(Type::Int)?;
+        let unit = self.emit(entry, position, int, Operation::Const(Literal::Int("0".into())))?;
+        let deps = self.intern(Type::Service(ServiceType::Deps))?;
+        self.emit(entry, position + 1, deps, Operation::Ownership(OwnershipOp::Dependencies { value: unit }))
     }
 
     fn success(&self, block: BlockId, values: &[ValueId]) -> Result<PublishOutcome, CoroError> {
@@ -643,28 +776,32 @@ impl Lowering<'_, '_> {
                 for result in &instruction.results {
                     live.remove(result);
                 }
-                suspensions.push(self.suspension(site, block, &instruction.op, live, closes, &frames));
+                let operands = instruction.op.operand_refs();
+                suspensions.push(self.suspension(site, block, &operands, live, closes, &frames));
             }
-            let TermKind::InvokeOwn { op, .. } = &data.term.kind else {
+            if !self.terminator_suspends(&data.term.kind)? {
                 continue;
-            };
-            if !self.suspends(op)? {
-                continue;
+            }
+            let mut operands = Vec::new();
+            match &data.term.kind {
+                TermKind::InvokeOwn { op, .. } => operands = op.operand_refs(),
+                TermKind::InvokeDefer { call, .. } => call.append(OperandMode::Borrow, &mut operands),
+                _ => {}
             }
             let mut live = BTreeSet::new();
             for target in graph::successors(&data.term.kind) {
                 live.extend(liveness.live_in[target.as_u32() as usize].iter().copied());
             }
-            suspensions.push(self.suspension(Site::Terminator(block), block, op, live, closes, &frames));
+            suspensions.push(self.suspension(Site::Terminator(block), block, &operands, live, closes, &frames));
         }
         Ok(suspensions)
     }
 
     fn suspension(
-        &self, site: Site, block: BlockId, op: &Operation, mut live: BTreeSet<ValueId>,
+        &self, site: Site, block: BlockId, operands: &[ReferencedOperand], mut live: BTreeSet<ValueId>,
         closes: &BTreeMap<Site, Vec<ValueId>>, frames: &BTreeSet<ValueId>,
     ) -> Suspension {
-        let operands: Vec<ValueId> = op.operand_refs().into_iter().filter_map(|operand| match operand.reference {
+        let operands: Vec<ValueId> = operands.iter().filter_map(|operand| match operand.reference {
             OperandRef::Value(value) => Some(value),
             _ => None,
         }).collect();
@@ -754,6 +891,59 @@ impl Lowering<'_, '_> {
         }
         self.body.insts.get_mut(resume)?.results = results;
         Ok(resume)
+    }
+
+    /// Plan §3.3 step 6 (R2): a unique-cache proof is rechecked after the suspensions are bracketed. The Future
+    /// it proves may be the resumed version of a value saved before; every frame slot that holds that value or
+    /// one of its earlier versions is a retained slot of its evidence (B9.2). The earlier versions stay out of
+    /// the evidence's aliases: their names are dead after the save (B9.5), and the slots account for them.
+    fn recheck_proofs(&mut self) -> Result<(), CoroError> {
+        // The saved value of each (continuation, slot) and the (continuation, slot) of each resumed version.
+        let mut saved = BTreeMap::new();
+        let mut resumed = BTreeMap::new();
+        let mut proofs = Vec::new();
+        for (inst, data) in self.body.insts.iter() {
+            self.budget.step(1)?;
+            match &data.op {
+                Operation::Async(AsyncOp::FrameSave { slots, continuation, .. }) => {
+                    for slot in slots {
+                        saved.insert((*continuation, slot.slot), slot.value);
+                    }
+                }
+                Operation::Async(AsyncOp::FrameResume { continuation, slots, .. }) => {
+                    for (slot, value) in slots.iter().zip(data.results.iter().skip(1)) {
+                        resumed.insert(*value, (*continuation, slot.slot));
+                    }
+                }
+                Operation::Async(AsyncOp::UniqueCacheProof { .. }) => proofs.push(inst),
+                _ => {}
+            }
+        }
+        for inst in proofs {
+            let Operation::Async(AsyncOp::UniqueCacheProof { mut proof }) = self.body.insts.get(inst)?.op.clone()
+            else {
+                continue;
+            };
+            let mut chain = Vec::new();
+            let mut current = proof.future;
+            while let Some(&(continuation, slot)) = resumed.get(&current) {
+                self.budget.step(1)?;
+                let previous = *saved.get(&(continuation, slot))
+                    .ok_or_else(|| self.invalid("a resumed version has no saved value"))?;
+                if chain.contains(&previous) || previous == proof.future {
+                    break;
+                }
+                chain.push(previous);
+                current = previous;
+            }
+            for (&(_, slot), value) in &saved {
+                if (*value == proof.future || chain.contains(value)) && !proof.evidence.frame_slots.contains(&slot) {
+                    proof.evidence.frame_slots.push(slot);
+                }
+            }
+            self.body.insts.get_mut(inst)?.op = Operation::Async(AsyncOp::UniqueCacheProof { proof });
+        }
+        Ok(())
     }
 
     fn implicit_sites(&self, closes: &BTreeMap<Site, Vec<ValueId>>, value: ValueId) -> Vec<Site> {

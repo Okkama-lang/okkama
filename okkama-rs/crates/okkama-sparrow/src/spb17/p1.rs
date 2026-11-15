@@ -34,13 +34,7 @@ impl P1Contracts {
             && object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
             && !object.layout.may_reach_resource);
         for object in objects.iter().filter(|object| !object.error_cases.is_empty()) {
-            let valid = if object.fields.is_empty() {
-                object.layout.storage_fields == [Type::Int]
-            } else {
-                object.error_cases.len() == 1 && object.layout.storage_fields.iter()
-                    .all(|ty| matches!(ty, Type::Str | Type::Int | Type::Bool))
-            };
-            if !valid || object.layout.may_reach_resource || object.layout.has_destroy {
+            if !error_layout(objects, object) {
                 return Err(error("invalid P1 plain Error layout"));
             }
         }
@@ -103,7 +97,7 @@ impl P1Contracts {
                 abi::Type::Void => Some(vec![]),
                 ty => abi_type(ty, &prefix, &handles).map(|ty| vec![ty]),
             };
-            // An operation over a type SPB 17 cannot carry (maps, float arrays) has no entry yet.
+            // An operation over a type this bridge does not carry (maps, char and rat arrays) has no entry yet.
             if let (Some(registers), Some(results)) = (registers, results) {
                 let function = entry(native.symbol(), registers, results, true, NATIVE_FAILURES);
                 natives.insert(native.symbol().to_owned(), function);
@@ -186,6 +180,39 @@ impl P1Contracts {
     }
 }
 
+/// A plain Error layout whose text `okkama.Error.text` writes: an Error enum (one case-number word), a
+/// case of an Error variant without payload (no storage), or a case with payload fields of the types an
+/// error payload may have and the text can show: scalars, plain enums that name their cases, and Error
+/// enums and Error variants (an `Error` role payload has no text on Tomato either).
+pub fn error_layout(objects: &[Object], object: &Object) -> bool {
+    let layout = &object.layout;
+    if layout.may_reach_resource || layout.has_destroy || object.enum_cases != 0 || !object.variant_cases.is_empty()
+        || object.handle || object.role.is_some() || object.any_box
+    {
+        return false;
+    }
+    if object.fields.is_empty() {
+        return layout.storage_fields == [Type::Int]
+            || (layout.storage_fields.is_empty() && object.error_cases.len() == 1);
+    }
+    let shown = |ty: &Type| match *ty {
+        Type::Str | Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat => true,
+        Type::Object(id) => objects.get(id as usize).is_some_and(|payload| !payload.error_cases.is_empty()
+            || (payload.enum_cases > 0 && payload.enum_names.len() == payload.enum_cases as usize
+                && payload.fields.is_empty() && payload.layout.storage_fields == [Type::Int])),
+        Type::Variant(id) => objects.get(id as usize).is_some_and(|variant| !variant.variant_cases.is_empty()
+            && variant.variant_cases.iter().all(|&case| objects.get(case as usize)
+                .is_some_and(|case| !case.error_cases.is_empty()))),
+        _ => false,
+    };
+    // Every storage word is one payload field, shown in declaration order.
+    let mut storage = object.fields.iter().map(|field| field.storage as usize).collect::<Vec<_>>();
+    storage.sort_unstable();
+    object.error_cases.len() == 1 && object.fields.iter().all(|field| !field.once)
+        && storage.iter().copied().eq(0..layout.storage_fields.len())
+        && layout.storage_fields.iter().all(shown)
+}
+
 /// The runtime word type held by a registered plain Atomic specialization (P2.4 §4.8): a scalar, or
 /// `array_` and a plain element suffix that SPB 17 can carry.
 pub fn atomic_value(suffix: &str) -> Option<Type> {
@@ -204,6 +231,9 @@ pub fn atomic_value(suffix: &str) -> Option<Type> {
                 Type::Bool => ArrayLeaf::Bool,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
+                Type::Float => ArrayLeaf::Float,
+                Type::Char => ArrayLeaf::Char,
+                Type::Rat => ArrayLeaf::Rat,
                 Type::Array(shape) => {
                     let depth = shape.depth.checked_add(1)?;
                     return Some(Type::Array(ArrayType { depth, ..shape }));
@@ -235,6 +265,7 @@ fn abi_type(ty: &abi::Type, prefix: &str, handles: &BTreeMap<String, u32>) -> Op
             let leaf = match abi_type(item, prefix, handles)? {
                 Type::Int => ArrayLeaf::Int,
                 Type::Bool => ArrayLeaf::Bool,
+                Type::Float => ArrayLeaf::Float,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
                 Type::Array(shape) => {

@@ -467,7 +467,8 @@ fn oir2_own_cases_triage() {
 
 /// #671, #686 (P2.4 section 4.8): an Atomic field is a capability without an obligation, so the holder's
 /// constructor returns no fresh creation (the SPB 17 layout gives the holder no identity), and every
-/// function that partitions an Atomic declares the program failure its scope.split can raise.
+/// function that partitions an Atomic declares the program failure its scope.split can raise. The full
+/// verifier agrees (#700): such a creation needs no ownership result.
 #[test]
 fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
     let source = concat!("module app; import \"cell\" take Cell; import \"async/atomic\" take Atomic; ",
@@ -475,8 +476,7 @@ fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
         "next() is int { let at = served.value(); served.replace(at + 1); at; } } ",
         "main() is int { let c = Cell(0); c.replace(2); let a = Atomic(1); a.replace(3); ",
         "Recorded().next() + c.value() + a.value(); }");
-    // The build gate: the full verifier still treats every deps-carrying holder as an owned creation.
-    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
     let summary = |symbol: &str| {
         let function = module.functions.iter().find(|(_, function)| function.symbol.starts_with(symbol))
             .unwrap_or_else(|| panic!("{symbol}")).1;
@@ -493,7 +493,9 @@ fn oir2_own_atomic_holder_is_not_a_fresh_creation() {
 
 /// #672: a constructor stores a role field whose implementers are plain (L09.math.aggregates' Extremes,
 /// L09.time.zones' ZonedDateTime). The value carries deps but no obligation and its action scope is
-/// elided; own elaborates the construction without staging instead of failing on the missing scope.
+/// elided; own elaborates the construction without staging instead of failing on the missing scope. Under
+/// the full verifier (#700) the holder is no fresh creation and its summary declares that it depends on the
+/// role argument it retains.
 #[test]
 fn oir2_own_deps_only_field_needs_no_action_scope() {
     let source = concat!("module app; role Shape { area() is int; } ",
@@ -501,11 +503,47 @@ fn oir2_own_deps_only_field_needs_no_action_scope() {
         "object Holder { has shape is Shape; Holder(shape is Shape) { self.shape = shape; } ",
         "area() is int { shape.area(); } } ",
         "main() is int { Holder(Square(side: 2)).area(); }");
-    // The build gate: the full verifier's owned-creation rule is the open counterpart of this class.
-    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
     let constructor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Holder.new"))
         .unwrap().1;
+    let summary = module.summaries.get(constructor.summary.unwrap()).unwrap();
+    assert!(summary.results.iter().all(|result| result.fresh.is_empty()), "{summary:?}");
+    assert_eq!(summary.results[0].external_deps, vec![0], "{summary:?}");
     let body = constructor.body.as_ref().unwrap();
     assert!(!body.insts.iter().any(|(_, inst)| matches!(inst.op,
         ir::Operation::Ownership(ir::OwnershipOp::Stage { .. }))));
+}
+
+/// #703 (L09.uuid.values, L10.stdin.lines): a role value with plain implementers carries deps but no
+/// obligation, yet own partitions it with a checked scope.split when it is offered to an owning call. The
+/// function that does so declares the program failure the split can raise, as for an Atomic (#671); SPB 17
+/// refuses a body failure outside the declared mask (ENTRY_FAILURE_MASK).
+#[test]
+fn oir2_own_partitioned_role_value_declares_the_split_failure() {
+    let source = concat!("module app; role Named { name() is string; } ",
+        "object A does Named { A(); name() is string { \"a\"; } same(other is Named) is bool { ",
+        "self.name() == other.name(); } } ",
+        "object B does Named { B(); name() is string { \"b\"; } } ",
+        "main() is int { if A().same(B()) { 1; } else { 0; } }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, same) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.A.same"))
+        .unwrap();
+    let body = same.body.as_ref().unwrap();
+    let splits = body.blocks.iter().any(|(_, block)| matches!(&block.term.kind, ir::TermKind::InvokeOwn { op, .. }
+        if matches!(op.as_ref(), ir::Operation::Ownership(ir::OwnershipOp::ScopeSplit { .. }))));
+    assert!(splits, "own partitions the role argument");
+    let summary = module.summaries.get(same.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
+    // An object holding such a role value (io/stdin's Utf8Input) is partitioned the same way.
+    let source = concat!("module app; role Named { name() is string; } ",
+        "object B does Named { B(); name() is string { \"b\"; } } ",
+        "object Holder { has inner is Named; Holder(inner is Named) { self.inner = inner; } ",
+        "name() is string { inner.name(); } } ",
+        "object User { User(); greet(holder is Holder) is string { holder.name(); } } ",
+        "main() is int { User().greet(Holder(B())).length(); }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, greet) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.User.greet"))
+        .unwrap();
+    let summary = module.summaries.get(greet.summary.unwrap()).unwrap();
+    assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
 }

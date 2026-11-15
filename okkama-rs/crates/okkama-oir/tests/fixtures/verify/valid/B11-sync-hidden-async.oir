@@ -7,7 +7,8 @@ object R {
 scope SD action in @destroy
 scope S action in @f
 summary Md internal parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[thrown], suspends=true, publication=atomic)
-summary Mf call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[thrown], suspends=true, publication=atomic)
+summary Mf call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+    call_contract(failures=[thrown, cancelled], suspends=true, publication=atomic)
 func @destroy(%self: R facts(managed(deps=dd))) -> void [destroy R, async] summary(Md) {
     dependency dd: dependency = retention(value=%self, selection=selection(%self))
 ^entry in SD:
@@ -18,6 +19,12 @@ func @f(%r: R facts(managed(deps=dr)); %input: own) -> void [async] summary(Mf) 
 ^entry in S:
     %q: scope<S> = scope.begin S
     %accepted: scope<S> = own.accept %q, %input
-    %closed: closed = scope.end %accepted, effects scope_effects(failures=[thrown], suspends=true, cancel=false)
+    invoke.own scope.end %accepted, effects scope_effects(failures=[thrown], suspends=true,
+        cancel=true)
+        normal ^d18_closed($closed)
+        unwind ^d18_cancelled($closed, $failure)
+^d18_closed(%closed: closed) in S:
     ret
+^d18_cancelled(%d18_closed2: closed, %d18_cancel: failure) in S:
+    raise %d18_cancel
 }

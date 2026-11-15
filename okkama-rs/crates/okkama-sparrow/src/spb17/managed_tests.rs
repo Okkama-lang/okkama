@@ -10,7 +10,7 @@ fn objects() -> Vec<Object> {
             .collect();
         Object {
             name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
-            role: None, implements: vec![], any_box: false,
+            role: None, implements: vec![], any_box: false, enum_names: vec![],
             fields: (0..fields.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
                 .collect(),
             layout: ObjectRuntimeLayout {
@@ -148,7 +148,7 @@ fn selected_identities_never_lose_unproved_elements() {
 fn handle_object() -> Object {
     Object {
         name: "Native".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true, role: None,
-        implements: vec![], any_box: false,
+        implements: vec![], any_box: false, enum_names: vec![],
         fields: vec![],
         layout: ObjectRuntimeLayout {
             allocation_words: 2, storage_fields: vec![], identity_offset: None, has_destroy: false,
@@ -266,6 +266,20 @@ fn binding_a_managed_array_removes_its_elements_from_admission() {
     // Binding `r` itself, or an array of it, binds `r`: the filtered split selects nothing.
     assert_eq!(redundant(0), Vec::<usize>::new());
     assert_eq!(redundant(1), Vec::<usize>::new());
+}
+
+/// A role value is its object: binding a role value of a resource object binds that object, so the admission
+/// filter of a later split is not redundant either (#711, #697: `reaches_resource` counts role values).
+#[test]
+fn binding_a_managed_role_value_removes_its_object_from_admission() {
+    let mut p = bound_then_split(2);
+    let role = p.objects.len() as u32;
+    p.objects.push(Object { handle: false, role: Some(RoleDecl::default()), ..handle_object() });
+    p.objects[0].implements = vec![RoleImpl { role, slots: vec![] }];
+    let f = &mut p.functions[0];
+    f.registers[2] = Type::Role(role);
+    f.code[5] = Instruction::Data { op: DataOp::Move, inputs: vec![0], output: Some(2), immediate: Immediate::None };
+    assert_eq!(evidence::redundant_admission_filters(&p, &p.functions[0]).unwrap(), Vec::<usize>::new());
 }
 
 /// `map.new` over two fresh resources whose keys are the constants `first` and `second`.

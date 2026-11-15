@@ -38,6 +38,18 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
     })
 }
 
+/// The operands of a `variant.get` whose receiver is a one-case Error variant (`single_error_case`).
+pub(super) fn error_case_get(module: &o::Module, body: &o::Body, op: &o::Operation)
+    -> Result<Option<(o::ValueId, o::FieldRef)>, GenerateError>
+{
+    let o::Operation::Core(o::CoreOp::VariantGet { value, case, field }) = op else { return Ok(None) };
+    let Some(layout) = single_error_case(module, body.values.get(*value)?.ty)? else { return Ok(None) };
+    if *case != 0 || field.declaration != layout {
+        return Err(error("variant.get of a one-case Error variant names another case"));
+    }
+    Ok(Some((*value, *field)))
+}
+
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
 /// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
 /// evaluated the same way: they fail only outside a running case.
@@ -379,7 +391,10 @@ impl Emitter<'_> {
         }
         let may_fail = !summary.contract.failures.is_empty();
         let id = self.summaries.len() as u32;
-        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params: vec![] });
+        // An observation keeps no obligation, but its result may still depend on a parameter (a holder of a
+        // role or Atomic reference): the entry contract states the same retained parameters.
+        let retained_params = retained_parameters(summary)?.into_iter().collect();
+        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params });
         let mut arguments = vec![A::Entry(function.as_u32()), A::Summary(id)];
         arguments.extend(call.args.iter().map(|arg| self.loc(arg.value).map(A::Location))
             .collect::<Result<Vec<_>, _>>()?);
@@ -742,9 +757,31 @@ impl Emitter<'_> {
         Ok(s::Instruction::Br(edge))
     }
 
+    /// `variant.get` of a one-case Error variant: the value is its case object, so the payload is a field
+    /// read that cannot fail. It computes into a fresh register and takes the normal edge.
+    fn error_case_payload(&mut self, value: o::ValueId, field: o::FieldRef, normal: &o::InvokeEdge)
+        -> Result<s::Instruction, GenerateError>
+    {
+        let storage = variant_storage(self.module, self.objects, field)?;
+        let ty = self.objects[field.declaration.as_u32() as usize].layout.storage_fields[storage as usize];
+        let target = fresh(&mut self.result, ty)?;
+        let receiver = self.reg(value)?;
+        self.result.code.push(data(s::DataOp::ObjGet, vec![receiver], target, s::Immediate::Field(storage)));
+        let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &[P::Value(ty)])?;
+        for assignment in &mut edge.assignments {
+            if assignment.source == s::Source::ProducedSlot(0) {
+                assignment.source = s::Source::Location(L::Register(target));
+            }
+        }
+        Ok(s::Instruction::Br(edge))
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
+                if let Some((value, field)) = error_case_get(self.module, self.body, op)? {
+                    return self.error_case_payload(value, field, normal);
+                }
                 if let o::Operation::Core(core) = op.as_ref()
                     && let Some((data, inputs)) = family_operation(core)
                 {
@@ -831,12 +868,14 @@ impl Emitter<'_> {
                     return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
                 }
                 if let o::Operation::Collection(o::CollectionOp::ArrayGet { array, index }) = op.as_ref() {
-                    let s::Type::Array(shape) = translate_type(self.module, self.body.values.get(*array)?.ty)? else {
-                        return Err(error("array.get requires a certified plain array"));
+                    // A plain array or a byte array (`@byte`, SPB 17 `Type::Bytes`): the loader reads the element
+                    // type from the receiver's declared type.
+                    let receiver = translate_type(self.module, self.body.values.get(*array)?.ty)?;
+                    let element = match receiver {
+                        s::Type::Array(_) | s::Type::Bytes => s::element_type(receiver),
+                        _ => return Err(error("array.get requires a plain array or a byte array")),
                     };
-                    let context = s::ResultContext {
-                        value: shape.element(), may_fail: true, ..s::ResultContext::default()
-                    };
+                    let context = s::ResultContext { value: element, may_fail: true, ..s::ResultContext::default() };
                     let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
                         (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
                         let schema = O::ArrayGet.results(tag, &context)?;
@@ -1097,8 +1136,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::VariantNew { packet: None, ty, .. })
                     if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 3,
-            // A total scalar family operation computes into a register and branches with it.
-            o::TermKind::InvokeOwn { op, .. } if total_family_operation(op) => 2,
+            // A total scalar family operation computes into a register and branches with it, as does the
+            // payload read of a one-case Error variant.
+            o::TermKind::InvokeOwn { op, .. } if total_family_operation(op)
+                || error_case_get(module, body, op)?.is_some() => 2,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
@@ -1374,7 +1415,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::Catch { failure, ty, handler, next } => {
                 let ty = translate_type(module, *ty)?;
                 let target = match ty {
-                    s::Type::Object(id) => A::Object(id),
+                    // An Error variant is caught by its declaration: any of its cases.
+                    s::Type::Object(id) | s::Type::Variant(id) => A::Object(id),
                     s::Type::Error => A::Flag(true),
                     _ => return Err(error("catch requires a plain Error")),
                 };

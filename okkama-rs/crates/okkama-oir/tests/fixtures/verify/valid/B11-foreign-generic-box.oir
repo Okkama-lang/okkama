@@ -29,7 +29,7 @@ func @box_int(%self: Box<int> facts(plain(certificate=closed_graph(ty=Box<int>))
 }
 scope S action in @f
 summary Mf call-boundary parameters [parameter_effect(convention=borrow,
-    destination=none)] contract call_contract(failures=[thrown, program, panic, native], suspends=true,
+    destination=none)] contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
     publication=atomic)
 func @f(%value: any facts(managed(deps=dv)); %input: own) -> void [async] summary(Mf) {
     dependency dv: dependency = retention(value=%value, selection=selection(%value))
@@ -38,7 +38,12 @@ func @f(%value: any facts(managed(deps=dv)); %input: own) -> void [async] summar
     %accepted: scope<S> = own.accept %state, %input
     %dictionary: type = type.of ty any, descriptor descriptor_contract(managed=runtime,
         retention=owner_graph(0), cleanup=@drop, async_destroy=true, summary=Mc)
-    %closed: closed = scope.end %accepted, effects scope_effects(
-        failures=[thrown, program, panic, native], suspends=true, cancel=false)
+    invoke.own scope.end %accepted, effects scope_effects(failures=[thrown, program, panic, native], suspends=true,
+        cancel=true)
+        normal ^d18_closed($closed)
+        unwind ^d18_cancelled($closed, $failure)
+^d18_closed(%closed: closed) in S:
     ret
+^d18_cancelled(%d18_closed2: closed, %d18_cancel: failure) in S:
+    raise %d18_cancel
 }

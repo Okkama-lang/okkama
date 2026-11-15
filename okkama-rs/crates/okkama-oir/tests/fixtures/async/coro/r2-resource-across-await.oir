@@ -1,0 +1,222 @@
+oir 2 coro
+// Coro golden of tests/fixtures/async/own/r2-resource-across-await.oir (R2): the bracket of the await saves the
+// scope state that owns R, the reference to R and its deps, and the resume restores them.
+module resource_across_await
+
+object R {
+    destroy @destroy
+}
+scope S0 action in @destroy
+scope S1 action in @make
+scope S2 action in @take
+scope S3 action in @task
+scope S4 action in @f
+summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M1 call-boundary contract call_contract(failures=[cancelled], suspends=true, publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M3 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M5 call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M7 call-boundary contract call_contract(failures=[cancelled], suspends=true, publication=atomic)
+summary M8 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M9 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M10 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M11 internal contract call_contract(publication=atomic)
+summary M12 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(M12) {
+    dependency d0: dependency = from_ssa(%3)
+    dependency d1: dependency = retention(value=%0, selection=selection(%0))
+    ^b0 in S0:
+    %1: deps = deps.of %0
+    br ^b1(%0, %1)
+    ^b1(%2: R facts(managed(deps=d0)), %3: deps) in S0:
+    ret
+}
+
+func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_packet=1) summary(M5) {
+    boundary B0 lexical in S1
+    boundary B1 lexical in S1
+    key k0: key = created(site=7, instance=%5)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = union([d0])
+    dependency d2: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%21)
+    ^b0 in S1:
+    %1: scope<S1> = scope.begin S1
+    %2: scope<S1> = own.accept %1, %0
+    br ^b1(%2)
+    ^b1(%3: scope<S1>) in S1:
+    %4: own = own.empty
+    invoke.own obj.new R {; %4 }
+        normal ^b2($value, $packet, %3)
+        unwind ^b3($packet, $failure, %3)
+    ^b2(%5: R facts(managed(deps=d1)), %6: own, %7: scope<S1>) in S1:
+    %8: deps = deps.of %5
+    %9: scope<S1> = own.admit %7, %6
+    %10: own = own.empty
+    %11: pending = exit.prepare return %5, %10, deps(%8) at B1
+    invoke.own scope.split %9, selection(%5)
+        normal ^b4($state, $selected, $external_deps, %5, %8, %11)
+        unwind ^b5($state, $failure, %11)
+    ^b3(%12: own, %13: failure, %14: scope<S1>) in S1:
+    %15: scope<S1> = own.admit %14, %12
+    %16: failure = scope.unwind %15, %13, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %16
+    ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
+    %23: pending = exit.extend %22, %18
+    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false, cancel=false)
+    (%26: R facts(managed(deps=d3)), %27: own, %28: deps) = exit.commit %25, destination caller, result R
+    ret %26, %27
+    ^b5(%29: scope<S1>, %30: failure, %31: pending) in S1:
+    %32: failure = scope.unwind %29, %30, reserve %31, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %32
+}
+
+func @take(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> own abi explicit(input_packet=2, output_packet=0) summary(M6) {
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%1)
+    ^b0 in S2:
+    %3: scope<S2> = scope.begin S2
+    %4: scope<S2> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: R facts(managed(deps=d0)), %6: deps, %7: scope<S2>) in S2:
+    %8: closed = scope.end %7, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %9: own = own.empty
+    ret %9
+}
+
+func @task(%0: frame<@task>) -> void [async] summary(M7) async-creation(M9) async-body(M7) {
+    frame.layout {
+        slot 0: own linear
+    }
+    continuation 0 start saves [0]
+    boundary B0 lexical in S3
+    selection s0: selection = union([])
+    ^b0 in S3:
+    (%1: frame<@task>, %2: own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=own, linear=true)]
+    %3: scope<S3> = scope.begin S3
+    %4: scope<S3> = own.accept %3, %2
+    br ^b1(%4)
+    ^b1(%5: scope<S3>) in S3:
+    %6: own = own.empty
+    %7: pending = exit.prepare return packet %6 select s0 at B0
+    invoke.own scope.end %5, reserve %7, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b2($closed, $pending)
+        unwind ^b3($closed, $failure)
+    ^b2(%8: closed, %9: pending) in S3:
+    (%10: own, %11: deps) = exit.commit %9, destination caller
+    fut.publish %1, success(packet=%10, deps=%11)
+    ret
+    ^b3(%12: closed, %13: failure) in S3:
+    fut.publish %1, failure(%13)
+    ret
+}
+
+func @f(%0: frame<@f>) -> void [async] summary(M8) async-creation(M10) async-body(M8) {
+    frame.layout {
+        slot 0: own linear
+        slot 1: R
+        slot 2: deps
+        slot 3: scope<S4> linear
+        slot 4: deps
+        slot 5: cache-state linear
+        slot 6: future<void>
+        slot 7: failure
+        slot 8: task-state linear
+        slot 9: receipt linear
+    }
+    continuation 0 start saves [0]
+    continuation 1 at ^b4 saves [1, 2, 3, 4, 5] operands [6]
+    continuation 2 at #17 saves [5] operands [3, 7, 8, 9]
+    service.schedule Schedule0 owner S4, protocol P0, duties [%48]
+    service.schedule Schedule0#1 owner S4, protocol P0, duties [%76]
+    binding b0 "r": R in S4
+    binding b1 "pending": future<void> in S4
+    boundary B0 lexical in S4
+    key k0: key = service_of(value=%26, kind=cache)
+    dependency d0: dependency = from_ssa(%9)
+    dependency d1: dependency = from_ssa(%19)
+    dependency d2: dependency = key(k0)
+    dependency d3: dependency = from_ssa(%36)
+    dependency d4: dependency = from_ssa(%39)
+    dependency d5: dependency = from_ssa(%54)
+    selection s0: selection = admissible(selection(%7))
+    selection s1: selection = union([])
+    selection s2: selection = union([selection(%35)])
+    selection s3: selection = admissible(s2)
+    selection s4: selection = union([])
+    ^b0 in S4:
+    (%1: frame<@f>, %2: own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=own, linear=true)]
+    %3: scope<S4> = scope.begin S4
+    %4: scope<S4> = own.accept %3, %2
+    br ^b1(%4)
+    ^b1(%5: scope<S4>) in S4:
+    %6: own = own.empty
+    invoke.own call @make(; %6)
+        normal ^b2($value, $packet, $deps, %5)
+        unwind ^b3($failure, %5)
+    ^b2(%7: R facts(managed(deps=d0)), %8: own, %9: deps, %10: scope<S4>) in S4:
+    %11: scope<S4> = own.admit %10, %8
+    invoke.own scope.split %11, s0
+        normal ^b4($state, $selected, $external_deps, %7, %9)
+        unwind ^b5($state, $failure)
+    ^b3(%12: failure, %13: scope<S4>) in S4:
+    %14: failure = scope.unwind %13, %12, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %1, failure(%14)
+    ret
+    ^b4(%15: scope<S4>, %16: own, %17: deps, %18: R facts(managed(deps=d1)), %19: deps) in S4:
+    %20: scope<S4> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%18, packet=%16), state=%15, original_scope=S4)
+    %21: own = own.empty
+    (%22: own, %23: own, %24: deps) = own.split %21, s1
+    %25: own = own.join [%22, %23]
+    (%26: future<void> facts(managed(deps=d2)), %27: cache-state, %28: scope<S4>) = fut.new %25, %24, %20, environment deferred(function=@task), owner S4
+    %29: deps = deps.of %26
+    %30: frame<@f> = frame.save %1, slots [frame_slot(slot=1, value=%18, mode=borrow), frame_slot(slot=2, value=%19, mode=borrow), frame_slot(slot=3, value=%28, mode=consume), frame_slot(slot=4, value=%29, mode=borrow), frame_slot(slot=5, value=%27, mode=consume)], continuation 1
+    invoke.own await %26
+        normal ^b12($deps)
+        unwind ^b13($failure, $task, $receipt)
+    ^b5(%31: scope<S4>, %32: failure) in S4:
+    %33: failure = scope.unwind %31, %32, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %1, failure(%33)
+    ret
+    ^b6(%34: deps, %35: R facts(managed(deps=d3)), %36: deps, %37: future<void> facts(managed(deps=d4)), %38: scope<S4>, %39: deps) in S4:
+    invoke.own scope.split %38, s3
+        normal ^b8($state, $selected, $external_deps, %35, %36)
+        unwind ^b9($state, $failure)
+    ^b7(%40: failure, %41: task-state, %42: receipt, %43: scope<S4>) in S4:
+    %44: frame<@f> = frame.save %80, slots [frame_slot(slot=5, value=%85, mode=consume)], continuation 2
+    [i17] (%45: scope<S4>, %46: failure) = await.unwind %43, %40, %41, %42, protocol P0
+    (%47: frame<@f>, %48: cache-state) = frame.resume %44, continuation 2, slots [saved_slot(slot=5, ty=cache-state, linear=true)]
+    %49: failure = scope.unwind %45, %46, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %47, failure(%49)
+    ret
+    ^b8(%50: scope<S4>, %51: own, %52: deps, %53: R facts(managed(deps=d5)), %54: deps) in S4:
+    %55: own = own.join [%51]
+    (%56: own, %57: deps) = call @take(%53; %55) deps [%54]
+    %58: scope<S4> = own.admit %50, %56
+    %59: own = own.empty
+    %60: pending = exit.prepare return packet %59 select s4 at B0
+    invoke.own scope.end %58, reserve %60, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b10($closed, $pending)
+        unwind ^b11($closed, $failure)
+    ^b9(%61: scope<S4>, %62: failure) in S4:
+    %63: failure = scope.unwind %61, %62, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %71, failure(%63)
+    ret
+    ^b10(%64: closed, %65: pending) in S4:
+    (%66: own, %67: deps) = exit.commit %65, destination caller
+    fut.publish %71, success(packet=%66, deps=%67)
+    ret
+    ^b11(%68: closed, %69: failure) in S4:
+    fut.publish %71, failure(%69)
+    ret
+    ^b12(%70: deps) in S4:
+    (%71: frame<@f>, %72: R facts(managed(deps=d1)), %73: deps, %74: scope<S4>, %75: deps, %76: cache-state) = frame.resume %30, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=deps), saved_slot(slot=5, ty=cache-state, linear=true)]
+    br ^b6(%70, %72, %73, %26, %74, %75)
+    ^b13(%77: failure, %78: task-state, %79: receipt) in S4:
+    (%80: frame<@f>, %81: R facts(managed(deps=d1)), %82: deps, %83: scope<S4>, %84: deps, %85: cache-state) = frame.resume %30, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=deps), saved_slot(slot=5, ty=cache-state, linear=true)]
+    br ^b7(%77, %78, %79, %83)
+}

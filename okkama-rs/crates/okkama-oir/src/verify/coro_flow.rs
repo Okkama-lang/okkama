@@ -28,6 +28,11 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
             sync(module, function, body, state);
         } else if let Some(layout) = &body.frame_layout {
             Frames::new(module, function, body, layout, state).check();
+        } else {
+            // D21: every async body of coro/low declares its frame layout; without one the suspension, frame and
+            // root rules of D20/D21 would not apply to it.
+            state.at(L::Function(function), data.loc);
+            state.error(R::CoroMissingLayout, "an async body of coro/low declares its D21 frame layout");
         }
     }
 }
@@ -296,10 +301,17 @@ impl<'s, 'a> Frames<'s, 'a> {
     }
 
     fn operands(&self, site: Site) -> Vec<ValueId> {
-        self.site_op(site).map(|op| op.operand_refs().into_iter().filter_map(|operand| match operand.reference {
+        let mut operands = self.site_op(site).map(Operation::operand_refs).unwrap_or_default();
+        // C-6: the call of an async defer entry is the operation that `invoke.defer` suspends on.
+        if let Site::Terminator(block) = site
+            && let Ok(Block { term: Terminator { kind: TermKind::InvokeDefer { call, .. }, .. }, .. })
+                = self.body.blocks.get(block) {
+            call.append(OperandMode::Borrow, &mut operands);
+        }
+        operands.into_iter().filter_map(|operand| match operand.reference {
             OperandRef::Value(value) => Some(value),
             _ => None,
-        }).collect()).unwrap_or_default()
+        }).collect()
     }
 
     /// Values that the edges of a suspending terminator pass on.
@@ -310,10 +322,15 @@ impl<'s, 'a> Frames<'s, 'a> {
         let Ok(data) = self.body.blocks.get(block) else {
             return Vec::new();
         };
-        let TermKind::InvokeOwn { normal, unwind, .. } = &data.term.kind else {
-            return Vec::new();
+        let edges: Vec<&InvokeEdge> = match &data.term.kind {
+            TermKind::InvokeOwn { normal, unwind, .. } => vec![normal, unwind],
+            TermKind::InvokeDefer { continue_edge, replacements, unwind, .. } => {
+                std::iter::once(continue_edge).chain(replacements.iter().map(|replacement| &replacement.edge))
+                    .chain(unwind.iter()).collect()
+            }
+            _ => return Vec::new(),
         };
-        normal.args.iter().chain(&unwind.args).filter_map(|arg| match arg {
+        edges.into_iter().flat_map(|edge| &edge.args).filter_map(|arg| match arg {
             EdgeArg::Value(value) => Some(*value),
             EdgeArg::Produced(_) => None,
         }).collect()

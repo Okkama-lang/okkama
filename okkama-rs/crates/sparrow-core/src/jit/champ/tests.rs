@@ -855,7 +855,8 @@ fn p1_runtime() -> Box<Runtime> {
         }).collect();
         program.objects.push(s::Object {
             name: name.into(), error_cases, enum_cases: 0, variant_cases: vec![],
-            handle: name == "runtime.buffer.BufferState", role: None, implements: vec![], any_box: false,
+            handle: name == "runtime.buffer.BufferState", role: None, implements: vec![],
+            any_box: false, enum_names: vec![],
             fields: if name == "app.Problem.note" {
                 vec![s::Field { name: "message".into(), storage: 0, once: false }]
             } else {
@@ -881,7 +882,7 @@ fn p1_runtime() -> Box<Runtime> {
     // An unresolved provider: the checked adapter with handle transport of its own module.
     program.objects.push(s::Object {
         name: "app.Port".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true,
-        role: None, implements: vec![], any_box: false, fields: vec![],
+        role: None, implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
         layout: s::ObjectRuntimeLayout {
             allocation_words: 2, identity_offset: None, has_destroy: false, may_reach_resource: false,
             may_async_destroy: false, storage_fields: vec![], trace_layout: vec![], selection_layout: vec![],
@@ -1130,6 +1131,143 @@ fn champ_p1_observation_outcomes_and_gc() {
     assert_eq!(ctx.status, FAILED);
     assert!(matches!(runtime.failure(ctx.failure).unwrap().kind, FailureKind::Thrown(_)));
     assert_eq!(runtime.failure(ctx.failure).unwrap().trace.len(), 1);
+}
+
+/// `array.get` of a byte array (`@byte`, #703): a packed byte per element, read as a raw byte word; an index
+/// outside the array fails with Tomato's text.
+#[test]
+fn champ_byte_array_get_reads_packed_bytes_and_checks_bounds() {
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "bytes".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Byte, s::Type::Byte, s::Type::Byte, s::Type::Bytes, s::Type::Byte,
+            s::Type::Failure],
+        services: vec![], params: vec![reg(0)], results: vec![s::Type::Byte],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0)] },
+            s::Block { pc: 5, params: vec![reg(5)] },
+            s::Block { pc: 6, params: vec![reg(6)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(1),
+                immediate: s::Immediate::Constant(s::Constant::Byte(0)) },
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(2),
+                immediate: s::Immediate::Constant(s::Constant::Byte(171)) },
+            s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(3),
+                immediate: s::Immediate::Constant(s::Constant::Byte(255)) },
+            s::Instruction::Data { op: s::DataOp::ArrayNew, inputs: vec![1, 2, 3], output: Some(4),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: O::ArrayGet,
+                arguments: vec![A::Location(reg(4)), A::Location(reg(0))],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 5, assignments: vec![s::Assignment {
+                            destination: reg(5), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 6, assignments: vec![s::Assignment {
+                            destination: reg(6), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]) },
+            s::Instruction::Ret(vec![5]),
+            s::Instruction::Raise(6),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    for (index, expected) in [("0", Some(0)), ("1", Some(171)), ("2", Some(255)), ("3", None), ("-1", None),
+        ("999999999999999999999999999999999999999999", None)]
+    {
+        ctx.status = OK;
+        ctx.failure = 0;
+        let index_word = runtime.heap.big(index.parse().unwrap());
+        let value = unsafe { invoke(code, &mut ctx, &[index_word]) };
+        match expected {
+            Some(byte) => {
+                assert_eq!(ctx.status, OK, "{index}");
+                assert_eq!(value, byte, "{index}");
+            }
+            None => {
+                assert_eq!(ctx.status, FAILED, "{index}");
+                let failure = runtime.failure(ctx.failure).unwrap();
+                assert!(matches!(&failure.kind, FailureKind::Program(message)
+                    if message == "Array index out of bounds"), "{index}");
+            }
+        }
+    }
+}
+
+/// Module constants (#709): built from their data before the program runs, kept across a collection, and
+/// read by `global.get` as the same values.
+#[test]
+fn champ_globals_are_built_before_the_run_and_read_in_place() {
+    let ints = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 1 });
+    let int = |value: &str| s::Datum {
+        ty: s::Type::Int, value: s::DatumValue::Constant(s::Constant::Int(value.into())),
+    };
+    let read = |global: u32, ty: s::Type| {
+        let mut function = s::Function {
+            symbol: format!("read{global}"), entry_abi: s::EntryAbi::Observation, registers: vec![ty],
+            services: vec![], params: vec![], results: vec![ty], blocks: vec![s::Block { pc: 0, params: vec![] }],
+            proofs: s::FunctionProofs::default(),
+            code: vec![
+                s::Instruction::Data { op: s::DataOp::GlobalGet, inputs: vec![], output: Some(0),
+                    immediate: s::Immediate::Global(global) },
+                s::Instruction::Ret(vec![0]),
+            ],
+        };
+        function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+            .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+            .collect();
+        function
+    };
+    let source = s::Program {
+        composites: vec![s::Composite::Map { key: s::Type::Int, value: s::Type::Str }],
+        globals: vec![
+            s::Global { name: "PRIMES".into(), ty: ints, data: vec![
+                int("2"), int("18446744073709551614"), s::Datum { ty: ints, value: s::DatumValue::Array(vec![0, 1]) },
+            ] },
+            s::Global { name: "NAMES".into(), ty: s::Type::Map(0), data: vec![
+                int("1"), s::Datum { ty: s::Type::Str, value: s::DatumValue::Constant(s::Constant::Str("one".into())) },
+                int("1"), s::Datum { ty: s::Type::Str, value: s::DatumValue::Constant(s::Constant::Str("uno".into())) },
+                s::Datum { ty: s::Type::Map(0), value: s::DatumValue::Map(vec![0, 1, 2, 3]) },
+            ] },
+        ],
+        functions: vec![read(0, ints), read(1, s::Type::Map(0))],
+        ..s::Program::default()
+    };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let constants = runtime.constants.clone();
+    runtime.heap.collect(|visit| constants.iter().for_each(|&(word, repr)| visit(word, repr)));
+    for _ in 0..1000 {
+        runtime.heap.allocate_text("garbage after the build");
+    }
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    let array = unsafe { invoke(code, &mut ctx, &[]) };
+    assert_eq!(ctx.status, OK);
+    let elements = runtime.heap.elements(array).into_owned();
+    assert_eq!(runtime.small_or_big(elements[0]), Some(2));
+    assert_eq!(runtime.big_value(elements[1]).to_string(), "18446744073709551614");
+    assert_eq!(unsafe { invoke(code, &mut ctx, &[]) }, array, "one value, built once");
+    let code = compile(&mut runtime, 1).unwrap();
+    let map = unsafe { invoke(code, &mut ctx, &[]) };
+    let entries = &runtime.heap.payload::<crate::ops::MapValue>(map).unwrap().entries;
+    // Later equal keys replace the value, as map.new.
+    assert_eq!(entries.len(), 1);
+    let (_, value) = entries.values().next().unwrap();
+    assert_eq!(runtime.heap.text(*value), "uno");
 }
 
 #[test]

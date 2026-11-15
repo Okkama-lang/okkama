@@ -418,6 +418,10 @@ pub(super) struct Cleanup {
     pub planned: bool,
     pub aborted: bool,
     pub done: bool,
+    /// D18 at an async body's final exit (decision L2): the deferred cancellation was delivered, after the first
+    /// plan; the aborted reserve's executor plan, the second and last, has begun.
+    pub delivered: bool,
+    pub second: bool,
     pub active: Option<(Word, u64, HolderId, OwnerId)>,
     pub invoked: bool,
     pub captured: Word,

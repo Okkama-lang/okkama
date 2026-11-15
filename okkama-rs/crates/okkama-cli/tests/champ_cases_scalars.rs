@@ -228,5 +228,3 @@ case!(char_raw_string_keeps_cr, "L01.lex.crlf.raw-string-keeps-cr");
 case!(char_code_round_trip, "L02.char.code-round-trip");
 case!(char_string_cast, "L02.char.string-cast");
 case!(char_surrogate_rejected, "L02.char.surrogate-rejected");
-// `LETTER.string()` lowers; the collection constants are globals, which the SPB 17 layout does not take yet.
-through_low!(const_values, "L06.const.values");

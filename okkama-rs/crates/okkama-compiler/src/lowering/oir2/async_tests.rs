@@ -482,6 +482,11 @@ fn w1_high_to_coro(id: &str) -> Result<ir::Module, String> {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lowering/oir2/goldens/p2_5");
     let text = std::fs::read_to_string(directory.join(format!("{id}.oir"))).unwrap();
     let high = ir::text::parse(&text).map_err(|error| format!("parse: {error:?}"))?;
+    high_to_coro(high)
+}
+
+/// High -> verify_high (Full) -> own -> verify_own (Full) -> coro -> verify_coro (Full).
+fn high_to_coro(high: ir::Module) -> Result<ir::Module, String> {
     let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
     let catalog = super::native_summaries::P1NativeSummaries::for_module(&high)
         .map_err(|error| format!("contracts: {error:?}"))?;
@@ -532,7 +537,11 @@ fn oir2_w1_every_case_reaches_verified_coro() {
 
 /// High → own → coro → low (OIR-2 §12, plan V4), with the full verifier after each pass.
 fn w1_high_to_low(id: &str) -> Result<ir::Module, String> {
-    let coro = w1_high_to_coro(id)?;
+    coro_to_low(w1_high_to_coro(id)?)
+}
+
+/// Coro -> low -> verify_low (Full).
+fn coro_to_low(coro: ir::Module) -> Result<ir::Module, String> {
     let catalog = super::native_summaries::P1NativeSummaries::for_module(&coro)
         .map_err(|error| format!("contracts_coro: {error:?}"))?;
     let low = ir::low::lower_cleanup(coro, &ir::low::LowOptions::default()).map_err(|error| format!("low: {error}"))?;
@@ -573,6 +582,31 @@ w1_reaches_verified_low! {
 #[test]
 fn oir2_w1_every_case_reaches_verified_low() {
     assert_eq!(W1_LOW, W1);
+}
+
+/// An awaited role value of a plain object is managed: the shared await gives it full deps (the cache service
+/// key and the outcome's external deps), so a role call on it passes them (`L12.role-restriction-through-async`,
+/// #710).
+#[test]
+fn oir2_v5_awaited_role_value_carries_full_deps() {
+    let high = lower("module app v1.0.0;
+role Named {
+    name() is string;
+}
+object Account does Named {
+    Account();
+    name() is string { \"acct\"; }
+}
+object Loader {
+    Loader();
+    async load() is Named { Account(); }
+}
+async main() is int {
+    let named = await Loader().load();
+    named.name().length();
+}");
+    let coro = high_to_coro(high).unwrap_or_else(|error| panic!("{error}"));
+    coro_to_low(coro).unwrap_or_else(|error| panic!("{error}"));
 }
 
 fn services(module: &ir::Module) -> Vec<ir::ProtocolDecl> {

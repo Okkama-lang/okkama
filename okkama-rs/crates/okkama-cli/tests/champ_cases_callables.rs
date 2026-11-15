@@ -1,8 +1,7 @@
 #![cfg(feature = "champ-abi")]
 //! #569 C3b (open action invocation) conformance cases, run end to end in Champ in
-//! process and compared with their case.json. A case the SPB 17 backend does not take
-//! yet is checked through own and Low (`through_low!`); a case that stops before Low is
-//! ignored with its ticket. The C6 (`any`) cases are in `champ_cases_any.rs`.
+//! process and compared with their case.json; a case that stops before Low is ignored
+//! with its ticket. The C6 (`any`) cases are in `champ_cases_any.rs`.
 //! Only pure language cases: no processes, workers, network or test mode.
 
 use okkama_compiler::lowering::{LoadedModule, ModuleLoader, RootFile, oir2};
@@ -57,7 +56,39 @@ fn case_directory(id: &str) -> PathBuf {
 struct Observed {
     exit: Option<i64>,
     stdout: String,
+    /// The category of the failure report when the program failed.
+    failure: Option<&'static str>,
 }
+
+/// The failure category of a Champ report, as the conformance runner reads its first line: a runtime error
+/// (also a cancellation or an exhausted budget), a panic, or an uncaught error.
+fn category(report: &str) -> &'static str {
+    let line = report.lines().find(|line| !line.trim().is_empty()).unwrap_or("").trim();
+    if line.starts_with("RuntimeError: ") || line.starts_with("Cancelled: ") || line.starts_with("Execution ") {
+        return "runtime";
+    }
+    if line.starts_with("Panic: ") {
+        return "panic";
+    }
+    match line.split_once(": ") {
+        Some((name, _)) if line.starts_with("Uncaught ") || name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => "uncaught-error",
+        _ => "runtime",
+    }
+}
+
+/// The one failure category a failing case expects.
+fn expected_category(id: &str, expect: &Value) -> Option<&'static str> {
+    let categories = expect["failure"]["categories"].as_array()?;
+    let [only] = categories.as_slice() else { panic!("{id}: one expected failure category") };
+    Some(match only.as_str() {
+        Some("runtime") => "runtime",
+        Some("panic") => "panic",
+        Some("uncaught-error") => "uncaught-error",
+        other => panic!("{id}: unsupported failure category {other:?}"),
+    })
+}
+
 
 fn run(id: &str) -> Result<Observed, String> {
     let directory = case_directory(id);
@@ -65,7 +96,8 @@ fn run(id: &str) -> Result<Observed, String> {
     let bytes = compile(&directory, &text).map_err(|error| format!("build: {error}"))?;
     let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
     let run = sparrow_core::run_captured(bytes, limits).map_err(|error| format!("load: {error}"))?;
-    Ok(Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned() })
+    let failure = run.result.as_ref().err().map(|error| category(&error.0));
+    Ok(Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned(), failure })
 }
 
 /// A `failure` or `error` outcome expects a runtime failure; `success` expects its exit status.
@@ -81,7 +113,8 @@ fn expected(id: &str) -> Observed {
         "failure" | "error" => None,
         outcome => panic!("{id}: unsupported outcome {outcome}"),
     };
-    Observed { exit, stdout }
+    let failure = exit.is_none().then(|| expected_category(id, expect)).flatten();
+    Observed { exit, stdout, failure }
 }
 
 fn check(id: &str) {
@@ -89,31 +122,9 @@ fn check(id: &str) {
     let expected = expected(id);
     assert_eq!(observed.stdout, expected.stdout, "{id}: stdout");
     assert_eq!(observed.exit, expected.exit, "{id}: exit");
-}
-
-/// Stages after verify_low belong to the SPB 17 / Champ lane.
-const BACKEND: [&str; 4] = ["layout", "compile_low", "verify_load", "encode"];
-
-/// The case passes own and low; it runs in Champ once the backend accepts it.
-fn check_through_low(id: &str) {
-    let directory = case_directory(id);
-    let text = std::fs::read_to_string(directory.join("main.ok")).unwrap();
-    match compile(&directory, &text) {
-        Ok(_) => check(id),
-        Err(oir2::PipelineError::Phase { phase, message }) if BACKEND.contains(&phase) => {
-            println!("{id}: own and low passed; stops in {phase}: {message}");
-        }
-        Err(error) => panic!("{id}: {error}"),
+    if expected.failure.is_some() {
+        assert_eq!(observed.failure, expected.failure, "{id}: failure category");
     }
-}
-
-macro_rules! through_low {
-    ($name:ident, $id:literal) => {
-        #[test]
-        fn $name() {
-            check_through_low($id);
-        }
-    };
 }
 
 macro_rules! case {
@@ -148,8 +159,8 @@ case!(open_invariant_escaped_self_bound_action, "L04.invariant.escaped-self-boun
 case!(open_privacy_closure_reads_self_field, "L04.privacy.closure-reads-self-field");
 case!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked");
 case!(open_successor_closure_transferred, "L04.successor.closure-transferred");
-// compile_low: a managed array and map of role values that reach resources.
-through_low!(open_regions_role_instances, "L07.regions.role-instances");
+// Managed arrays and maps of role values that reach resources (#711).
+case!(open_regions_role_instances, "L07.regions.role-instances");
 stops_before_low!(open_collections_ordered_sets, "L09.collections.ordered-sets",
     "#687: low cleanup inventory inference exceeds the step budget");
 
@@ -159,7 +170,8 @@ fn run_source(text: &str) -> Observed {
     let bytes = compile(&directory, text).unwrap_or_else(|error| panic!("build: {error}"));
     let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
     let run = sparrow_core::run_captured(bytes, limits).unwrap_or_else(|error| panic!("load: {error}"));
-    Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned() }
+    let failure = run.result.as_ref().err().map(|error| category(&error.0));
+    Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned(), failure }
 }
 
 /// An open call that returns a fresh resource: the Closure protocol moves it into the calling scope, which
@@ -191,7 +203,7 @@ main() is int {
     0;
 }"#);
     let stdout = "got made\ndestroy made\nagain made\nend\ndestroy made\n";
-    assert_eq!(observed, Observed { exit: Some(0), stdout: stdout.into() });
+    assert_eq!(observed, Observed { exit: Some(0), stdout: stdout.into(), failure: None });
 }
 
 /// An opaque action value that owns a resource it captured: each call reads it, and the resource is destroyed
@@ -218,5 +230,23 @@ main() is int {
     out.writeln("end");
     0;
 }"#);
-    assert_eq!(observed, Observed { exit: Some(0), stdout: "kept!\nkept!\nend\ndestroy kept\n".into() });
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "kept!\nkept!\nend\ndestroy kept\n".into(), failure: None });
+}
+
+/// The failure report of a case run in Champ.
+fn report(id: &str) -> String {
+    let directory = case_directory(id);
+    let text = std::fs::read_to_string(directory.join("main.ok")).unwrap();
+    let bytes = compile(&directory, &text).unwrap_or_else(|error| panic!("{id}: build: {error}"));
+    let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
+    let run = sparrow_core::run_captured(bytes, limits).unwrap_or_else(|error| panic!("{id}: load: {error}"));
+    run.result.expect_err("a failing case").0
+}
+
+/// #712: a bound action of a receiver whose construction is pending fails when it is called, with Tomato's
+/// runtime error; a closure trampoline that passed its input packet to the failing call has consumed it.
+#[test]
+fn a_bound_action_of_a_pending_receiver_fails_like_tomato() {
+    assert_eq!(report("L04.invariant.escaped-self-bound-action"),
+        "RuntimeError: Action \"name\" on object \"Parent\" was called before its construction completed");
 }

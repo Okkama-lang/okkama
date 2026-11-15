@@ -69,7 +69,7 @@ fn plain_object(name: &str, fields: Vec<Type>, resource: bool) -> Object {
         .collect();
     Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
-        role: None, implements: vec![], any_box: false,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
         fields: (0..fields.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
             .collect(),
         layout: ObjectRuntimeLayout {
@@ -288,15 +288,18 @@ fn never_keyed_maps_keep_their_value_type() {
     verify_load(&retag(0, 3), &NoExternalContracts).unwrap();
     verify_load(&retag(1, 2), &NoExternalContracts).unwrap();
     reject(&retag(1, 3), "NEVER_RETAG");
-    // An array of never leaves keeps its depth.
-    let empty = Type::Array(ArrayType { leaf: ArrayLeaf::Never, depth: 1 });
-    let deep = Type::Array(ArrayType { leaf: ArrayLeaf::Int, depth: 2 });
-    let p = straight(vec![empty, deep, Type::Int], vec![
+    // The empty arrays at the never level may take a deeper shape (`[]` as `@@int`, OIR-2 array.retag), never a
+    // shallower one, where an array would be read as a leaf.
+    let retag = |from: ArrayType, to: ArrayType| straight(vec![Type::Array(from), Type::Array(to), Type::Int], vec![
         data(DataOp::ArrayNew, vec![], 0),
         data(DataOp::Move, vec![0], 1),
         data(DataOp::ArrayLen, vec![1], 2),
     ]);
-    reject(&p, "NEVER_RETAG");
+    let never = |depth| ArrayType { leaf: ArrayLeaf::Never, depth };
+    let ints = |depth| ArrayType { leaf: ArrayLeaf::Int, depth };
+    verify_load(&retag(never(1), ints(2)), &NoExternalContracts).unwrap();
+    verify_load(&retag(never(2), ints(3)), &NoExternalContracts).unwrap();
+    reject(&retag(never(2), ints(1)), "NEVER_RETAG");
 }
 
 /// The audit's type confusion: an `undef` stored in a never field and read back is a never value; a map of it

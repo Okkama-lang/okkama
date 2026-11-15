@@ -320,8 +320,11 @@ macro_rules! record {
 }
 
 record! { Program {
-    module, version, objects, tables, functions, entry; tests, composites,
+    module, version, objects, tables, functions, entry; tests, composites, globals,
 } }
+
+record! { Global { name, ty, data } }
+record! { Datum { ty, value } }
 
 record! { Test { name, function } }
 
@@ -332,7 +335,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements, any_box,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements, any_box, enum_names,
 } }
 record! { RoleDecl { slots } }
 record! { RoleSlot { name, entry_abi, params, results } }
@@ -491,9 +494,12 @@ tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(v
     3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String),
     7 => Rat(value: RatValue) } }
 record! { RatValue { numerator, denominator } }
+tagged! { DatumValue {
+    0 => Constant(value: Constant), 1 => Case(case: u32), 2 => Array(items: Vec<u32>), 3 => Map(items: Vec<u32>),
+} }
 tagged! { Immediate {
     0 => None, 1 => Constant(value: Constant), 2 => Inclusive(flag: bool),
-    3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>),
+    3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>), 6 => Global(index: u32),
 } }
 tagged! { Tag {
     0 => Normal, 1 => Unwind, 2 => Selected, 3 => Done, 4 => Continue, 5 => Replace(label: u32),
@@ -591,6 +597,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         92 => Some("obj.get"),
         93 => Some("obj.next"),
         94 => Some("enum.case"),
+        95 => Some("global.get"),
         140 => Some("br"),
         141 => Some("cond"),
         142 => Some("ret"),
@@ -676,6 +683,7 @@ impl DataOp {
             Self::ObjGet => (92, None),
             Self::ObjNext => (93, None),
             Self::EnumCase => (94, None),
+            Self::GlobalGet => (95, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
             Self::RoleNarrow => (100, Some(0)),
@@ -785,6 +793,7 @@ impl DataOp {
             (92, None) => Ok(Self::ObjGet),
             (93, None) => Ok(Self::ObjNext),
             (94, None) => Ok(Self::EnumCase),
+            (95, None) => Ok(Self::GlobalGet),
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
             (100, Some(0)) => Ok(Self::RoleNarrow),

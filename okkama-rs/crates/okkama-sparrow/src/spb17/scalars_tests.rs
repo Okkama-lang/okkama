@@ -42,7 +42,7 @@ fn plain_object(name: &str, storage_fields: Vec<Type>) -> Object {
         name: name.into(),
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false,
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false, enum_names: vec![],
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: ObjectRuntimeLayout {
             storage_fields, allocation_words: (1 + count).max(2), identity_offset: None, has_destroy: false,
@@ -206,12 +206,37 @@ fn value_equality_compares_objects_of_one_declaration() {
     verify_load(&with_declarations(program(registers.clone(), code(0, 1), false, 2)), &NoExternalContracts)
         .unwrap();
     reject(&with_declarations(program(registers.clone(), code(0, 1), false, 0)), "ENTRY_FAILURE_MASK");
-    let code = vec![
-        constant(0, Constant::Int("1".into())),
-        constant(1, Constant::Int("1".into())),
-        data(DataOp::ValEq, vec![0, 1], 2, Immediate::None),
+}
+
+/// OIR-1 §16.3: `val.eq` on scalars is the scalar `==`. A generic `==` specialized to a scalar
+/// (`Frequencies<string>.amount`) reaches SPB as `val.eq` of two values of that scalar type.
+#[test]
+fn value_equality_compares_two_values_of_one_scalar_type() {
+    let compare = |left: (Type, Constant), right: (Type, Constant)| {
+        let code = vec![
+            constant(0, left.1),
+            constant(1, right.1),
+            data(DataOp::ValEq, vec![0, 1], 2, Immediate::None),
+        ];
+        with_declarations(program(vec![left.0, right.0, Type::Bool], code, false, 2))
+    };
+    let int = || (Type::Int, Constant::Int("1".into()));
+    let float = || (Type::Float, Constant::Float(1.0f64.to_bits().to_string()));
+    let scalars = [
+        int(),
+        float(),
+        (Type::Bool, Constant::Bool(true)),
+        (Type::Str, Constant::Str("blue".into())),
+        (Type::Char, Constant::Char(u32::from('x'))),
+        (Type::Byte, Constant::Byte(7)),
+        (Type::Rat, Constant::Rat(RatValue { numerator: "1".into(), denominator: "2".into() })),
     ];
-    reject(&with_declarations(program(vec![Type::Int, Type::Int, Type::Bool], code, false, 2)), "VAL_EQ_TYPE");
+    for scalar in scalars {
+        verify_load(&compare(scalar.clone(), scalar.clone()), &NoExternalContracts)
+            .unwrap_or_else(|error| panic!("{:?}: {error:?}", scalar.0));
+    }
+    reject(&compare(int(), float()), "VAL_EQ_TYPE");
+    reject(&compare((Type::Str, Constant::Str("1".into())), int()), "VAL_EQ_TYPE");
 }
 
 #[test]

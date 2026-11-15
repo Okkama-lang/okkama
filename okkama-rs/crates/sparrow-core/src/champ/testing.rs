@@ -164,20 +164,25 @@ fn show_into(runtime: &Runtime, program: &s::Program, word: Word, ty: s::Type, q
     }
 }
 
-/// Run the tests table of a verified SPB 17 program and write the standard report: true when no test
-/// failed. Each test runs on a fresh runtime under `limits`.
+/// Run the tests table of an SPB 17 program and write the standard report: true when no test failed.
+/// Each test runs on a fresh runtime under `limits`.
+#[cfg(test)]
 pub(crate) fn run_suite(program: s::Program, out: Box<dyn std::io::Write + Send>, limits: crate::budget::Limits)
     -> Result<bool, Error>
 {
-    let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
-    if tests.is_empty() {
-        return Err(Error("Test run requires at least one test".into()));
-    }
+    suite_tests(&program)?;
+    run_verified_suite(&machine::Verified::new(program, Vec::new())?, out, limits)
+}
+
+/// [`run_suite`] for a program the loader has already checked: every case gets a fresh runtime over the
+/// same verified program, and nothing verifies it again.
+pub(crate) fn run_verified_suite(verified: &machine::Verified, out: Box<dyn std::io::Write + Send>,
+    limits: crate::budget::Limits) -> Result<bool, Error>
+{
+    let tests = suite_tests(verified.source())?;
     let names = tests.iter().map(|test| test.name.clone()).collect::<Vec<_>>();
-    // The loader checks the program once; every case gets a fresh runtime over the same verified program.
-    let verified = machine::Verified::new(program, Vec::new())?;
     crate::report_suite(&names, out, |index| {
-        let mut runtime = Runtime::new_champ_verified(&verified)?;
+        let mut runtime = Runtime::new_champ_verified(verified)?;
         runtime.limits = limits.clone();
         if let Some(host) = &mut runtime.host {
             host.test_failures = Some(Vec::new());
@@ -199,6 +204,14 @@ pub(crate) fn run_suite(program: s::Program, out: Box<dyn std::io::Write + Send>
         }
         Ok(crate::CaseOutcome { failures, skipped })
     })
+}
+
+fn suite_tests(program: &s::Program) -> Result<Vec<s::Test>, Error> {
+    let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
+    if tests.is_empty() {
+        return Err(Error("Test run requires at least one test".into()));
+    }
+    Ok(tests)
 }
 
 #[cfg(test)]

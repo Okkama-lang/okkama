@@ -760,3 +760,69 @@ fn dynamic_protocols_map_to_spb17_protocols() {
     *services.protocols.get_mut(boxed).unwrap() = o::catalogue::services_protocol();
     assert!(protocol(&services, boxed).is_err());
 }
+
+const MIXED_BOXES: &str = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Shape { area() is int; }
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+object Holder {
+    has items is @any;
+    Holder(:items);
+    count() is int { items.size(); }
+}
+main() is int {
+    let out = Stdout();
+    let shapes is @Shape = [Square(side: 2), Square(side: 3)];
+    {
+        let mixed is @any = [Res(name: "boxed"), 7, "text"];
+        let holder = Holder(items: mixed);
+        out.writeln(holder.count().string() + " " + shapes.size().string());
+    }
+    0;
+}
+"#;
+
+/// #711: a box of a resource makes every `any` collection managed, so an object that holds one selects it; the
+/// role whose implementations are plain keeps its arrays closed plain data, and the program loads.
+#[test]
+fn a_reaching_box_makes_any_collections_managed_and_plain_roles_stay_plain() {
+    let p = compile(MIXED_BOXES);
+    let holder = &p.objects[object(&p, "app.Holder") as usize];
+    assert_eq!(holder.layout.storage_fields, vec![s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Any, depth: 1 })]);
+    assert_eq!(holder.layout.selection_layout, vec![0]);
+    assert!(holder.layout.may_reach_resource);
+    let shape = object(&p, "app.Shape");
+    assert!(!p.objects[object(&p, "app.Square") as usize].layout.may_reach_resource);
+    let main = &p.functions[function(&p, "main")];
+    assert!(main.registers.contains(&s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Role(shape), depth: 1 })));
+    assert!(p.objects.iter().any(|object| object.any_box && object.layout.may_reach_resource));
+    assert!(p.objects.iter().any(|object| object.any_box && !object.layout.may_reach_resource));
+    load(&p).unwrap();
+}
+
+/// #700: an observation that keeps no obligation may still retain a parameter: `Holder(item:)` stores the role
+/// value it is given, so the call summary states the retained parameter as the entry contract does.
+#[test]
+fn an_observation_call_states_the_parameters_it_retains() {
+    let p = compile(ROLES);
+    let holder = function(&p, "app.Holder.new#0");
+    assert_eq!(p.functions[holder].proofs.entry.as_ref().unwrap().retained_params, vec![0]);
+    let main = &p.functions[function(&p, "main")];
+    let summary = main.code.iter().find_map(|instruction| match instruction {
+        s::Instruction::Champ { op: s::Opcode::InvokeObserve, arguments, .. }
+            if arguments.contains(&s::Argument::Entry(holder as u32)) => arguments.iter().find_map(|argument| {
+                match argument { s::Argument::Summary(id) => Some(*id), _ => None }
+            }),
+        _ => None,
+    }).expect("observation call of Holder.new");
+    assert_eq!(p.tables.summaries[summary as usize].retained_params, vec![0]);
+}

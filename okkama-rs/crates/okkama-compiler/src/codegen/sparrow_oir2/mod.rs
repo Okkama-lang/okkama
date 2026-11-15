@@ -124,6 +124,7 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
     let synthetic = roles::Synthetic::of(module)?;
     p.composites = composites(module).entries().to_vec();
     p.tables.future_results = composites(module).futures().to_vec();
+    p.globals = globals(module)?;
     for (id, scope) in module.scopes.iter() {
         p.tables.scopes.push(s::Scope {
             function: scope.function.as_u32(),
@@ -222,7 +223,9 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             // A cap value is its owner's reference: the cap declaration is a placeholder descriptor.
             o::DeclarationKind::Role { .. } | o::DeclarationKind::Cap { .. } => (&[][..], &[][..], None),
             o::DeclarationKind::Handle => (&[][..], &[][..], None),
-            _ => return Err(unsupported("non-object declaration")),
+            // A module constant is laid out in `Program::globals`; its declaration keeps a placeholder
+            // descriptor so that descriptor indices stay declaration indices.
+            o::DeclarationKind::Global { .. } => (&[][..], &[][..], None),
         };
         let role = match &declaration.kind {
             o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => None,
@@ -264,7 +267,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 }).unwrap_or_default(),
             },
             variant_cases: match &declaration.kind {
-                o::DeclarationKind::Variant { cases, is_error: false } => {
+                o::DeclarationKind::Variant { cases, .. } => {
                     cases.iter().map(|case| case.layout.as_u32()).collect()
                 }
                 _ => vec![],
@@ -286,6 +289,13 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             role,
             implements,
             any_box: false,
+            // A plain enum names its cases as Tomato's texts do (`Enum.case`): an Error payload shows them.
+            enum_names: match &declaration.kind {
+                o::DeclarationKind::Enum { cases, is_error: false } => cases.iter().map(|case| {
+                    format!("{}.{case}", declaration.name.rsplit('.').next().unwrap())
+                }).collect(),
+                _ => vec![],
+            },
         });
     }
     roles::synthetic_objects(module, &mut objects)?;
@@ -446,11 +456,12 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
             let o::DeclarationKind::Variant { cases, is_error } = &module.declarations.get(*decl)?.kind else {
                 return Err(GenerateError("variant type references non-variant declaration".into()));
             };
-            if !is_error {
-                return Ok(s::Type::Variant(decl.as_u32()));
+            // A one-case Error variant is its case object (#703); an Error variant with several cases is a
+            // variant whose values are its case objects, which are Error values (#705).
+            match cases.as_slice() {
+                [case] if *is_error => s::Type::Object(case.layout.as_u32()),
+                _ => s::Type::Variant(decl.as_u32()),
             }
-            let [case] = cases.as_slice() else { return Err(unsupported("multi-case Error variant type")); };
-            s::Type::Object(case.layout.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Handle(decl) => {
@@ -492,6 +503,95 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
             }
         },
         ty => return Err(unsupported(&format!("type {ty:?}"))),
+    })
+}
+
+/// The index in `Program::globals` of a module constant: its position among the global declarations.
+fn global_index(module: &o::Module, declaration: o::DeclId) -> Result<u32, GenerateError> {
+    let position = module.declarations.iter()
+        .filter(|(_, declared)| matches!(declared.kind, o::DeclarationKind::Global { .. }))
+        .position(|(id, _)| id == declaration)
+        .ok_or_else(|| GenerateError("global read of a declaration that is not a global".into()))?;
+    u32::try_from(position).map_err(|_| GenerateError("too many globals".into()))
+}
+
+fn global_init(module: &o::Module, declaration: o::DeclId) -> Result<o::FuncId, GenerateError> {
+    match module.declarations.get(declaration)?.kind {
+        o::DeclarationKind::Global { init, .. } => Ok(init),
+        _ => Err(GenerateError("global read of a declaration that is not a global".into())),
+    }
+}
+
+/// The SPB 17 layout of the module constants (#709): each global's value as data, read from its init
+/// function. The producer builds that body from literals, `enum.case`, `array.new` and `map.new` only
+/// (`lowering::oir2::globals`), so the data are the value the init would compute, children first.
+fn globals(module: &o::Module) -> Result<Vec<s::Global>, GenerateError> {
+    let mut globals = Vec::new();
+    for (_, declaration) in module.declarations.iter() {
+        let o::DeclarationKind::Global { ty, init } = declaration.kind else { continue };
+        let function = module.functions.get(init)?;
+        let body = function.body.as_ref().ok_or_else(|| unsupported("global without an init body"))?;
+        let mut definitions = BTreeMap::new();
+        for (_, block) in body.blocks.iter() {
+            for &inst in &block.insts {
+                let instruction = body.insts.get(inst)?;
+                if let [result] = instruction.results.as_slice() {
+                    definitions.insert(*result, &instruction.op);
+                }
+            }
+        }
+        let returned = body.blocks.iter().find_map(|(_, block)| match &block.term.kind {
+            o::TermKind::Ret { values } => values.first().copied(),
+            _ => None,
+        }).ok_or_else(|| unsupported("global init without a returned value"))?;
+        let mut data = Vec::new();
+        let mut built = BTreeMap::new();
+        datum(module, body, &definitions, returned, &mut data, &mut built)?;
+        let ty = translate_type(module, ty)?;
+        if data.last().map(|datum| datum.ty) != Some(ty) {
+            return Err(GenerateError("global init returns another type".into()));
+        }
+        globals.push(s::Global { name: declaration.name.clone(), ty, data });
+    }
+    Ok(globals)
+}
+
+/// The datum of one init value, after the data of its parts; each value becomes one datum.
+fn datum(module: &o::Module, body: &o::Body, definitions: &BTreeMap<o::ValueId, &o::Operation>,
+    value: o::ValueId, data: &mut Vec<s::Datum>, built: &mut BTreeMap<o::ValueId, u32>) -> Result<u32, GenerateError>
+{
+    if let Some(&index) = built.get(&value) {
+        return Ok(index);
+    }
+    let ty = translate_type(module, body.values.get(value)?.ty)?;
+    let operation = definitions.get(&value).ok_or_else(|| unsupported("global init value outside its data"))?;
+    let mut parts = |values: &[o::ValueId], data: &mut Vec<s::Datum>| values.iter()
+        .map(|&part| datum(module, body, definitions, part, data, built)).collect::<Result<Vec<_>, _>>();
+    let value_datum = match operation {
+        o::Operation::Const(literal) => s::DatumValue::Constant(translate_constant(literal)?),
+        o::Operation::Core(o::CoreOp::EnumCase { case, .. }) => s::DatumValue::Case(*case),
+        o::Operation::Collection(o::CollectionOp::ArrayNew { values, packet: None, .. }) => {
+            s::DatumValue::Array(parts(values, data)?)
+        }
+        o::Operation::Collection(o::CollectionOp::MapNew { entries, packet: None, .. }) => {
+            let values = entries.iter().flat_map(|&(key, item)| [key, item]).collect::<Vec<_>>();
+            s::DatumValue::Map(parts(&values, data)?)
+        }
+        _ => return Err(unsupported(&format!("global init operation {}", operation.opcode()))),
+    };
+    let index = u32::try_from(data.len()).map_err(|_| GenerateError("too many global data".into()))?;
+    data.push(s::Datum { ty, value: value_datum });
+    built.insert(value, index);
+    Ok(index)
+}
+
+/// The case layout of a one-case Error variant type, which SPB 17 represents by that case object
+/// (`translate_type`); `None` for every other type.
+pub(crate) fn single_error_case(module: &o::Module, ty: o::TypeId) -> Result<Option<o::DeclId>, GenerateError> {
+    let o::Type::Variant(decl) = module.types.get(ty)? else { return Ok(None) };
+    Ok(match &module.declarations.get(*decl)?.kind {
+        o::DeclarationKind::Variant { cases, is_error: true } if cases.len() == 1 => Some(cases[0].layout),
+        _ => None,
     })
 }
 
@@ -900,6 +1000,16 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             (op, values.into_iter().map(reg).collect())
         }
         o::Operation::Core(core) => match core {
+            C::Global { declaration, ty } => {
+                let global = global_index(module, *declaration)?;
+                if module.declarations.get(*declaration)?.kind != (o::DeclarationKind::Global {
+                    ty: *ty, init: global_init(module, *declaration)?,
+                }) {
+                    return Err(GenerateError("global read type differs from its declaration".into()));
+                }
+                immediate = s::Immediate::Global(global);
+                (D::GlobalGet, vec![])
+            }
             C::EnumCase { declaration, case } => {
                 immediate = s::Immediate::Updates(vec![declaration.as_u32(), *case]);
                 (D::EnumCase, vec![])
@@ -949,6 +1059,11 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             C::EnumNe { left, right } => (D::EnumNe, vec![reg(*left), reg(*right)]),
             C::IntDiv { left, right } => (D::RatNew, vec![reg(*left), reg(*right)]),
             C::RatNew { numerator, denominator } => (D::RatNew, vec![reg(*numerator), reg(*denominator)]),
+            // A one-case Error variant is its case object (`translate_type`): its active case is always 0.
+            C::VariantTag { value } if single_error_case(module, body.values.get(*value)?.ty)?.is_some() => {
+                immediate = s::Immediate::Constant(s::Constant::Int("0".into()));
+                (D::Const, vec![])
+            }
             C::VariantTag { value } => (D::VariantTag, vec![reg(*value)]),
             C::VariantOf { value, ty } if matches!(translate_type(module, *ty)?, s::Type::Variant(_)) => {
                 (D::Move, vec![reg(*value)])

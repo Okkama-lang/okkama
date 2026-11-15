@@ -293,12 +293,18 @@ pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *m
         let task = runtime.champ_task_of(this)?;
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
-            ready(cleanup)?;
+            // Decision L2: after the settle phase and the first plan, which may have run to done; once.
+            let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
+            if !idle || !cleanup.planned || cleanup.delivered || cleanup.second {
+                return Err(error("a deferred cancellation is delivered once, between the two plans"));
+            }
+            cleanup.delivered = true;
             let current = get(task, FLAGS);
             let requested = current & flags::CANCEL_REQUESTED != 0 && current & flags::CANCEL_DELIVERED == 0;
             if requested && cleanup.failure == 0 {
                 let failure = runtime.champ_take_emergency(this)?;
-                record_failure(runtime, cleanup, failure)?;
+                cleanup.failure = failure;
+                abort(runtime, cleanup);
                 set(task, FLAGS, current | flags::CANCEL_DELIVERED);
             }
             Ok(())
@@ -350,8 +356,11 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
             .ok_or_else(|| error("unknown cleanup plan"))?;
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
+            if cleanup.planned {
+                return second_plan(runtime, cleanup, plan);
+            }
             ready(cleanup)?;
-            if !cleanup.settled || cleanup.planned || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+            if !cleanup.settled || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
                 return Err(error("cleanup plan inventory/settlement mismatch"));
             }
             let reserve_empty = cleanup.pending.as_ref().is_none_or(|pending| pending.reserve.words().next().is_none());
@@ -368,6 +377,22 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
         }
         Ok(())
     })
+}
+/// The aborted reserve's executor plan (OIR-2 D18 at an async body's final exit, decision L2): it follows the
+/// delivery that follows the first plan, and no close has a third. The stream then holds what the delivery
+/// aborted, or nothing when no cancellation was delivered and the reserve stays pending.
+fn second_plan(runtime: &Runtime, cleanup: &mut Cleanup, plan: CleanupPlan) -> Result<(), Error> {
+    let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
+    if !cleanup.delivered || cleanup.second || !idle {
+        return Err(error("a second plan follows a delivered cancellation; a close has at most two plans"));
+    }
+    if plan.direct || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+        return Err(error("the aborted reserve runs its own executor plan"));
+    }
+    stream_append(runtime, &mut cleanup.stream, std::mem::take(&mut cleanup.remainder));
+    cleanup.second = true;
+    cleanup.done = false;
+    Ok(())
 }
 fn select(runtime: &Runtime, cleanup: &mut Cleanup) -> Option<(Word, u64, HolderId, OwnerId)> {
     let (serial, index) = cleanup.stream.heads.pop()?;
@@ -759,7 +784,6 @@ pub(super) fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word)
 }
 
 pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
-    let frame = frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let io = unsafe { &mut *io };
     let Some(entry) = runtime.champ_entry_contract(io.entry_abi) else {
@@ -768,16 +792,34 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     if entry.replacements >= OUTCOME_STOP - 1 {
         return stop(ctx, error("invalid owning outcome count"));
     }
+    match reject_inputs(ctx, &mut io.input) {
+        Ok(failure) => {
+            unsafe {
+                (*ctx).failure = failure;
+                (*ctx).status = FAILED;
+                io.output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
+            }
+            entry.replacements + 1
+        }
+        Err(outcome) => outcome,
+    }
+}
+
+/// Close `input` with a stack overflow as the primary failure, in the reserved headroom: the combined
+/// failure, or the terminal outcome when the close stopped.
+fn reject_inputs(ctx: *mut Ctx, input: &mut PacketSlot) -> Result<Word, Outcome> {
+    let frame = frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
     // Validate before constructing or consuming anything, including a repeated rejection.
-    if let Err(error) = packet(runtime, io.input.record).and_then(|packet| validate(runtime, &packet)) {
-        return stop(ctx, error);
+    if let Err(error) = packet(runtime, input.record).and_then(|packet| validate(runtime, &packet)) {
+        return Err(stop(ctx, error));
     }
     let roots = runtime.roots.len();
-    runtime.roots.push((io.input.record, Repr::Ref));
+    runtime.roots.push((input.record, Repr::Ref));
     runtime::rt_stack_overflow(ctx);
     if unsafe { (*ctx).status } != FAILED {
         unsafe { &mut *(*ctx).runtime }.roots.truncate(roots);
-        return OUTCOME_STOP;
+        return Err(OUTCOME_STOP);
     }
     let primary = unsafe { (*ctx).failure };
     unsafe { &mut *(*ctx).runtime }.roots.push((primary, Repr::Ref));
@@ -794,28 +836,49 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     let usable_limit = hard_limit.saturating_add(crate::jit::MAX_FRAME);
     unsafe { (*ctx).stack_limit = old_limit.min(usable_limit) };
     unsafe { &mut *(*ctx).runtime }.safepoint(frame, unsafe { &*ctx }, &[]);
-    let result = close_packet(ctx, &mut io.input, primary);
+    let result = close_packet(ctx, input, primary);
     unsafe { (*ctx).stack_limit = old_limit };
     let runtime = unsafe { &mut *(*ctx).runtime };
     runtime.champ.rejection_floor = previous_floor;
     runtime.roots.truncate(roots);
-    match result {
-        Ok(failure) => {
-            unsafe {
-                (*ctx).failure = failure;
-                (*ctx).status = FAILED;
-                io.output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
-            }
-            entry.replacements + 1
+    result.map_err(|error| {
+        if matches!(unsafe { (*ctx).status }, FATAL | EXHAUSTED) {
+            OUTCOME_STOP
+        } else {
+            stop(ctx, error)
         }
-        Err(error) => {
-            if matches!(unsafe { (*ctx).status }, FATAL | EXHAUSTED) {
-                OUTCOME_STOP
-            } else {
-                stop(ctx, error)
-            }
-        }
+    })
+}
+
+/// A Champ async body that cannot start for want of stack (draft 3 §3), class X. Its inputs in continuation 0
+/// close with the overflow as the primary failure, as `rt_entry_reject` closes an owning entry's, and the Future
+/// publishes the combined failure. A resumed body holds state that only its own code can close: running out of
+/// stack there stops the engine.
+pub extern "C" fn rt_body_reject(ctx: *mut Ctx, frame: Word) -> Outcome {
+    use crate::tasks::{get, set, RESUME};
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let Some(map) = runtime.champ_frame_map(runtime.function_of(frame)) else {
+        return stop(ctx, error("body rejection of a frame without a map"));
+    };
+    if get(frame, RESUME) != 0 {
+        return stop(ctx, error("stack exhausted while resuming an async body"));
     }
+    let start = map.start.iter().map(|&slot| map.slots[slot as usize].offset).collect::<Vec<_>>();
+    let packet = map.packet();
+    // A fixed root starts empty (#667): it offers no inputs, and an empty packet closes with the overflow alone.
+    let mut input = match packet {
+        Some(offset) => PacketSlot { record: get(frame, offset) },
+        None => PacketSlot { record: store(runtime, Data::Packet(Packet::default())) },
+    };
+    for offset in start {
+        set(frame, offset, 0);
+    }
+    let failure = match reject_inputs(ctx, &mut input) {
+        Ok(failure) => failure,
+        Err(outcome) => return outcome,
+    };
+    let published = PublishIn { tag: 1, value: 0, packet: std::ptr::null_mut(), failure };
+    super::rt_future_publish(ctx, frame, &published)
 }
 
 fn invoke_owned(ctx: *mut Ctx, entry_id: EntryId, arguments: (*const Word, u64),
@@ -905,6 +968,17 @@ impl Runtime {
         contracts: &dyn okkama_sparrow::spb17::ExternalContracts) -> Result<Vec<Vec<PlanId>>, Error>
     {
         okkama_sparrow::spb17::verify_load(program, contracts).map_err(|failure| error(&failure.to_string()))?;
+        Ok(self.relocate_cleanup_plans(program))
+    }
+
+    /// [`Runtime::champ_load_cleanup_plans`] for a program the loader has already checked: the evidence
+    /// is the [`Verified`](super::machine::Verified) itself, so nothing verifies it again (#701).
+    pub(crate) fn champ_verified_cleanup_plans(&mut self, verified: &super::machine::Verified) -> Vec<Vec<PlanId>> {
+        self.relocate_cleanup_plans(verified.source())
+    }
+
+    /// Only reached with a program that passed `verify_load`: its plans, closes and envelopes are in range.
+    fn relocate_cleanup_plans(&mut self, program: &okkama_sparrow::spb17::Program) -> Vec<Vec<PlanId>> {
         let mut relocated = Vec::new();
         for function in &program.functions {
             let mut plans = vec![0; function.proofs.plans.len()];
@@ -920,6 +994,6 @@ impl Runtime {
             }
             relocated.push(plans);
         }
-        Ok(relocated)
+        relocated
     }
 }

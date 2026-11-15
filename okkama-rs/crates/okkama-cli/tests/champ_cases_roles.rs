@@ -118,12 +118,45 @@ fn compile(id: &str) -> Result<Vec<u8>, oir2::PipelineError> {
 struct Observed {
     exit: Option<i64>,
     stdout: String,
+    /// The category of the failure report when the program failed.
+    failure: Option<&'static str>,
 }
+
+/// The failure category of a Champ report, as the conformance runner reads its first line: a runtime error
+/// (also a cancellation or an exhausted budget), a panic, or an uncaught error.
+fn category(report: &str) -> &'static str {
+    let line = report.lines().find(|line| !line.trim().is_empty()).unwrap_or("").trim();
+    if line.starts_with("RuntimeError: ") || line.starts_with("Cancelled: ") || line.starts_with("Execution ") {
+        return "runtime";
+    }
+    if line.starts_with("Panic: ") {
+        return "panic";
+    }
+    match line.split_once(": ") {
+        Some((name, _)) if line.starts_with("Uncaught ") || name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => "uncaught-error",
+        _ => "runtime",
+    }
+}
+
+/// The one failure category a failing case expects.
+fn expected_category(id: &str, expect: &Value) -> Option<&'static str> {
+    let categories = expect["failure"]["categories"].as_array()?;
+    let [only] = categories.as_slice() else { panic!("{id}: one expected failure category") };
+    Some(match only.as_str() {
+        Some("runtime") => "runtime",
+        Some("panic") => "panic",
+        Some("uncaught-error") => "uncaught-error",
+        other => panic!("{id}: unsupported failure category {other:?}"),
+    })
+}
+
 
 fn run(id: &str, bytes: Vec<u8>) -> Observed {
     let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
     let run = sparrow_core::run_captured(bytes, limits).unwrap_or_else(|error| panic!("{id}: load: {error}"));
-    Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned() }
+    let failure = run.result.as_ref().err().map(|error| category(&error.0));
+    Observed { exit: run.result.ok(), stdout: String::from_utf8_lossy(&run.stdout).into_owned(), failure }
 }
 
 /// A `failure` outcome, or an `error` outcome whose only stage is runtime, expects a runtime failure; `success`
@@ -138,7 +171,8 @@ fn expected(id: &str) -> Observed {
         "error" if expect["failure"]["stages"] == serde_json::json!(["runtime"]) => None,
         outcome => panic!("{id}: unsupported outcome {outcome}"),
     };
-    Observed { exit, stdout }
+    let failure = exit.is_none().then(|| expected_category(id, expect)).flatten();
+    Observed { exit, stdout, failure }
 }
 
 fn check(id: &str) {
@@ -265,7 +299,8 @@ through_low!(collections_batching_functional, "L05.batching.functional");
 through_low!(collections_persistent_list, "L09.collections.persistent-list");
 through_low!(caps_in_collections_and_closures, "L12.caps-in-collections-and-closures");
 through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
-// compile_low: VAL_EQ_TYPE, a value comparison in collections/frequencies.
+// compile_low: ENTRY_FAILURE_MASK (#706), the witness entry of `CursorItems.cursor`; its scalar `val.eq`
+// loads since #710.
 through_low!(once_collections_frequencies, "L09.collections.frequencies");
 // Batching sources holding an Atomic: the constructor's fresh evidence (FRESH_PACKET).
 through_low!(batching_empty_and_nested, "L05.batching.empty-and-nested");
@@ -297,7 +332,7 @@ main() is int {
     out.writeln(left() + right() + left());
     0;
 }");
-    assert_eq!(observed, Observed { exit: Some(0), stdout: "aba\n".into() });
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "aba\n".into(), failure: None });
 }
 
 /// A cap of a fresh owner carries the owner's packet; every read still recomputes the field.
@@ -325,7 +360,7 @@ main() is int {
     out.writeln(view::value);
     0;
 }");
-    assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\ndestroy r\n".into() });
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\ndestroy r\n".into(), failure: None });
 }
 
 /// Decision (a) of #676: a closure captures a resource by reference (P2.4 §4.1), so the resource stays its
@@ -350,5 +385,15 @@ main() is int {
     out.writeln(\"end\");
     0;
 }", okkama_compiler::oir2::VerifyMode::Full);
-    assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\nend\ndestroy r\n".into() });
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\nend\ndestroy r\n".into(), failure: None });
+}
+
+/// A role call on a receiver whose construction is pending fails with Tomato's runtime error (§11.4).
+#[test]
+fn a_role_call_on_a_pending_receiver_fails_like_tomato() {
+    let bytes = compile("L04.invariant.escaped-self-role-call").unwrap();
+    let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
+    let run = sparrow_core::run_captured(bytes, limits).unwrap();
+    assert_eq!(run.result.expect_err("a failing case").0,
+        "RuntimeError: Action \"name\" on object \"Parent\" was called before its construction completed");
 }

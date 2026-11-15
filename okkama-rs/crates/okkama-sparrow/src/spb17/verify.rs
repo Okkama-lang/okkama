@@ -90,6 +90,9 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
                 enforce(!p.objects[id as usize].handle, "HANDLE_TYPE",
                     "an array element names a native handle declaration")?;
             }
+            if let Type::Role(id) = element {
+                role_decl(p, id)?;
+            }
             // An object with an async destroy is rejected for every use outside P1, arrays included.
             enforce(collection_leaf(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
         }
@@ -117,17 +120,22 @@ pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
 /// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
 /// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
 /// declares neither a destroy nor a resource is plain only if its whole graph is (`ARRAY_PLAIN`, `MAP_PLAIN`).
+/// A role or `any` leaf refers to an implementing object or an any box: the collection is managed when one of
+/// them may reach a resource (#711), and plain data otherwise.
 fn collection_leaf(p: &Program, leaf: Type) -> bool {
     let resource = match leaf {
         Type::Object(id) => p.objects.get(id as usize)
             .is_some_and(|object| object.layout.has_destroy || object.layout.may_reach_resource),
+        Type::Role(id) => role_reaches_resource(p, id),
+        Type::Any => any_reaches_resource(p),
         _ => false,
     };
     resource || closed_plain(p, leaf)
 }
 
-/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
-/// or a managed array or map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
+/// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor, a
+/// role value one of whose implementations does, an `any` value one of whose boxes does, or a managed array or
+/// map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
 pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
     let leaf = match ty {
         Type::Array(shape) => ArrayType { depth: 1, ..shape }.element(),
@@ -138,8 +146,14 @@ pub(crate) fn reaches_resource(p: &Program, ty: Type) -> bool {
         },
         ty => Some(ty),
     };
-    matches!(leaf, Some(Type::Object(id) | Type::Successor(id))
-        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource))
+    match leaf {
+        Some(Type::Object(id) | Type::Successor(id)) => {
+            p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource)
+        }
+        Some(Type::Role(id) | Type::RoleSuccessor(id)) => role_reaches_resource(p, id),
+        Some(Type::Any) => any_reaches_resource(p),
+        _ => false,
+    }
 }
 
 /// Whether every value of `ty` is closed plain data: no identity with destroy, no resource, no service
@@ -222,6 +236,14 @@ pub(crate) fn key_type(p: &Program, ty: Type) -> bool {
         }
     }
     key(p, ty, &mut Vec::new())
+}
+
+/// A multi-case Error variant: a variant whose every case is a plain Error case object. Its values are
+/// Error values: they convert to `Error`, are thrown and are caught by the variant's declaration.
+fn error_variant(p: &Program, id: u32) -> bool {
+    p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()
+        && object.variant_cases.iter().all(|&case| p.objects.get(case as usize)
+            .is_some_and(|case| !case.error_cases.is_empty())))
 }
 
 /// Composite references point backwards, so composite types are finite and checkable in order.
@@ -374,6 +396,54 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
     }
 }
 
+/// Module constants (#709): each is closed plain data (`GLOBAL_TYPE`) whose data build exactly its type
+/// (`GLOBAL_DATA`): every datum is a constant, an enum case, an array or a map of its declared type, made of
+/// earlier data of its element, key and value types, and the last datum is the constant. The runtime
+/// builds the data in order before the program runs, so a value is never read as another type.
+fn check_globals(p: &Program) -> Check {
+    for global in &p.globals {
+        ty_valid(global.ty, p)?;
+        enforce(closed_plain(p, global.ty), "GLOBAL_TYPE", "a module constant must be closed plain data")?;
+        enforce(global.data.last().map(|datum| datum.ty) == Some(global.ty), "GLOBAL_TYPE",
+            "the last datum of a module constant must have the constant's type")?;
+        for (index, datum) in global.data.iter().enumerate() {
+            ty_valid(datum.ty, p)?;
+            let parts = |items: &[u32]| -> Result<Vec<Type>, Error> {
+                items.iter().map(|&item| {
+                    enforce((item as usize) < index, "GLOBAL_DATA", "a datum names a datum that does not precede it")?;
+                    Ok(global.data[item as usize].ty)
+                }).collect()
+            };
+            let valid = match &datum.value {
+                DatumValue::Constant(Constant::Descriptor(_)) => false,
+                DatumValue::Constant(value) => constant_type(value)? == datum.ty,
+                DatumValue::Case(case) => match datum.ty {
+                    Type::Object(id) => p.objects.get(id as usize).is_some_and(|object| {
+                        object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
+                            && !object.layout.may_reach_resource
+                            && ((*case as usize) < object.error_cases.len() || *case < object.enum_cases)
+                    }),
+                    _ => false,
+                },
+                DatumValue::Array(items) => {
+                    let element = element_type(datum.ty);
+                    element.is_some() && parts(items)?.into_iter().all(|ty| Some(ty) == element)
+                }
+                DatumValue::Map(items) => match datum.ty {
+                    Type::Map(id) => match p.composites.get(id as usize) {
+                        Some(&Composite::Map { key, value }) => items.len().is_multiple_of(2)
+                            && parts(items)?.chunks(2).all(|pair| pair == [key, value]),
+                        _ => false,
+                    },
+                    _ => false,
+                },
+            };
+            enforce(valid, "GLOBAL_DATA", "a datum does not build a value of its declared type")?;
+        }
+    }
+    Ok(())
+}
+
 pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
@@ -392,6 +462,7 @@ pub fn verify(p: &Program) -> Check {
         composite_valid(p, index, composite)?;
     }
     check_tests(p)?;
+    check_globals(p)?;
     let mut handles = BTreeSet::new();
     for object in &p.objects {
         // Natives name their handles by declaring module and name: one name, one declaration.
@@ -419,6 +490,10 @@ pub fn verify(p: &Program) -> Check {
                 && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
             enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
         }
+        // Case texts belong to a plain enum only, one per case; an enum may also carry none.
+        enforce(object.enum_names.is_empty()
+            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize),
+            "ENUM_NAMES", "enum case names belong to a plain enum, one per case")?;
         if !object.variant_cases.is_empty() {
             // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
             // variant declares that it reaches resources exactly when one of its cases does.
@@ -815,8 +890,12 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         Catch => {
             enforce(loc_type(f, locations[0])? == ProducedType::Value(Type::Failure),
                 "CATCH_FAILURE", "catch operand must be a failure")?;
+            // A plain Error, the Error role, or the system NativeFailure (language spec 9.5).
             ctx.value = Some(match args.get(1) {
                 Some(Argument::Object(id)) if !p.objects[*id as usize].error_cases.is_empty() => Type::Object(*id),
+                // A multi-case Error variant catches each of its cases (descriptors of its `variant_cases`).
+                Some(Argument::Object(id)) if error_variant(p, *id) => Type::Variant(*id),
+                Some(Argument::Object(id)) if native_failure(p) == Some(*id) => Type::Object(*id),
                 Some(Argument::Flag(true)) => Type::Error,
                 _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
             });
@@ -842,6 +921,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let ty = loc_type(f, locations[0])?;
             let valid = if kind == Some(0) {
                 matches!(ty, ProducedType::Value(Type::Object(id)) if !p.objects[id as usize].error_cases.is_empty())
+                    || matches!(ty, ProducedType::Value(Type::Variant(id)) if error_variant(p, id))
                     || ty == ProducedType::Value(Type::Error)
             } else {
                 ty == ProducedType::Value(Type::Str)
@@ -850,12 +930,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         }
         ArrayGet => {
             enforce(locations.len() == 2, "ARRAY_GET_OPERANDS", "array.get needs array and index")?;
-            let ProducedType::Value(Type::Array(shape)) = loc_type(f, locations[0])? else {
-                return Err(violation("ARRAY_GET_OPERANDS", "array.get receiver must be a plain array"));
+            // A plain array yields its element; a byte array (`@byte`, its own packed representation)
+            // yields a byte. The receiver's declared type is the evidence for the read the machine emits.
+            let element = match loc_type(f, locations[0])? {
+                ProducedType::Value(array @ (Type::Array(_) | Type::Bytes)) => element_type(array),
+                _ => return Err(violation("ARRAY_GET_OPERANDS",
+                    "array.get receiver must be a plain array or a byte array")),
             };
             enforce(loc_type(f, locations[1])? == ProducedType::Value(Type::Int),
                 "ARRAY_GET_OPERANDS", "array.get index must be int")?;
-            ctx.value = shape.element();
+            ctx.value = element;
             ctx.may_fail = true;
         }
         BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
@@ -1300,7 +1384,8 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
     let expect = |args: &[Type], result: Option<Type>| -> Check {
         require(types == args && out == result, "scalar operand/result type or arity mismatch")
     };
-    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet);
+    let immediate_none = !matches!(op,
+        Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet | GlobalGet);
     if immediate_none {
         require(*imm == Immediate::None, "unexpected scalar immediate")?;
     }
@@ -1322,6 +1407,15 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 && ((*case as usize) < object.error_cases.len() || *case < object.enum_cases),
                 "ENUM_CASE", "invalid plain enum case")?;
             expect(&[], Some(Type::Object(*id)))
+        }
+        GlobalGet => {
+            let Immediate::Global(index) = *imm else {
+                return Err(violation("GLOBAL_GET", "global.get requires a module constant index"));
+            };
+            let global = p.globals.get(index as usize)
+                .ok_or_else(|| violation("GLOBAL_GET", "global.get names no module constant"))?;
+            enforce(types.is_empty() && out == Some(global.ty), "GLOBAL_GET",
+                "global.get takes no operand and produces the constant's type")
         }
         ArrayNew => {
             let Some(element) = out.and_then(element_type) else {
@@ -1401,10 +1495,13 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 [left @ (Type::Array(_) | Type::Bytes | Type::Map(_) | Type::Variant(_) | Type::Range), right] => {
                     left == right
                 }
+                // A generic `==` specialized to a scalar (`Frequencies<string>`) compares two values of it.
+                [left @ (Type::Int | Type::Bool | Type::Str | Type::Float | Type::Char | Type::Byte | Type::Rat),
+                    right] => left == right,
                 _ => false,
             };
             enforce(comparable && out == Some(Type::Bool), "VAL_EQ_TYPE",
-                "value comparison needs two objects of one declaration or two plain collections of one type")?;
+                "value comparison needs two values of one scalar, object or plain collection type")?;
             // Structural equality is defined on plain values; identities and error payloads are not compared.
             enforce(closed_plain(p, types[0]), "VAL_EQ_TYPE", "value comparison needs closed plain operands")
         }
@@ -1457,6 +1554,7 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 (Type::Successor(a), Some(Type::Object(b))) if a == b)
                 || matches!((types[0], out), (Type::Object(id), Some(Type::Error))
                     if !p.objects[id as usize].error_cases.is_empty())
+                || matches!((types[0], out), (Type::Variant(id), Some(Type::Error)) if error_variant(p, id))
                 || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
                     if p.objects[variant as usize].variant_cases.contains(&case))
                 || out.is_some_and(|out| never_retag(&p.composites, types[0], out));

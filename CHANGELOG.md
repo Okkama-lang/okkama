@@ -8,6 +8,91 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Closure-dense programs compile and load on Champ in seconds (#701).**
+  The SPB 17 allocation checker kept one `BTreeSet` per frame slot, cloned
+  it at every visit and rebuilt every slot on every edge; a 940-instruction
+  `main` with 69 slots and nested loops took 2 s per check in a debug build,
+  and one `okkama run` checked each function five or six times (the
+  producer, the pipeline, the decoder, the runtime, its cleanup-plan load,
+  the JIT). The checker now keeps sorted vectors, runs an edge's copies by
+  reference and visits in reverse postorder (same verdicts, same budgets),
+  and a program passes `verify_load` once in the compiler and once in the
+  runtime. `L05.reduce.accumulator-in-place`, `L05.variants.search`,
+  `L04.roles.contextual-wrap`, `L07.destroy.branch-scope` and
+  `L04.invariant.early-self-in-blocks` no longer time out on Champ (debug
+  build: 19–73 s before, 5.6–11.4 s after). `L09.compare.failing-order-stops-the-sort`
+  still waits for an O(n log n) sort (#678).
+  `OKKAMA_PROFILE_PIPELINE=1` prints the OIR-2 pipeline's per-stage wall
+  times on stderr.
+- **Module constants on Champ (#709).** A `const` whose value is an array or a
+  map (an OIR-2 global with an init function) had no SPB 17 layout ("unsupported
+  declaration app.const.PRIMES"). SPB 17 gains a globals table: each constant
+  is closed plain data written as data (constants, enum cases, arrays and maps
+  of earlier data, children first), read by the new data operation
+  `global.get` (wire 95, `Immediate::Global`). The loader checks the table with
+  the new rules `GLOBAL_TYPE` (closed plain data, last datum is the value),
+  `GLOBAL_DATA` (each datum builds its declared type from earlier data) and
+  `GLOBAL_GET` (an existing constant, read as its type). Champ builds every
+  constant once before the program runs and keeps it as a runtime constant;
+  a read is the word itself. `L06.const.values` and
+  `L05.literal.empty-collections` pass on Champ.
+
+- **Champ indexes byte arrays (#703).** `bytes[i]` on an `@byte` value stopped
+  SPB 17 generation ("array.get requires a certified plain array"): `array.get`
+  took only the plain array shape. The loader now admits a byte array receiver
+  under `ARRAY_GET_OPERANDS` (its element is a byte, from the receiver's
+  declared type), and Champ reads the packed byte in place, with Tomato's
+  "Array index out of bounds" outside it. Two further gaps behind the same
+  cases are closed: `variant.tag` and `variant.get` of a one-case Error
+  variant (which SPB 17 represents by its case object) become a constant 0 and
+  a field read, and own's summaries declare the program failure of the
+  `scope.split` it emits for a deps-carrying reference offered to an owning
+  call or bound (a role value with plain implementers or an object holding
+  one, not only an Atomic), which `ENTRY_FAILURE_MASK` required. `L05.array.replaced`, `L09.encoding.hex`,
+  `.quoted-printable`, `.utf-codecs`, `L09.random.pcg32-reproducible`,
+  `L09.uuid.values`, `L10.stdin.chunks`, `.for-lines` and `.lines` pass on
+  Champ.
+- **Champ runs Error enums with payloads (#705).** The P1 contract of
+  `Error.text` admitted only Error enums and single-case payloads of strings,
+  ints and bools, while codegen emits a case without payload as a case object
+  with no storage, and payloads may be any scalar, a plain enum or another
+  Error variant: `L07.catch-pattern.cases-and-types`,
+  `L07.error-enum.text-escaping` and `L07.error-enum.uncaught` stopped at load
+  with `invalid P1 plain Error layout`. The contract now admits exactly the
+  layouts the text can show, a plain enum carries its case texts
+  (`enum_names`, rule `ENUM_NAMES`), and `Error.text` writes strings as Okkama
+  literals and enums and nested errors by their texts, as Tomato does. Every
+  Error variant is an SPB 17 variant of its case objects: `catch` of the
+  variant takes each of its cases, and its values are thrown and widened to
+  `Error` (`CATCH_TYPE`, `FAIL_OPERAND`, `move`). `L09.csv.rows-and-round-trip`
+  now passes these rules and stops later, at a dead unwind landing of a total
+  construction (see the ticket).
+- **`catch e is NativeFailure` on the OIR-2 → SPB 17 → Champ path (#673).**
+  The language spec (9.5) admits `Error`, an error enum or the system
+  `NativeFailure` as a catch type, but the OIR-2 lowering, the OIR verifier
+  (T1), the SPB 17 loader (`CATCH_TYPE`) and Champ's private descriptor all
+  refused the system object. The lowering now declares it (four `str`
+  fields; its readers are methods, `text()` is the message as in Tomato),
+  the verifier and the loader admit exactly that declaration, and Champ
+  gives native failure payloads the declared descriptor.
+  `L10.random.secure-invariants` passes on Champ; the json, regex and pcg32
+  natives cases now stop on #705, #707, #717 and #703.
+- **Champ compares unbound raw scalar fields as Tomato does (#713).** The
+  undef placeholder of a float, bool, byte or char field is Tomato's
+  `UNBOUND_RAW` marker instead of the zero word, so comparing an object
+  with such an unbound field fails with "cannot compare unbound object
+  fields" instead of reading it as bound.
+- **Four single blockers of the wave-4 Champ run (#710).** An `Atomic` of a
+  float, char or rat array has its registered specialization (P2.4 §4.8);
+  a literal `if` whose other arm holds a collection the join's empty type
+  cannot take passes an empty collection of that type (the arm never runs);
+  natives take and return float arrays; an awaited role value carries the
+  await's deps in own. The loader admits `val.eq` of two values of one
+  scalar type (OIR-1 §16.3) and never-level empty arrays retagged to a
+  deeper shape. `L02.equality.signed-zero-composite`,
+  `L05.choice.empty-collections` and `L09.statistics.exact-samples` pass on
+  Champ; the other four cases stop on #706, #687, #717 and #718.
+
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)

@@ -627,3 +627,66 @@ fn a_transfer_admission_filter_is_one_true_flag_after_its_selection() {
         assert_eq!(failure.rule, "TRANSFER_ADMISSION", "{filter:?}: {failure}");
     }
 }
+
+/// The system NativeFailure declaration: four public `str` fields in storage order.
+fn native_failure_object() -> Object {
+    Object {
+        name: NATIVE_FAILURE.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
+        fields: NATIVE_FAILURE_FIELDS.iter().enumerate()
+            .map(|(storage, name)| Field { name: (*name).into(), storage: storage as u32, once: false }).collect(),
+        layout: ObjectRuntimeLayout {
+            storage_fields: vec![Type::Str; 4], allocation_words: 5, identity_offset: None, has_destroy: false,
+            may_reach_resource: false, may_async_destroy: false, trace_layout: vec![0, 1, 2, 3],
+            selection_layout: vec![],
+        },
+    }
+}
+
+/// `(failure) -> str`: catches `failure` as object 0 and returns its message, or "none".
+fn native_failure_catch(object: Object) -> Program {
+    use Location::Register as R;
+    let mut f = empty_function();
+    f.registers = vec![Type::Failure, Type::Object(0), Type::Str, Type::Str];
+    f.params = vec![R(0)];
+    f.results = vec![Type::Str];
+    f.blocks = vec![Block { pc: 0, params: vec![R(0)] }, Block { pc: 1, params: vec![R(1)] },
+        Block { pc: 3, params: vec![] }];
+    f.code = vec![
+        Instruction::Champ { op: Opcode::Catch, arguments: vec![Argument::Location(R(0)), Argument::Object(0)],
+            flow: Flow::Outcomes(vec![
+                Outcome { tag: Tag::Some, edge: Edge { target_pc: 1, assignments: vec![Assignment {
+                    destination: R(1), source: Source::ProducedSlot(0),
+                }] } },
+                Outcome { tag: Tag::None, edge: Edge { target_pc: 3, assignments: vec![] } },
+            ]) },
+        Instruction::Data { op: DataOp::ObjGet, inputs: vec![1], output: Some(2), immediate: Immediate::Field(3) },
+        Instruction::Ret(vec![2]),
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(3),
+            immediate: Immediate::Constant(Constant::Str("none".into())) },
+        Instruction::Ret(vec![3]),
+    ];
+    refresh(&mut f);
+    Program { objects: vec![object], functions: vec![f], ..Program::default() }
+}
+
+/// `catch e is NativeFailure` (#673, language spec 9.5): a catch may name the system NativeFailure, whose
+/// payloads the runtime gives that descriptor; another object of its name but not its shape is no catch type.
+#[test]
+fn a_catch_may_name_the_system_native_failure() {
+    let p = native_failure_catch(native_failure_object());
+    assert_eq!(native_failure(&p), Some(0));
+    verify_load(&p, &NoExternalContracts).unwrap();
+    let mut renamed = native_failure_object();
+    renamed.fields[1].name = "kind".into();
+    let mut retyped = native_failure_object();
+    retyped.layout.storage_fields[0] = Type::Int;
+    retyped.layout.trace_layout = vec![1, 2, 3];
+    let mut other = native_failure_object();
+    other.name = "app.NativeFailure".into();
+    for object in [renamed, retyped, other] {
+        let p = native_failure_catch(object);
+        assert_eq!(native_failure(&p), None);
+        reject(&p, &NoExternalContracts, "CATCH_TYPE");
+    }
+}

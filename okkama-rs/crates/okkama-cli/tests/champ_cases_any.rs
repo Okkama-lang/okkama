@@ -1,32 +1,13 @@
 //! `any` on Champ, in process (#689, #569 C6): an `any` value is a traced reference to an any box, which holds
 //! the value in its one field and the value's type in its descriptor. Conformance cases are compared with
-//! their case.json; a case that stops on a gap outside `any` passes own and Low and is a `through_low` entry
-//! until the backend accepts it.
+//! their case.json.
 //!
 //! Only pure language cases: no processes, workers, network, outside files or test mode.
 #![cfg(feature = "champ-abi")]
 
 mod champ_support;
 
-use champ_support::{case_dir, check, compile, run_case, run_source};
-use okkama_compiler::SourceFile;
-
-/// Phases after verify_low belong to the SPB 17 / Champ backend.
-const BACKEND: [&str; 4] = ["layout", "compile_low", "verify_load", "encode"];
-
-/// The case passes own and Low; it runs in Champ, compared with case.json, once the backend accepts it.
-fn through_low(id: &str) {
-    let file = case_dir(id).join("main.ok");
-    let text = std::fs::read_to_string(&file).unwrap();
-    let source = SourceFile::new(std::fs::canonicalize(&file).unwrap().to_string_lossy(), text).unwrap();
-    match compile(&[source]) {
-        Ok(_) => run_case(id).unwrap_or_else(|error| panic!("{id}: {error}")),
-        Err(error) if BACKEND.iter().any(|phase| error.contains(&format!("OIR-2 {phase}:"))) => {
-            println!("{id}: own and low passed; stops in the backend: {error}");
-        }
-        Err(error) => panic!("{id}: {error}"),
-    }
-}
+use champ_support::{check, run_case, run_source};
 
 /// `any` boundaries: boxed literals, `any` parameters and results, arrays and maps of `any`, overloads.
 #[test]
@@ -42,18 +23,6 @@ fn champ_cases_any() {
         "L05.literal.heterogeneous-to-any",
         "L05.literal.homogeneous-inference",
     ]);
-}
-
-/// compile_low: `array.get` of a byte array (`bytes[0]`), which SPB 17 has only as `lookup`.
-#[test]
-fn any_array_replaced() {
-    through_low("L05.array.replaced");
-}
-
-/// layout: a module constant (`const NESTED`) is a declaration the SPB 17 layout does not take.
-#[test]
-fn any_literal_empty_collections() {
-    through_low("L05.literal.empty-collections");
 }
 
 #[test]
@@ -121,4 +90,42 @@ main() is int {
     out.writeln(copy.size().string());
     0;
 }"#, "4 2\n4\n");
+}
+
+/// #711: one box holds a resource, so `any` collections are managed: a holder of one refers to the boxed resource
+/// without owning it, and the scope that owns the box destroys it once. Plain role arrays and plain `any` values
+/// keep working beside it. Tomato prints the same.
+#[test]
+fn a_managed_any_collection_refers_to_a_boxed_resource() {
+    expect_output(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Shape { area() is int; }
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+object Holder {
+    has items is @any;
+    Holder(:items);
+    count() is int { items.size(); }
+}
+main() is int {
+    let out = Stdout();
+    let shapes is @Shape = [Square(side: 2), Square(side: 3)];
+    let plain is @any = [1, "two"];
+    {
+        let mixed is @any = [Res(name: "boxed"), 7, "text"];
+        let holder = Holder(items: mixed);
+        out.writeln(holder.count().string() + " " + shapes.size().string() + " " + plain.size().string());
+    }
+    out.writeln("area " + shapes[1].area().string());
+    out.writeln("end");
+    0;
+}"#, "3 2 2\ndestroy boxed\narea 9\nend\n");
 }

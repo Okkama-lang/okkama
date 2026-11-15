@@ -68,6 +68,38 @@ pub struct Program {
     /// Map and builder shapes named by `Type::Map`, `Type::MapBuilder` and `Type::Builder`. An entry refers
     /// only to earlier entries, so the table is acyclic (`COMPOSITE_ORDER`).
     pub composites: Vec<Composite>,
+    /// Module constants (`const`, #709), read by `global.get` with `Immediate::Global` (`GLOBAL_GET`).
+    pub globals: Vec<Global>,
+}
+
+/// A module constant: closed plain data (`GLOBAL_TYPE`) written as data, which the runtime builds once
+/// before the program runs. `data` lists its parts children first; the last datum is the value
+/// (`GLOBAL_DATA`). No code runs to build it, so reading it never fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Global {
+    pub name: String,
+    pub ty: Type,
+    pub data: Vec<Datum>,
+}
+
+/// One part of a constant with its type. Array and map parts name earlier data by index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Datum {
+    pub ty: Type,
+    pub value: DatumValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DatumValue {
+    /// A scalar or string constant of type `ty` (no descriptor).
+    Constant(Constant),
+    /// A case of the plain enum `ty`, as `enum.case`.
+    Case(u32),
+    /// The elements of the array or byte array `ty`.
+    Array(Vec<u32>),
+    /// The entries of the map `ty` as key, value, key, value, ...; later equal keys replace the value, as
+    /// `map.new`.
+    Map(Vec<u32>),
 }
 
 /// A collection shape that does not fit inline in `Type`.
@@ -128,6 +160,8 @@ pub struct Object {
     pub implements: Vec<RoleImpl>,
     /// An any box: the one field holds a boxed value, and the descriptor names its type (`ANY_BOX`).
     pub any_box: bool,
+    /// The case texts (`Enum.case`) of a plain enum, in case order, or empty (`ENUM_NAMES`).
+    pub enum_names: Vec<String>,
 }
 
 /// The slots of a role: each slot's entry ABI and its signature without the receiver.
@@ -301,6 +335,28 @@ impl ArrayType {
     }
 }
 
+/// The system `NativeFailure` (language spec 9.5): the payload of a native failure, four plain strings.
+pub const NATIVE_FAILURE: &str = "NativeFailure";
+/// Its fields, in storage order.
+pub const NATIVE_FAILURE_FIELDS: [&str; 4] = ["domain", "code", "operation", "message"];
+
+/// The declaration of the system NativeFailure, the first object of exactly its name and shape: four public
+/// `str` fields in storage order, no cases, roles, handle, destroy or resource. The runtime gives native failure
+/// payloads this descriptor, and `catch` may name it (`CATCH_TYPE`).
+pub fn native_failure(p: &Program) -> Option<u32> {
+    p.objects.iter().position(|object| {
+        let layout = &object.layout;
+        object.name == NATIVE_FAILURE && object.error_cases.is_empty() && object.enum_cases == 0
+            && object.variant_cases.is_empty() && !object.handle && !object.any_box && object.role.is_none()
+            && object.implements.is_empty() && layout.storage_fields == [Type::Str; 4]
+            && !layout.has_destroy && !layout.may_reach_resource && !layout.may_async_destroy
+            && layout.selection_layout.is_empty() && object.fields.len() == NATIVE_FAILURE_FIELDS.len()
+            && object.fields.iter().zip(NATIVE_FAILURE_FIELDS).enumerate().all(|(storage, (field, name))| {
+                field.name == name && field.storage == storage as u32 && !field.once
+            })
+    }).map(|id| id as u32)
+}
+
 /// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
 /// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
 pub fn transfer_admissible(arguments: &[Argument]) -> bool {
@@ -308,13 +364,14 @@ pub fn transfer_admissible(arguments: &[Argument]) -> bool {
         && arguments.iter().any(|argument| matches!(argument, Argument::Selection(_)))
 }
 
-/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`) to a collection of the same
-/// shape: no element is reinterpreted. Byte arrays have their own representation and are excluded. A map
-/// without keys has no values either, but its value type is kept unless it is `never` too: a value word is
-/// never read as another type.
+/// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`): no element is reinterpreted.
+/// The arrays at the never level are empty, so they may become arrays of any deeper shape (`[]` as `@@int`),
+/// while every level above keeps holding arrays; a shallower shape would read an array as a leaf. Byte arrays
+/// have their own representation and are excluded. A map without keys has no values either, but its value type
+/// is kept unless it is `never` too: a value word is never read as another type.
 pub fn never_retag(composites: &[Composite], from: Type, to: Type) -> bool {
     match (from, to) {
-        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && from.depth == to.depth,
+        (Type::Array(from), Type::Array(to)) => from.leaf == ArrayLeaf::Never && to.depth >= from.depth,
         (Type::Map(from), Type::Map(to)) => match (composites.get(from as usize), composites.get(to as usize)) {
             (Some(Composite::Map { key: Type::Never, value: old }), Some(Composite::Map { value: new, .. })) => {
                 *old == Type::Never || old == new
@@ -487,6 +544,8 @@ pub enum Immediate {
     Object(u32),
     Field(u32),
     Updates(Vec<u32>),
+    /// The index of a module constant in `Program::globals`.
+    Global(u32),
 }
 
 /// A checked synchronous dynamic transfer protocol (`own.dynamic`, OIR-2 §6.4, §7.1): the open Closure
@@ -626,6 +685,8 @@ pub enum DataOp {
     ObjGet,
     ObjNext,
     EnumCase,
+    /// The value of a module constant (`Immediate::Global`), built before the program runs.
+    GlobalGet,
     ArrayNew,
     ArrayLen,
     FailSecondary,
@@ -1034,6 +1095,8 @@ mod tests;
 
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod allocation_tests;
 
 /// Function contracts are verified against bodies or a trusted external catalog at load time.
 /// In particular, escaping body failures (not just fresh_singleton) must fit the declared mask.
@@ -1116,6 +1179,8 @@ mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
 #[cfg(test)]
+mod globals_tests;
+#[cfg(test)]
 mod natives_tests;
 #[cfg(test)]
 mod scalars_tests;
@@ -1135,3 +1200,5 @@ mod budget_tests;
 mod async_tests;
 #[cfg(test)]
 mod roles_tests;
+#[cfg(test)]
+mod view_collections_tests;

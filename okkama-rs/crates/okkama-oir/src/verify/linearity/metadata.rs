@@ -50,8 +50,35 @@ impl ManagedFormula {
     }
 }
 pub(super) fn managed_types(module: &Module, state: &mut State<'_>) -> Vec<bool> {
+    classify_types(module, state, false)
+}
+
+/// Whether a value of each type may hold an obligation, the duty to finish an identity once (OIR-2 §3.2). This
+/// is narrower than managedness, which also counts deps on borrowed identities: a builtin capability without
+/// destroy holds borrowed references with their deps and no obligation of its own (Atomic, §7.2; P2.4 §4.8),
+/// and a role holds one only when one of its implementations can (§3.1 counts every implementation of a role).
+/// Closures, caps, `any` and Futures stay opaque.
+pub(super) fn obligation_types(module: &Module, state: &mut State<'_>) -> Vec<bool> {
+    classify_types(module, state, true)
+}
+
+fn classify_types(module: &Module, state: &mut State<'_>, obligations: bool) -> Vec<bool> {
     if !state.array(module.types.len() + module.declarations.len(), 40) {
         return Vec::new();
+    }
+    // The implementations of each role type, from the witness tables.
+    let mut implementers = std::collections::BTreeMap::<TypeId, Vec<DeclId>>::new();
+    if obligations {
+        for (id, declaration) in module.declarations.iter() {
+            if let DeclarationKind::Object { witnesses, .. } = &declaration.kind {
+                for witness in witnesses {
+                    if !state.step(1) || !state.memory(8) {
+                        return Vec::new();
+                    }
+                    implementers.entry(witness.role).or_default().push(id);
+                }
+            }
+        }
     }
     let opaque = ManagedFormula { owned: true, ..ManagedFormula::default() };
     let mut types = vec![ManagedFormula::default(); module.types.len()];
@@ -66,7 +93,7 @@ pub(super) fn managed_types(module: &Module, state: &mut State<'_>) -> Vec<bool>
             let mut next = ManagedFormula::default();
             match &declaration.kind {
                 DeclarationKind::Object { fields, destroy, builtin, .. } => {
-                    next.owned = *builtin || destroy.is_some();
+                    next.owned = destroy.is_some() || *builtin && !obligations;
                     for field in fields {
                         next.include(types.get(field.ty.as_u32() as usize).unwrap_or(&opaque));
                     }
@@ -115,6 +142,14 @@ pub(super) fn managed_types(module: &Module, state: &mut State<'_>) -> Vec<bool>
                         GenericOwner::Function(id) => (1, id.as_u32()),
                     };
                     next.parameters.insert((kind, owner, parameter.index));
+                }
+                Type::Role { decl, .. } if obligations => {
+                    let builtin = matches!(module.declarations.get(*decl).map(|declaration| &declaration.kind),
+                        Ok(DeclarationKind::Role { builtin: true, .. }) | Err(_));
+                    next.owned = builtin;
+                    for implementer in implementers.get(&id).into_iter().flatten() {
+                        next.include(declarations.get(implementer.as_u32() as usize).unwrap_or(&opaque));
+                    }
                 }
                 Type::Any | Type::Role { .. } | Type::Cap { .. } | Type::Fn(_) | Type::Future(_) => {
                     next.owned = true;
@@ -259,7 +294,14 @@ impl Engine<'_, '_> {
                     match self.body.keys.get(*key) {
                         Ok(KeyExpr::Created { instance, .. }) => {
                             self.live_use(flow, *instance);
-                            result.insert(self.identity(flow, *instance));
+                            // deps name the stable key of an obligation (OIR-2 §3.2): a creation that holds none
+                            // (a value with deps only, see `obligation_types`) has no key to depend on.
+                            let obligated = self.body.values.get(*instance).is_ok_and(|value| {
+                                self.obligations.get(value.ty.as_u32() as usize).copied().unwrap_or(true)
+                            });
+                            if obligated || flow.identities[instance.as_u32() as usize].is_some() {
+                                result.insert(self.identity(flow, *instance));
+                            }
                         }
                         Ok(KeyExpr::Runtime(value) | KeyExpr::ServiceOf { value, .. }) => {
                             self.live_use(flow, *value);

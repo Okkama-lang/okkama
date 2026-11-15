@@ -40,7 +40,7 @@ fn object(name: &str, storage_fields: Vec<Type>, implements: Vec<RoleImpl>) -> O
     Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
         implements,
-        any_box: false,
+        any_box: false, enum_names: vec![],
         fields: (0..count).map(|storage| Field { name: format!("f{storage}"), storage, once: false }).collect(),
         layout: layout(storage_fields),
     }
@@ -503,14 +503,22 @@ fn role_values_compare_within_one_role() {
 }
 
 #[test]
-fn role_arrays_and_fields_are_closed_plain() {
-    // ARRAY_PLAIN: a role array is plain only when every implementation is closed plain data.
+fn role_arrays_are_closed_plain_or_managed() {
+    // ARRAY_PLAIN: a role array is closed plain data when every implementation is.
     let array = Type::Array(ArrayType { leaf: ArrayLeaf::Role(0), depth: 1 });
     let mut p = plain_main(vec![array], vec![undef(0)], 0);
     p.functions[0].code = vec![Instruction::Data { op: DataOp::ArrayNew, inputs: vec![], output: Some(0),
         immediate: Immediate::None }, Instruction::Ret(vec![])];
     seal(&mut p.functions[0]);
     accept(&p);
+    // An implementation that is neither plain data nor a resource leaves the array neither plain nor managed.
+    let mut failing = p.clone();
+    failing.objects[1].layout = layout(vec![Type::Failure]);
+    failing.objects[1].layout.trace_layout = vec![0];
+    failing.objects[1].fields = vec![Field { name: "f0".into(), storage: 0, once: false }];
+    reject(&failing, "ARRAY_PLAIN");
+    // #711: an implementation that reaches a resource makes the array managed: it refers to the objects
+    // without owning them.
     let resource = with_resource(&mut p);
     p.objects[resource as usize].implements = vec![RoleImpl { role: 0, slots: vec![2] }];
     // The implementation must take the resource object; reuse Box.name's body under a new receiver.
@@ -519,7 +527,9 @@ fn role_arrays_and_fields_are_closed_plain() {
     seal(&mut name);
     p.objects[resource as usize].implements[0].slots = vec![p.functions.len() as u32];
     p.functions.push(name);
-    reject(&p, "ARRAY_PLAIN");
+    // The structure admits it; this plain entry may then not return with it (`RETURN_PLAIN_PACKET`).
+    verify(&p).unwrap();
+    reject(&p, "RETURN_PLAIN_PACKET");
 }
 
 #[test]
@@ -540,4 +550,32 @@ fn role_fields_are_traced_and_never_understate_resources() {
     q.functions.push(name);
     let failure = verify_load(&q, &NoExternalContracts).unwrap_err();
     assert!(failure.message.contains("understated object retention metadata"), "{failure}");
+}
+
+/// A role field whose implementations reach a resource is selected: the runtime selection walk follows only
+/// selected fields, and would otherwise leave the identity behind the role value unbound (#697, #711:
+/// `COLLECTION_RETENTION`).
+#[test]
+fn managed_role_fields_are_selected() {
+    // Holder keeps a slotless `Marker`, which the resource implements when `managed`.
+    let holder = |managed: bool, selected: Vec<u32>| {
+        let mut p = role_caller(vec![1, 2], 0);
+        let marker = p.objects.len() as u32;
+        p.objects.push(role("Marker", vec![]));
+        let mut object = object("Holder", vec![Type::Role(marker)], vec![]);
+        object.layout.may_reach_resource = managed;
+        object.layout.selection_layout = selected;
+        p.objects.push(object);
+        let resource = with_resource(&mut p);
+        if managed {
+            p.objects[resource as usize].implements = vec![RoleImpl { role: marker, slots: vec![] }];
+        } else {
+            p.objects[3].implements = vec![RoleImpl { role: marker, slots: vec![] }];
+        }
+        p
+    };
+    accept(&holder(true, vec![0]));
+    reject(&holder(true, vec![]), "COLLECTION_RETENTION");
+    // A role whose implementations are all plain needs no selection.
+    accept(&holder(false, vec![]));
 }
