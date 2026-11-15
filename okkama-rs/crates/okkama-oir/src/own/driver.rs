@@ -185,7 +185,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 if !wanted.contains(value) {
                     continue;
                 }
-                let deps = &flow.values[value.as_u32() as usize].deps;
+                let deps = &flow.values[*value].deps;
                 if flow.journals.iter().any(|((scope, atom), quantity)| {
                     edge.plan.close.contains(scope) && deps.contains(atom)
                         && quantity.presence != domain::Presence::Absent

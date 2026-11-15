@@ -558,3 +558,17 @@ fn oir2_own_reference_splits_declare_the_program_failure() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// #707: the largest functions of these cases hold up to 4 800 values, of which at most 20 may own. Own's flow
+/// analysis costs work in proportion to the facts of the values that may own, so they pass own and low under
+/// the default budgets.
+#[test]
+fn oir2_own_large_plain_functions_finish_within_the_default_budgets() {
+    let mut failures = vec![];
+    for id in ["L05.variants.case-layouts", "L07.try-mark.diverging-operand", "L09.digest.md5-sha1-vectors"] {
+        if let Err(error) = case(id, ir::verify::VerifyMode::Structural) {
+            failures.push(format!("{id}: {}", error.chars().take(300).collect::<String>()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

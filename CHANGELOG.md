@@ -8,6 +8,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Own's flow analysis is linear in the plain values of a function (#707).**
+  Each program point kept a state for every SSA value of the function, and
+  every instruction charged (and walked) the whole state, so a large `main`
+  with thousands of plain values cost work quadratic in its size and
+  exhausted own's work budget (`own_rewrite: Incomplete`) in
+  `L05.variants.case-layouts`, `L07.try-mark.diverging-operand` and
+  `L09.digest.md5-sha1-vectors`, whose largest functions have 0 to 20
+  values that may own among 700 to 4 800. A point now keeps states only for
+  the values that may own (the only ones with dependencies; no consumer
+  reads the masks of plain values). The budgets are unchanged.
+
 - **Own declares the program failure of every split it elaborates (#706).**
   Elaboration gives deps to, and so splits, any deps-carrying reference
   without an obligation (a cap value, a role, a function value), not only

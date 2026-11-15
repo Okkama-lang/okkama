@@ -103,24 +103,30 @@ pub fn analyze_function(
     let height_bound = height_bound.saturating_add(scopes.saturating_mul(origins).saturating_mul(4));
     // Rank, pending and block-state map nodes; no product of possible facts and CFG points.
     budget.memory(body.blocks.len().saturating_mul(256))?;
-    let initial_bytes = size_of::<FlowState>() + values * size_of::<ValueState>();
+    // Only values whose type may own carry facts (#707); every one of them has a state at every point.
+    let tracked: Vec<_> = value_shapes.iter().filter(|(_, shape)| **shape != empty).map(|(value, _)| *value)
+        .collect();
+    let initial_bytes = size_of::<FlowState>() + tracked.len() * (size_of::<(ValueId, ValueState)>() + 64);
     budget.memory(initial_bytes)?;
-    let mut initial = FlowState { values: vec![ValueState::default(); values], ..FlowState::default() };
+    let mut initial = FlowState::default();
+    for value in tracked {
+        initial.values.insert(value, ValueState::ABSENT);
+    }
     let root = body.blocks.get(body.entry).map_err(arena)?.lexical_scope;
     let declaration = module.functions.get(function).map_err(arena)?;
     let accepts = declaration.signature.ownership_abi != OwnershipAbi::Observation;
     let destroy = declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Destroy(_)));
     let mut initial_reserved = initial_bytes;
     for (index, value) in body.blocks.get(body.entry).map_err(arena)?.params.iter().enumerate() {
-        let state = &mut initial.values[value.as_u32() as usize];
-        state.masks.availability = 2;
-        state.masks.lifetime = 1;
         if managed(body, *value, classification)? {
+            let state = &mut initial.values[*value];
+            state.masks.availability = 2;
+            state.masks.lifetime = 1;
             // One dependency plus at most one journal/provenance entry.
             budget.memory(3 * 128)?;
             initial_reserved += 3 * 128;
             let atom = Atom::current(value_shapes[value]);
-            state.deps.insert(atom);
+            initial.values[*value].deps.insert(atom);
             if accepts && !(destroy && index == 0) {
                 initial.journals.insert((root, atom), Quantity::ONE);
                 initial.provenance.insert((root, atom), 2);
@@ -313,7 +319,7 @@ fn transfer(
             };
             if let Some(fields) = fields {
                 let deps: BTreeSet<_> = fields.iter().flat_map(|value| {
-                    state.values[value.as_u32() as usize].deps.iter().copied()
+                    state.values[*value].deps.iter().copied()
                 }).collect();
                 let owners: BTreeSet<_> = state.journals.iter().filter(|((scope, atom), quantity)| {
                     deps.contains(atom) && !matches!(quantity.presence, Presence::Absent | Presence::Bottom)
@@ -330,10 +336,10 @@ fn transfer(
             // the scopes inside the builder's owner into the owner's journal.
             Operation::Collection(collection) if arrays::consumed_buffer(&instruction.op).is_some() => {
                 let buffer = arrays::consumed_buffer(&instruction.op).unwrap();
-                let mut deps = state.values[buffer.as_u32() as usize].deps.clone();
+                let mut deps = state.values[buffer].deps.clone();
                 let mut inserted = BTreeSet::new();
                 for value in arrays::inserted(collection) {
-                    inserted.extend(state.values[value.as_u32() as usize].deps.iter().copied());
+                    inserted.extend(state.values[value].deps.iter().copied());
                 }
                 // Every transition, finish and abandon included, lies inside the builder's owner.
                 let owner = *builder_owners.get(&buffer)
@@ -345,7 +351,7 @@ fn transfer(
                 }
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
-                        state.values[result.as_u32() as usize].deps = deps.clone();
+                        state.values[*result].deps = deps.clone();
                     }
                 }
             }
@@ -357,11 +363,11 @@ fn transfer(
                 let mut deps = BTreeSet::new();
                 for operand in cfg::operation_uses(&instruction.op, body)
                     .map_err(|error| flow_error(format!("operands: {error}")))? {
-                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                    deps.extend(&state.values[operand.value].deps);
                 }
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
-                        state.values[result.as_u32() as usize].deps = deps.clone();
+                        state.values[*result].deps = deps.clone();
                     }
                 }
             }
@@ -376,7 +382,7 @@ fn transfer(
                 let mut retained = BTreeSet::new();
                 for operand in crate::cfg::operation_uses(&instruction.op, body)
                     .map_err(|error| flow_error(format!("operands: {error}")))? {
-                    retained.extend(&state.values[operand.value.as_u32() as usize].deps);
+                    retained.extend(&state.values[operand.value].deps);
                 }
                 for result in &instruction.results {
                     if !managed(body, *result, classification)? {
@@ -385,7 +391,7 @@ fn transfer(
                     let origin = shapes[result];
                     state.retire(origin);
                     let atom = Atom::current(origin);
-                    let value = &mut state.values[result.as_u32() as usize];
+                    let value = &mut state.values[*result];
                     value.deps = retained.clone();
                     value.deps.insert(atom);
                     state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
@@ -400,11 +406,11 @@ fn transfer(
                 let mut deps = BTreeSet::new();
                 for operand in cfg::operation_uses(&instruction.op, body)
                     .map_err(|error| flow_error(format!("operands: {error}")))? {
-                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                    deps.extend(&state.values[operand.value].deps);
                 }
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
-                        state.values[result.as_u32() as usize].deps = deps.clone();
+                        state.values[*result].deps = deps.clone();
                     }
                 }
             }
@@ -417,7 +423,7 @@ fn transfer(
             Operation::Lexical(LexicalOp::Bind { binding, value }
                 | LexicalOp::Rebind { binding, value, .. }) => {
                 let owner = body.bindings.get(*binding).map_err(arena)?.scope;
-                let deps = state.values[value.as_u32() as usize].deps.clone();
+                let deps = state.values[*value].deps.clone();
                 if matches!(instruction.op, Operation::Lexical(LexicalOp::Rebind { .. })) {
                     let previous = state.binding_deps.get(binding).cloned().unwrap_or_default();
                     for atom in previous.difference(&deps) {
@@ -440,19 +446,19 @@ fn transfer(
                 }
             }
             Operation::Lexical(LexicalOp::Stage { action, value, .. }) => {
-                let deps = state.values[value.as_u32() as usize].deps.clone();
+                let deps = state.values[*value].deps.clone();
                 transfer_selected(&mut state, *action, None, &deps, false, 4);
             }
             Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Incomplete, .. }) => {
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
-                        state.values[result.as_u32() as usize].deps.insert(Atom::current(shapes[result]));
+                        state.values[*result].deps.insert(Atom::current(shapes[result]));
                     }
                 }
             }
             Operation::Core(CoreOp::ObjInit { object, field, value, .. }) => {
-                let incoming = state.values[value.as_u32() as usize].deps.clone();
-                state.values[object.as_u32() as usize].deps.extend(incoming);
+                let incoming = state.values[*value].deps.clone();
+                state.values[*object].deps.extend(incoming);
                 if module.declarations.get(field.declaration).is_ok_and(|declaration| {
                     matches!(&declaration.kind, DeclarationKind::Object { fields, .. }
                         if fields[field.index as usize].name == "$pending")
@@ -468,7 +474,7 @@ fn transfer(
                 let mut deps = BTreeSet::new();
                 for operand in cfg::operation_uses(&instruction.op, body)
                     .map_err(|error| flow_error(format!("operands: {error}")))? {
-                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                    deps.extend(&state.values[operand.value].deps);
                 }
                 // An async call creates a Future whose cache duty joins its creation
                 // scope (D12). The duty is never offered, bound or staged.
@@ -483,8 +489,8 @@ fn transfer(
                         let origin = shapes[result];
                         state.retire(origin);
                         let atom = Atom::current(origin);
-                        state.values[result.as_u32() as usize].deps = deps.clone();
-                        state.values[result.as_u32() as usize].deps.insert(atom);
+                        state.values[*result].deps = deps.clone();
+                        state.values[*result].deps.insert(atom);
                         state.journals.insert((data.lexical_scope, atom), Quantity::ONE);
                         state.provenance.insert((data.lexical_scope, atom), provenance);
                     }
@@ -493,10 +499,10 @@ fn transfer(
             // A shared await borrows the cached outcome: the value depends on the
             // stable cache service key and the outcome's external deps (§13.2).
             Operation::Async(AsyncOp::Await { future, .. }) => {
-                let deps = state.values[future.as_u32() as usize].deps.clone();
+                let deps = state.values[*future].deps.clone();
                 for result in &instruction.results {
                     if managed(body, *result, classification)? {
-                        state.values[result.as_u32() as usize].deps = deps.clone();
+                        state.values[*result].deps = deps.clone();
                     }
                 }
             }
@@ -513,7 +519,10 @@ fn transfer(
         budget.resize(old, state.allocated_bytes())?;
         budget.release(scratch);
         for value in &instruction.results {
-            let masks = &mut state.values[value.as_u32() as usize].masks;
+            if !managed(body, *value, classification)? {
+                continue;
+            }
+            let masks = &mut state.values[*value].masks;
             masks.availability = 2;
             masks.lifetime = 1;
             if matches!(module.types.get(body.values.get(*value).map_err(arena)?.ty), Ok(Type::Successor(_))) {
@@ -572,11 +581,11 @@ fn edge_state(
     mut state: FlowState,
 ) -> Result<FlowState, OwnError> {
     // Read all outgoing references first, then bind every phi simultaneously.
-    let arguments: Vec<_> = edge.args.iter().map(|value| state.values[value.as_u32() as usize].clone()).collect();
+    let arguments: Vec<_> = edge.args.iter().map(|value| state.values.get(*value).cloned()).collect();
     if !edge.unwind && !edge.plan.close.is_empty() {
         let wanted = super::edges::wanted(body, edge)?;
         let deps: BTreeSet<_> = edge.args.iter().zip(&arguments).filter(|(value, _)| wanted.contains(value))
-            .flat_map(|(_, value)| value.deps.iter().copied()).collect();
+            .flat_map(|(_, value)| value.iter().flat_map(|value| value.deps.iter().copied())).collect();
         let destination = body.blocks.get(edge.target).map_err(arena)?.lexical_scope;
         let moving: Vec<_> = state.journals.iter().filter(|((scope, atom), _)| {
             edge.plan.close.contains(scope) && deps.contains(atom)
@@ -594,8 +603,14 @@ fn edge_state(
         state.latest.retain(|binding, _| body.bindings.get(*binding).is_ok_and(|decl| decl.scope != *scope));
         state.binding_deps.retain(|binding, _| body.bindings.get(*binding).is_ok_and(|decl| decl.scope != *scope));
     }
+    // A parameter has the type, and so the tracking, of its argument.
     for (parameter, value) in body.blocks.get(edge.target).map_err(arena)?.params.iter().zip(arguments) {
-        state.values[parameter.as_u32() as usize] = value;
+        match value {
+            Some(value) => state.values.insert(*parameter, value),
+            None => {
+                state.values.remove(*parameter);
+            }
+        }
     }
     // Lexical ownership is keyed by ScopeId, independent of incoming SSA names.
     let _ = module;

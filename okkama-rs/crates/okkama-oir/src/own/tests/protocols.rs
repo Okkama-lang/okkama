@@ -259,12 +259,12 @@ fn captures_and_bound_receivers_keep_snapshot_deps_without_an_extra_identity() {
     }).unwrap();
     let Operation::Core(CoreOp::FnBind { receiver, .. }) = closure.op else { unreachable!() };
     let state = &flow.before_instructions[&call];
-    assert_eq!(state.values[closure.results[0].as_u32() as usize].deps,
-        state.values[receiver.as_u32() as usize].deps);
-    assert!(state.values[receiver.as_u32() as usize].deps.iter().all(|atom| {
+    assert_eq!(state.values[closure.results[0]].deps,
+        state.values[receiver].deps);
+    assert!(state.values[receiver].deps.iter().all(|atom| {
         atom.incarnation == domain::Incarnation::History
     }));
-    assert_eq!(state.values[closure.results[0].as_u32() as usize].deps.len(), 1);
+    assert_eq!(state.values[closure.results[0]].deps.len(), 1);
 }
 
 #[test]
