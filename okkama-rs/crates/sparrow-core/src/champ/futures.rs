@@ -56,7 +56,8 @@ pub struct FrameMap {
     pub scopes: Vec<(u32, u64)>,
     /// The first tail word; INPUTS, EMERGENCY, STEP and TASK are offsets from it.
     pub tail: u64,
-    /// Continuation 0: the slots of the language inputs in order, then the slot of the input packet.
+    /// Continuation 0: the slots of the language inputs in order and their deps, then the slot of the input
+    /// packet. A fixed root's start is empty (#667).
     pub start: Vec<u32>,
     /// Allocation words, the header included.
     pub words: usize,
@@ -94,9 +95,11 @@ impl FrameMap {
         Some(Self { slots, scopes, tail, start, words: 1 + trace.len(), trace })
     }
 
-    /// The number of language inputs of continuation 0.
+    /// The number of language inputs of continuation 0: the deps of borrowed inputs take no words.
     pub fn inputs(&self) -> usize {
-        self.start.len().saturating_sub(1)
+        self.start.split_last().map_or(0, |(_, inputs)| {
+            inputs.iter().filter(|&&slot| !self.slots[slot as usize].reprs.is_empty()).count()
+        })
     }
 
     /// The offset of the input packet's slot.
@@ -250,10 +253,13 @@ impl Runtime {
         Ok(frame)
     }
 
-    /// Creation step 2: continuation 0 holds the language inputs, then the accepted input packet.
+    /// Creation step 2: continuation 0 holds the language inputs (their deps take no words), then the accepted
+    /// input packet.
     fn champ_write_start(&self, frame: Word, args: &[Word], packet: Word) {
         let map = self.champ_frame_map(self.function_of(frame)).expect("Champ frame map");
-        for (&slot, &word) in map.start.iter().zip(args) {
+        let inputs = map.start.split_last().map_or(&[][..], |(_, inputs)| inputs);
+        let words = inputs.iter().filter(|&&slot| !map.slots[slot as usize].reprs.is_empty());
+        for (&slot, &word) in words.zip(args) {
             set(frame, map.slots[slot as usize].offset, word);
         }
         set(frame, map.packet(), packet);
@@ -309,7 +315,8 @@ impl Runtime {
 
     /// The root driver of an async entry (draft 3 §3, plan §3.6 "Root"), as Tomato runs `async main`: the root
     /// Future on this stack, the scheduler until it settles, then shutdown with the report of the first
-    /// unobserved spawned failure. The root is its own task, owned by the root, and offers an empty packet.
+    /// unobserved spawned failure. The root is its own task, owned by the root. A fixed root starts empty; a root
+    /// body with inputs (in tests) is offered them and an empty packet.
     pub(crate) fn champ_run_async_main(self: &mut Box<Self>, ctx: &mut Ctx, entry: usize, arguments: &[Word])
         -> Result<Word, Error>
     {
@@ -320,8 +327,11 @@ impl Runtime {
         }
         let root = self.champ_future_alloc(entry, owner)?;
         self.roots.push((root, Repr::Ref));
-        let inputs = store(self, Data::Packet(Packet::default()));
-        self.champ_write_start(root, arguments, inputs);
+        // A fixed root has no caller (#667): its start is empty and nothing is written into continuation 0.
+        if self.champ_frame_map(entry).is_some_and(|map| !map.start.is_empty()) {
+            let inputs = store(self, Data::Packet(Packet::default()));
+            self.champ_write_start(root, arguments, inputs);
+        }
         self.champ_future_start(ctx, 0, root);
         if ctx.status == OK {
             self.schedule(ctx, root);

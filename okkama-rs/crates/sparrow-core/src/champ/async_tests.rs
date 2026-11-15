@@ -1864,3 +1864,57 @@ fn champ_v8_deadlock_diagnostic_matches_tomato() {
         assert_eq!(steps(&runtime, WATCH), [FutureStep::Start, FutureStep::Pending]);
     }
 }
+
+// --- #601 V7: fixed roots and deps inputs (#667) ---------------------------------------------------------------
+
+/// `async main() is int { 7; }` as the program's entry: a fixed root starts without inputs and without a packet.
+fn fixed_root() -> (s::Function, s::FrameLayout) {
+    let (mut b, frame) = Body::asynchronous("main", 0, vec![s::Type::Int]);
+    let (body, inputs) = b.resume(frame, 0, &[]);
+    assert!(inputs.is_empty());
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(0), A::Boundary(0)], K::ScopeState);
+    let seven = b.constant(s::Constant::Int("7".into()), s::Type::Int);
+    b.return_value(body, q0, 0, Some(seven), &[], "done");
+    let layout = b.layout(vec![], vec![(vec![], vec![])]);
+    (b.finish(), layout)
+}
+
+#[test]
+fn champ_v7_fixed_root_runs_from_an_empty_start() {
+    let (function, layout) = fixed_root();
+    let program = s::Program {
+        module: "root".into(),
+        functions: vec![function],
+        entry: Some(0),
+        tables: s::ChampTables {
+            scopes: vec![s::Scope { function: 0, parent: None, boundary: 0 }],
+            boundaries: vec![s::Boundary { scope: 0 }],
+            frames: vec![layout],
+            ..s::ChampTables::default()
+        },
+        ..s::Program::default()
+    };
+    s::verify_load(&program, &s::NoExternalContracts).unwrap();
+    for stress in [false, true] {
+        let mut runtime = Runtime::new_champ(program.clone(), Vec::new()).unwrap();
+        runtime.heap.set_stress(stress);
+        runtime.invocations[0].code = reference as *const () as u64;
+        let map = runtime.champ_frame_map(0).unwrap();
+        assert_eq!((map.start.len(), map.inputs()), (0, 0));
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        assert_eq!(runtime.champ_run_async_main(&mut ctx, 0, &[]), Ok(word::small(7).unwrap()));
+    }
+}
+
+#[test]
+fn champ_v7_deps_inputs_take_no_words() {
+    let mut p = program();
+    // `work(n is int)` with the deps of a borrowed input after it: one language input, then the packet.
+    let layout = &mut p.tables.frames[WORK as usize];
+    layout.slots = vec![value(s::Type::Int), service(K::Deps), service(K::Packet)];
+    layout.continuations[0].saved = vec![0, 1, 2];
+    let map = FrameMap::new(&p, WORK as usize).unwrap();
+    assert_eq!(map.slots[1].reprs, []);
+    assert_eq!((map.inputs(), map.packet()), (1, map.slots[2].offset));
+}

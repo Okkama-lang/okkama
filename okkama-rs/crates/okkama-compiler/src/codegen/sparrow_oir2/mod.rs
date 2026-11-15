@@ -61,6 +61,28 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
 }
 
 fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<AllocatedProgram, GenerateError> {
+    let mut p = translate_program(module, layouts)?;
+    s::verify(&p)?;
+    let redundant = p.functions.iter().map(|function| s::redundant_admission_filters(&p, function))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (function, pcs) in p.functions.iter_mut().zip(redundant) {
+        for pc in pcs {
+            if let s::Instruction::Champ { arguments, .. } = &mut function.code[pc] {
+                arguments.retain(|argument| !matches!(argument, s::Argument::Flag(_)));
+            }
+        }
+    }
+    let mut allocations = Vec::new();
+    for function in &p.functions {
+        let allocation = s::allocate(function)?;
+        s::check_allocation(function, &allocation)?;
+        allocations.push(allocation);
+    }
+    Ok(AllocatedProgram { program: p, allocations })
+}
+
+/// The translated program with its relocated evidence, before SPB 17's own structural verification.
+fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::Program, GenerateError> {
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
@@ -72,15 +94,20 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     }
     let module = &sunk;
     // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
-    let profile = |feature: &o::Feature| *feature == o::Feature::Core
+    // Plain async (#601 V7) is part of SPB 17; process workers are not.
+    let profile = |feature: &o::Feature| matches!(feature, o::Feature::Core | o::Feature::Async)
         || *feature == o::Feature::Test && module.tests.is_some();
     if !module.imports.is_empty() || !module.requires.iter().all(profile)
         || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
     {
         return Err(unsupported("unresolved declarations or service metadata"));
     }
-    for (id, _) in module.protocols.iter() {
-        protocol(module, id)?;
+    // The Services family (D16) is the protocol of Future duties: its settle and await.unwind steps are opcodes,
+    // so it needs no SPB 17 protocol. Every dynamic transfer protocol maps to one.
+    for (id, declared) in module.protocols.iter() {
+        if declared.kind != o::ProtocolKind::Services {
+            protocol(module, id)?;
+        }
     }
     let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
         name: test.name.clone(),
@@ -96,6 +123,7 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     p.objects = objects(module, layouts)?;
     let synthetic = roles::Synthetic::of(module)?;
     p.composites = composites(module).entries().to_vec();
+    p.tables.future_results = composites(module).futures().to_vec();
     for (id, scope) in module.scopes.iter() {
         p.tables.scopes.push(s::Scope {
             function: scope.function.as_u32(),
@@ -133,7 +161,7 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
             }
         }
         let translated = if calls::needs_s2(module, function)? {
-            calls::translate(module, id, function, &p.objects, &mut p.tables.summaries, &synthetic)?
+            calls::translate(module, id, function, &p.objects, &mut p.tables, &synthetic)?
         } else {
             translate_function(module, id, function, &p.objects)?
         };
@@ -154,28 +182,12 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
         successors::close_unwind_permissions(function)?;
         complete_codegen_roots(function)?;
     }
-    s::verify(&p)?;
-    let redundant = p.functions.iter().map(|function| s::redundant_admission_filters(&p, function))
-        .collect::<Result<Vec<_>, _>>()?;
-    for (function, pcs) in p.functions.iter_mut().zip(redundant) {
-        for pc in pcs {
-            if let s::Instruction::Champ { arguments, .. } = &mut function.code[pc] {
-                arguments.retain(|argument| !matches!(argument, s::Argument::Flag(_)));
-            }
-        }
-    }
-    let mut allocations = Vec::new();
-    for function in &p.functions {
-        let allocation = s::allocate(function)?;
-        s::check_allocation(function, &allocation)?;
-        allocations.push(allocation);
-    }
-    Ok(AllocatedProgram { program: p, allocations })
+    Ok(p)
 }
 
 /// The SPB 17 protocol of a declared dynamic transfer protocol: the registered open Closure protocol, or the
-/// synchronous `any` protocol (one checked packet-to-scope transfer, as Low admits it). Any other protocol
-/// (storage merges, services) has no SPB 17 form yet.
+/// synchronous `any` protocol (one checked packet-to-scope transfer, as Low admits it). Services protocols are
+/// carried by opcodes (see `program`); any other protocol (storage merges) has no SPB 17 form yet.
 pub(crate) fn protocol(module: &o::Module, id: o::ProtocolId) -> Result<s::Protocol, GenerateError> {
     let declared = module.protocols.get(id)?;
     if *declared == o::catalogue::open_callable_protocol() {
@@ -280,17 +292,39 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
     Ok(objects)
 }
 
-/// SPB 17 collection shapes of one module, in OIR type order. Equal shapes share one entry.
+/// SPB 17 collection shapes and Future outcomes of one module, in OIR type order. Equal shapes share one
+/// entry, and so do Futures of one outcome type (`ChampTables::future_results` entries are distinct).
 #[derive(Debug, Default)]
 pub(crate) struct Composites {
     index: std::collections::HashMap<o::TypeId, u32>,
     entries: Vec<s::Composite>,
+    future_index: std::collections::HashMap<o::TypeId, u32>,
+    futures: Vec<Option<s::Type>>,
 }
 
 impl Composites {
     fn build(module: &o::Module) -> Self {
         let mut table = Self::default();
         for (id, ty) in module.types.iter() {
+            // A type is interned after the types it names, so its outcome is already in the table.
+            if let o::Type::Future(result) = ty {
+                let outcome = match result {
+                    Some(result) => match translate_with(module, *result, &table) {
+                        Ok(outcome) => Some(outcome),
+                        Err(_) => continue,
+                    },
+                    None => None,
+                };
+                let position = match table.futures.iter().position(|entry| *entry == outcome) {
+                    Some(position) => position,
+                    None => {
+                        table.futures.push(outcome);
+                        table.futures.len() - 1
+                    }
+                };
+                table.future_index.insert(id, position as u32);
+                continue;
+            }
             let composite = match ty {
                 o::Type::Map(key, value) | o::Type::MapBuilder(key, value) => {
                     match (translate_with(module, *key, &table), translate_with(module, *value, &table)) {
@@ -321,6 +355,11 @@ impl Composites {
 
     pub(crate) fn entries(&self) -> &[s::Composite] {
         &self.entries
+    }
+
+    /// `ChampTables::future_results`: the outcome of each `Type::Future` index; `None` is a void Future.
+    pub(crate) fn futures(&self) -> &[Option<s::Type>] {
+        &self.futures
     }
 }
 
@@ -441,6 +480,16 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
                 s::Type::RoleSuccessor(decl.as_u32())
             }
             _ => return Err(unsupported("non-object successor type")),
+        },
+        o::Type::Future(result) => match table.future_index.get(&id) {
+            Some(&index) => s::Type::Future(index),
+            None => {
+                // The outcome type decides the error: a Future of an SPB 17 type is always in the table.
+                if let Some(result) = result {
+                    translate_with(module, *result, table)?;
+                }
+                return Err(unsupported("Future outcome outside SPB 17"));
+            }
         },
         ty => return Err(unsupported(&format!("type {ty:?}"))),
     })
@@ -1120,6 +1169,8 @@ mod tests;
 #[cfg(test)]
 mod cleanup_tests;
 #[cfg(test)]
+mod futures_tests;
+#[cfg(test)]
 mod roles_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
@@ -1149,6 +1200,67 @@ pub fn compile_low_with(
     Ok(output)
 }
 
+/// Low traces values and inventories; a Future's duty tokens have no Low trace. In SPB 17 each of them is a word
+/// that refers to the Future frame (cache-state, task-state; Champ draft 3 §14.2), so it is rooted wherever the
+/// token is active. The state records list the active tokens: like the maps before each pc, which take the
+/// state records whole, the map after an operation takes the duty tokens of the next pc's state.
+fn root_duty_words(function: &mut s::Function) {
+    let duty = |location: &s::Location| matches!(location, s::Location::Service(id)
+        if matches!(function.services[*id as usize], s::ServiceKind::CacheState | s::ServiceKind::TaskState));
+    let mut missing = Vec::new();
+    for state in &function.proofs.states {
+        let Some(pc) = state.pc.checked_sub(1) else { continue };
+        let next = matches!(function.code.get(pc as usize),
+            Some(s::Instruction::Champ { op, flow: s::Flow::Next(_), .. })
+                if !matches!(op, s::Opcode::RetOwn | s::Opcode::RetDefer));
+        let duties = state.locations.iter().filter(|&location| duty(location)).copied().collect::<Vec<_>>();
+        if next && !duties.is_empty() {
+            missing.push((pc, duties));
+        }
+    }
+    for (pc, duties) in missing {
+        let post = &mut function.proofs.post_roots;
+        let index = match post.iter().position(|root| root.pc == pc) {
+            Some(index) => index,
+            None => {
+                post.push(s::RootRequirement { pc, locations: vec![] });
+                post.len() - 1
+            }
+        };
+        let locations = &mut post[index].locations;
+        for location in duties {
+            if !locations.contains(&location) {
+                locations.push(location);
+            }
+        }
+    }
+}
+
+/// Low roots a value with its full dependencies (`RootTrace::FullDependencies`, managed facts). In SPB 17 a location
+/// keeps the anchors its dependencies name alive (`proofs.dependencies`), so every traced anchor joins each map that
+/// holds the location: for instance a fixed root's deps of its result, taken before its scope closes, keep the
+/// result's register alive up to fut.publish.
+fn root_dependency_anchors(function: &s::Function, locations: &mut BTreeSet<s::Location>) {
+    let traced = |location: &s::Location| match *location {
+        s::Location::Register(id) => !matches!(function.registers[id as usize], s::Type::Bool | s::Type::Never
+            | s::Type::Descriptor | s::Type::Byte | s::Type::Float | s::Type::Char),
+        s::Location::Service(id) => !s::layout::service_layout(function.services[id as usize]).references.is_empty(),
+    };
+    let mut reached = locations.clone();
+    loop {
+        let before = reached.len();
+        for dependency in &function.proofs.dependencies {
+            if reached.contains(&dependency.value) {
+                reached.extend(&dependency.obligations);
+            }
+        }
+        if reached.len() == before {
+            break;
+        }
+    }
+    locations.extend(reached.into_iter().filter(traced));
+}
+
 /// Relocated Low roots remain authoritative for services. Scalar register liveness fills the gaps
 /// introduced by machine expansion (range.len, switch, construction); it never synthesizes Low proofs.
 fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateError> {
@@ -1171,7 +1283,23 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
     for state in &function.proofs.states {
         roots.entry(state.pc).or_default().extend(&state.locations);
     }
-    if !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty() {
+    let low_roots = !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty();
+    root_duty_words(function);
+    for locations in roots.values_mut() {
+        root_dependency_anchors(function, locations);
+    }
+    let mut post = std::mem::take(&mut function.proofs.post_roots);
+    for root in &mut post {
+        let mut locations = root.locations.iter().copied().collect::<BTreeSet<_>>();
+        root_dependency_anchors(function, &mut locations);
+        for location in locations {
+            if !root.locations.contains(&location) {
+                root.locations.push(location);
+            }
+        }
+    }
+    function.proofs.post_roots = post;
+    if low_roots {
         // Cleanup-bearing Low has complete #591 roots. Never repair a missing Low root here.
         // Only the explicitly recorded machine-expansion boundaries were added by the emitter.
         function.proofs.roots = roots.into_iter().map(|(pc, locations)| s::RootRequirement {

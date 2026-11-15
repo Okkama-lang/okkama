@@ -1009,6 +1009,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let layout = p.frame_layout(callee)
                 .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
             let start = layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?;
+            // A fixed root starts without a packet: only the root driver starts it (#667).
+            enforce(!suspension::fixed_root(p, entry), suspension::ASYNC_ENTRY,
+                "fut.new cannot create a fixed root")?;
             let inputs = start.iter().filter(|ty| matches!(ty, ProducedType::Value(_))).count();
             let future = args.iter().find_map(|arg| match arg {
                 Argument::Result(result) => *result,

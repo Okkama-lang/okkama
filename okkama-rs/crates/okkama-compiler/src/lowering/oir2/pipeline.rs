@@ -100,7 +100,8 @@ pub fn compile_linked_tests_with(roots: &[RootFile<'_>], loader: &mut dyn Module
     compile_high_with(high, mode)
 }
 
-/// The phases after the producer: verify_high, own, verify_own, low, verify_low, SPB 17 and its load check.
+/// The phases after the producer: verify_high, own, verify_own, coro, verify_coro, low, verify_low, SPB 17 and
+/// its load check.
 pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<Vec<u8>, PipelineError> {
     let execution = if high.tests.is_some() {
         o::verify::ExecutionMode::Tests
@@ -120,7 +121,12 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let catalog = P1NativeSummaries::for_module(&own.module).map_err(|error| phase("contracts_own", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
     o::verify_own_with(&own.module, &options.verify, context()).map_err(|error| phase("verify_own", error))?;
-    let low = o::low::lower_cleanup(own.module, &o::low::LowOptions::default())
+    // OIR-2 §12: coro gives async bodies their frames and suspension brackets; a synchronous module keeps its
+    // bodies. Its verifier follows the build's mode, like the others (structural in builds, full in the gate).
+    let coro = o::coro::lower_coro(own.module, &o::coro::CoroOptions::default())
+        .map_err(|error| phase("coro", error))?;
+    o::verify_coro_with(&coro, &options.verify, context()).map_err(|error| phase("verify_coro", error))?;
+    let low = o::low::lower_cleanup(coro, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
     o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
     let layouts = sparrow_oir2::with_composites(&low, || layouts(&low))?;
@@ -258,3 +264,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
     }
     Ok(layouts)
 }
+
+#[cfg(test)]
+#[path = "pipeline_tests.rs"]
+mod tests;
