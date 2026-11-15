@@ -108,10 +108,10 @@ summary.
   afterwards. Use local Docker only when a result is needed faster than the
   runners give it.
 - **Cloud Claude sessions** (routines, `RemoteTrigger`): 4 CPUs and 15 GB
-  each, Rust 1.97 and crates.io available. Two things are needed before
-  they can take implementation lanes: push access (the Claude GitHub App
-  installed on the repository) and access to the specifications in
-  `okkama-docs`.
+  each, Rust 1.97 and crates.io available, push through the Claude GitHub
+  App. `okkama-docs` stays local, so give the cloud only tasks whose context
+  is in this repository, and paste spec excerpts into the prompt. A cloud
+  session pushes `cloud/<ticket>`; Claude reviews and merges.
 
 ## 2. Repository map
 
