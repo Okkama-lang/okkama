@@ -594,6 +594,9 @@ fn iterative_metadata_walk_preserves_occurrences_and_limits_shared_dags() {
 #[path = "scalar_tests.rs"]
 mod scalar_tests;
 
+#[path = "coro_tests.rs"]
+mod coro_tests;
+
 #[test]
 fn operand_families_accept_builders_and_reject_each_changed_operand() {
     for case in 0..38 {
@@ -664,7 +667,7 @@ fn operand_families_accept_builders_and_reject_each_changed_operand() {
             })),
             23 => (vec![future], Operation::Async(AsyncOp::Await { future: v(0), result: Some(int) })),
             24 => (vec![future], Operation::Async(AsyncOp::FutureDone { future: v(0) })),
-            25 => (vec![future], Operation::Async(AsyncOp::FutureSpawn { future: v(0) })),
+            25 => (vec![future, scope_ty], Operation::Async(AsyncOp::FutureSpawn { future: v(0), state: v(1) })),
             26 => (vec![frame], Operation::Async(AsyncOp::FrameLoad { frame: v(0), slot: 0, ty: int })),
             27 => (vec![frame, own, deps, scope_ty], Operation::Async(AsyncOp::FutureNew {
                 environment: FutureEnvironment::Frame(v(0)), packet: v(1), deps: v(2), owner: scope,

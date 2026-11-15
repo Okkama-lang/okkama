@@ -70,6 +70,7 @@ fn body() -> Body {
     let mut body = Body { cleanup: CleanupMetadata::default(), high_results: vec![], high_effects: vec![],
         descriptor_bindings: vec![],
         service_schedules: vec![], entry: sample(), values: Arena::new(), blocks: Arena::new(), insts: Arena::new(),
+        frame_layout: None,
         bindings: Arena::new(), boundaries: Arena::new(), deps: Arena::new(), keys: Arena::new(),
         selections: Arena::new() };
     body.selections.alloc(SelectionExpr::Value(v(0))).unwrap();
@@ -442,6 +443,9 @@ fn dynamic_census_add_merge_and_zero_counts() {
 
 sample_expr!(ScopeEffectEnvelope, ScopeEffectEnvelope::conservative());
 sample_expr!(FutureEnvironment, FutureEnvironment::Frame(sample()));
+sample_expr!(RehomeForm, RehomeForm::Scope { state: sample(), pending: sample(), future: sample() });
+sample_expr!(PublishOutcome, PublishOutcome::Success { value: sample(), packet: sample(), deps: sample() });
+sample_expr!(ServiceEntry, ServiceEntry { holder: sample(), kind: ServiceKeyKind::Cache });
 
 impl DeclaredOperands for ScopeEffectEnvelope {
     fn append_declared(&self, _: &mut Vec<OperandRef>) {}
@@ -450,11 +454,45 @@ impl DeclaredOperands for FutureEnvironment {
     fn append_declared(&self, refs: &mut Vec<OperandRef>) {
         match self {
             Self::Frame(frame) => frame.append_declared(refs),
-            Self::Deferred { arguments, descriptors, .. } => {
+            Self::Deferred { arguments, descriptors, .. } | Self::External { arguments, descriptors, .. } => {
                 arguments.append_declared(refs);
                 descriptors.append_declared(refs);
             }
         }
+    }
+}
+impl DeclaredOperands for RehomeForm {
+    fn append_declared(&self, refs: &mut Vec<OperandRef>) {
+        match self {
+            Self::State(state) => state.append_declared(refs),
+            Self::Scope { state, pending, future } => {
+                state.append_declared(refs);
+                pending.append_declared(refs);
+                future.append_declared(refs);
+            }
+            Self::Token { pending, cache, task } => {
+                pending.append_declared(refs);
+                cache.append_declared(refs);
+                task.append_declared(refs);
+            }
+        }
+    }
+}
+impl DeclaredOperands for PublishOutcome {
+    fn append_declared(&self, refs: &mut Vec<OperandRef>) {
+        match self {
+            Self::Success { value, packet, deps } => {
+                value.append_declared(refs);
+                packet.append_declared(refs);
+                deps.append_declared(refs);
+            }
+            Self::Failure(failure) => failure.append_declared(refs),
+        }
+    }
+}
+impl DeclaredOperands for ServiceEntry {
+    fn append_declared(&self, refs: &mut Vec<OperandRef>) {
+        self.holder.append_declared(refs);
     }
 }
 

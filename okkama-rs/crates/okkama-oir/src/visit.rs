@@ -96,7 +96,9 @@ fields!(
     Block { lexical_scope, params, unwind, insts, term },
     Terminator { kind, loc }, SwitchCase { value, target },
     Body { cleanup, entry, values, blocks, insts, bindings, boundaries, deps, keys, selections,
-        high_results, high_effects, descriptor_bindings, service_schedules }
+        high_results, high_effects, descriptor_bindings, service_schedules, frame_layout },
+    FrameLayout { slots, continuations }, FrameSlotDecl { ty }, Continuation { site },
+    ServiceEntry { holder }
 );
 impl Rewrite for DebugLoc {
     fn rewrite(&mut self, visitor: &mut impl VisitorMut) { self.file.rewrite(visitor); visitor.location(self); }
@@ -251,6 +253,7 @@ pub fn rewrite_uses(body: &mut Body, visitor: &mut impl VisitorMut) {
     body.high_effects.rewrite(visitor);
     body.descriptor_bindings.rewrite(visitor);
     body.service_schedules.rewrite(visitor);
+    body.frame_layout.rewrite(visitor);
     body.keys.rewrite(visitor); body.deps.rewrite(visitor); body.selections.rewrite(visitor);
     for (_, data) in body.values.iter_mut() { data.facts.rewrite(visitor); }
     for (_, inst) in body.insts.iter_mut() { inst.op.rewrite(visitor); inst.facts.rewrite(visitor); inst.loc.rewrite(visitor); }
@@ -262,7 +265,8 @@ pub fn rewrite_uses(body: &mut Body, visitor: &mut impl VisitorMut) {
 impl Rewrite for FutureEnvironment {
     fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
         match self {
-            Self::Deferred { function, arguments, descriptors } => {
+            Self::Deferred { function, arguments, descriptors }
+            | Self::External { function, arguments, descriptors } => {
                 function.rewrite(visitor);
                 arguments.rewrite(visitor);
                 descriptors.rewrite(visitor);
@@ -328,6 +332,52 @@ impl Rewrite for CreationWitness {
                 site.rewrite(visitor);
                 callee.rewrite(visitor);
                 summary.rewrite(visitor);
+            }
+        }
+    }
+}
+
+impl Rewrite for SuspendSite {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::Start => {}
+            Self::Terminator(block) => block.rewrite(visitor),
+            Self::Instruction(instruction) => instruction.rewrite(visitor),
+        }
+    }
+}
+impl Rewrite for ScheduleDuty {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        if let Self::Value(value) = self {
+            value.rewrite(visitor);
+        }
+    }
+}
+impl Rewrite for PublishOutcome {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::Success { value, packet, deps } => {
+                value.rewrite(visitor);
+                packet.rewrite(visitor);
+                deps.rewrite(visitor);
+            }
+            Self::Failure(failure) => failure.rewrite(visitor),
+        }
+    }
+}
+impl Rewrite for RehomeForm {
+    fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
+        match self {
+            Self::State(state) => state.rewrite(visitor),
+            Self::Scope { state, pending, future } => {
+                state.rewrite(visitor);
+                pending.rewrite(visitor);
+                future.rewrite(visitor);
+            }
+            Self::Token { pending, cache, task } => {
+                pending.rewrite(visitor);
+                cache.rewrite(visitor);
+                task.rewrite(visitor);
             }
         }
     }

@@ -54,6 +54,10 @@ operation_group! { CleanupOp {
         => ("cleanup.defer", [cleanup: Consume, action: Borrow], Rule::CleanupStep { cleanup: *cleanup, finishing: false });
     Settle { cleanup: ValueId, holder: ValueId, protocol: ProtocolId }
         => ("cleanup.settle", [cleanup: Consume, holder: Consume], Rule::CleanupSettle { cleanup: *cleanup, holder: *holder, protocol: *protocol });
+    // Settles every service entry admitted at run time, in list order (async ABI D25.3).
+    SettleDynamic { cleanup: ValueId, protocol: ProtocolId }
+        => ("cleanup.settle.dynamic", [cleanup: Consume],
+            Rule::CleanupSettleDynamic { cleanup: *cleanup, protocol: *protocol });
     Plan { cleanup: ValueId, plan: CleanupPlanId }
         => ("cleanup.plan", [cleanup: Consume], Rule::CleanupStep { cleanup: *cleanup, finishing: false });
     Destroy { cleanup: ValueId, key: ValueId }

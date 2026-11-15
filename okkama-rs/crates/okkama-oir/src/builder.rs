@@ -89,6 +89,7 @@ impl<'a> FunctionBuilder<'a> {
         let body = Body { cleanup: CleanupMetadata::default(), high_results: vec![], high_effects: vec![],
             descriptor_bindings: vec![],
             service_schedules: vec![], entry: BlockId::from_u32(0), values: Arena::new(), blocks: Arena::new(),
+            frame_layout: None,
             insts: Arena::new(), bindings: Arena::new(), boundaries: Arena::new(),
             deps: Arena::new(), keys: Arena::new(), selections: Arena::new() };
         let mut builder = Self { module, function, body, current: None, location: None,
@@ -226,6 +227,12 @@ impl<'a> FunctionBuilder<'a> {
     pub fn declare_service_schedule(&mut self, schedule: ServiceSchedule) -> Result<(), BuildError> {
         check_references(&schedule, self.module, &self.body)?;
         self.body.service_schedules.push(schedule);
+        Ok(())
+    }
+    /// Sets the D21 frame layout after the sites it names exist in the body.
+    pub fn set_frame_layout(&mut self, layout: Option<FrameLayout>) -> Result<(), BuildError> {
+        check_references(&layout, self.module, &self.body)?;
+        self.body.frame_layout = layout;
         Ok(())
     }
     pub fn invoke_own(&mut self, op: Operation, normal: InvokeEdge, unwind: InvokeEdge) -> Result<(), BuildError> {

@@ -85,6 +85,15 @@ rule_ids! {
     H7 => "OIR2-H7",
     H8 => "OIR2-H8",
     H9 => "OIR2-H9",
+    // Structural rules of the async ABI (D20–D25), with their stable codes.
+    CoroMissingResume => "coro-missing-resume",
+    CoroContinuationMismatch => "coro-continuation-mismatch",
+    CoroLayoutTypeMismatch => "coro-layout-type-mismatch",
+    CoroRawFrameAccess => "coro-raw-frame-access",
+    CoroShieldedAwait => "coro-shielded-await",
+    CoroBodyRaises => "coro-body-raises",
+    AsyncDeferReplace => "async-defer-replace",
+    D22ExternalWithBody => "d22-external-with-body",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }

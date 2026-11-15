@@ -136,6 +136,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             module: &mut output.module, high: &high, analysis: &output.analysis, emitter: &mut emitter,
             body: Body {
                 high_results: vec![], high_effects: vec![], descriptor_bindings: vec![], service_schedules: vec![],
+                frame_layout: None,
                 entry: BlockId::from_u32(0), values: Arena::new(), blocks: Arena::new(), insts: Arena::new(),
                 bindings: high.bindings.clone(), boundaries: high.boundaries.clone(), deps: Arena::new(),
                 keys: Arena::new(), selections: Arena::new(), cleanup: Default::default(),

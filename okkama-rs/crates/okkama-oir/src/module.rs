@@ -195,7 +195,8 @@ pub struct DescriptorBinding {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceSchedule {
     pub dictionary: Option<crate::ValueId>,
-    pub duties: Vec<crate::ValueId>,
+    /// May include one `dynamic` entry for service entries admitted at run time (D25.3).
+    pub duties: Vec<crate::ScheduleDuty>,
     pub name: String,
     pub owner: ScopeId,
     pub protocol: crate::ProtocolId,

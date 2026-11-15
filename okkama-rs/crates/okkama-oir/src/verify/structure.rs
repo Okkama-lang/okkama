@@ -131,6 +131,7 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
             state.error(R::S3, "module entry must have signature () -> int");
         }
         if let Some(body) = &data.body { body_structure(module, function, data, body, state); }
+        super::coro::check(module, function, data, state);
     }
 }
 
@@ -337,6 +338,7 @@ fn body_structure<'a>(module: &'a Module, function: FuncId, data: &Function, bod
     references(module, Some(body), Some(function), &body.high_effects, state);
     references(module, Some(body), Some(function), &body.descriptor_bindings, state);
     references(module, Some(body), Some(function), &body.service_schedules, state);
+    references(module, Some(body), Some(function), &body.frame_layout, state);
     expressions::check(body, state);
     if !state.array(body.insts.len(), 8) || !state.array(body.values.len(), 8) { return; }
     let mut inst_count = vec![0_u8; body.insts.len()];
