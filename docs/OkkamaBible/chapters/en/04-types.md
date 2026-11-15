@@ -126,10 +126,11 @@ reader is not looking at. Okkama annotates every declaration — parameters,
 results, fields — and infers inside bodies, so that a type is always found
 within a few lines of where it is used.
 
-Inference has known rough edges. Anonymous actions cannot declare their
-result type, so some generic calls need an annotation on the binding that
-receives them (issue #214), and empty literals need a declared type because
-they contain no evidence.
+Inference has one known rough edge: an empty literal needs a declared type,
+because it contains no evidence. Until 0.4.1 anonymous actions had a second
+one: they could not declare their result type, so some generic calls needed
+an annotation on the binding that received them. Since issue #214 an
+anonymous action may state it, `(n is int) is int { n * 2; }`.
 
 ## 4.6 The top type `any`
 
@@ -320,8 +321,8 @@ Three rows place Okkama.
   between types is expressed by a role or by an enum with cases.
 - **No type-level computation.** Generics take types as parameters, but there
   are no type functions, associated types or dependent types (Chapter 17).
-- **Annotation of empty and anonymous things.** Empty collections and some
-  anonymous actions need declared types (issue #214).
+- **Annotation of empty collections.** An empty literal needs a declared
+  type, because it carries no evidence of what it will hold.
 - **No explicit narrowing of `any` yet.** Opaque values can only be passed
   on (Chapter 28).
 

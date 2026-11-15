@@ -1896,10 +1896,11 @@ reader is not looking at. Okkama annotates every declaration — parameters,
 results, fields — and infers inside bodies, so that a type is always found
 within a few lines of where it is used.
 
-Inference has known rough edges. Anonymous actions cannot declare their
-result type, so some generic calls need an annotation on the binding that
-receives them (issue #214), and empty literals need a declared type because
-they contain no evidence.
+Inference has one known rough edge: an empty literal needs a declared type,
+because it contains no evidence. Until 0.4.1 anonymous actions had a second
+one: they could not declare their result type, so some generic calls needed
+an annotation on the binding that received them. Since issue #214 an
+anonymous action may state it, `(n is int) is int { n * 2; }`.
 
 ## 4.6 The top type `any`
 
@@ -2231,8 +2232,8 @@ Three rows place Okkama.
   between types is expressed by a role or by an enum with cases.
 - **No type-level computation.** Generics take types as parameters, but there
   are no type functions, associated types or dependent types (Chapter 17).
-- **Annotation of empty and anonymous things.** Empty collections and some
-  anonymous actions need declared types (issue #214).
+- **Annotation of empty collections.** An empty literal needs a declared
+  type, because it carries no evidence of what it will hold.
 - **No explicit narrowing of `any` yet.** Opaque values can only be passed
   on (Chapter 28).
 
@@ -3894,10 +3895,12 @@ Ranges expand inside array literals: `[9, 0, 2..=4, 1]` is the array
 `9 0 2 3 4 1`. `a..b` excludes its end and `a..=b` includes it; bounds are
 integers and the start may not exceed the end.
 
-`ordering()` sorts an array whose elements can be compared. The comment in
-the example records a wrinkle of the current compiler: the builtin
-recognises numbers and strings as comparable only when the `Comparing` role
-from the `compare` module is in scope (issue #233).
+`ordering()` sorts an array whose elements can be compared. It compares
+them through the standard role `Comparing` of the `compare` module, so the
+program imports that role even to sort numbers or strings, as the example
+does. Without the import the compiler names it: "compares elements through
+the role Comparing, which this program does not load: add
+`import "compare" take Comparing;`" (issue #233).
 
 ### Typed identity
 
@@ -4335,7 +4338,8 @@ mutable collection beside them to fall back on.
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
-- **`ordering()` needs `compare.Comparing` in scope** (issue #233).
+- **`ordering()` needs `import "compare" take Comparing;`**, even for
+  numbers and strings; the compiler names the missing import (issue #233).
 
 # Chapter 9. Expressions and Control Flow
 
