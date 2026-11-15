@@ -1027,10 +1027,11 @@ fn terminator<'a>(
             }
             TermKind::Catch { failure, ty, handler, next } => {
                 checker.service(*failure, ServiceType::Failure)?;
-                // A catch type guarantees Error: an error enum, the Error role, or the system NativeFailure
-                // (language spec 9.5); an object never implements Error (OIR-2 §9.4).
+                // A catch type guarantees Error: an error enum, the Error role, the system NativeFailure (language
+                // spec 9.5) or the system Cancelled (Bible §20.5); an object never implements Error (OIR-2 §9.4).
                 let valid = match module.types.get(*ty)? {
-                    Type::Object { decl, args } => args.is_empty() && is_native_failure(module, *decl),
+                    Type::Object { decl, args } => args.is_empty()
+                        && (is_native_failure(module, *decl) || is_cancelled(module, *decl)),
                     ty => is_error(module, ty),
                 };
                 checker.require(valid, "catch needs an Error type");

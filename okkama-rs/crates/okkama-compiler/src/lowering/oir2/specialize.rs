@@ -723,9 +723,11 @@ impl Specializer<'_, '_> {
             }
             E::Call { callee, args } => {
                 match callee {
-                    // The system NativeFailure's getters are field reads: no body to specialize.
+                    // The system NativeFailure's getters are field reads and Cancelled's text() a constant: no body
+                    // to specialize.
                     thir::Callee::Method { receiver, object, .. }
-                        if *object == self.input.registry.system.native_failure => {
+                        if *object == self.input.registry.system.native_failure
+                            || *object == self.input.registry.system.cancelled => {
                         self.expr(receiver, env)?;
                     }
                     thir::Callee::Method { receiver, object, method } => {

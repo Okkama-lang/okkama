@@ -7,6 +7,9 @@ use crate::lowering::ctx::PENDING_FIELD;
 use crate::source::Span;
 use crate::syntax::ast;
 
+/// The text of the system Cancelled, as Tomato gives it (`Cancelled.text()` and the failure report).
+const CANCELLED_TEXT: &str = "Operation was cancelled";
+
 pub(super) struct Declarations {
     pub builder: ir::ModuleBuilder,
     pub natives: HashMap<usize, ir::FuncId>,
@@ -341,6 +344,29 @@ impl Declarations {
                     })?;
                 this.functions.insert(thir::BodyOwner::Method { object: reg.system.native_failure, method }, getter);
             }
+        }
+        // The system Cancelled (Bible §20.5, #724), when a body names it: the payload of a cancellation that
+        // `catch e is Cancelled` binds. It has no fields, and its `text()` is Tomato's message. Source never
+        // constructs it.
+        let cancelled = ty::Ty::object(reg.system.cancelled);
+        let mut uses_cancelled = all_bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == cancelled));
+        for body in &all_bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                uses_cancelled |= expr.ty.as_ref() == Some(&cancelled);
+            });
+        }
+        if uses_cancelled {
+            let declaration = this.builder.declare(ir::Declaration {
+                name: ir::CANCELLED.into(), type_params: vec![], loc: None,
+                kind: ir::DeclarationKind::Object { fields: vec![], witnesses: vec![], destroy: None, builtin: false },
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
+            this.types.insert(cancelled, lowered);
+            let text = this.types[&ty::Ty::Str];
+            let message = ir::Operation::Const(ir::Literal::Str(CANCELLED_TEXT.into()));
+            let getter = super::builtin_roles::function(&mut this, declaration, "text", vec![lowered], text, false,
+                |builder, _| Ok(builder.emit_schema(message)?[0]))?;
+            this.functions.insert(thir::BodyOwner::Method { object: reg.system.cancelled, method: 0 }, getter);
         }
         if reg.test_mode {
             this.declare_test_intrinsics(&all_bodies, source.program.module.span)?;
