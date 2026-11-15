@@ -27,6 +27,7 @@ mod graph;
 mod dominance;
 mod contracts;
 mod authority;
+mod entry_packets;
 mod construction;
 mod summaries;
 mod high;
@@ -278,6 +279,7 @@ fn run_mode<'m>(
     dominance::check(module, function, &mut state);
     contracts::check(module, function, &mut state);
     authority::check(module, function, &mut state);
+    entry_packets::check(module, function, &mut state);
     if options.mode == VerifyMode::Full {
         summaries::check(module, function, &mut state);
         high::check(module, function, &mut state);

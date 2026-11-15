@@ -5,10 +5,12 @@
 //! under the High name of the pre-instruction buffer. Finish and abandon return
 //! the journal, which is admitted at the lexical owner of the instruction.
 //!
-//! Inserted elements go to the journal of the builder's owner (spec §4.1): the
-//! fresh parts of an inserted value move from inner retained scopes into the
-//! outermost retained scope of the instruction, which encloses the finishing
-//! scope and therefore outlives the buffer. Already owned parts stay borrowed.
+//! Inserted elements go to the journal of the builder's owner (spec §4.1, §8):
+//! the fresh parts of an inserted value move from inner retained scopes into the
+//! nearest retained scope enclosing the `builder.new`. That scope encloses every
+//! transition and the finish, so it outlives the buffer, and it closes where
+//! Tomato destroys the collection: a builder made in a loop body releases its
+//! elements at the end of each iteration. Already owned parts stay borrowed.
 use super::*;
 
 impl Driver<'_, '_> {
@@ -21,7 +23,7 @@ impl Driver<'_, '_> {
         let consumed = arrays::consumed_buffer(&instruction.op);
         if let Some(buffer) = consumed {
             let inserted = self.inserted_values(&point, &instruction.op)?;
-            point = self.rehome(point, &inserted)?;
+            point = self.rehome(point, buffer, &inserted)?;
             // Checked transfers forward every live SSA name: rename again.
             op = instruction.op.clone();
             let mut missing = false;
@@ -96,18 +98,21 @@ impl Driver<'_, '_> {
         Ok(values)
     }
 
-    /// Move the admissible parts of `originals` from every inner retained scope
-    /// into the outermost retained scope of the current block.
-    fn rehome(&mut self, mut point: Landing, originals: &[ValueId]) -> Result<Landing, OwnError> {
+    /// Move the admissible parts of `originals` from every retained scope inside
+    /// the builder's owner into the nearest retained scope enclosing its `builder.new`.
+    fn rehome(&mut self, mut point: Landing, buffer: ValueId, originals: &[ValueId]) -> Result<Landing, OwnError> {
         if originals.is_empty() {
             return Ok(point);
         }
-        let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
-        let retained: Vec<_> = stack(self.module, scope)?.into_iter()
-            .filter(|scope| point.env.scopes.contains_key(scope)).collect();
-        let Some((&outer, inner)) = retained.split_first() else {
+        let owner = *self.builder_owners.get(&buffer)
+            .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+        let Some(outer) = stack(self.module, owner)?.into_iter().rev()
+            .find(|scope| point.env.scopes.contains_key(scope)) else {
             return Ok(point);
         };
+        let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+        let inner: Vec<_> = arrays::inner_scopes(self.module, scope, outer)?.into_iter()
+            .filter(|scope| point.env.scopes.contains_key(scope)).collect();
         for scope in inner.iter().rev() {
             let mut selections = vec![];
             for original in originals {
