@@ -51,6 +51,15 @@ const WITNESSES: &[&str] = &[
     "coro-nested-cold-await",
     "coro-schedule-duty-live-across-await",
     "coro-start-continuation",
+    // Commit 5b (R1): resources across the Future boundary.
+    "r1-cached-outcome",
+    "r1-cold-escape",
+    "r1-loop-escape",
+    "r1-make-escape",
+    "r1-never-started-close",
+    "r1-plain-temporary",
+    "r1-temporary-take",
+    "r1-view-escape",
 ];
 
 #[test]
@@ -280,6 +289,270 @@ fn await_unwind_requires_the_services_protocol() {
     assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::MissingBoundary);
 }
 
+/// OIR-2 §10.1, #587: the creation of a cold Future retains the fresh part of its managed input. The offered packet
+/// comes out of the creating scope, the creation summary takes the parameter into the Future's cache, and the
+/// environment names the argument as the offer left it.
+#[test]
+fn r1_a_cold_future_retains_its_fresh_input() {
+    let output = rewrite_async(&input("r1-never-started-close")).unwrap();
+    let module = &output.module;
+    let (_, consume) = function(module, "consume");
+    let creation = module.summaries.get(consume.async_creation_summary.unwrap()).unwrap();
+    assert_eq!(creation.parameters[0].convention, FreshConvention::Take);
+    assert_eq!(creation.parameters[0].destination, TransferDestination::Cache);
+    assert_eq!(creation.parameters[0].retention, Some(SummarySelection::Parameter(0)));
+    let (_, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let (packet, environment) = body.insts.iter().find_map(|(_, instruction)| match &instruction.op {
+        Operation::Async(AsyncOp::FutureNew { packet, environment, .. }) => Some((*packet, environment.clone())),
+        _ => None,
+    }).unwrap();
+    // The input packet is not an empty packet: it joins what the scope split offered.
+    let Definition::InstResult { inst, .. } = body.values.get(packet).unwrap().def else { panic!("packet") };
+    assert!(matches!(body.insts.get(inst).unwrap().op, Operation::Ownership(OwnershipOp::Join { .. })));
+    let offers = body.blocks.iter().filter(|(_, block)| matches!(&block.term.kind,
+        TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(), Operation::Ownership(OwnershipOp::ScopeSplit { .. }))))
+        .count();
+    assert_eq!(offers, 1, "the fresh Res is offered once, from main's scope");
+    let FutureEnvironment::Deferred { arguments, .. } = environment else { panic!("deferred environment") };
+    let argument = body.values.get(arguments[0]).unwrap();
+    assert!(matches!(argument.def, Definition::BlockParam { .. }), "the argument after the offer's edge");
+}
+
+/// OIR-2 §10.2, elaboration §13.2: a shared await of a resource outcome borrows the cached outcome. It yields the
+/// value and its deps and no packet; the body publishes a fresh result.
+#[test]
+fn r1_a_shared_await_borrows_the_cached_outcome() {
+    let output = rewrite_async(&input("r1-cached-outcome")).unwrap();
+    let module = &output.module;
+    let (_, work) = function(module, "work");
+    let body = module.summaries.get(work.async_body_summary.unwrap()).unwrap();
+    assert!(!body.results[0].fresh.is_empty(), "work's outcome is fresh");
+    let (_, main) = function(module, "main");
+    let main_body = main.body.as_ref().unwrap();
+    let mut awaits = 0;
+    for (_, block) in main_body.blocks.iter() {
+        let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind else { continue };
+        if !matches!(op.as_ref(), Operation::Async(AsyncOp::Await { .. })) {
+            continue;
+        }
+        awaits += 1;
+        let produced: Vec<_> = normal.args.iter().filter_map(|arg| match arg {
+            EdgeArg::Produced(result) => Some(result.slot),
+            EdgeArg::Value(_) => None,
+        }).collect();
+        assert_eq!(produced, [0, 1], "value and deps, no packet");
+        let view = main_body.blocks.get(normal.block).unwrap().params[0];
+        assert!(matches!(main_body.values.get(view).unwrap().facts, ValueFacts::Managed { .. }));
+    }
+    assert_eq!(awaits, 2);
+}
+
+/// The `cache.rehome`s of a function: (owner scope of the state, target).
+fn rehomes(module: &Module, body: &Body) -> Vec<(ScopeId, RehomeTarget)> {
+    body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Scope { state, .. }, target, .. }) => {
+            let Ok(Type::Service(ServiceType::Scope(scope))) = module.types.get(body.values.get(*state).unwrap().ty)
+            else { panic!("rehome state") };
+            Some((*scope, *target))
+        }
+        _ => None,
+    }).collect()
+}
+
+fn scope_named(module: &Module, function: FuncId, parent: bool) -> ScopeId {
+    module.scopes.iter().find(|(_, scope)| scope.function == function && scope.parent.is_none() != parent)
+        .map(|(id, _)| id).unwrap()
+}
+
+/// OIR-2 §10.1 make(), async ABI C-4 and D25.1: a returned cold Future takes its duty and its fresh inputs to the
+/// caller. make rehomes the duty into the pending reserve of its return (target caller), its summary marks the
+/// Future's fresh family and returns the inputs with it, and main's scope that admits the packet settles it by the
+/// dynamic step (D25.3). When the Future leaves main's inner block, its duty is rehomed again (target S).
+#[test]
+fn r1_a_returned_future_takes_its_cache_duty_to_the_caller() {
+    let output = rewrite_async(&input("r1-make-escape")).unwrap();
+    let module = &output.module;
+    let (make_id, make) = function(module, "make");
+    let body = make.body.as_ref().unwrap();
+    assert_eq!(rehomes(module, body), [(scope_named(module, make_id, false), RehomeTarget::Caller)]);
+    // No split selects the Future: its duty leaves only through the rehome.
+    for (_, block) in body.blocks.iter() {
+        if let TermKind::InvokeOwn { op, .. } = &block.term.kind
+            && let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref()
+            && let Ok(SelectionExpr::Value(value)) = body.selections.get(*selection) {
+            assert!(!matches!(module.types.get(body.values.get(*value).unwrap().ty), Ok(Type::Future(_))),
+                "a Future's duty never leaves by a split");
+        }
+    }
+    let summary = module.summaries.get(make.summary.unwrap()).unwrap();
+    assert_eq!(summary.results[0].fresh.len(), 3, "the Future's duty and the fresh R and A");
+    assert_eq!(summary.parameters[0].destination, TransferDestination::Result);
+    let (main_id, main) = function(module, "main");
+    let main_body = main.body.as_ref().unwrap();
+    let outer = scope_named(module, main_id, false);
+    let inner = scope_named(module, main_id, true);
+    assert_eq!(rehomes(module, main_body), [(inner, RehomeTarget::Scope(outer))]);
+    for scope in [inner, outer] {
+        let dynamic = main_body.service_schedules.iter().filter(|schedule| schedule.owner == scope)
+            .flat_map(|schedule| &schedule.duties).filter(|duty| **duty == ScheduleDuty::Dynamic).count();
+        assert_eq!(dynamic, 1, "{scope:?} admits a service entry");
+    }
+}
+
+/// OIR-2 §10.2, C-4: a cold Future created in an inner block and a view of a cached outcome escaping it both
+/// rehome the cache duty to the block's destination; the commit names the same scope.
+#[test]
+fn r1_an_escape_from_a_block_rehomes_into_the_destination() {
+    for name in ["r1-cold-escape", "r1-view-escape"] {
+        let output = rewrite_async(&input(name)).unwrap();
+        let module = &output.module;
+        let (main_id, main) = function(module, "main");
+        let body = main.body.as_ref().unwrap();
+        let outer = scope_named(module, main_id, false);
+        let inner = scope_named(module, main_id, true);
+        assert_eq!(rehomes(module, body), [(inner, RehomeTarget::Scope(outer))], "{name}");
+        let commits: Vec<_> = body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+            Operation::Exit(ExitOp::Commit { destination, .. }) => Some(*destination),
+            _ => None,
+        }).collect();
+        assert_eq!(commits, [ExitDestination::Scope(outer)], "{name}");
+        // The inner block keeps its static duty; the outer scope admits the entry.
+        let duties = |scope: ScopeId| body.service_schedules.iter().filter(|schedule| schedule.owner == scope)
+            .flat_map(|schedule| schedule.duties.clone()).collect::<Vec<_>>();
+        assert!(matches!(duties(inner).as_slice(), [ScheduleDuty::Value(_)]), "{name}");
+        assert_eq!(duties(outer), [ScheduleDuty::Dynamic], "{name}");
+    }
+}
+
+fn golden(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("src/own/tests/async-goldens/{name}.oir"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+/// The diagnostics of the full own verifier, with their locations.
+fn rejections(text: &str) -> Vec<(RuleId, EntityLocation, String)> {
+    let module = crate::text::parse(text).unwrap();
+    match verify_own(&module) {
+        Ok(_) => vec![],
+        Err(report) => report.diagnostics.into_iter()
+            .map(|diagnostic| (diagnostic.rule, diagnostic.primary.entity, diagnostic.message)).collect(),
+    }
+}
+
+fn rejected_by(text: &str, rule: RuleId, message: &str) -> bool {
+    rejections(text).iter().any(|(actual, _, text)| *actual == rule && text == message)
+}
+
+fn edit(text: &str, from: &str, to: &str) -> String {
+    assert!(text.contains(from), "{from}");
+    text.replacen(from, to, 1)
+}
+
+const COLD_REHOME: &str = "(%46: scope<S4>, %47: pending) = cache.rehome %42, %45, future %41, target S3, protocol P0";
+
+/// C-4, ruling of #601 R1: the target of a rehome is a live scope that encloses the duty's owner, or the caller.
+#[test]
+fn r1_a_rehome_target_encloses_the_owner_scope() {
+    let valid = golden("r1-cold-escape");
+    assert_eq!(rejections(&valid), []);
+    let message = "cache rehome requires a live sufficient target boundary";
+    let inner = edit(&valid, COLD_REHOME, &COLD_REHOME.replace("target S3", "target S4"));
+    assert!(rejected_by(&inner, RuleId::B94, message), "{:?}", rejections(&inner));
+}
+
+/// C-4 step 2: the rehomed duties reach the destination their rehome named; the commit checks it.
+#[test]
+fn r1_a_rehome_names_the_destination_of_its_exit() {
+    let message = "rehomed cache duties reach a destination other than their rehome target";
+    let valid = golden("r1-cold-escape");
+    let caller = edit(&valid, COLD_REHOME, &COLD_REHOME.replace("target S3", "target caller"));
+    assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
+    let make = golden("r1-make-escape");
+    let returned = "cache.rehome %47, %50, future %46, target caller, protocol P0";
+    assert!(make.contains(returned));
+    // make's own scope is no destination of its return.
+    let own = edit(&make, returned, &returned.replace("target caller", "target S3"));
+    let boundary = "cache rehome requires a live sufficient target boundary";
+    assert!(rejected_by(&own, RuleId::B94, boundary), "{:?}", rejections(&own));
+}
+
+/// C-4: a rehome moves the cache duty its scope state holds; a second rehome of the same duty finds none, and
+/// the duties of one pending exit name one destination.
+#[test]
+fn r1_a_rehome_moves_a_duty_its_state_holds() {
+    let valid = golden("r1-cold-escape");
+    let again = |target: &str| {
+        let second = format!("{COLD_REHOME}\n    (%90: scope<S4>, %91: pending) = cache.rehome %46, %47, future %41, \
+            target {target}, protocol P0");
+        let text = edit(&valid, COLD_REHOME, &second);
+        let text = edit(&text, "%49: pending = exit.extend %47, %48", "%49: pending = exit.extend %91, %48");
+        edit(&text, "scope.end %46, reserve %49", "scope.end %90, reserve %49")
+    };
+    let twice = again("S3");
+    let absent = "cache.rehome names a Future whose cache duty its scope state does not hold";
+    assert!(rejected_by(&twice, RuleId::B94, absent), "{:?}", rejections(&twice));
+    let conflict = again("caller");
+    let message = "the duties rehomed into one pending exit name different destinations";
+    assert!(rejected_by(&conflict, RuleId::B94, message), "{:?}", rejections(&conflict));
+}
+
+/// The pre-C-4 form over one cache-state token keeps naming a scope.
+#[test]
+fn r1_the_token_state_rehome_names_a_scope() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/spec/10-cache-rehome.oir");
+    let valid = std::fs::read_to_string(path).unwrap();
+    let message = "the pre-C-4 cache.rehome form needs a target scope";
+    assert!(!rejected_by(&valid, RuleId::B94, message));
+    let caller = edit(&valid, "target Souter", "target caller");
+    assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
+}
+
+/// OIR-2 §10.2, §10.3, elaboration §13.2: the awaiting block takes a temporary Future of a managed outcome.
+/// The proof carries the full evidence (its creation, no alias, frame slot, storage, waiter, view or collector, the block of
+/// the take) and the take's boundary is the awaiting scope, which admits the actual outcome packet. A bound or a
+/// plain temporary Future stays a shared await.
+#[test]
+fn r1_a_temporary_future_is_taken_by_its_awaiting_scope() {
+    let output = rewrite_async(&input("r1-temporary-take")).unwrap();
+    let module = &output.module;
+    let (main_id, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let inner = scope_named(module, main_id, true);
+    let (proof_block, proof) = body.blocks.iter().find_map(|(id, block)| block.insts.iter().find_map(|inst| {
+        match &body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::UniqueCacheProof { proof }) => Some((id, proof.clone())),
+            _ => None,
+        }
+    })).unwrap();
+    let Definition::InstResult { inst, .. } = body.values.get(proof.future).unwrap().def else { panic!("future") };
+    assert!(matches!(body.insts.get(inst).unwrap().op, Operation::Async(AsyncOp::FutureNew { owner, .. })
+        if owner == inner));
+    assert_eq!(proof.scope, inner);
+    assert_eq!(proof.region, [proof_block]);
+    assert_eq!(proof.evidence, UniqueCacheEvidence {
+        creation: CreationOrigin::Instruction(inst), aliases: vec![], frame_slots: vec![], no_external_storage: true,
+        no_other_waiters: true, no_live_views: true, no_collector_retention: true, scheduler_cannot_publish: true,
+    });
+    let TermKind::InvokeOwn { op, normal, .. } = &body.blocks.get(proof_block).unwrap().term.kind else {
+        panic!("take")
+    };
+    let Operation::Async(AsyncOp::AwaitTake { future, boundary, .. }) = op.as_ref() else { panic!("{op:?}") };
+    assert_eq!((*future, *boundary), (proof.future, TakeBoundary::Temporary { awaiting: inner }));
+    // The landing admits the taken packet into the awaiting scope, and no edge carries the Future on.
+    let landing = body.blocks.get(normal.block).unwrap();
+    let packet = landing.params[1];
+    assert!(landing.insts.iter().any(|inst| matches!(&body.insts.get(*inst).unwrap().op,
+        Operation::Ownership(OwnershipOp::Admit { packet: admitted, .. }) if *admitted == packet)));
+    assert!(!normal.args.contains(&EdgeArg::Value(proof.future)));
+    for name in ["r1-cached-outcome", "async-void", "r1-plain-temporary"] {
+        let output = rewrite_async(&input(name)).unwrap();
+        let (_, main) = function(&output.module, "main");
+        assert!(!operations(main.body.as_ref().unwrap()).iter().any(|op| matches!(op,
+            Operation::Async(AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. }))), "{name}");
+    }
+}
+
 /// The main of async-repeated-await with its creation and await in a loop of the root scope, or in an
 /// iteration scope that the loop opens on every round.
 fn creation_in_loop(iteration_scope: bool) -> String {
@@ -329,4 +602,95 @@ fn a_future_created_in_a_loop_of_its_owner_is_unsupported() {
     // An iteration scope owns the Future of each round and closes it before the next one.
     let output = rewrite_async(&creation_in_loop(true)).unwrap();
     crate::verify_own(&output.module).unwrap();
+}
+
+
+
+/// C-4 through a loop exit: the commit names the loop boundary, which has no scope, so the rehome names the scope
+/// where the exit lands (the block SO around the loop); the duty then leaves SO for S as its value.
+#[test]
+fn r1_a_loop_exit_rehomes_into_the_scope_where_it_lands() {
+    let output = rewrite_async(&input("r1-loop-escape")).unwrap();
+    let module = &output.module;
+    let (main_id, main) = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let scope = |kind: ScopeKind| module.scopes.iter().find(|(_, data)| data.function == main_id && data.kind == kind)
+        .map(|(id, _)| id).unwrap();
+    let (root, block, iteration) = (scope(ScopeKind::Action), scope(ScopeKind::Block), scope(ScopeKind::Iteration));
+    let mut found = rehomes(module, body);
+    found.sort_by_key(|(scope, _)| scope.as_u32());
+    let mut expected = vec![(iteration, RehomeTarget::Scope(block)), (block, RehomeTarget::Scope(root))];
+    expected.sort_by_key(|(scope, _)| scope.as_u32());
+    assert_eq!(found, expected);
+    let commits: Vec<_> = body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Exit(ExitOp::Commit { destination, .. }) => Some(*destination),
+        _ => None,
+    }).collect();
+    assert!(commits.iter().any(|destination| matches!(destination, ExitDestination::Loop(_))), "{commits:?}");
+    assert!(commits.contains(&ExitDestination::Scope(root)), "{commits:?}");
+    // A loop exit's rehome that names a scope other than the landing one is refused where the packet lands.
+    let golden = golden("r1-loop-escape");
+    let rehome = "future %78, target S4, protocol P0";
+    let elsewhere = edit(&golden, rehome, &rehome.replace("target S4", "target S3"));
+    let message = "committed packet must be admitted into its declared destination";
+    assert!(rejected_by(&elsewhere, RuleId::B101, message), "{:?}", rejections(&elsewhere));
+}
+
+/// OIR-2 §10.2, D12 (`future.passed-and-awaited-elsewhere`): a Future passed to an async entry stays in the cache
+/// of its owner. The creation of the outer Future offers nothing for it, so no selection names the inner Future:
+/// its duty never travels through an offer, and a run-time selection walk never meets a Future.
+#[test]
+fn r1_a_future_input_of_a_cold_future_is_never_offered() {
+    let source = input("async-plain-await")
+        .replace("scope S action in @main\n", "scope SO action in @outer\nscope S action in @main\n")
+        .replace("func @main()", "summary MouterC call-boundary parameters [parameter_effect(convention=borrow, \
+            destination=none)] results [result_relation(provenance=unbound_result)] contract \
+            call_contract(results=[future<int>], publication=atomic)
+summary MouterB call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results \
+            [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, \
+            program, panic, native, cancelled], suspends=true, publication=atomic)
+func @outer(%g: future<int>) -> int [async] async-creation(MouterC) async-body(MouterB) {
+    boundary BO lexical in SO
+    ^entry in SO unwind ^failed:
+    %n: int = await %g, result int
+    want %n
+    [iprepo] exit.prepare return %n at BO
+    result.exit edge normal(0), value %n, demand want, prepare iprepo
+    ret %n
+    ^failed(%failure: failure) in SO:
+    raise %failure
+}
+func @main()")
+        .replace("    %v: int = await %f, result int\n", "    %h: future<int> = call @outer(%f)\n    temp %h, S\n    \
+            %v: int = await %h, result int\n");
+    let output = rewrite_async(&source).unwrap();
+    verify_own(&output.module).unwrap();
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let mut creations = 0;
+    for op in operations(body) {
+        let selection = match op {
+            Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. }) => {
+                *selection
+            }
+            Operation::Async(AsyncOp::FutureNew { .. }) => {
+                creations += 1;
+                continue;
+            }
+            _ => continue,
+        };
+        let mut pending = vec![selection];
+        while let Some(selection) = pending.pop() {
+            match body.selections.get(selection).unwrap() {
+                SelectionExpr::Union(items) => pending.extend(items),
+                SelectionExpr::Admissible(inner) => pending.push(*inner),
+                SelectionExpr::Value(value) => {
+                    let ty = output.module.types.get(body.values.get(*value).unwrap().ty).unwrap();
+                    assert!(!matches!(ty, Type::Future(_)), "a selection names a Future: {op:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(creations, 2);
 }

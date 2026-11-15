@@ -77,7 +77,9 @@ pub fn open_callable_protocol() -> ProtocolDecl {
 /// whose bodies hold Futures declares it once:
 /// - a cache duty settles into its owner scope, or detaches a running Future to
 ///   the root registry (D24.2, parity);
-/// - an await receipt settles into the awaiting scope (C-3).
+/// - an await receipt settles into the awaiting scope (C-3);
+/// - `cache.rehome` moves a cache duty from its owner scope into the pending
+///   reserve of the scope's exit (C-4).
 ///
 /// Spawned-task duties (`frame → root`, P1) and the D23 families arrive with
 /// their slices.
@@ -95,11 +97,20 @@ pub fn services_protocol() -> ProtocolDecl {
     ProtocolDecl {
         kind: ProtocolKind::Services,
         holders: vec![HolderKind::Scope, HolderKind::Cache, HolderKind::Frame, HolderKind::Receipt,
-            HolderKind::RootRegistry],
+            HolderKind::RootRegistry, HolderKind::PendingExit],
         rules: vec![
             settle(HolderKind::Cache, HolderKind::Scope, HolderState::Settled),
             settle(HolderKind::Receipt, HolderKind::Scope, HolderState::Settled),
             settle(HolderKind::Cache, HolderKind::RootRegistry, HolderState::Running),
+            ProtocolRule {
+                transition: ProtocolTransition::Rehome,
+                from: HolderKind::Scope,
+                to: HolderKind::PendingExit,
+                checks: vec![ProtocolCheck::Owner, ProtocolCheck::LiveDependencies, ProtocolCheck::SufficientBoundary],
+                normal: ProtocolPoststate { holder: HolderKind::PendingExit, state: HolderState::Open },
+                unwind: None,
+                cancel: None,
+            },
         ],
         roots: vec![],
     }

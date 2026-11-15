@@ -810,7 +810,8 @@ variants!(TransferRule {
     AbortReservation { pending, cleanup } => "abort_reservation",
     FrameSave { frame, values } => "frame_save",
     FrameResume { frame, slots } => "frame_resume",
-    CompleteIdentity { identity, state, output } => "complete_identity"
+    CompleteIdentity { identity, state, output } => "complete_identity",
+    Rehome { inputs, outputs } => "rehome"
 });
 variants!(Postcondition {
     CleanupOwnsReserve => "cleanup_owns_reserve",

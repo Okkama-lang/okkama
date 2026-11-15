@@ -144,6 +144,7 @@ impl Engine<'_, '_> {
                 token.pending_type = before.tokens[pending.as_u32() as usize].pending_type;
                 token.pending_kind = before.tokens[pending.as_u32() as usize].pending_kind;
                 token.pending_boundary = before.tokens[pending.as_u32() as usize].pending_boundary;
+                token.rehome = before.tokens[pending.as_u32() as usize].rehome;
                 token.reserve = before.tokens[pending.as_u32() as usize].reserve.clone();
             }
             if let Some(slot) = slots.first_mut() {
@@ -428,6 +429,7 @@ impl Engine<'_, '_> {
                             slot.token.pending_type = token.pending_type;
                             slot.token.pending_kind = token.pending_kind;
                             slot.token.pending_boundary = token.pending_boundary;
+                            slot.token.rehome = token.rehome;
                             slot.token.reserve = token.reserve.clone();
                             if let Some(scope) = token.scope {
                                 slot.token.reserve.remove(&scope);
