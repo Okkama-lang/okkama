@@ -90,7 +90,6 @@ fn oir2_c3b_open_invocation_cases_reach_low() {
 }
 
 #[test]
-#[ignore = "#569: OIR-2 has no char-to-string conversion (NumericType has no Char)"]
 fn oir2_c6_string_tail_converts_reaches_low() {
     let id = "L03.variadic.string-tail-converts";
     case(id, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{id}: {error}"));

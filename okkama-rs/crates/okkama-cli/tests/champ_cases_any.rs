@@ -26,7 +26,6 @@ fn champ_cases_any() {
 }
 
 #[test]
-#[ignore = "#569: OIR-2 has no char-to-string conversion"]
 fn any_variadic_string_tail_converts() {
     run_case("L03.variadic.string-tail-converts").unwrap();
 }

@@ -284,13 +284,7 @@ case!(once_keeps_plain_closure_and_role, "L04.once.keeps-plain-closure-and-role"
 // Construction completion state: a role call on a receiver whose construction is pending fails (§11.4).
 case!(construction_escaped_self_role_call, "L04.invariant.escaped-self-role-call");
 
-/// It builds and runs in Champ, but sorting 100 000 integers is superlinear in a debug build: 1 000 take
-/// seconds, 10 000 more than four minutes. With smaller arrays the output matches case.json.
-#[test]
-#[ignore = "debug Champ: the 100 000-element sort runs for hours (superlinear)"]
-fn collections_failing_order_stops_the_sort() {
-    check("L09.compare.failing-order-stops-the-sort");
-}
+// L09.compare.failing-order-stops-the-sort is a full check in champ_sorting.rs (#678).
 
 // Multi-case Error variant types are not in S1 yet.
 through_low!(streams_params_grouped, "L01.gram.params.grouped");

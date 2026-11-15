@@ -575,13 +575,6 @@ fn an_async_test_is_a_void_fixed_root() {
     assert_eq!(s::verify_load(&started, &contracts).unwrap_err().rule, "SPB_ASYNC_ENTRY");
 }
 
-/// C-2 with descriptor parameters: the S2 transport has no descriptor bindings yet (open calls, lane cr).
-#[test]
-#[ignore = "#689"]
-fn v7_descriptor_start_golden_compiles_and_loads() {
-    loads("coro-start-descriptors");
-}
-
 
 // --- #601 R4: resources ------------------------------------------------------------------------------------------
 
