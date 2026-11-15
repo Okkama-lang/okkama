@@ -9,8 +9,15 @@ impl ExternalContracts for Catalog {
     }
 }
 pub(super) fn fixture(name: &str) -> (Program, Catalog) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../okkama-compiler/src/codegen/sparrow_oir2/fixtures/{name}.spb17"));
+    loaded(&format!("../okkama-compiler/src/codegen/sparrow_oir2/fixtures/{name}.spb17"))
+}
+/// fresh-call as codegen emitted it before #702 removed unreachable blocks: the tests that rebuild its
+/// callee by instruction position keep this program, which the loader accepts as it is.
+pub(super) fn fresh_call_unwind_chain() -> (Program, Catalog) {
+    loaded("src/spb17/fixtures/fresh-call-unwind-chain.spb17")
+}
+fn loaded(relative: &str) -> (Program, Catalog) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     let program = assemble(&std::fs::read_to_string(path).unwrap()).unwrap();
     let catalog = Catalog(program.functions.iter().filter(|f| f.proofs.entry.as_ref()
         .is_some_and(|entry| entry.external.is_some())).cloned().collect());
@@ -372,7 +379,7 @@ fn non_return_commit_cannot_reinterpret_pending_value() {
 /// a scope.split without the admissible flag, and a close of the emptied scope. With `commit` the selected
 /// packet returns through exit.prepare and exit.commit; without it ret.own returns that bound packet itself.
 pub(super) fn bound_fresh_return(commit: bool) -> (Program, Catalog) {
-    let (mut p, catalog) = fixture("fresh-call");
+    let (mut p, catalog) = fresh_call_unwind_chain();
     let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
     assert!(matches!(f.code[11], Instruction::Champ { op: Opcode::OwnSplit, .. }), "fixture changed");
     assert!(matches!(f.code[14], Instruction::Champ { op: Opcode::CleanupBegin, .. }), "fixture changed");
@@ -611,21 +618,45 @@ fn transfer(filter: Vec<Argument>) -> Program {
     Program { functions: vec![f], tables, ..Program::default() }
 }
 
-/// The admission filter of a transfer is one `true` flag right after its selection (#697): an admissible
-/// transfer moves only what its source admitted, a plain one every selected identity.
+/// The admission filter of a transfer is at most one flag right after its selection (#697): `true` makes an
+/// admissible transfer, which moves only what its source admitted; `false` a held one, which moves what its source
+/// admitted or bound; no flag a plain one, which moves every selected identity.
 #[test]
-fn a_transfer_admission_filter_is_one_true_flag_after_its_selection() {
-    verify(&transfer(vec![])).unwrap();
-    let admissible = transfer(vec![Argument::Flag(true)]);
-    verify(&admissible).unwrap();
-    let Instruction::Champ { arguments, .. } = &admissible.functions[0].code[3] else { unreachable!() };
-    assert!(transfer_admissible(arguments));
-    let Instruction::Champ { arguments, .. } = &transfer(vec![]).functions[0].code[3] else { unreachable!() };
-    assert!(!transfer_admissible(arguments));
-    for filter in [vec![Argument::Flag(false)], vec![Argument::Flag(true), Argument::Flag(true)]] {
+fn a_transfer_admission_filter_is_one_flag_after_its_selection() {
+    let filter_of = |p: &Program| {
+        let Instruction::Champ { arguments, .. } = &p.functions[0].code[3] else { unreachable!() };
+        transfer_filter(arguments)
+    };
+    for (filter, expected) in [
+        (vec![], TransferFilter::Strict),
+        (vec![Argument::Flag(true)], TransferFilter::Admitted),
+        (vec![Argument::Flag(false)], TransferFilter::Held),
+    ] {
+        let program = transfer(filter);
+        verify(&program).unwrap();
+        assert_eq!(filter_of(&program), expected);
+    }
+    for filter in [
+        vec![Argument::Flag(true), Argument::Flag(true)],
+        vec![Argument::Flag(false), Argument::Flag(false)],
+        vec![Argument::Flag(false), Argument::Flag(true)],
+        vec![Argument::Scope(0)],
+    ] {
         let failure = verify(&transfer(filter.clone())).unwrap_err();
         assert_eq!(failure.rule, "TRANSFER_ADMISSION", "{filter:?}: {failure}");
     }
+}
+
+/// A held transfer (#697) survives the binary codec and the assembler unchanged.
+#[test]
+fn a_held_transfer_round_trips() {
+    let program = transfer(vec![Argument::Flag(false)]);
+    let decoded = decode(&encode(&program).unwrap()).unwrap();
+    assert_eq!(decoded, program);
+    let assembled = assemble(&disassemble(&program).unwrap()).unwrap();
+    assert_eq!(assembled, program);
+    let Instruction::Champ { arguments, .. } = &assembled.functions[0].code[3] else { unreachable!() };
+    assert_eq!(transfer_filter(arguments), TransferFilter::Held);
 }
 
 /// The system NativeFailure declaration: four public `str` fields in storage order.

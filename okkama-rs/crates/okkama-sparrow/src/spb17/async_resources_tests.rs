@@ -553,10 +553,16 @@ enum Escape {
     TwoOwners,
     /// The exit is replaced after the rehome.
     Replaced,
+    /// MAIN's close does not settle the duty its scope admitted with the commit (ABI D25.3).
+    Undynamic,
 }
 
 fn escaper(variant: Escape) -> (Function, FrameLayout) {
     let (mut b, frame) = Body::asynchronous("escape", 1, vec![]);
+    // MAIN admits the committed reserve's duty, so its close settles it dynamically (D25.3).
+    if variant != Escape::Undynamic {
+        b.dynamic.insert(MAIN, super::async_tests::Dynamic::AfterStatic);
+    }
     b.block("entry", &[frame]);
     let (body, start) = b.resume(frame, 0, &[ProducedType::Service(K::Packet)]);
     let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
@@ -645,6 +651,11 @@ fn escaping(variant: Escape) -> Program {
 #[test]
 fn a_rehomed_future_leaves_its_owner_for_the_exit_destination() {
     verify_load(&escaping(Escape::Plain), &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn a_scope_that_admits_a_rehomed_duty_settles_it_dynamically() {
+    reject_with(&escaping(Escape::Undynamic), suspension::SCHEDULE, "settles them dynamically");
 }
 
 #[test]

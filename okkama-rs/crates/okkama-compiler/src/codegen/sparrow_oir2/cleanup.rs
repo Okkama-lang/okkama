@@ -154,6 +154,9 @@ impl Emitter<'_> {
                 if admissible && op != O::ScopeSplit {
                     return Err(error("admissible packet selection requires provenance transport"));
                 }
+                if matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Held(_)) {
+                    return Err(error("a held selection belongs only to scope.transfer"));
+                }
                 let selection = self.selection(*selection)?;
                 let mut arguments = vec![packet, A::Selection(selection)];
                 if admissible { arguments.push(A::Flag(true)); }
@@ -174,11 +177,16 @@ impl Emitter<'_> {
             ScopeTransfer { states, selection } => {
                 let mut arguments = vec![A::Flag(matches!(states, o::TransferStates::Between { .. }))];
                 arguments.extend(states.values().into_iter().map(location).collect::<Result<Vec<_>, _>>()?);
-                // An admissible selection moves only what the source admitted (TRANSFER_ADMISSION).
-                let admissible = matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Admissible(_));
+                // An admissible selection moves only what the source admitted, a held one what it admitted or bound
+                // (TRANSFER_ADMISSION: a `true` or a `false` flag after the selection, #697).
+                let filter = match self.body.selections.get(*selection)? {
+                    o::SelectionExpr::Admissible(_) => Some(true),
+                    o::SelectionExpr::Held(_) => Some(false),
+                    _ => None,
+                };
                 arguments.push(A::Selection(self.selection(*selection)?));
-                if admissible {
-                    arguments.push(A::Flag(true));
+                if let Some(admitted) = filter {
+                    arguments.push(A::Flag(admitted));
                 }
                 (O::ScopeTransfer, arguments)
             }
@@ -315,7 +323,7 @@ impl Emitter<'_> {
                         // An expanded value (an action value, a cap with a packet) exists after its last step.
                         op if super::expansion(op) > 1 => (instructions[&id] + super::expansion(op) - 1, true),
                         // An evaluate has no post state: its result exists where the normal outcome lands.
-                        op if super::fallible_scalar(op) => {
+                        op if super::fallible_in(self.module, self.body, op)? => {
                             let raise = self.body.blocks.iter().any(|(_, block)| {
                                 block.insts.contains(&id) && block.unwind.is_none()
                             });
@@ -363,6 +371,11 @@ impl Emitter<'_> {
                 (O::CleanupSettle, vec![loc(*cleanup)?, A::Schedule(schedule), loc(*holder)?])
             }
             DeliverCancel { cleanup } => (O::CleanupDeliverCancel, vec![loc(*cleanup)?]),
+            // D25.3: the entries the owner admitted at run time, after the static duties.
+            SettleDynamic { cleanup, protocol } => {
+                self.services(*protocol)?;
+                (O::CleanupSettleDynamic, vec![loc(*cleanup)?])
+            }
             Plan { cleanup, plan } => (O::CleanupPlan, vec![loc(*cleanup)?, A::Plan(plan.as_u32())]),
             Destroy { cleanup, key } => (O::CleanupDestroy, vec![loc(*cleanup)?, loc(*key)?]),
             DestroyDirect { cleanup, identity, descriptor, destroy } => {
@@ -673,7 +686,7 @@ impl Emitter<'_> {
                     // four-step action value is a construction expansion with its own boundaries below.
                     states.insert(pc + 1, before);
                 }
-                if super::fallible_scalar(&instruction.op) {
+                if super::fallible_in(self.module, self.body, &instruction.op)? {
                     // The evaluate consumes no service: its raise block and normal landing see the same state.
                     states.insert(pc + 1, active.clone());
                     if block.unwind.is_none() {
@@ -880,7 +893,7 @@ impl Emitter<'_> {
         // did plus its result.
         for (&block_id, &pc) in terms {
             let o::TermKind::InvokeOwn { op, .. } = &self.body.blocks.get(block_id)?.term.kind else { continue };
-            if !super::total_family_operation(op) && super::error_case_get(self.module, self.body, op)?.is_none() {
+            if !super::total_invocation(self.module, self.body, op)? {
                 continue;
             }
             let before = states.get(&pc).cloned().unwrap_or_default();

@@ -81,6 +81,9 @@ pub(super) struct Universe {
     pub calls: BTreeMap<(FuncId, Site), usize>,
     strides: BTreeMap<FuncId, usize>,
     pub inventories: BTreeMap<ScopeId, ScopeFacts>,
+    /// Functions whose root scope the rewrite keeps whatever its inventory says: async actions and
+    /// defer helpers (the registered actions and the D8 entries).
+    pub retained_roots: BTreeSet<FuncId>,
     pub services: BTreeMap<TypeId, usize>,
     pub protocol_services: BTreeMap<ProtocolId, usize>,
     pub descriptors: BTreeMap<TypeId, Vec<DescriptorContract>>,
@@ -149,6 +152,7 @@ pub(super) fn call(op: &Operation) -> Option<(&CallSite, Option<CallArgument>)> 
         Operation::Call(CallOp::Direct { call, .. } | CallOp::Native { call, .. }
             | CallOp::Intrinsic { call, .. } | CallOp::Resume { call, .. }) => Some((call, None)),
         Operation::Call(CallOp::Role { call, receiver, .. }) => Some((call, Some(*receiver))),
+        Operation::Call(CallOp::Order { call, array, .. }) => Some((call, Some(*array))),
         Operation::Call(CallOp::Closure { call, callee }) => Some((call, Some(*callee))),
         Operation::Call(CallOp::Cap { call, cap, .. }) => Some((call, Some(*cap))),
         _ => None,
@@ -160,6 +164,7 @@ fn call_mut(op: &mut Operation) -> Option<(&mut CallSite, Option<&mut CallArgume
         Operation::Call(CallOp::Direct { call, .. } | CallOp::Native { call, .. }
             | CallOp::Intrinsic { call, .. } | CallOp::Resume { call, .. }) => Some((call, None)),
         Operation::Call(CallOp::Role { call, receiver, .. }) => Some((call, Some(receiver))),
+        Operation::Call(CallOp::Order { call, array, .. }) => Some((call, Some(array))),
         Operation::Call(CallOp::Closure { call, callee }) => Some((call, Some(callee))),
         Operation::Call(CallOp::Cap { call, cap, .. }) => Some((call, Some(cap))),
         _ => None,
@@ -180,7 +185,7 @@ fn targets(module: &Module, body: &Body, op: &Operation, budget: &mut Budget<'_>
                 targets.insert(field.function.as_u32() as usize);
             }
         }
-        Operation::Call(CallOp::Role { role, slot, .. }) => {
+        Operation::Call(CallOp::Role { role, slot, .. } | CallOp::Order { role, slot, .. }) => {
             for (_, declaration) in module.declarations.iter() {
                 budget.work(1)?;
                 let DeclarationKind::Object { witnesses, .. } = &declaration.kind else {
@@ -230,8 +235,22 @@ impl Universe {
         budget: &mut Budget<'_>,
     ) -> Result<Self, OwnError> {
         let inventories = scopes::inventory(module, types, &external, budget)?;
+        let mut retained_roots = BTreeSet::new();
+        for (id, function) in module.functions.iter() {
+            budget.work(1)?;
+            if function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Async | FunctionAttr::DeferEntry { .. })) {
+                retained_roots.insert(id);
+            }
+            for (_, instruction) in function.body.iter().flat_map(|body| body.insts.iter()) {
+                budget.work(1)?;
+                if let Operation::Lexical(LexicalOp::DeferRegister { action, .. }) = &instruction.op {
+                    retained_roots.insert(action.function);
+                }
+            }
+        }
+        budget.memory(retained_roots.len() * 64)?;
         let mut universe = Self {
-            nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories,
+            nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories, retained_roots,
             services: BTreeMap::new(), protocol_services: BTreeMap::new(), descriptors: BTreeMap::new(),
             creations: BTreeMap::new(), replacements: BTreeMap::new(),
         };
@@ -265,7 +284,8 @@ impl Universe {
             }
         }
         for (function, data) in module.functions.iter() {
-            if !data.attrs.contains(&FunctionAttr::Async) {
+            // #730, async ABI C-6: an async defer entry runs inside its owner's cleanup and creates no Future.
+            if !futures::is_async(module, function) {
                 continue;
             }
             budget.work(1)?;
@@ -306,7 +326,7 @@ impl Universe {
                     | CallOp::Intrinsic { .. } | CallOp::Resume { .. } | CallOp::Cap { .. }));
                 let captures = captures_by_target;
                 let kind = match op {
-                    Operation::Call(CallOp::Role { .. }) => 0,
+                    Operation::Call(CallOp::Role { .. } | CallOp::Order { .. }) => 0,
                     Operation::Call(CallOp::Closure { callee, .. }) => {
                         match body.values.get(callee.value).map_err(arena)?.def {
                             Definition::InstResult { inst, .. } => match &body.insts.get(inst).map_err(arena)?.op {

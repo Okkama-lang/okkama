@@ -6,8 +6,46 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Changed
+
+- **`rat.numerator()` and `rat.denominator()` return `int` (#743, owner's
+  decision).** They returned decimal strings because a part could exceed the
+  old `int`; since `int` is exact and unbounded (#189) every part fits. The
+  denominator of the canonical form is positive. Migration: code that joined
+  a part as text writes `.string()` (`r.numerator().string() + "/" + ...`),
+  and a check such as `r.denominator() == "1"` becomes `r.denominator() == 1`.
+  The compiler, Tomato, Champ (OIR-2 `rat.numerator`/`rat.denominator` and
+  SPB 17 `rat.ext` now yield `int`), the IDE completion, the Book, the
+  standard library (ten call sites), `L02.rat.constructor` and `t/op` follow.
+
 ### Fixed
 
+- **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
+  rehomes ran on every function and cloned a dense map of all locations at
+  every instruction. Debug builds spent 50 s of a 53 s compile of
+  `L10.stdin.lines` there, and nine Champ conformance cases timed out. The
+  analysis now runs only for functions with a state-form `cache.rehome` and
+  keeps only the locations that hold scopes; `L10.stdin.lines` compiles and
+  runs in 10 s instead of 104 s.
+
+- **Elements a cursor step owns live as long as the collection on Champ (#697).**
+  `Owned(...).map() -> res { res; }` collects the resource each cursor step
+  owns; the step is bound in the iteration scope, so the admissible rehome of
+  the builder left that resource behind and Champ destroyed it with the
+  iteration while the array still held it (`L07.traversal.escaping`). The
+  rehome is now a `held(...)` transfer: it moves what the inner scope admitted
+  or bound among the identities the element reaches; staged identities and
+  identities outside the source stay with their owners without a failure.
+  OIR-2 gains `SelectionExpr::Held` (text `held(...)`, only the whole
+  selection of a `scope.transfer` between non-action scopes, verifier rule
+  T1); SPB 17 carries it as a `false` flag after the transfer's selection
+  (`TRANSFER_ADMISSION`), and Champ runs it with `champ_scope_transfer_held`.
+- **Async tests load on Champ (#725).** The SPB 17 loader took only a
+  synchronous `() -> void` observation body as a test (`TEST_ENTRY`), so the
+  program of an async test, a void async body that starts with an empty
+  continuation 0 (async ABI C-2, #691), was refused. `TEST_ENTRY` now also
+  takes a void async body; as a fixed root its start must stay empty
+  (`SPB_ASYNC_ENTRY`).
 - **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
   Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
   cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2
@@ -107,7 +145,52 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   deeper shape. `L02.equality.signed-zero-composite`,
   `L05.choice.empty-collections` and `L09.statistics.exact-samples` pass on
   Champ; the other four cases stop on #706, #687, #717 and #718.
+- **Own's flow analysis is linear in the plain values of a function (#707).**
+  Each program point kept a state for every SSA value of the function, and
+  every instruction charged (and walked) the whole state, so a large `main`
+  with thousands of plain values cost work quadratic in its size and
+  exhausted own's work budget (`own_rewrite: Incomplete`) in
+  `L05.variants.case-layouts`, `L07.try-mark.diverging-operand` and
+  `L09.digest.md5-sha1-vectors`, whose largest functions have 0 to 20
+  values that may own among 700 to 4 800. A point now keeps states only for
+  the values that may own (the only ones with dependencies; no consumer
+  reads the masks of plain values). The budgets are unchanged.
 
+- **Own declares the program failure of every split it elaborates (#706).**
+  Elaboration gives deps to, and so splits, any deps-carrying reference
+  without an obligation (a cap value, a role, a function value), not only
+  owned values and Atomic. Summary inference counted only the latter, so a
+  lambda own entry binding a cap parameter, a witness entry returning a role
+  field and a generic method staging a role value declared no failure while
+  their bodies held a `scope.split`, and the loader refused them with
+  `ENTRY_FAILURE_MASK`. Inference now declares the failure wherever the
+  driver may split such a reference: at a binding, a staged value or an exit
+  inside a scope that keeps a state, and at a call that offers it (not where
+  the scope is elided or the offer is dropped, so plain functions stay
+  infallible). `L09.collections.heap-and-deque`,
+  `L09.collections.persistent-list`, `L09.math.aggregates` and
+  `L12.caps-in-collections-and-closures` pass on Champ. The loader rules are
+  unchanged.
+
+- **The SPB 17 emitter drops the code it disconnects (#702).** A Low
+  invocation that SPB 17 computes totally (a total scalar operation, a plain
+  construction such as `throw E.case(x)`) becomes data and a branch, and its
+  unwind edge is dropped; the cleanup chain behind that edge stayed in the
+  function, still reading by Low dominance a local carried to a catch
+  handler, so the loader refused it with `SPB_STRUCTURE` "definition does not
+  dominate use" (`L05.batching.functional`, the `L07.traversal.*` cases,
+  `strings.parse.Number.rat`, `time.rfc3339.Rfc3339.parsed`). The emitter now
+  removes unreachable blocks with their closes, plans, envelopes and records
+  and renumbers the rest. Low was valid; the loader rules are unchanged.
+- **Single-case Error variants on Champ (#704).** SPB 17 holds an Error
+  enum with one payload case as that case's object, but `variant.tag` and
+  `variant.get` were emitted on it as on a variant (`VARIANT_TAG` in
+  `confirm … else throw`, `xs[i] else v` and case patterns). Its tag is now
+  the constant 0 and its payload read a field read that cannot fail. A
+  failure raised from an owning entry (a closure that throws into its
+  caller's `catch`) now clears the entry's input packet as `ret.own` does,
+  instead of stopping Champ with "owning entry did not consume input". The
+  loader rules are unchanged.
 - **Own never indexes a missing scope state (#672).** A constructor that
   stores a field which carries deps but holds no obligation (a role whose
   implementers are plain, as in `L09.math.aggregates` and `L09.time.zones`)
@@ -126,6 +209,27 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   deps-carrying reference with no obligation, and a function that
   partitions one declares the program failure of its `scope.split`
   (`ENTRY_FAILURE_MASK`). The loader rules are unchanged.
+- **`ordering()` on Champ is Tomato's runtime sort (#678).** The OIR-2
+  producer synthesized an O(n²) insertion sort, so sorting 10⁵ ints ran out of
+  the step budget. Following the lead's ruling (a synthesized merge sort took
+  the Full High verifier past its step budget, 470afc9cf), `ordering()` now
+  lowers to one operation, as Tomato's `ordering` intrinsic. Scalars and text
+  (int, float, rat, byte, char, str) use OIR-2 `array.order` (total) and
+  SPB 17 `array.order` (`array.op` sub-code 6, rule `ARRAY_ORDER_TYPE`); Champ
+  runs Tomato's sort with the same comparators and interrupt/memory polling,
+  and a byte array stays bytes. Elements ordered by `Comparing<T>.order` use
+  OIR-2 `call.order` (the failures of `order`, inferred by own like a role
+  dispatch) and the SPB 17 operation `array.order.dispatch` (Champ opcode 99,
+  rule `ORDER_DISPATCH`, with the dispatch's `DISPATCH_SITE`/`DISPATCH_TARGET`
+  and failure mask); its re-entrant Champ helper `champ_machine_order` runs
+  Tomato's bottom-up merge (now shared, `merge_order`) and calls `order`
+  through the dispatch once per comparison, so the comparisons and their
+  effects come in Tomato's order; the first failure stops the sort and
+  propagates, and the source array stays rooted. Each comparison borrows its
+  elements, so elements that own resources sort too (each destroyed once, as
+  in Tomato); an owning `order` slot gets an empty packet per comparison and
+  must return one.
+  `L09.compare.failing-order-stops-the-sort` passes on Champ.
 - **Char conversions on the OIR-2 → SPB 17 → Champ path (#679).** `c.code()`,
   `char(n)`, `string(c)` and `c.string()` stopped the OIR-2 producer: `cvt`
   had no char kind. OIR-2 `cvt` now takes char (char → int and char → str

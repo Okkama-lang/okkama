@@ -619,7 +619,9 @@ fn champ_j1_owned_span_adapter_accepts_shielded_call_contract() {
 }
 
 fn merge_pair() -> String {
-    let text = include_str!("../../../../okkama-compiler/src/codegen/sparrow_oir2/fixtures/local-pair.spb17");
+    // local-pair as the emitter produced it before #702, with the unreachable executor chain of a dropped
+    // unwind edge still in the code: the merge variant below is routed through that chain.
+    let text = include_str!("fixtures/local-pair-unwind-chain.spb17");
     let mut program = s::assemble(text).unwrap();
     let function = &mut program.functions[1];
     // Use the same source inventory and return value, routing both closes through the executor CFG.

@@ -181,7 +181,7 @@ hidden object EventRetry {
 
     EventRetry(origin is Duration) {
         let value = origin::Span::seconds * 1000.rat();
-        confirm value.denominator() == "1"
+        confirm value.denominator() == 1
             else throw InvalidServerEvent.because("retry requires integral milliseconds");
         let amount = BigInt(value.numerator());
         milliseconds = if amount.sign() < 0 {

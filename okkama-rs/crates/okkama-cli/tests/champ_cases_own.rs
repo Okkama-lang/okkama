@@ -249,6 +249,67 @@ fn mapped_and_filtered_resources_are_destroyed_once_by_their_owner() {
     assert_eq!(String::from_utf8_lossy(&run.destroy_trace), "app.Res 2\napp.Res 1\n");
 }
 
+/// #697: `map` collects the resource each cursor step owns, while every step also borrows its source's resource.
+/// The step is bound in the iteration scope; the collected resource leaves that scope with the element (a held
+/// rehome) and lives as long as the array, and the borrowed source resource stays with its owner.
+const CURSOR_OWNED_ELEMENTS: &str = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "collections/iteration" take Iterating, Cursor;
+
+object Res {
+    has name is string;
+    Res(name is string) { self.name = name; Stdout().writeln("+" + name); }
+    destroy { Stdout().writeln("-" + name); }
+    name() is string { name; }
+}
+
+object Owned does Iterating<Res> {
+    has res is Res;
+    Owned() { res = Res("src"); }
+    cursor() is Cursor<Res> { OwnedStep(res, Res("r0"), 0); }
+}
+
+object OwnedStep does Cursor<Res> {
+    has source, mine is Res;
+    has at is int;
+    OwnedStep(source is Res, mine is Res, at is int) {
+        self.source = source;
+        self.mine = mine;
+        self.at = at;
+    }
+    available() is bool { at < 3; }
+    item() is Res { mine; }
+    successor() is Cursor<Res> { OwnedStep(source, Res("r" + (at + 1).string()), at + 1); }
+}
+
+object T {
+    T();
+    kept() is void {
+        let all is @Res = Owned().map() -> res { res; };
+        Stdout().writeln("kept" + all.size().string());
+    }
+}
+
+main() is int {
+    T().kept();
+    Stdout().writeln("end");
+    0;
+}
+"#;
+
+#[test]
+fn elements_a_cursor_step_owns_live_as_long_as_the_collection() {
+    let directory = root().join("conformance/harness/okkama");
+    let bytes = compile(&directory, CURSOR_OWNED_ELEMENTS).unwrap_or_else(|error| panic!("{error}"));
+    let limits = sparrow_core::budget::Limits { steps: Some(10_000_000), ..sparrow_core::budget::Limits::default() };
+    let run = sparrow_core::run_captured(bytes, limits).unwrap();
+    assert_eq!(run.result, Ok(0));
+    // Tomato prints the same.
+    let expected = "+src\n+r0\n+r1\n+r2\n+r3\n-r3\nkept3\n-r2\n-r1\n-r0\n-src\nend\n";
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+}
+
 /// Opt-in triage: `OKKAMA_CHAMP_CASES=<file with one id per line>` prints where each case stops.
 #[test]
 fn champ_cases_own_triage() {

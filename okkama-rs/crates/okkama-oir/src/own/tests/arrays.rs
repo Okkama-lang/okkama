@@ -35,7 +35,7 @@ fn plain_arrays_preserve_positions_empty_arrays_and_observation_failures() {
         assert_eq!(flow.equations.nodes, vec![Shape::Empty]);
         for state in flow.before_instructions.values().chain(flow.before_edges.values()) {
             assert!(state.journals.is_empty());
-            assert!(state.values.iter().all(|value| value.deps.is_empty()));
+            assert!(state.values.states().all(|value| value.deps.is_empty()));
         }
         let output = rewrite_synchronous(output, &options).unwrap();
         verify_own(&output.module).unwrap();
@@ -106,11 +106,11 @@ fn managed_and_residual_element_graphs_follow_the_collection_rules_for_all_three
             let body = module.functions.get(f).unwrap().body.as_ref().unwrap();
             let (_, inst) = body.insts.iter().find(|(_, inst)| matches!(inst.op, Operation::Collection(_))).unwrap();
             let after = flow.before_edges.values().next().unwrap();
-            let element_deps = &after.values[params[0].as_u32() as usize].deps;
-            let array_deps = &after.values[params[1].as_u32() as usize].deps;
+            let element_deps = &after.values[params[0]].deps;
+            let array_deps = &after.values[params[1]].deps;
             if let Some(result) = inst.results.first().filter(|_| operation != 1) {
                 let expected = if operation == 0 { element_deps } else { array_deps };
-                assert_eq!(&after.values[result.as_u32() as usize].deps, expected);
+                assert_eq!(&after.values[*result].deps, expected);
             }
             if residual {
                 continue;

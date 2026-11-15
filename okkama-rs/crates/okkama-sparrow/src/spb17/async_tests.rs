@@ -52,6 +52,19 @@ pub(super) struct Body {
     delivery: Delivery,
     /// Executors emitted so far, for their block labels.
     executors: usize,
+    /// Scopes whose closes settle their dynamic service entries (ABI D25.3), and where.
+    pub(super) dynamic: BTreeMap<u32, Dynamic>,
+}
+
+/// Where a close settles its dynamic service entries: after the static duties (D25.3), or one counterexample.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Dynamic {
+    #[default]
+    AfterStatic,
+    /// Before the static settle step.
+    BeforeStatic,
+    /// Twice after the static duties.
+    Twice,
 }
 
 /// A close with `cancel=true` settles, runs its plan, delivers, then runs the aborted reserve's executor plan
@@ -83,7 +96,7 @@ impl Body {
             blocks: vec![], proofs: FunctionProofs::default(), code: vec![],
         };
         Self { f, labels: BTreeMap::new(), targets: vec![], sites: BTreeMap::new(), settle_empty_first: false,
-            delivery: Delivery::AfterPlan, executors: 0 }
+            delivery: Delivery::AfterPlan, executors: 0, dynamic: Default::default() }
     }
 
     /// An async body: its only parameter is its frame.
@@ -215,11 +228,23 @@ impl Body {
         if cancel && delivery == Delivery::BeforeSettle {
             cleanup = self.deliver(cleanup);
         }
+        let dynamic = self.dynamic.get(&scope).copied();
+        if dynamic == Some(Dynamic::BeforeStatic) {
+            cleanup = self.emit(O::CleanupSettleDynamic, vec![l(cleanup)], K::Cleanup);
+        }
         if duties.is_empty() || self.settle_empty_first {
             cleanup = self.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule)], K::Cleanup);
         }
         for &duty in duties {
             cleanup = self.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule), l(duty)], K::Cleanup);
+        }
+        let after = match dynamic {
+            Some(Dynamic::AfterStatic) => 1,
+            Some(Dynamic::Twice) => 2,
+            _ => 0,
+        };
+        for _ in 0..after {
+            cleanup = self.emit(O::CleanupSettleDynamic, vec![l(cleanup)], K::Cleanup);
         }
         if cancel && delivery == Delivery::BeforePlan {
             cleanup = self.deliver(cleanup);
@@ -857,14 +882,15 @@ fn async_block_ids_follow_draft3() {
         (71, O::FutureCancel, "fut.cancel"), (72, O::FutureDone, "fut.done"), (73, O::FutureCancelled, "fut.cancelled"),
         (74, O::FrameSave, "frame.save"), (75, O::FrameResume, "frame.resume"), (76, O::AwaitUnwind, "await.unwind"),
         (77, O::CleanupDeliverCancel, "cleanup.deliver_cancel"), (67, O::AwaitTake, "await.take"),
-        (68, O::UniqueCacheProof, "unique_cache.proof"), (69, O::CacheRehome, "cache.rehome")];
+        (68, O::UniqueCacheProof, "unique_cache.proof"), (69, O::CacheRehome, "cache.rehome"),
+        (84, O::CleanupSettleDynamic, "cleanup.settle.dynamic"), (85, O::ServiceMaterialize, "service.materialize"),
+        (86, O::ServiceAbsorb, "service.absorb")];
     for (id, op, name) in assigned {
         assert_eq!((op.id(), op.name()), (id, name));
         assert_eq!(Opcode::from_id(id).unwrap(), op);
     }
-    // Spawn, pins, workers, the dynamic settle, service materialize/absorb and the unassigned tail stay reserved
-    // until their slices.
-    for id in [65].into_iter().chain(78..=95) {
+    // Spawn, pins, workers and the unassigned tail stay reserved until their slices.
+    for id in [65].into_iter().chain(78..=83).chain(87..=95) {
         assert!(Opcode::from_id(id).unwrap_err().message.contains("reserved"), "{id}");
     }
     assert_eq!(Opcode::CleanupSettle.id(), 21);

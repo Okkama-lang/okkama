@@ -13,6 +13,7 @@ mod automaton;
 pub use automaton::infer_plan_reserves;
 mod suspension;
 mod take;
+mod services;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
@@ -375,11 +376,30 @@ pub fn cancelled(p: &Program) -> Option<u32> {
     }).map(|id| id as u32)
 }
 
-/// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
-/// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
-pub fn transfer_admissible(arguments: &[Argument]) -> bool {
-    matches!(arguments.last(), Some(Argument::Flag(true)))
-        && arguments.iter().any(|argument| matches!(argument, Argument::Selection(_)))
+/// Which selected identities of its source a scope.transfer moves (`TRANSFER_ADMISSION`, #697).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferFilter {
+    /// No flag after the selection: every selected identity, each of which the source must hold.
+    Strict,
+    /// A `true` flag: only the selected identities its source admitted; bound, staged and outside identities
+    /// stay where they are.
+    Admitted,
+    /// A `false` flag: the selected identities its source admitted or bound; staged and outside identities stay
+    /// where they are.
+    Held,
+}
+
+/// The filter a scope.transfer's arguments carry after its selection (`TRANSFER_ADMISSION`). The loader accepts
+/// no other filter shape.
+pub fn transfer_filter(arguments: &[Argument]) -> TransferFilter {
+    if !arguments.iter().any(|argument| matches!(argument, Argument::Selection(_))) {
+        return TransferFilter::Strict;
+    }
+    match arguments.last() {
+        Some(Argument::Flag(true)) => TransferFilter::Admitted,
+        Some(Argument::Flag(false)) => TransferFilter::Held,
+        _ => TransferFilter::Strict,
+    }
 }
 
 /// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`): no element is reinterpreted.
@@ -752,6 +772,9 @@ pub enum DataOp {
     ArrayReplace,
     /// The first array without the elements equal to an element of the others.
     ArrayDifference,
+    /// The stable ascending sort of an array of int, float, rat, char or str, or of a byte array (#678):
+    /// Tomato's `ordering` of scalars. Total; an exhausted budget or an interrupt stops the machine.
+    ArrayOrder,
     /// An empty unique builder of the result's builder type.
     BuilderNew,
     /// Test assertions (`test.ok`, `test.is`, `test.isnt`, `test.fail`) of the test profile. Each
@@ -805,7 +828,7 @@ pub enum DataOp {
     FloatAbs,
     FloatSign,
     FloatSqrt,
-    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are decimal text.
+    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are ints (#743).
     RatAdd,
     RatSub,
     RatMul,
@@ -901,7 +924,7 @@ impl DataOp {
             RatAdd | RatSub | RatMul | RatDiv | RatMod => (&[Rat, Rat], Rat),
             RatNeg | RatAbs => (&[Rat], Rat),
             RatSign => (&[Rat], Int),
-            RatNumerator | RatDenominator => (&[Rat], Str),
+            RatNumerator | RatDenominator => (&[Rat], Int),
             StrSlice => (&[Str, Int, Int], Str),
             StrSplit => (&[Str, Str], STR_ARRAY),
             StrReplace | StrReplaceFirst => (&[Str, Str, Str], Str),
@@ -1236,6 +1259,10 @@ mod async_tests;
 #[cfg(test)]
 mod async_resources_tests;
 #[cfg(test)]
+mod services_tests;
+#[cfg(test)]
 mod roles_tests;
 #[cfg(test)]
 mod view_collections_tests;
+#[cfg(test)]
+mod ordering_tests;

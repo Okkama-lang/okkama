@@ -682,6 +682,7 @@ variants!(DepExpr {
 });
 variants!(SelectionExpr {
     Admissible(x0) => "admissible",
+    Held(x0) => "held",
     Value(x0) => "value",
     Projection(x0) => "projection",
     OwnerGraph(x0) => "owner_graph",
@@ -1266,6 +1267,7 @@ opcodes!(CoreOp {
 opcodes!(CallOp {
     Direct { function, call } => "call",
     Role { receiver, role, slot, call } => "call.role",
+    Order { array, role, slot, call } => "call.order",
     Closure { callee, call } => "fn.call",
     Cap { cap, field, call } => "call.cap",
     Native { function, call } => "call.native",
@@ -1285,6 +1287,7 @@ opcodes!(CollectionOp {
     ArrayLen { array } => "array.len",
     ArrayGet { array, index } => "array.get",
     ArrayJoin { array, separator } => "array.join",
+    ArrayOrder { array } => "array.order",
     ArrayRetag { array, ty } => "array.retag",
     MapLen { map } => "map.len",
     MapHas { map, key } => "map.has",
@@ -1730,7 +1733,7 @@ impl Codec for CleanupMetadata {
     }
 }
 record!(CleanupClose, "cleanup_close", { source, after_defers, reserve, active_failure, effects });
-record!(CleanupSchedule, "cleanup_schedule", { close, holders, dictionary, protocol });
+record!(CleanupSchedule, "cleanup_schedule", { close, holders, dictionary, protocol, dynamic });
 record!(CleanupPlan, "cleanup_plan", { close, sources, direct });
 record!(RootRequirement, "root_requirement", { boundary, bindings, through_suspend });
 record!(RootBinding, "root_binding", { value, trace });

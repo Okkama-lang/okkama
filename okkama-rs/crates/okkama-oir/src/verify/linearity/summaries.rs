@@ -529,6 +529,21 @@ impl Engine<'_, '_> {
                     labels.extend(self.summary_labels(flow, &arguments, selection));
                 }
             }
+            // #700, #731 (OIR-2 §7.2, §10.2; P2.4 §4.8): a borrowed reference that holds no obligation may reach
+            // a result, stored in it or as it, when the result declares its external deps. Its graph is the
+            // caller's: storage does not become ownership, so no take retention names it.
+            for parameter in summary.results.iter().flat_map(|relation| &relation.external_deps) {
+                let borrowed = summary.parameters.get(usize::from(*parameter))
+                    .is_some_and(|effect| effect.convention == FreshConvention::Borrow);
+                let obligation = arguments.get(usize::from(*parameter))
+                    .and_then(|value| self.body.values.get(*value).ok())
+                    .is_none_or(|value| self.obligations[value.ty.as_u32() as usize]);
+                if borrowed && !obligation {
+                    let selection = SummarySelection::OwnerGraph(*parameter);
+                    permitted.extend(self.summary_selection(flow, &arguments, &selection));
+                    labels.extend(self.summary_labels(flow, &arguments, &selection));
+                }
+            }
             for &value in values {
                 for piece in &flow.tokens[value.as_u32() as usize].pieces {
                     let accepted = match piece.origin {

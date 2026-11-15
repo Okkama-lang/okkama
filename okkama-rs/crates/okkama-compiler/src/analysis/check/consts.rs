@@ -323,10 +323,7 @@ fn tree(value: &Value) -> ConstValue {
         Value::Bool(value) => ConstValue::Scalar(Constant::Bool(*value)),
         Value::Byte(value) => ConstValue::Scalar(Constant::Byte(*value)),
         Value::Rat(rat) => {
-            let numerator = ops::rat_part(value, false).ok().and_then(|text| text.as_string().ok().map(str::to_string));
-            let denominator = ops::rat_part(value, true).ok().and_then(|text| text.as_string().ok().map(str::to_string));
-            let _ = rat;
-            ConstValue::Rat(numerator.unwrap_or_default(), denominator.unwrap_or_else(|| "1".into()))
+            ConstValue::Rat(rat.numerator().to_string(), rat.denominator().to_string())
         }
         Value::Enum { declaration, case } => ConstValue::Enum(EnumId(*declaration), *case),
         Value::Array(_) => ConstValue::Array(

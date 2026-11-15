@@ -284,23 +284,14 @@ case!(once_keeps_plain_closure_and_role, "L04.once.keeps-plain-closure-and-role"
 // Construction completion state: a role call on a receiver whose construction is pending fails (§11.4).
 case!(construction_escaped_self_role_call, "L04.invariant.escaped-self-role-call");
 
-/// It builds and runs in Champ, but sorting 100 000 integers is superlinear in a debug build: 1 000 take
-/// seconds, 10 000 more than four minutes. With smaller arrays the output matches case.json.
-#[test]
-#[ignore = "debug Champ: the 100 000-element sort runs for hours (superlinear)"]
-fn collections_failing_order_stops_the_sort() {
-    check("L09.compare.failing-order-stops-the-sort");
-}
+// L09.compare.failing-order-stops-the-sort is a full check in champ_sorting.rs (#678).
 
 // Multi-case Error variant types are not in S1 yet.
 through_low!(streams_params_grouped, "L01.gram.params.grouped");
 // compile_low: SPB_STRUCTURE, a definition that does not dominate its use in `main`.
 through_low!(collections_batching_functional, "L05.batching.functional");
-// compile_low: ENTRY_FAILURE_MASK, an own entry or witness whose body may fail but whose summary declares no
-// failure.
-through_low!(collections_persistent_list, "L09.collections.persistent-list");
-through_low!(caps_in_collections_and_closures, "L12.caps-in-collections-and-closures");
-through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
+// L09.collections.persistent-list, L12.caps-in-collections-and-closures and L09.collections.heap-and-deque
+// (ENTRY_FAILURE_MASK, #706) are full checks in champ_cases_own_masks.rs.
 // compile_low: ENTRY_FAILURE_MASK (#706), the witness entry of `CursorItems.cursor`; its scalar `val.eq`
 // loads since #710.
 through_low!(once_collections_frequencies, "L09.collections.frequencies");

@@ -111,8 +111,8 @@ registry! {
     60 => BuilderAbandon, "builder.abandon";
     61 => Lookup, "lookup";
     // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
-    // await, wave 2 (#601 R4) the temporary take, its proof and the rehome; spawn (65), pins (78–80), workers
-    // (81–83), the dynamic settle (84) and service materialize/absorb (85–86) stay reserved.
+    // await, wave 2 the temporary take, its proof and the rehome (#601 R4), the dynamic settle and service
+    // materialize/absorb (#601 D25); spawn (65), pins (78–80) and workers (81–83) stay reserved.
     64 => FutureNew, "fut.new";
     66 => Await, "await";
     67 => AwaitTake, "await.take";
@@ -126,9 +126,14 @@ registry! {
     75 => FrameResume, "frame.resume";
     76 => AwaitUnwind, "await.unwind";
     77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
+    84 => CleanupSettleDynamic, "cleanup.settle.dynamic";
+    85 => ServiceMaterialize, "service.materialize";
+    86 => ServiceAbsorb, "service.absorb";
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
     98 => OwnDynamic, "own.dynamic";
+    // The stable sort of an array by a role slot (`Comparing<T>.order`, #678), one dispatch per comparison.
+    99 => OrderDispatch, "array.order.dispatch";
 }
 
 impl Opcode {
@@ -174,13 +179,18 @@ impl Opcode {
             (ExitPrepare | ExitExtend, Tag::Normal) => vec![S(Pending)],
             (ExitReplace, Tag::Normal) => vec![S(Pending), S(Packet)],
             (ExitCommit, Tag::Normal) => valued(),
-            (ExitAbort | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure, Tag::Normal) => vec![S(Cleanup)],
+            (ExitAbort | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | CleanupSettleDynamic,
+                Tag::Normal) => vec![S(Cleanup)],
             (CleanupNext, Tag::Selected) => vec![S(Cleanup), S(StableKey)],
             (CleanupNext, Tag::Done) => vec![S(Cleanup)],
             (DestroyDirect | CleanupDestroy, Tag::Normal) => vec![S(Cleanup), S(FailureState)],
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
             (InvokeObserve | InvokeDispatch, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (InvokeObserve | InvokeDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (OrderDispatch, Tag::Normal) => {
+                vec![Value(context.value.ok_or_else(|| error("array.order.dispatch without an array type"))?)]
+            }
+            (OrderDispatch, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (ArrayGet, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (ArrayGet, Tag::Unwind) => vec![Value(Type::Failure)],
             (Fail, Tag::Unwind) => vec![Value(Type::Failure)],
@@ -240,7 +250,9 @@ impl Opcode {
             (AwaitTake, Tag::Normal) => valued(),
             // The take capability: a proof position of zero words (draft 3 §14.2).
             (UniqueCacheProof, Tag::Normal) => vec![S(UniqueCache)],
-            // The token form of C-4: the cache duty joins the pending reserve, which continues the exit.
+            // C-4: the cache duty joins the pending reserve, which continues the exit. The state form (`between`)
+            // takes an entry the scope admitted (ABI D25.3) and gives the state back first, as own's form does.
+            (CacheRehome, Tag::Normal) if context.between => vec![S(ScopeState), S(Pending)],
             (CacheRehome, Tag::Normal) => vec![S(Pending)],
             (FuturePublish | FutureCancel, Tag::Normal) => vec![],
             (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],
@@ -252,6 +264,10 @@ impl Opcode {
             }
             (AwaitUnwind, Tag::Normal) => vec![S(ScopeState), Value(Type::Failure)],
             (CleanupDeliverCancel, Tag::Normal) => vec![S(Cleanup)],
+            // ABI D25.2: the packet without the entry and the entry as its cache duty token (the frame kind's
+            // task-state comes with spawn, D24); absorb gives the packet that now carries the token's entry.
+            (ServiceMaterialize, Tag::Normal) => vec![S(Packet), S(CacheState)],
+            (ServiceAbsorb, Tag::Normal) => vec![S(Packet)],
             _ => return Err(error(format!("invalid outcome {tag:?} for {}", self.name()))),
         };
         Ok(slots)
@@ -266,7 +282,7 @@ impl Opcode {
             OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic | ArrayGet | Evaluate | Await | AwaitTake => {
                 vec![Tag::Normal, Tag::Unwind]
             }
-            InvokeObserve | InvokeDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
+            InvokeObserve | InvokeDispatch | OrderDispatch if context.may_fail => vec![Tag::Normal, Tag::Unwind],
             InvokeCallOwn | InvokeDispatchOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
             }
@@ -297,7 +313,7 @@ impl Opcode {
     pub fn is_terminator(self) -> bool {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer | Self::OwnDynamic |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
-            Self::InvokeDispatch | Self::InvokeDispatchOwn |
+            Self::InvokeDispatch | Self::InvokeDispatchOwn | Self::OrderDispatch |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
             | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
             | Self::Lookup | Self::Await | Self::AwaitTake)
@@ -320,7 +336,8 @@ impl Opcode {
             Self::FutureNew => G,
             Self::Await | Self::AwaitTake | Self::AwaitUnwind => S,
             Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
-                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome => L,
+                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome
+                | Self::CleanupSettleDynamic | Self::ServiceMaterialize | Self::ServiceAbsorb => L,
             _ => return None,
         })
     }
@@ -489,6 +506,9 @@ impl Opcode {
                 Self::FutureCancel => "champ_future_cancel",
                 Self::FutureCancelled => "champ_future_cancelled",
                 Self::CleanupDeliverCancel => "champ_cleanup_deliver_cancel",
+                Self::CleanupSettleDynamic => "champ_cleanup_settle_dynamic",
+                Self::ServiceMaterialize => "champ_service_materialize",
+                Self::ServiceAbsorb => "champ_service_absorb",
                 // These forms lower to CFG, return transport, or parallel slot moves.
                 _ => return None,
             }
@@ -532,6 +552,7 @@ helper_registry! {
         "champ_scope_transfer" => &[C, P, P, P], G, Some(O::ScopeTransfer);
         "champ_own_dynamic" => &[C, P, P, P], G, Some(O::OwnDynamic);
         "champ_scope_transfer_admissible" => &[C, P, P, P], G, Some(O::ScopeTransfer);
+        "champ_scope_transfer_held" => &[C, P, P, P], G, Some(O::ScopeTransfer);
         "champ_exit_prepare" => &[C, P, P], L, Some(O::ExitPrepare);
         "champ_exit_extend" => &[C, P, P, P], L, Some(O::ExitExtend);
         "champ_exit_replace" => &[C, P, P, P], L, Some(O::ExitReplace);
@@ -572,6 +593,7 @@ helper_registry! {
         "champ_machine_text_order" => &[C, W, W], 0, None;
         "champ_machine_text_len" => &[C, W], 0, None;
         "champ_machine_external" => &[C, W, P, P, W], X | HELPER_UNWINDS, None;
+        "champ_machine_order" => &[C, W, W, W], X | HELPER_UNWINDS, None;
         "champ_machine_scope" => &[C, W, W, W, P], L, None;
         "champ_machine_invalid" => &[C], HELPER_STOPS, None;
         "champ_machine_destination" => &[C, W, P], L, None;
@@ -590,6 +612,12 @@ helper_registry! {
         "champ_future_cancelled" => &[C, W, P], HELPER_STOPS, Some(O::FutureCancelled);
         "champ_cleanup_deliver_cancel" => &[C, W, P, P], L, Some(O::CleanupDeliverCancel);
         "champ_cleanup_settle" => &[C, W, P, W, W, W, P], L, Some(O::CleanupSettle);
+        // ABI D25: the dynamic settle of a close (84), and a duty's entry out of or into a packet (85, 86).
+        "champ_cleanup_settle_dynamic" => &[C, W, P, P], L, Some(O::CleanupSettleDynamic);
+        "champ_service_materialize" => &[C, P, W, W, P], L, Some(O::ServiceMaterialize);
+        "champ_service_absorb" => &[C, P, W, W, P], L, Some(O::ServiceAbsorb);
+        // `invoke.defer` of an async defer entry (ID 29 is S for `AsyncDefer`, draft 3 §§11, 14.4).
+        "champ_invoke_defer_async" => &[C, W, W, P, W, P, P, P], SUSPENDING | HELPER_UNWINDS, Some(O::InvokeDefer);
         "champ_machine_future_destination" => &[C, W, P], HELPER_STOPS, None;
         "champ_body_reject" => &[C, W], X, None;
 }

@@ -7,6 +7,7 @@ use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
 
 mod calls;
+mod dead;
 mod roles;
 mod successors;
 mod undef;
@@ -178,6 +179,7 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
     p.tables.summaries = summaries;
     p.functions.extend(trampolines);
     for function in &mut p.functions {
+        dead::prune_unreachable(function)?;
         successors::forward_taken(function)?;
         successors::prune_dead_aliases(function);
         successors::close_unwind_permissions(function)?;
@@ -1069,8 +1071,21 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 (D::Move, vec![reg(*value)])
             }
             C::VariantGet { value, case, field } => {
-                immediate = s::Immediate::Updates(vec![*case, variant_storage(module, objects, *field)?]);
-                (D::VariantGet, vec![reg(*value)])
+                let storage = variant_storage(module, objects, *field)?;
+                match translate_type(module, body.values.get(*value)?.ty)? {
+                    // The single case of an Error variant is the value's own object: read the field.
+                    s::Type::Object(id) if single_error_case(module, body.values.get(*value)?.ty)?.is_some() => {
+                        if *case != 0 || field.declaration.as_u32() != id {
+                            return Err(GenerateError("variant.get outside the only Error case".into()));
+                        }
+                        immediate = s::Immediate::Field(storage);
+                        (D::ObjGet, vec![reg(*value)])
+                    }
+                    _ => {
+                        immediate = s::Immediate::Updates(vec![*case, storage]);
+                        (D::VariantGet, vec![reg(*value)])
+                    }
+                }
             }
             C::ValEq { left, right } => (D::ValEq, vec![reg(*left), reg(*right)]),
             C::ValNe { left, right } => (D::ValNe, vec![reg(*left), reg(*right)]),
@@ -1228,6 +1243,7 @@ pub(crate) fn collection_data(module: &o::Module, body: &o::Body, op: &o::Collec
         C::ArrayLen { array } => (D::ArrayLen, vec![*array]),
         C::ArrayConcat { arrays, packet: None, .. } => (D::ArrayConcat, arrays.clone()),
         C::ArrayJoin { array, separator } => (D::ArrayJoin, vec![*array, *separator]),
+        C::ArrayOrder { array } => (D::ArrayOrder, vec![*array]),
         C::ArraySlice { array, start, end, packet: None } => (D::ArraySlice, vec![*array, *start, *end]),
         C::ArrayRemove { array, index, packet: None } => (D::ArrayRemove, vec![*array, *index]),
         C::ArrayReplace { array, index, value, packet: None } => (D::ArrayReplace, vec![*array, *index, *value]),
@@ -1287,6 +1303,10 @@ mod cleanup_tests;
 mod futures_tests;
 #[cfg(test)]
 mod roles_tests;
+#[cfg(test)]
+mod dead_tests;
+#[cfg(test)]
+mod variant_tests;
 
 /// Mandatory semantic gate for executable Low. External contracts come from the caller's backend catalog.
 /// This path cannot be selected by a file flag; external artifacts always pass verify_load independently.
@@ -1506,3 +1526,5 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
     }).collect();
     Ok(())
 }
+#[cfg(test)]
+mod ordering_tests;

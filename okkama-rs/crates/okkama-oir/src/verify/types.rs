@@ -439,6 +439,7 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
         }
         let Some(body) = &data.body else { continue; };
         metadata(module, body, function, state);
+        held_selections(module, body, function, state);
         elaboration::metadata(module, body, function, state);
         for (value, data) in body.values.iter() {
             if module.types.get(data.ty).is_ok_and(|ty| matches!(ty, Type::Never)) {
@@ -1148,11 +1149,82 @@ fn metadata<'a>(module: &'a Module, body: &'a Body, function: FuncId, state: &mu
                         checker.require(key == element, "selection map key type mismatch");
                     }
                 },
-                SelectionExpr::Union(_) | SelectionExpr::Admissible(_) => {}
+                SelectionExpr::Union(_) | SelectionExpr::Admissible(_) | SelectionExpr::Held(_) => {}
             }
             Ok(())
         };
         if check().is_err() { checker.report(R::T1, "invalid selection operand"); }
+    }
+}
+
+/// Every reader of each selection, counted.
+struct SelectionUses(Vec<u32>);
+impl super::read::Reader for SelectionUses {
+    fn selection(&mut self, id: &SelectionId) {
+        if let Some(count) = self.0.get_mut(id.as_u32() as usize) {
+            *count = count.saturating_add(1);
+        }
+    }
+}
+
+/// A `held(...)` selection (#697) is the whole selection of exactly one `scope.transfer` between two states whose
+/// source is not an action scope. The transfer moves what its source admitted or bound; only an action's state
+/// holds staged obligations, which a held transfer leaves in place, so the source excludes them by construction
+/// and the linearity model needs no staging case.
+fn held_selections(module: &Module, body: &Body, function: FuncId, state: &mut State<'_>) {
+    use super::read::Read;
+    if !body.selections.iter().any(|(_, selection)| matches!(selection, SelectionExpr::Held(_))) {
+        return;
+    }
+    let entities = body.blocks.len() + body.insts.len() + body.values.len() + body.deps.len()
+        + body.keys.len() + body.selections.len();
+    if !state.step(entities.saturating_mul(4)) || !state.array(body.selections.len(), 4) {
+        return;
+    }
+    let mut uses = SelectionUses(vec![0; body.selections.len()]);
+    for (_, block) in body.blocks.iter() {
+        block.term.kind.read(&mut uses);
+        block.unwind.read(&mut uses);
+    }
+    for (_, instruction) in body.insts.iter() {
+        instruction.op.read(&mut uses);
+        instruction.facts.read(&mut uses);
+    }
+    for (_, value) in body.values.iter() {
+        value.facts.read(&mut uses);
+    }
+    body.deps.read(&mut uses);
+    body.keys.read(&mut uses);
+    body.selections.read(&mut uses);
+    let mut transfers = vec![false; body.selections.len()];
+    let operations = body.insts.iter().map(|(_, instruction)| &instruction.op).chain(body.blocks.iter()
+        .filter_map(|(_, block)| match &block.term.kind {
+            TermKind::InvokeOwn { op, .. } => Some(op.as_ref()),
+            _ => None,
+        }));
+    for op in operations {
+        let Operation::Ownership(OwnershipOp::ScopeTransfer { states: TransferStates::Between { from, .. }, selection })
+            = op else { continue };
+        let source = body.values.get(*from).ok().and_then(|value| module.types.get(value.ty).ok());
+        let action = match source {
+            Some(Type::Service(ServiceType::Scope(scope))) => module.scopes.get(*scope).is_ok_and(|scope| {
+                scope.kind == ScopeKind::Action
+            }),
+            _ => true,
+        };
+        if !action && let Some(slot) = transfers.get_mut(selection.as_u32() as usize) {
+            *slot = true;
+        }
+    }
+    for (id, selection) in body.selections.iter() {
+        if !matches!(selection, SelectionExpr::Held(_)) {
+            continue;
+        }
+        let index = id.as_u32() as usize;
+        if uses.0[index] != 1 || !transfers[index] {
+            state.at(L::Function(function), None);
+            state.error(R::T1, "held selection belongs only to one scope.transfer between non-action scopes");
+        }
     }
 }
 
@@ -1245,12 +1317,15 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
             }
             FunctionAttr::Method(owner) | FunctionAttr::Destroy(owner) | FunctionAttr::Successor(owner) => {
                 if !receiver(*owner) { state.error(R::T5, "object action needs its concrete receiver in slot zero"); }
+                // #733: the results of a D21 async body are those of its language signature (C-2); its coro
+                // signature `[frame<@f>] -> void` never returns a value.
+                let results = language.as_ref().map_or(&data.signature.results, |signature| &signature.results);
                 if matches!(attr, FunctionAttr::Destroy(_))
-                    && (data.signature.params.len() != 1 || !data.signature.results.is_empty()) {
+                    && (data.signature.params.len() != 1 || !results.is_empty()) {
                     state.error(R::T5, "destroy must take only self and return void");
                 }
                 if matches!(attr, FunctionAttr::Successor(_)) {
-                    let results = language_slots(module, &data.signature.results, state);
+                    let results = language_slots(module, results, state);
                     let valid = results.len() == 1 && results.first()
                         .and_then(|id| module.types.get(*id).ok()).is_some_and(|ty| match ty {
                             Type::Successor(id) => module.types.get(*id).is_ok_and(|ty| {

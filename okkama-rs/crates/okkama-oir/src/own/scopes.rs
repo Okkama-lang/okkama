@@ -110,7 +110,7 @@ pub(super) fn inventory(
                     | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. } | CoreOp::AnyBox { .. }
                     | CoreOp::FakeNew { .. }) | Operation::Collection(_) | Operation::Call(_)
                     | Operation::Async(_));
-                if matches!(op, Operation::Call(CallOp::Closure { .. } | CallOp::Role { .. })) {
+                if matches!(op, Operation::Call(CallOp::Closure { .. } | CallOp::Role { .. } | CallOp::Order { .. })) {
                     scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
                 }
                 if can_own {
@@ -414,20 +414,26 @@ pub(super) fn analyze(
             normal::failures(&mut facts.effects.failures, &effects.failures);
             facts.effects.suspends |= effects.suspends;
         }
-        for defer in &facts.defers {
-            summaries::project(&mut facts.effects, universe.summary(*defer));
-        }
         for protocol in &facts.service_protocols {
             summaries::project(&mut facts.effects, universe.protocol_summary(*protocol));
         }
+        // #730, async ABI C-6: the defers of an async owner may suspend (`defer await`). Own runs each as an
+        // explicit `invoke.defer` before the close, which coro brackets; the close itself runs no defer, so its
+        // envelope does not suspend for them. Every other suspending cleanup stays refused below.
+        let suspends = facts.effects.suspends;
+        for defer in &facts.defers {
+            summaries::project(&mut facts.effects, universe.summary(*defer));
+        }
+        let deferred = std::mem::replace(&mut facts.effects.suspends, suspends);
+        let function = module.scopes.get(*scope).map_err(arena)?.function;
+        let asynchronous = module.functions.get(function).map_err(arena)?.attrs.contains(&FunctionAttr::Async);
         if facts.blockers.contains(&ElisionBlocker::ServiceDuty) && facts.service_protocols.is_empty()
             && facts.potential_owned_types.iter().all(|ty| types[ty].service_types.is_empty()) {
             return Err(budget.fail(OwnDiagnosticKind::MissingBoundary, format!(
                 "scope {scope:?} has a service duty without a registered settlement descriptor",
             )));
         }
-        if facts.effects.suspends {
-            let function = module.scopes.get(*scope).map_err(arena)?.function;
+        if suspends || (deferred && !asynchronous) {
             return Err(budget.fail(OwnDiagnosticKind::UnsupportedAsync, format!(
                 "scope {scope:?} in {function:?} may own suspending cleanup",
             )));

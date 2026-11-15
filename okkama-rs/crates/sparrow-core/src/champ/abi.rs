@@ -83,6 +83,7 @@ pub const RECORD_LAYOUTS: &[RecordLayout] = &[
     record!(AwaitPost; [task]; [value]),
     record!(AwaitTakePost; [packet, task]; [value]),
     record!(RehomePost; [pending, state]; []),
+    record!(MaterializePost; [packet, token]; []),
     record!(AwaitUnwindPost; [state, failure]; []),
     record!(PublishIn; [failure]; [value]),
     record!(FlagPost; []; []),
@@ -141,6 +142,8 @@ impl HelperAbi {
                 if count == 1 { vec![8] } else { vec![0, 8] }
             }
             (O::AwaitTake, Tag::Unwind) => vec![0, 16, 24],
+            // RehomePost: the state form's state, then the reserve.
+            (O::CacheRehome, Tag::Normal) if context.between => vec![8, 0],
             _ => (0..count).map(|index| index * 8).collect(),
         };
         let mut offsets = offsets.into_iter();
@@ -172,7 +175,9 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_own_split_static" => ("SplitPost", Some(O::OwnSplit)),
         "champ_own_split_checked" => ("SplitPost", Some(O::OwnSplitChecked)),
         "champ_scope_split" | "champ_scope_split_admissible" => ("ScopeSplitPost", Some(O::ScopeSplit)),
-        "champ_scope_transfer" | "champ_scope_transfer_admissible" => ("TransferPost", Some(O::ScopeTransfer)),
+        "champ_scope_transfer" | "champ_scope_transfer_admissible" | "champ_scope_transfer_held" => {
+            ("TransferPost", Some(O::ScopeTransfer))
+        }
         "champ_own_dynamic" => ("ScopeSplitPost", Some(O::OwnDynamic)),
         "champ_exit_prepare" => ("PendingSlot", Some(O::ExitPrepare)),
         "champ_exit_extend" => ("PendingSlot", Some(O::ExitExtend)),
@@ -203,6 +208,10 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_future_cancelled" => ("FlagPost", Some(O::FutureCancelled)),
         "champ_cleanup_deliver_cancel" => ("CleanupSlot", Some(O::CleanupDeliverCancel)),
         "champ_cleanup_settle" => ("CleanupSlot", Some(O::CleanupSettle)),
+        "champ_cleanup_settle_dynamic" => ("CleanupSlot", Some(O::CleanupSettleDynamic)),
+        "champ_service_materialize" => ("MaterializePost", Some(O::ServiceMaterialize)),
+        "champ_service_absorb" => ("PacketSlot", Some(O::ServiceAbsorb)),
+        "champ_invoke_defer_async" => ("CallPost", Some(O::InvokeDefer)),
         _ if okkama_sparrow::spb17::helper(name).is_some() => ("", None),
         _ => return None,
     };

@@ -19,6 +19,7 @@ id	section	classification	fixture	profile	model	expected-rule	expectations	verif
 16-4	16.4	v2	spec/16-4.oir	own	-	-	-	static-ir	spec/16-4.oir	verify/invalid/B6-block-local-unwind.oir	OIR2-B6.1
 04-split-overlap	3.3;4.2;16.5	v2	spec/04-split-overlap.oir	own	fixtures/review/02-overlap-split.oir	-	spec/04-split-overlap.json	runtime-behavior	spec/04-split-overlap.oir	verify/invalid/M2-bound-take-not-fresh.oir	OIR2-B5.3
 04-checked-split	4.2;15.1	v2	spec/04-checked-split.oir	own	-	-	-	static-ir	spec/04-checked-split.oir	verify/invalid/B2-lost-empty-rest.oir	OIR2-B2.2
+04-held-transfer	4.2	v2	spec/04-held-transfer.oir	own	-	-	-	static-ir	spec/04-held-transfer.oir	verify/invalid/T1-held-outside-transfer.oir	OIR2-T1
 10-await-shared	3.3;10.2;10.3	v2	spec/10-await-shared.oir	own	-	-	spec/10-await-shared.json	runtime-behavior	verify/valid/B9-cold-shared-cache.oir	verify/invalid/B9-cold-shared-cache.oir	OIR2-B9.1
 10-await-bound	3.3;10.2;10.3	v2	spec/10-await-bound.oir	own	fixtures/valid/bound-unique-take-keeps-original-boundary.oir	-	spec/10-await-bound.json	runtime-behavior	verify/valid/B9-inner-take-boundary.oir	verify/invalid/B9-inner-take-boundary.oir	OIR2-B9.3
 10-await-temporary	3.3;10.2;10.3	v2	spec/10-await-temporary.oir	own	-	-	spec/10-await-temporary.json	runtime-behavior	verify/valid/B9-unique-temporary-take.oir	verify/invalid/B9-unique-temporary-take.oir	OIR2-B9.2

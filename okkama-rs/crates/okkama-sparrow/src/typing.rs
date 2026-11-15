@@ -451,7 +451,7 @@ impl<'a> Typing<'a> {
             }
             I::RatPart { dst, value, .. } => {
                 self.expect(*value, &rat)?;
-                self.define(dst.0, &str_, "rat.part")
+                self.define(dst.0, &int, "rat.part")
             }
             I::StrConcat { dst, left, right } => {
                 self.expect(*left, &str_)?;

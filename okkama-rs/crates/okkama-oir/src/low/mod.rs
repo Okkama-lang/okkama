@@ -10,7 +10,7 @@
 //! - delivers the final cancellation of a D18 close after its plan (`cleanup`);
 //! - recomputes the D21 frame layout (`layout`).
 mod cleanup;
-mod compact;
+pub(crate) mod compact;
 mod eligibility;
 mod layout;
 mod narrow;

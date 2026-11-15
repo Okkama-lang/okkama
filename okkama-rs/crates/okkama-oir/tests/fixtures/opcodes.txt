@@ -5,6 +5,7 @@ array.get
 array.join
 array.len
 array.new
+array.order
 array.remove
 array.replace
 array.retag
@@ -49,6 +50,7 @@ call
 call.cap
 call.intrinsic
 call.native
+call.order
 call.resume
 call.role
 cap.make

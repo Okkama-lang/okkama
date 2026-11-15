@@ -39,9 +39,9 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // R2: a resource held across an await; a temporary take whose proof coro rechecks.
     variant!("r2-resource-across-await"),
     variant!("r2-take-proof-recheck"),
-    // R2, C-6: async defers whose entry awaits, after a body failure and across a pending exit.
-    variant!("r2-defer-await-body-failure"),
-    variant!("r2-defer-await-reserve"),
+    // R2, C-6: async defers whose entry awaits, after a body failure and across a pending exit (own's output, #730).
+    golden!("r2-defer-await-body-failure"),
+    golden!("r2-defer-await-reserve"),
     // R2: closes that suspend while the body owns a resource.
     variant!("r2-resource-suspending-close"),
     // K1: cancellation before start, the elaboration §13.4 fixture, a nested close before the next await.
@@ -53,6 +53,8 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // #691: a void fixed root (an async test); the deps of a Future argument in continuation 0.
     golden!("void-fixed-root"),
     golden!("start-deps"),
+    // #733: an async successor action publishes its successor (T5 and B8.2 read the language signature).
+    golden!("async-successor"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
@@ -174,7 +176,7 @@ fn later_slices_keep_their_forms_unsupported() {
 #[test]
 fn an_async_defer_entry_never_replaces() {
     // C-6 (R2): an async defer entry is lowered as an async body; a replacement inside it stays forbidden.
-    let source = include_str!("../../tests/fixtures/async/own/r2-defer-await-body-failure.oir");
+    let source = include_str!("../own/tests/async-goldens/r2-defer-await-body-failure.oir");
     let replacing = edited(source, "    ret defer continue\n", "    ret defer replace return\n");
     assert!(matches!(lower(&replacing), Err(CoroError::InvalidInput { message, .. }) if message.contains("C-6")));
 }
@@ -474,4 +476,101 @@ fn a_void_fixed_root_publishes_the_empty_deps_of_a_scalar() {
         assert!(position < begins, "the deps are taken before the root scope opens");
     }
     assert_eq!(published, 1);
+}
+
+/// The rehomes of a coro body: the form and the scope whose state or duty they take.
+fn rehomes(module: &Module, body: &Body) -> Vec<(bool, Option<ScopeId>)> {
+    body.blocks.iter().flat_map(|(_, block)| block.insts.iter()).filter_map(|inst| {
+        match &body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Token { .. }, .. }) => Some((true, None)),
+            Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Scope { state, .. }, .. }) => {
+                let ty = body.values.get(*state).unwrap().ty;
+                let Ok(Type::Service(ServiceType::Scope(scope))) = module.types.get(ty) else { unreachable!() };
+                Some((false, Some(*scope)))
+            }
+            _ => None,
+        }
+    }).collect()
+}
+
+/// #601 D25 (C-1, C-4, D25.3): a Future created here leaves its owner with its token: the rehome takes the token
+/// form (verify_coro then checks that no close settles it again). A Future that reached a scope through an admitted
+/// packet has no token: it leaves in the own form, which takes it from the state. Own's dynamic step stays the
+/// last entry of every schedule version of its owner.
+#[test]
+fn a_rehome_takes_the_token_of_a_duty_created_here_and_the_state_of_an_admitted_one() {
+    let source = include_str!("../own/tests/async-goldens/r1-loop-escape.oir");
+    let module = lowered("r1-loop-escape", source);
+    let main = body(&module, "main");
+    // S5's Future leaves S5 by its token; S4 admitted it and passes it on from its state.
+    let forms = rehomes(&module, main);
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert!(forms.contains(&(true, None)), "{forms:?}");
+    assert!(forms.iter().any(|(token, scope)| !token && scope.is_some()), "{forms:?}");
+    let own = parsed(source);
+    let own_main = own.functions.iter().find(|(_, function)| function.symbol == "main").unwrap().1;
+    let dynamic: Vec<_> = own_main.body.as_ref().unwrap().service_schedules.iter()
+        .filter(|schedule| schedule.duties.contains(&ScheduleDuty::Dynamic)).map(|schedule| schedule.owner).collect();
+    assert!(!dynamic.is_empty());
+    for schedule in main.service_schedules.iter().filter(|schedule| dynamic.contains(&schedule.owner)) {
+        assert_eq!(schedule.duties.last(), Some(&ScheduleDuty::Dynamic), "{}", schedule.name);
+        assert_eq!(schedule.duties.iter().filter(|duty| **duty == ScheduleDuty::Dynamic).count(), 1);
+    }
+    for schedule in main.service_schedules.iter().filter(|schedule| !dynamic.contains(&schedule.owner)) {
+        assert!(!schedule.duties.contains(&ScheduleDuty::Dynamic), "{}", schedule.name);
+    }
+}
+
+/// The returned Future of OIR-2 §10.1 `make()`: @make's rehome takes its token to the caller, and main's scopes
+/// that admit it settle it dynamically.
+#[test]
+fn a_returned_future_leaves_by_its_token() {
+    let module = lowered("r1-make-escape", include_str!("../own/tests/async-goldens/r1-make-escape.oir"));
+    let make = body(&module, "make");
+    assert_eq!(rehomes(&module, make), [(true, None)]);
+    // The duty left with the exit: no schedule of @make names its token.
+    let token = cache_tokens(make)[0];
+    assert!(make.service_schedules.iter().all(|schedule| !schedule.duties.contains(&ScheduleDuty::Value(token))));
+    let main = body(&module, "main");
+    assert!(main.service_schedules.iter().all(|schedule| schedule.duties.last() == Some(&ScheduleDuty::Dynamic)));
+}
+
+/// A schedule names its dynamic step once.
+#[test]
+fn a_schedule_names_its_dynamic_step_once() {
+    let source = include_str!("../own/tests/async-goldens/r1-make-escape.oir");
+    let twice = source.replace("duties [dynamic]", "duties [dynamic, dynamic]");
+    assert!(matches!(lower(&twice), Err(CoroError::InvalidInput { .. })));
+}
+
+#[test]
+fn a_nested_selection_of_a_saved_value_names_its_resumed_version() {
+    // #734, D20: a value used after a suspension is saved and redefined by the resume. A selection names it
+    // through nested expressions too (the admissible part of a union of single values, as own selects the
+    // borrowed inputs of a cold Future); the repair copies the expression to name the resumed version.
+    let source = include_str!("../../tests/fixtures/async/own/r2-resource-across-await.oir");
+    let nested = edited(source, "selection s2: selection = union([selection(%31)])",
+        "selection s2: selection = union([selection(%16)])");
+    let output = lowered("nested selection", &nested);
+    let f = body(&output, "f");
+    let split = f.blocks.iter().find_map(|(_, block)| match &block.term.kind {
+        TermKind::InvokeOwn { op, .. } => match **op {
+            Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) => match f.selections.get(selection) {
+                Ok(SelectionExpr::Admissible(inner))
+                    if matches!(f.selections.get(*inner), Ok(SelectionExpr::Union(items)) if !items.is_empty()) => {
+                    Some(selection)
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }).expect("the split after the await");
+    let SelectionExpr::Admissible(union) = f.selections.get(split).unwrap() else { unreachable!() };
+    let SelectionExpr::Union(items) = f.selections.get(*union).unwrap() else { panic!("{union:?}") };
+    let [single] = items.as_slice() else { panic!("{items:?}") };
+    let SelectionExpr::Value(named) = f.selections.get(*single).unwrap() else { panic!("{single:?}") };
+    let (_, _, definition) = definition(f, *named);
+    assert!(matches!(definition.op, Operation::Async(AsyncOp::FrameResume { continuation: 1, .. })),
+        "{named:?} is the version the await's resume restores");
 }

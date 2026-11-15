@@ -10,7 +10,7 @@ impl Driver<'_, '_> {
         }
         let flow = self.current_instruction.and_then(|inst| self.flow.before_instructions.get(&inst));
         flow.is_none_or(|flow| {
-            let deps = &flow.values[original.as_u32() as usize].deps;
+            let deps = &flow.values[original].deps;
             flow.journals.iter().any(|((owner, atom), quantity)| {
                 point.env.scopes.contains_key(owner) && deps.contains(atom)
                     && !matches!(quantity.presence, domain::Presence::Bottom | domain::Presence::Absent)
@@ -121,8 +121,10 @@ impl Driver<'_, '_> {
         let (call, receiver) = summaries::call(&op).ok_or_else(|| flow_error("expected call"))?;
         let originals: Vec<_> = receiver.iter().chain(&call.args).map(|arg| arg.value).collect();
         let summary = call.summary.ok_or_else(|| flow_error("call has no inferred summary"))?;
+        // A sort's comparisons only observe elements of its array: the sort offers no packet, and the
+        // runtime gives each owning comparison an empty one (`call.order`).
         let observation = self.module.summaries.get(summary).map_err(arena)?.entry_kind
-            == EntryKind::ObservationAdmissionStaysCaller;
+            == EntryKind::ObservationAdmissionStaysCaller || matches!(op, Operation::Call(CallOp::Order { .. }));
         let open_protocol = if let Operation::Call(CallOp::Closure { callee, .. }) = &op {
             let origin = &self.origins[&callee.value];
             if origin.open || origin.entries.is_empty() {
@@ -163,7 +165,7 @@ impl Driver<'_, '_> {
         let call = match &mut op {
             Operation::Call(CallOp::Direct { call, .. } | CallOp::Native { call, .. }
                 | CallOp::Intrinsic { call, .. } | CallOp::Closure { call, .. }
-                | CallOp::Cap { call, .. } | CallOp::Role { call, .. }) => call,
+                | CallOp::Cap { call, .. } | CallOp::Role { call, .. } | CallOp::Order { call, .. }) => call,
             _ => unreachable!(),
         };
         call.packet = packet;

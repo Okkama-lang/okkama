@@ -41,6 +41,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
+                | OrderDispatch
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
             // A Future is a language value: awaiting, cancelling or reading it consumes nothing. Its proof
             // produces a capability, which the take consumes.
@@ -50,7 +51,9 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             // and the success packet; frame.save the frame and the saved tokens; await.unwind the state, task and
             // receipt; cleanup.settle the cleanup state and its duty.
             FutureNew | FuturePublish | FrameSave | FrameResume | AwaitUnwind | CleanupDeliverCancel
-                | CleanupSettle | CacheRehome => true,
+                | CleanupSettle | CacheRehome | CleanupSettleDynamic | ServiceAbsorb => true,
+            // The holder of a materialized entry is a language value; only the packet is consumed.
+            ServiceMaterialize => index == 0,
             // The journal packet travels with the buffer; the buffer is a register (check_builders).
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
                 index + 1 == locations.len()
@@ -175,6 +178,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                 "destroy entry signature mismatch")?;
         }
     }
+    // D25.1: which calls return their Future's entry, proved from the callees' returns.
+    let fresh = services::fresh_futures(p)?;
     for (index, f) in p.functions.iter().enumerate() {
         if matches!(f.entry_abi, EntryAbi::Owned | EntryAbi::Defer { .. }) {
             require(f.params.iter().filter(|&&location| verify::loc_type(f, location)
@@ -212,6 +217,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         check_service_results(p, f)?;
         suspension::check_flow(p, f)?;
         take::check(p, index as u32, f)?;
+        services::check_materialize(p, f, &fresh)?;
         let states = service_states(f)?;
         enforce(f.proofs.states == states, "EVIDENCE_STATES",
             "service maps differ from reconstructed lifetimes")?;
@@ -581,8 +587,9 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
             evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
                 "returned packet must have identical admission and full inventories")?;
         }
-        if let Instruction::Champ { op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, arguments, .. }
-            = instruction
+        if let Instruction::Champ {
+            op: Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch, arguments, ..
+        } = instruction
         {
             check_dispatch_contract(p, f, arguments, &mut reconstructed)?;
             continue;
@@ -759,7 +766,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                         (Opcode::Fail, Tag::Unwind) => arguments.iter().find_map(|arg| match arg {
                             Argument::Label(kind) => Some(1 << kind), _ => None,
                         }).unwrap_or(15),
-                        (Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn, Tag::Unwind) => {
+                        (Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch, Tag::Unwind) => {
                             arguments.iter().find_map(|arg| match arg {
                                 Argument::Dispatch(dispatch) => Some(dispatch.failures), _ => None,
                             }).unwrap_or(15)

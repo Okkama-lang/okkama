@@ -409,7 +409,7 @@ fn scalar_family_operands_and_results_are_typed() {
     p.functions[0].registers[2] = Type::Str;
     reject(&p, "SCALAR_OP_TYPE");
     let mut p = family_program(DataOp::RatNumerator, false, 0);
-    p.functions[0].registers[1] = Type::Int;
+    p.functions[0].registers[1] = Type::Str;
     reject(&p, "SCALAR_OP_TYPE");
     let mut p = family_program(DataOp::FloatAdd, false, 2);
     let Instruction::Data { inputs, .. } = &mut p.functions[0].code[2] else { unreachable!() };

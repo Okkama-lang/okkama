@@ -1,7 +1,7 @@
 //! Positive and negative tests of the load gate's rules (#654). Each negative test reaches its rule with a
 //! program that is valid up to that rule; the matching positive test shows the admissible form loads.
 use super::*;
-use super::load_tests::{Catalog, bound_fresh_return, fixture, main, refresh, reject, small};
+use super::load_tests::{Catalog, bound_fresh_return, fixture, fresh_call_unwind_chain, main, refresh, reject, small};
 use super::tests::empty_function;
 
 /// Rules without a stable code of their own report SPB_STRUCTURE; the message names the rule.
@@ -89,7 +89,7 @@ fn plain_call_cannot_pass_a_packet_with_obligations() {
 /// fresh-call's callee with no results: its packet split selects `selection` and ret.own returns the
 /// selected packet. The caller is replaced by an empty function so the callee's schema can change.
 fn plain_return(selection: u32) -> (Program, Catalog) {
-    let (mut p, mut catalog) = fixture("fresh-call");
+    let (mut p, mut catalog) = fresh_call_unwind_chain();
     *main(&mut p) = empty_function();
     // With nothing selected the object stays in the scope, whose close has an empty failure envelope:
     // its destroy must not fail.
@@ -912,7 +912,7 @@ fn merge_envelope_cannot_omit_a_destroy_reached_through_a_field() {
 /// such an object, so it can reach the caller only through the callee's result packet. The merge closes
 /// of both functions declare `envelope`.
 fn callee_destroy(callee_param: bool, envelope: u32) -> (Program, Catalog) {
-    let (mut p, catalog) = fixture("fresh-call");
+    let (mut p, catalog) = fresh_call_unwind_chain();
     p.objects.push(resource_object("Inner"));
     p.functions.push(destroy_entry(1, 8));
     if callee_param {

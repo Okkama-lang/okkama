@@ -87,7 +87,7 @@ impl Engine<'_, '_> {
                 inventory: token.pieces.union(&reserve).cloned().collect(), reserve,
                 failures, failure_origin, cancel_delivered: false, cancel_open: false, may_fail: false,
                 awaiting_failure: false, awaiting_source: None, awaiting_origin: None, selected: None,
-                executed: BTreeSet::new(), services: BTreeSet::new(), had_services: false,
+                executed: BTreeSet::new(), services: BTreeSet::new(), had_services: false, dynamic: false,
                 close: *close, plan: None,
             };
             // #684: a close takes the service duties of the scope it closes; those of enclosing scopes pass.
@@ -165,7 +165,7 @@ impl Engine<'_, '_> {
         }
         let cleanup = match op {
             CleanupOp::Defer { cleanup, .. } | CleanupOp::Settle { cleanup, .. }
-            | CleanupOp::Plan { cleanup, .. }
+            | CleanupOp::SettleDynamic { cleanup, .. } | CleanupOp::Plan { cleanup, .. }
             | CleanupOp::SettleEmpty { cleanup, .. } | CleanupOp::Destroy { cleanup, .. }
             | CleanupOp::DestroyDirect { cleanup, .. } | CleanupOp::RecordFailure { cleanup, .. }
             | CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => *cleanup,
@@ -264,7 +264,35 @@ impl Engine<'_, '_> {
                 }
                 fact.phase = 1;
             }
+            // D25.3: once, after the static duties of the close's schedule and before its plan, under that
+            // schedule's Services protocol; the entries the owner admitted settle without failure in 0.6.0.
+            CleanupOp::SettleDynamic { protocol, .. } => {
+                let scheduled = self.body.cleanup.schedules.iter().any(|(_, schedule)| {
+                    schedule.close == fact.close && schedule.dynamic && schedule.protocol == Some(*protocol)
+                });
+                let services = self.module.protocols.get(*protocol)
+                    .is_ok_and(|protocol| protocol.kind == ProtocolKind::Services);
+                if !scheduled || !services {
+                    self.error(R::B106, "a dynamic settle belongs to a close whose Services schedule has one (D25.3)");
+                }
+                if fact.phase != 1 || !fact.services.is_empty() {
+                    self.error(R::B106, "the dynamic settle follows the static duties and precedes the plan (D25.3)");
+                }
+                if fact.dynamic {
+                    self.error(R::B106, "a close settles its dynamic entries once (D25.3)");
+                }
+                fact.dynamic = true;
+            }
             CleanupOp::Plan { plan, .. } => {
+                let dynamic = self.body.cleanup.schedules.iter()
+                    .any(|(_, schedule)| schedule.close == fact.close && schedule.dynamic);
+                if fact.plan.is_none() && dynamic && !fact.dynamic {
+                    self.error(R::B106, "a close with admitted entries settles them before its plan (D25.3)");
+                }
+                let direct = self.body.cleanup.plans.get(*plan).is_ok_and(|plan| plan.direct.is_some());
+                if fact.dynamic && direct {
+                    self.error(R::B106, "entries settled dynamically release into the executor plan (D25.3)");
+                }
                 if fact.phase != 1 || !fact.services.is_empty() {
                     self.error(R::B106, "every assigned service must settle before planning");
                 }

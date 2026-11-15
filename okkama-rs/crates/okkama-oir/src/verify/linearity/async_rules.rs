@@ -30,6 +30,17 @@ impl Engine<'_, '_> {
             && self.body.frame_layout.is_some()
     }
 
+    /// #733, C-2: a D21 body leaves through `fut.publish` and `ret`. The `ret` is a normal exit only after a
+    /// success publication; after a failure publication it is a failure exit, which may drop a successor (B8.2).
+    pub(super) fn ret_normal(&self, block: &Block) -> bool {
+        if !self.frame_body() {
+            return true;
+        }
+        let last = block.insts.last().and_then(|inst| self.body.insts.get(*inst).ok());
+        !last.is_some_and(|inst| matches!(inst.op,
+            Operation::Async(AsyncOp::FuturePublish { outcome: PublishOutcome::Failure(_), .. })))
+    }
+
     /// C-2: `fut.publish` is the exit of a D21 async body. Its success outcome is checked against the body
     /// summary as a return of the value and the packet, its failure as a failure exit.
     fn publish_exit(&mut self, before: &Flow, frame: ValueId, outcome: &PublishOutcome) {
@@ -523,6 +534,12 @@ impl Engine<'_, '_> {
             // `fut.publish` (C-2) has no result slot; in a D21 body it is the exit checked by the summary.
             AsyncOp::FuturePublish { frame, outcome } if self.frame_body() => {
                 self.publish_exit(before, *frame, outcome);
+                // #733, B8.2: the published value is the body's return; it uses a successor as `ret` does.
+                if let PublishOutcome::Success { value, .. } = outcome {
+                    for value in value.iter().copied() {
+                        self.discharge_must_use(flow, value);
+                    }
+                }
             }
             _ => {}
         }

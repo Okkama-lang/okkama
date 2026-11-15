@@ -10,6 +10,7 @@ mod abi;
 pub use abi::*;
 pub(crate) mod machine;
 pub(crate) mod collections;
+pub(crate) mod ordering;
 pub use machine::{ExternalEntry, PlainEntry};
 mod helpers;
 pub(crate) mod testing;

@@ -16,13 +16,10 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
     let machine = runtime.champ.machine.as_ref().expect("Champ program");
     let program = machine.source.clone();
     let source = &program.functions[index];
-    // An async defer entry runs as a shielded child of its caller (C-6), with the runtime of #601 R5.
-    if matches!(source.entry_abi, s::EntryAbi::AsyncDefer { .. }) {
-        return Err(Error("Champ async defer entries run with the async resources runtime (#601 R5)".into()));
-    }
     let frame = Frame::new(source)?;
-    // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn.
-    let asynchronous = matches!(source.entry_abi, s::EntryAbi::AsyncBody { .. });
+    // An async body takes the context and its frame (draft 3 §13); owning entries take CallOwn. An async defer
+    // entry is an async body that runs as a child of its caller (C-6, draft 3 §11).
+    let asynchronous = source.entry_abi.asynchronous();
     let owned = source.entry_abi != s::EntryAbi::Observation && !asynchronous;
     let params = if asynchronous {
         1
@@ -542,6 +539,9 @@ impl Emit<'_, '_> {
                     self.store(post, 0, zero);
                     self.store(post, 8, zero);
                     self.store(post, 16, failure);
+                    // As ret.own: the loader admits a raise only once every service is consumed, so the
+                    // entry's input packet has moved on (into a call, an acceptance or a close).
+                    self.store(self.io, 0, zero);
                     let ordinal = self.iconst(match &self.source.entry_abi {
                         s::EntryAbi::Defer { labels } => labels.len() as u64 + 1,
                         _ => 1,
@@ -785,8 +785,14 @@ impl Emit<'_, '_> {
                 self.checked("champ_machine_destination", &[ctx, state, destination]);
                 return self.flow(op, flow, arguments, ordinal, "champ_scope_begin");
             }
-            O::InvokeObserve | O::InvokeDispatch => {
-                let (value, has_result) = if op == O::InvokeDispatch {
+            O::InvokeObserve | O::InvokeDispatch | O::OrderDispatch => {
+                let (value, has_result) = if op == O::OrderDispatch {
+                    // The runtime decodes the dispatch from this instruction and runs the whole sort (#678).
+                    let function = self.iconst(self.index as u64);
+                    let pc = self.iconst(self.pc.unwrap() as u64);
+                    let array = self.word(locations[0]);
+                    (self.call("champ_machine_order", &[ctx, function, pc, array]).unwrap(), true)
+                } else if op == O::InvokeDispatch {
                     let (function, count, has_result) = self.dispatch(arguments, locations[0], |_, function| {
                         function as u64
                     });
@@ -915,10 +921,10 @@ impl Emit<'_, '_> {
                 args.push(self.pointer(locations[1]));
             }
             O::ScopeTransfer => {
-                helper = if s::transfer_admissible(arguments) {
-                    "champ_scope_transfer_admissible"
-                } else {
-                    "champ_scope_transfer"
+                helper = match s::transfer_filter(arguments) {
+                    s::TransferFilter::Admitted => "champ_scope_transfer_admissible",
+                    s::TransferFilter::Held => "champ_scope_transfer_held",
+                    s::TransferFilter::Strict => "champ_scope_transfer",
                 };
                 let between = arguments.first() == Some(&A::Flag(true));
                 let from = self.pointer(locations[0]);
@@ -1031,15 +1037,15 @@ impl Emit<'_, '_> {
             O::CleanupSettle if locations.len() > 1 => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
-            // An async defer entry (C-6) has its SPB 17 form (#601 R4) and runtime helper (#601 R5); its JIT call
-            // arrives with the dynamic-settle slice.
+            // An async defer entry (C-6): a shielded child the body waits for (draft 3 §11, `futures.rs`).
             O::InvokeDefer if arguments.iter().filter_map(entry).any(|target| {
                 matches!(self.program.functions[target as usize].entry_abi, s::EntryAbi::AsyncDefer { .. })
             }) => {
-                return Err(Error("Champ invoke.defer of an async defer entry is not supported yet (#601)".into()));
+                return self.future_operation(op, arguments, &locations, flow);
             }
-            // The temporary take, its proof and the rehome (#601 R4, R5).
-            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome => {
+            // The temporary take, its proof and the rehome (#601 R4, R5); service duties in packets (#601 D25).
+            O::AwaitTake | O::UniqueCacheProof | O::CacheRehome | O::CleanupSettleDynamic | O::ServiceMaterialize
+                | O::ServiceAbsorb => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle => {
@@ -1376,7 +1382,9 @@ impl Emit<'_, '_> {
             }
             D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues | D::MapKeyAt
                 | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
-                | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew => self.collection(&words),
+                | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::ArrayOrder | D::BuilderNew => {
+                    self.collection(&words)
+                }
             D::ArrayLen => {
                 let header = self.load(words[0], 0);
                 let length = self.builder.ins().ushr_imm_u(header, 32);
@@ -1596,7 +1604,8 @@ fn sets_status(op: s::DataOp) -> bool {
         | D::VariantGet | D::RoleNarrow | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues
         | D::MapKeyAt
         | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
-        | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew | D::ArrayNew | D::TestOk
+        | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::ArrayOrder | D::BuilderNew | D::ArrayNew
+        | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
         || op.scalar_code().is_some() && !inline_scalar(op)
 }

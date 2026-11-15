@@ -19,12 +19,14 @@ pub(super) enum CloseKey {
     Edge(BlockId),
 }
 
-/// The schedule of one close.
+/// The schedule of one close. `dynamic`: after the static duties, one step settles the entries its owner
+/// admitted at run time (D25.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CloseDuties {
     pub duties: Vec<ValueId>,
     pub dictionary: Option<ValueId>,
     pub protocol: ProtocolId,
+    pub dynamic: bool,
 }
 
 fn invalid(function: FuncId, message: &str) -> LowError {
@@ -47,12 +49,21 @@ fn closed_scope(module: &Module, body: &Body, op: &Operation) -> Result<Option<S
 pub(super) fn assign(
     module: &Module, function: FuncId, body: &Body, budget: &mut Budget<'_>,
 ) -> Result<BTreeMap<CloseKey, CloseDuties>, LowError> {
+    // D25.3: an owner whose schedules end with `dynamic` settles its admitted entries at every close.
+    let mut dynamic: BTreeMap<ScopeId, (Option<ValueId>, ProtocolId)> = BTreeMap::new();
     for schedule in &body.service_schedules {
         budget.step(schedule.duties.len())?;
-        if schedule.duties.contains(&ScheduleDuty::Dynamic) {
-            return Err(LowError::Unsupported {
-                function, message: "dynamic service entries (D25.3) are lowered by slice R2 (wave 2)".into(),
-            });
+        let count = schedule.duties.iter().filter(|duty| **duty == ScheduleDuty::Dynamic).count();
+        if count > 1 || count == 1 && schedule.duties.last() != Some(&ScheduleDuty::Dynamic) {
+            return Err(invalid(function, "a schedule ends with its one dynamic step (D25.3)"));
+        }
+        if count == 1 {
+            dynamic.insert(schedule.owner, (schedule.dictionary, schedule.protocol));
+        }
+    }
+    for schedule in &body.service_schedules {
+        if dynamic.contains_key(&schedule.owner) && schedule.duties.last() != Some(&ScheduleDuty::Dynamic) {
+            return Err(invalid(function, "every schedule of an owner with admitted entries ends with dynamic"));
         }
     }
     // C-1: every cache-state token is a version of the duty that one `fut.new` gave its owner scope.
@@ -75,9 +86,15 @@ pub(super) fn assign(
     if !owners.is_empty() {
         available(module, body, &owners, &mut available_at, budget)?;
     }
+    // The closes of the owners with admitted entries, whether or not a token reaches them.
+    closes_of(module, body, &dynamic, &mut available_at, budget)?;
     let mut assigned = BTreeMap::new();
     for (key, (scope, duties)) in available_at {
+        let admits = dynamic.get(&scope).copied();
         if duties.is_empty() {
+            if let Some((dictionary, protocol)) = admits {
+                assigned.insert(key, CloseDuties { duties: vec![], dictionary, protocol, dynamic: true });
+            }
             continue;
         }
         let mut tokens = BTreeMap::new();
@@ -103,10 +120,35 @@ pub(super) fn assign(
         let (schedule, order) = chosen.ok_or_else(|| invalid(function, message))?;
         let ordered = order.into_iter().flatten().filter_map(|creation| tokens.get(&creation).copied()).collect();
         assigned.insert(key, CloseDuties {
-            duties: ordered, dictionary: schedule.dictionary, protocol: schedule.protocol,
+            duties: ordered, dictionary: schedule.dictionary, protocol: schedule.protocol, dynamic: admits.is_some(),
         });
     }
     Ok(assigned)
+}
+
+/// Add every close of an owner in `owners` to `sites`, with no duties if no token reaches it.
+fn closes_of(
+    module: &Module, body: &Body, owners: &BTreeMap<ScopeId, (Option<ValueId>, ProtocolId)>,
+    sites: &mut BTreeMap<CloseKey, (ScopeId, BTreeSet<ValueId>)>, budget: &mut Budget<'_>,
+) -> Result<(), LowError> {
+    if owners.is_empty() {
+        return Ok(());
+    }
+    for (_, data) in body.blocks.iter() {
+        budget.step(data.insts.len() + 1)?;
+        for &inst in &data.insts {
+            if let Some(scope) = closed_scope(module, body, &body.insts.get(inst)?.op)?
+                && owners.contains_key(&scope) {
+                sites.entry(CloseKey::Instruction(inst)).or_insert_with(|| (scope, BTreeSet::new()));
+            }
+        }
+        if let TermKind::InvokeOwn { op, normal, .. } = &data.term.kind
+            && let Some(scope) = closed_scope(module, body, op)?
+            && owners.contains_key(&scope) {
+            sites.entry(CloseKey::Edge(normal.block)).or_insert_with(|| (scope, BTreeSet::new()));
+        }
+    }
+    Ok(())
 }
 
 /// The token that created the duty `value` stands for, or `None` if edges pass different duties.
@@ -341,14 +383,56 @@ mod tests {
         }
     }
 
-    /// Dynamic schedule entries (D25.3) keep a named rejection.
+    fn dynamic_closes(module: &Module, function: FuncId) -> Result<Vec<(usize, bool)>, LowError> {
+        let body = module.functions.get(function).unwrap().body.as_ref().unwrap();
+        let options = LowOptions::default();
+        let mut budget = Budget { options: &options, steps: 0, blocks: 0, roots: 0 };
+        let assigned = assign(module, function, body, &mut budget)?;
+        Ok(assigned.values().map(|close| (close.duties.len(), close.dynamic)).collect())
+    }
+
+    /// D25.3: an owner whose schedule ends with `dynamic` settles its admitted entries at every close, after the
+    /// static duties, including a close that no token reaches.
     #[test]
-    fn dynamic_entries_are_a_later_slice() {
+    fn a_dynamic_entry_gives_every_close_of_its_owner_the_dynamic_step() {
+        let source = include_str!("../../tests/fixtures/async/coro/async-never-awaited.oir");
+        let (module, function) = narrowed(source);
+        let before = dynamic_closes(&module, function).unwrap();
+        assert!(before.iter().all(|(_, dynamic)| !dynamic), "{before:?}");
+        let (mut module, function) = narrowed(source);
+        let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();
+        let owner = body.service_schedules[0].owner;
+        body.service_schedules[0].duties.push(ScheduleDuty::Dynamic);
+        let closes = dynamic_closes(&module, function).unwrap();
+        assert!(closes.iter().all(|(_, dynamic)| *dynamic), "{closes:?}");
+        // The owner's closes that no token reaches settle their entries too.
+        let body = module.functions.get(function).unwrap().body.as_ref().unwrap();
+        let sites = body.blocks.iter().flat_map(|(_, block)| block.insts.iter().copied()).filter(|&inst| {
+            closed_scope(&module, body, &body.insts.get(inst).unwrap().op).unwrap() == Some(owner)
+        }).count() + body.blocks.iter().filter(|(_, block)| matches!(&block.term.kind,
+            TermKind::InvokeOwn { op, .. } if closed_scope(&module, body, op).unwrap() == Some(owner))).count();
+        assert_eq!(closes.len(), sites);
+    }
+
+    /// A schedule ends with its one dynamic step, and every schedule of such an owner has it.
+    #[test]
+    fn a_dynamic_step_ends_every_schedule_of_its_owner_once() {
         let source = include_str!("../../tests/fixtures/async/coro/async-never-awaited.oir");
         let (mut module, function) = narrowed(source);
         let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();
+        body.service_schedules[0].duties.insert(0, ScheduleDuty::Dynamic);
+        assert!(matches!(dynamic_closes(&module, function), Err(LowError::InvalidInput { .. })));
+        let (mut module, function) = narrowed(source);
+        let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();
+        body.service_schedules[0].duties.extend([ScheduleDuty::Dynamic, ScheduleDuty::Dynamic]);
+        assert!(matches!(dynamic_closes(&module, function), Err(LowError::InvalidInput { .. })));
+        let (mut module, function) = narrowed(source);
+        let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();
+        let mut second = body.service_schedules[0].clone();
+        second.name = "Other".into();
+        second.duties = vec![];
         body.service_schedules[0].duties.push(ScheduleDuty::Dynamic);
-        let error = duties(&module, function).unwrap_err();
-        assert!(matches!(error, LowError::Unsupported { .. }), "{error:?}");
+        body.service_schedules.push(second);
+        assert!(matches!(dynamic_closes(&module, function), Err(LowError::InvalidInput { .. })));
     }
 }

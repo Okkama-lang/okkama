@@ -315,7 +315,7 @@ impl Driver<'_, '_> {
             return Ok(point);
         };
         let atoms: BTreeSet<_> = escaping.iter()
-            .flat_map(|value| state.values[value.as_u32() as usize].deps.iter().copied()).collect();
+            .flat_map(|value| state.values[*value].deps.iter().copied()).collect();
         let duties: BTreeSet<_> = state.journals.iter().filter(|((owner, atom), quantity)| {
             *owner == scope && atoms.contains(atom)
                 && !matches!(quantity.presence, domain::Presence::Absent | domain::Presence::Bottom)

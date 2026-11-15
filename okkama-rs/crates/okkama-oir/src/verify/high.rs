@@ -21,7 +21,14 @@ pub(super) fn check(module: &Module, selected: Option<FuncId>, state: &mut State
         if data.signature.ownership_abi != OwnershipAbi::Unelaborated {
             state.error(R::H2, "high calls use unelaborated ownership ABI");
         }
-        if data.attrs.contains(&FunctionAttr::Async)
+        // #730, async ABI C-6: an async defer entry runs as a child of its owner's cleanup and creates no
+        // Future, so it has a body summary and no creation summary.
+        let defer_entry = data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
+        if data.attrs.contains(&FunctionAttr::Async) && defer_entry
+            && (data.async_creation_summary.is_some() || data.async_body_summary.is_none()) {
+            state.error(R::H6, "async defer entry requires a body summary and no creation summary (C-6)");
+        }
+        if data.attrs.contains(&FunctionAttr::Async) && !defer_entry
             && (data.async_creation_summary.is_none() || data.async_body_summary.is_none()) {
             state.error(R::H6, "async high action requires creation and body summaries");
         }

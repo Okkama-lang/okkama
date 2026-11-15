@@ -12,8 +12,16 @@ const NEVER_FIELD: &str = "NEVER_FIELD";
 const NEVER_OPERAND: &str = "NEVER_OPERAND";
 /// A collection of never leaves is retagged to another shape, or a key-less map to another value type.
 const NEVER_RETAG: &str = "NEVER_RETAG";
-/// The admission filter of a scope.transfer is anything but a single `true` flag right after its selection.
+/// The admission filter of a scope.transfer is anything but nothing or a single flag right after its selection
+/// (`true`: admitted identities; `false`: admitted or bound ones, #697).
 const TRANSFER_ADMISSION: &str = "TRANSFER_ADMISSION";
+/// `array.order` of anything but an array of int, float, rat, char or str or a byte array, or into another type.
+const ARRAY_ORDER_TYPE: &str = "ARRAY_ORDER_TYPE";
+/// `array.order.dispatch` sorts an array whose elements its dispatch cannot compare: the slot is not a
+/// synchronous (observation or owned) slot taking one element and returning a plain three-case enum
+/// (`compare.Order`), the elements are not the dispatch's receivers, a comparison may retain an element, or
+/// the site carries services.
+const ORDER_DISPATCH: &str = "ORDER_DISPATCH";
 
 fn require(condition: bool, message: &str) -> Check {
     if condition { Ok(()) } else { Err(error(message)) }
@@ -682,8 +690,12 @@ fn check_tests(p: &Program) -> Check {
         enforce(functions.insert(test.function), "TEST_TABLE", "two tests share one function")?;
         enforce(p.entry != Some(test.function), "TEST_ENTRY", "the program entry cannot be a test")?;
         let external = f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some());
-        enforce(f.entry_abi == EntryAbi::Observation && f.params.is_empty() && f.results.is_empty()
-            && !external && !f.code.is_empty(), "TEST_ENTRY", "a test needs a () -> void observation body")?;
+        // A test is a synchronous `() -> void` observation or a void async body (#725): an async body takes only
+        // its frame (`check_entry`), and as a fixed root its start holds nothing (`check_layouts`).
+        let observation = f.entry_abi == EntryAbi::Observation && f.params.is_empty();
+        let asynchronous = matches!(f.entry_abi, EntryAbi::AsyncBody { .. });
+        enforce((observation || asynchronous) && f.results.is_empty() && !external && !f.code.is_empty(),
+            "TEST_ENTRY", "a test needs a () -> void observation body or a void async body")?;
     }
     Ok(())
 }
@@ -856,6 +868,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 | Argument::Continuation(_) | Argument::Protocol(_) => {}
         }
     }
+    if op == Opcode::OrderDispatch {
+        // A sort yields a new array of its operand's type, not the slot's result.
+        ctx.value = args.iter().find_map(|arg| match *arg {
+            Argument::Location(location) => match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            },
+            _ => None,
+        });
+    }
     if op.frame_bound() {
         enforce(f.entry_abi.asynchronous(), suspension::ASYNC_ENTRY,
             &format!("{} belongs to async bodies only", op.name()))?;
@@ -864,11 +886,12 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         ctx.between = flags.first().copied().ok_or_else(|| error("missing Same/Between discriminator"))?;
     }
     if op == Opcode::ScopeTransfer {
-        // An admissible transfer moves only what its source admitted (OIR-2 `admissible(...)` selections).
+        // An admissible transfer moves only what its source admitted (OIR-2 `admissible(...)`), a held one what its
+        // source admitted or bound (`held(...)`, #697); a plain transfer takes no filter.
         let filter = args.iter().skip_while(|arg| !matches!(arg, Argument::Selection(_))).skip(1)
             .collect::<Vec<_>>();
-        enforce(filter.is_empty() || filter == [&Argument::Flag(true)], TRANSFER_ADMISSION,
-            "a transfer's admission filter is one true flag after its selection")?;
+        let shape = filter.is_empty() || filter == [&Argument::Flag(true)] || filter == [&Argument::Flag(false)];
+        enforce(shape, TRANSFER_ADMISSION, "a transfer's admission filter is one flag after its selection")?;
     }
     if op == Opcode::ExitDispatch {
         require(flags.len() == 3, "exit.dispatch requires reserve/active-failure/may-fail close contract")?;
@@ -879,7 +902,7 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
         require(args.iter().any(|arg| matches!(arg, Argument::Summary(_))), "missing result contract summary")?;
     }
-    if matches!(op, Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn) {
+    if matches!(op, Opcode::InvokeDispatch | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch) {
         enforce(args.iter().any(|arg| matches!(arg, Argument::Dispatch(_))), "DISPATCH_SITE", "missing dispatch")?;
     }
     if op == Opcode::ExitCommit {
@@ -1099,7 +1122,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             input(0, Pending)?;
             input(1, Cleanup)?;
         }
-        CleanupPlan | CleanupNext | CleanupFinish | CleanupDeliverCancel => input(0, Cleanup)?,
+        CleanupPlan | CleanupNext | CleanupFinish | CleanupDeliverCancel | CleanupSettleDynamic => {
+            input(0, Cleanup)?
+        }
         CleanupSettle => {
             input(0, Cleanup)?;
             if let Some(&duty) = locations.get(1) {
@@ -1166,9 +1191,29 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 ctx.may_fail = true;
             }
         }
+        CacheRehome if locations.len() == 3 => {
+            // The state form (C-4): the reserve, the owner state and the Future whose entry it holds.
+            input(0, Pending)?;
+            input(1, ScopeState)?;
+            enforce(matches!(loc_type(f, locations[2])?, ProducedType::Value(Type::Future(_))), FUTURE_TYPES,
+                "the state form of cache.rehome names a Future")?;
+            ctx.between = true;
+        }
         CacheRehome => {
             input(0, Pending)?;
             input(1, CacheState)?;
+        }
+        // ABI D25.2: a packet and the Future whose cache duty's entry leaves it.
+        ServiceMaterialize => {
+            input(0, Packet)?;
+            enforce(matches!(loc_type(f, locations[1])?, ProducedType::Value(Type::Future(_))), FUTURE_TYPES,
+                "service.materialize names a Future holder")?;
+        }
+        // A packet and the duty token whose entry joins it: a cache-state, or a task-state of a spawn (D24).
+        ServiceAbsorb => {
+            input(0, Packet)?;
+            require(matches!(loc_type(f, locations[1])?, ProducedType::Service(CacheState | TaskState)),
+                "service.absorb takes a cache-state or task-state token")?;
         }
         FuturePublish => {
             input(0, Frame)?;
@@ -1314,6 +1359,38 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(flags.len() == 1, "owned call requires explicit cleanup mode")?;
             }
         }
+        OrderDispatch => {
+            let Some(Argument::Dispatch(dispatch)) = args.first() else {
+                return Err(violation("DISPATCH_SITE", "missing dispatch"));
+            };
+            let slot = &role_decl(p, dispatch.role)?.slots[dispatch.slot as usize];
+            let element = match locations.as_slice() {
+                [array] => match loc_type(f, *array)? {
+                    ProducedType::Value(Type::Array(shape)) => shape.element(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // The elements are the dispatch's receivers: role values, or the one object it selects.
+            let receivers = match element {
+                Some(Type::Object(object)) => dispatch.targets == [object],
+                Some(Type::Role(role)) => role == dispatch.role,
+                _ => false,
+            };
+            let order = match slot.results.as_slice() {
+                [Type::Object(id)] => p.objects.get(*id as usize).is_some_and(|object| object.enum_cases == 3
+                    && object.fields.is_empty() && object.layout.storage_fields == [Type::Int]),
+                _ => false,
+            };
+            // A comparison borrows its elements: an owning slot gets an empty packet and must return one, and
+            // the elements' obligations stay with the array's owner.
+            let borrows = dispatch.retained_params.is_empty();
+            enforce(matches!(slot.entry_abi, EntryAbi::Observation | EntryAbi::Owned) && borrows && receivers
+                && element.is_some_and(|element| {
+                slot.params == [element]
+            }) && order, ORDER_DISPATCH,
+                "array.order.dispatch compares its array's elements by an observation slot returning compare.Order")?;
+        }
         RetOwn => {
             require(f.entry_abi == EntryAbi::Owned, "ret.own requires owned entry")?;
             let mut expected = f.results.iter().copied().map(ProducedType::Value).collect::<Vec<_>>();
@@ -1401,6 +1478,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         ExitDispatch => shape == "lll???",
         OwnCreateCommit => shape == "lob",
         InvokeDispatch => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l'),
+        OrderDispatch => shape == "gl",
         InvokeDispatchOwn => shape.starts_with('g') && shape[1..].chars().all(|ch| ch == 'l' || ch == '?'),
         BuilderPush => shape == "lll" || shape == "llll",
         BuilderAppend => shape == "lll",
@@ -1410,8 +1488,12 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel | UniqueCacheProof => shape == "l",
         // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
         AwaitTake => shape == "lls",
-        // The exit's destination, the pending reserve and the cache duty (C-4, token form).
-        CacheRehome => shape == "xll",
+        // The exit's destination, the pending reserve and the cache duty (C-4, token form), or the owner state and
+        // the Future whose admitted entry moves (state form).
+        CacheRehome => shape == "xll" || shape == "xlll",
+        // The closing scope's cleanup state (D25.3); a packet and the holder or the token (D25.2).
+        CleanupSettleDynamic => shape == "l",
+        ServiceMaterialize | ServiceAbsorb => shape == "ll",
         FuturePublish => shape.len() > 2 && shape.starts_with("l?") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameSave => shape.starts_with("lc") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameResume => shape == "lc",
@@ -1483,6 +1565,9 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             enforce(array_types(op, types, out) && comparable, "ARRAY_OP_TYPE",
                 "array operation operand/result types mismatch")
         }
+        ArrayOrder => enforce(types.len() == 1 && out == Some(types[0]) && sortable(types[0]),
+            ARRAY_ORDER_TYPE,
+            "array.order sorts an array of int, float, rat, char or str, or a byte array, into its own type"),
         BuilderNew => enforce(types.is_empty() && matches!(out, Some(Type::Builder(_) | Type::MapBuilder(_))),
             "BUILDER_NEW_TYPE", "builder.new must produce a builder"),
         Const => {
@@ -1694,6 +1779,17 @@ fn map_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>) -> bool
     }
 }
 
+/// An array whose elements have Tomato's natural order: int, float, rat, char, str, or a byte array.
+fn sortable(ty: Type) -> bool {
+    match ty {
+        Type::Bytes => true,
+        Type::Array(shape) => shape.depth == 1
+            && matches!(shape.leaf,
+                ArrayLeaf::Int | ArrayLeaf::Float | ArrayLeaf::Rat | ArrayLeaf::Char | ArrayLeaf::Str),
+        _ => false,
+    }
+}
+
 /// Operand and result types of an array operation; the receiver is an array or a byte array.
 fn array_types(op: DataOp, types: &[Type], out: Option<Type>) -> bool {
     use DataOp::*;
@@ -1742,7 +1838,7 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
             Flow::Next(destinations) => {
                 require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
                     || matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDispatch
-                        | Opcode::InvokeDispatchOwn) && !ctx.may_fail,
+                        | Opcode::InvokeDispatchOwn | Opcode::OrderDispatch) && !ctx.may_fail,
                     "terminator requires outcomes")?;
                 if *op == Opcode::DepsOf {
                     let [Argument::Location(anchor)] = arguments.as_slice() else { unreachable!() };
@@ -2175,7 +2271,7 @@ pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     match (op, tag) {
         // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
         (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
-            | CleanupDestroy | CacheRehome, Tag::Normal) => Carry::Slot(0),
+            | CleanupDestroy | CacheRehome | CleanupSettleDynamic, Tag::Normal) => Carry::Slot(0),
         (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
         (CleanupFinish, Tag::Normal) => Carry::Slot(2),
         (ExitDispatch, Tag::Pending) => Carry::Slot(1),
@@ -2271,7 +2367,12 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                 }
                 if let Flow::Next(outputs) = flow {
                     // Without a held permission there is nothing to carry: Lapses is a no-op.
-                    let carry = if carried { exit_carry(*op, Tag::Normal) } else { Carry::Lapses };
+                    // The state form of cache.rehome gives the state back before the reserve.
+                    let carry = match (*op, outputs.len()) {
+                        _ if !carried => Carry::Lapses,
+                        (Opcode::CacheRehome, 2) => Carry::Slot(1),
+                        _ => exit_carry(*op, Tag::Normal),
+                    };
                     let committed = match carry {
                         Carry::Commit => outputs.first().copied().filter(|&location| successor(location)),
                         _ => None,

@@ -137,6 +137,8 @@ pub(super) struct CleanupFact {
     pub executed: BTreeSet<Origin>,
     pub services: BTreeSet<Origin>,
     pub had_services: bool,
+    /// The close's `cleanup.settle.dynamic` ran (async ABI D25.3).
+    pub dynamic: bool,
     pub close: CleanupCloseId,
     pub plan: Option<CleanupPlanId>,
 }

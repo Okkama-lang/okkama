@@ -18,6 +18,7 @@ pub(super) fn packet(operation: &CollectionOp) -> Option<ValueId> {
         | CollectionOp::MapBuilderPut { packet, .. } | CollectionOp::MapBuilderAppend { packet, .. }
         | CollectionOp::MapBuilderFinish { packet, .. } | CollectionOp::MapBuilderAbandon { packet, .. } => *packet,
         CollectionOp::ArrayLen { .. } | CollectionOp::ArrayGet { .. } | CollectionOp::ArrayJoin { .. }
+        | CollectionOp::ArrayOrder { .. }
         | CollectionOp::ArrayRetag { .. } | CollectionOp::MapLen { .. } | CollectionOp::MapHas { .. }
         | CollectionOp::MapGet { .. } | CollectionOp::MapKeys { .. } | CollectionOp::MapValues { .. }
         | CollectionOp::MapKeyAt { .. } | CollectionOp::MapValueAt { .. } | CollectionOp::MapRetag { .. }

@@ -143,8 +143,8 @@ impl Emit<'_, '_> {
         }
     }
 
-    /// Champ draft 3 §14.4: the Future operations, the suspension brackets, the take with its proof, the rehome and
-    /// the nonempty `cleanup.settle`.
+    /// Champ draft 3 §14.4: the Future operations, the suspension brackets, the take with its proof, the rehome, the
+    /// nonempty `cleanup.settle`, the dynamic settle and service materialize/absorb (ABI D25).
     pub(super) fn future_operation(&mut self, op: O, arguments: &[A], locations: &[L], flow: &s::Flow)
         -> Result<(), Error>
     {
@@ -241,10 +241,68 @@ impl Emit<'_, '_> {
                     None => self.iconst(c::TARGET_CALLER),
                 };
                 let pending = self.pointer(locations[0]);
-                let cache = self.pointer(locations[1]);
-                let future = self.word(locations[1]);
-                let args = [ctx, pending, zero, cache, zero, future, target, post];
+                let args = if let [_, state, future] = locations {
+                    // The state form takes the entry the scope admitted (D25.3).
+                    let state = self.pointer(*state);
+                    let future = self.word(*future);
+                    [ctx, pending, state, zero, zero, future, target, post]
+                } else {
+                    let cache = self.pointer(locations[1]);
+                    let future = self.word(locations[1]);
+                    [ctx, pending, zero, cache, zero, future, target, post]
+                };
                 ("champ_cache_rehome", self.checked("champ_cache_rehome", &args))
+            }
+            // `invoke.defer` of an async defer entry (ABI C-6, draft 3 §11), class S: the helper runs the entry as a
+            // child of this body and waits for it; Continue or Unwind follows. Its operands are the entry's start
+            // values (arguments, then captures) and the input packet, which the helper empties and finally consumes.
+            O::InvokeDefer => {
+                let target = arguments.iter().find_map(|argument| match argument {
+                    A::Entry(id) => Some(*id),
+                    _ => None,
+                }).expect("verified defer entry");
+                let program: &s::Program = self.program;
+                let callee = &program.functions[target as usize];
+                let count = program.frame_layout(callee).and_then(|layout| layout.saved_types(0))
+                    .map_or(0, |types| types.iter().filter(|ty| matches!(ty, s::ProducedType::Value(_))).count());
+                let values = locations[..count].iter().map(|&location| self.word(location)).collect::<Vec<_>>();
+                let argv = self.record(&values);
+                let argc = self.iconst(count as u64);
+                let packet = self.word(locations[count]);
+                let entry = self.iconst(u64::from(target));
+                let io = self.record(&[packet, zero, post, zero, zero]);
+                let registration = self.record(&[zero]);
+                let args = [ctx, body, entry, argv, argc, io, registration, post];
+                let ordinal = self.suspending("champ_invoke_defer_async", &args, locations);
+                // The helper consumed the input packet on its outcome.
+                self.write(locations[count], &[zero]);
+                ("champ_invoke_defer_async", ordinal)
+            }
+            // ABI D25.3: the closing scope's service list, after the static duties. `this` is the body's frame, or
+            // zero in a synchronous owner.
+            O::CleanupSettleDynamic => {
+                let cleanup = self.pointer(locations[0]);
+                let args = [ctx, body, cleanup, post];
+                ("champ_cleanup_settle_dynamic", self.checked("champ_cleanup_settle_dynamic", &args))
+            }
+            // ABI D25.2: a cache duty's entry out of a packet as its token, or a duty token into a packet.
+            O::ServiceMaterialize => {
+                let packet = self.pointer(locations[0]);
+                let holder = self.word(locations[1]);
+                let kind = self.iconst(c::SERVICE_CACHE);
+                let args = [ctx, packet, holder, kind, post];
+                ("champ_service_materialize", self.checked("champ_service_materialize", &args))
+            }
+            O::ServiceAbsorb => {
+                let packet = self.pointer(locations[0]);
+                let token = self.word(locations[1]);
+                let kind = match self.kind(locations[1]) {
+                    Some(s::ServiceKind::TaskState) => c::SERVICE_TASK,
+                    _ => c::SERVICE_CACHE,
+                };
+                let kind = self.iconst(kind);
+                let args = [ctx, packet, token, kind, post];
+                ("champ_service_absorb", self.checked("champ_service_absorb", &args))
             }
             O::AwaitUnwind => {
                 let state = self.pointer(locations[0]);

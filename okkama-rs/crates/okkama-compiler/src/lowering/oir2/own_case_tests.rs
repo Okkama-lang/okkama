@@ -211,6 +211,46 @@ fn oir2_own_managed_builder_rehomes_fresh_elements_to_the_builder_owner() {
         ir::OwnershipOp::ScopeTransfer { states: ir::TransferStates::Between { .. }, .. }))));
 }
 
+/// #697: an element a builder collects may borrow what a nested scope binds: here the step of the cursor, bound
+/// in the iteration scope as `$cursor`, owns the resource `item()` returns. The rehome of every scope inside the
+/// builder's owner is a `held(...)` transfer, which takes the bound parts too, so the iteration scope gives up
+/// the borrowed resource and it lives as long as the collection (Tomato, `L07.traversal.escaping`).
+#[test]
+fn oir2_own_builder_rehome_holds_what_the_cursor_scope_binds() {
+    let source = concat!(
+        "module app; import \"collections/iteration\" take Iterating, Cursor; ",
+        "object Res { has id is int; Res(:id); destroy { } } ",
+        "object Owned does Iterating<Res> { Owned(); cursor() is Cursor<Res> { Step(mine: Res(id: 0), at: 0); } } ",
+        "object Step does Cursor<Res> { has mine is Res; has at is int; Step(:mine, :at); ",
+        "available() is bool { at < 3; } item() is Res { mine; } ",
+        "successor() is Cursor<Res> { Step(mine: Res(id: at + 1), at: at + 1); } } ",
+        "object T { T(); kept() is int { let all is @Res = Owned().map() -> res { res; }; all.size(); } } ",
+        "main() is int { T().kept(); }",
+    );
+    let low = own_to_low(source, None, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let kept = low.functions.iter().find(|(_, function)| function.symbol == "app.T.kept#0").unwrap().1;
+    let body = kept.body.as_ref().unwrap();
+    let cursor = body.bindings.iter().find(|(_, binding)| binding.name == "$cursor").unwrap().1.scope;
+    let mut held = vec![];
+    for (_, block) in body.blocks.iter() {
+        let ops = block.insts.iter().map(|inst| &body.insts.get(*inst).unwrap().op)
+            .chain(match &block.term.kind {
+                ir::TermKind::InvokeOwn { op, .. } => Some(op.as_ref()),
+                _ => None,
+            });
+        for op in ops {
+            if let ir::Operation::Ownership(ir::OwnershipOp::ScopeTransfer {
+                states: ir::TransferStates::Between { from, .. }, selection,
+            }) = op {
+                let filter = body.selections.get(*selection).unwrap();
+                assert!(matches!(filter, ir::SelectionExpr::Held(_)), "builder rehome filter {filter:?}");
+                held.push(state_scope(&low, body, *from));
+            }
+        }
+    }
+    assert!(held.contains(&cursor), "the scope binding $cursor {cursor:?} gives up its part: {held:?}");
+}
+
 /// #668 F7: a failure Own introduces after `builder.finish` has no buffer left for the block's
 /// High handler, so Own routes it past that handler only when the handler is a buffer cleanup
 /// block: it abandons its buffers and re-raises. Any other handler is an elaboration error.
@@ -546,4 +586,67 @@ fn oir2_own_partitioned_role_value_declares_the_split_failure() {
         .unwrap();
     let summary = module.summaries.get(greet.summary.unwrap()).unwrap();
     assert!(summary.contract.failures.contains(&ir::FailureKind::Program), "{summary:?}");
+}
+
+/// The functions of an Own module whose elaborated body emits a checked scope.split, with whether their summary
+/// declares the program failure it may raise (the loader's ENTRY_FAILURE_MASK counts it).
+fn splitting_functions(module: &ir::Module) -> Vec<(String, bool)> {
+    module.functions.iter().filter_map(|(_, function)| {
+        let body = function.body.as_ref()?;
+        let splits = body.blocks.iter().any(|(_, block)| matches!(&block.term.kind,
+            ir::TermKind::InvokeOwn { op, .. }
+                if matches!(**op, ir::Operation::Ownership(ir::OwnershipOp::ScopeSplit { .. }))));
+        let declared = module.summaries.get(function.summary?).ok()?.contract.failures
+            .contains(&ir::FailureKind::Program);
+        splits.then(|| (function.symbol.clone(), declared))
+    }).collect()
+}
+
+/// #706: own's elaboration splits every value it gives deps, and a deps-carrying reference without an obligation
+/// (a cap value, a role) is one of them. A lambda own entry binding a cap parameter, a witness entry returning a
+/// role field and a generic method staging a role value for return declare the split's program failure.
+#[test]
+fn oir2_own_reference_splits_declare_the_program_failure() {
+    let sources = [
+        ("main.lambda#0.__own_entry", concat!("module app; object Customer { has name is string; Customer(:name); ",
+            "cap Card { label is string { name; } } } ",
+            "main() is int { let reader = (card is Customer::Card) is string { card::label; }; ",
+            "reader(Customer(name: \"d\")::Card).length(); }")),
+        ("own_witness_entry", concat!("module app; role Chain { rest() is Chain; size() is int; } ",
+            "object End does Chain { End(); rest() is Chain { End(); } size() is int { 0; } } ",
+            "object Link does Chain { has following is Chain; Link(:following); rest() is Chain { following; } ",
+            "size() is int { 1 + following.size(); } } ",
+            "main() is int { let c is Chain = Link(following: Link(following: End())); c.rest().size(); }")),
+        ("app::Pair<int>.first", concat!("module app; role Shape { area() is int; } ",
+            "object Square does Shape { has side is int; Square(:side); area() is int { side * side; } } ",
+            "object Pair<T> { has left is Shape; has tag is T; Pair(:left, :tag); ",
+            "first() is Shape { if left.area() >= 0 { left; } else { left; } } } ",
+            "main() is int { Pair(left: Square(side: 3), tag: 1).first().area(); }")),
+    ];
+    let mut failures = vec![];
+    for (prefix, source) in sources {
+        let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural)
+            .unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        let splitting = splitting_functions(&module);
+        assert!(splitting.iter().any(|(symbol, _)| symbol.starts_with(prefix)), "{prefix}: {splitting:?}");
+        let undeclared: Vec<_> = splitting.iter().filter(|(_, declared)| !declared).collect();
+        if !undeclared.is_empty() {
+            failures.push(format!("{prefix}: splits without the program failure: {undeclared:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// #707: the largest functions of these cases hold up to 4 800 values, of which at most 20 may own. Own's flow
+/// analysis costs work in proportion to the facts of the values that may own, so they pass own and low under
+/// the default budgets.
+#[test]
+fn oir2_own_large_plain_functions_finish_within_the_default_budgets() {
+    let mut failures = vec![];
+    for id in ["L05.variants.case-layouts", "L07.try-mark.diverging-operand", "L09.digest.md5-sha1-vectors"] {
+        if let Err(error) = case(id, ir::verify::VerifyMode::Structural) {
+            failures.push(format!("{id}: {}", error.chars().take(300).collect::<String>()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

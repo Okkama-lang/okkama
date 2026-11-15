@@ -543,17 +543,36 @@ fn v7_low_goldens_compile_and_load() {
 #[test]
 fn k1_low_goldens_compile_and_load() {
     for name in ["k1-cancel-unstarted", "k1-failure-view-escapes", "k1-nested-close-next-await",
-        "nested-close-outer-future", "start-deps"]
+        "nested-close-outer-future", "start-deps", "void-fixed-root"]
     {
         loads(name);
     }
 }
 
-/// C-2 with descriptor parameters: the S2 transport has no descriptor bindings yet (open calls, lane cr).
+/// #725: an async test is a void async body and a fixed root. TEST_ENTRY refuses one that publishes a value, and
+/// SPB_ASYNC_ENTRY one whose start holds an input.
 #[test]
-#[ignore = "#689"]
-fn v7_descriptor_start_golden_compiles_and_loads() {
-    loads("coro-start-descriptors");
+fn an_async_test_is_a_void_fixed_root() {
+    let module = golden("void-fixed-root");
+    let program = compile(&module).unwrap().program;
+    let objects = with_composites(&module, || objects(&module, &layouts(&module))).unwrap();
+    let contracts = s::p1::P1Contracts::new(&objects).unwrap();
+    s::verify_load(&program, &contracts).unwrap();
+    let test = program.tests.as_ref().unwrap()[0].function as usize;
+    assert!(matches!(program.functions[test].entry_abi, s::EntryAbi::AsyncBody { .. }));
+    let mut valued = program.clone();
+    valued.functions[test].results.push(s::Type::Int);
+    assert_eq!(s::verify_load(&valued, &contracts).unwrap_err().rule, "TEST_ENTRY");
+    let mut started = program.clone();
+    let layout = match started.functions[test].entry_abi {
+        s::EntryAbi::AsyncBody { layout } => layout as usize,
+        _ => unreachable!(),
+    };
+    let frame = &mut started.tables.frames[layout];
+    frame.slots.push(s::FrameSlot { ty: P::Value(s::Type::Int), linear: false });
+    let slot = (frame.slots.len() - 1) as u32;
+    frame.continuations[0].saved.push(slot);
+    assert_eq!(s::verify_load(&started, &contracts).unwrap_err().rule, "SPB_ASYNC_ENTRY");
 }
 
 
@@ -695,4 +714,58 @@ fn r4_async_defer_entry_never_replaces() {
         }
     });
     rejected(&module, "an async defer entry never replaces (C-6)");
+}
+
+/// R1's own golden `name` through coro and low, as the pipeline runs them.
+fn escape(name: &str) -> o::Module {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../okkama-oir/src/own/tests/async-goldens/{name}.oir"));
+    let module = o::text::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let coro = okkama_oir::coro::lower_coro(module, &Default::default()).unwrap();
+    okkama_oir::low::lower_cleanup(coro, &Default::default()).unwrap()
+}
+
+/// #601 D25: a Future that leaves its block by its token (r1-cold-escape) or whose outcome view escapes
+/// (r1-view-escape) is admitted by the outer scope, whose closes settle it with `cleanup.settle.dynamic` before
+/// the executor plan; the programs pass the load gate (SPB_SCHEDULE, SPB_REHOME).
+#[test]
+fn d25_admitted_entries_settle_dynamically_and_load() {
+    for name in ["r1-cold-escape", "r1-view-escape"] {
+        let low = escape(name);
+        compile(&low).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let program = translated(&low);
+        let main = function(&program, "main");
+        let dynamic = sites(main, O::CleanupSettleDynamic);
+        assert!(!dynamic.is_empty(), "{name}");
+        for (pc, arguments, flow) in dynamic {
+            assert_eq!(types(main, arguments), [P::Service(K::Cleanup)], "{name}");
+            assert_eq!(outputs(flow).len(), 1);
+            let s::Instruction::Champ { op: O::CleanupPlan, .. } = &main.code[pc + 1] else {
+                panic!("{name}: the plan follows the dynamic settle");
+            };
+        }
+        assert!(!sites(main, O::CacheRehome).is_empty(), "{name}");
+    }
+}
+
+/// C-4, own form: the rehome of an entry that main's block admitted from @make (OIR-2 §10.1) names the target,
+/// the reserve, the state and the Future, and gives the state back before the reserve.
+#[test]
+fn d25_the_state_form_of_rehome_takes_the_state_and_the_future() {
+    let program = translated(&escape("r1-make-escape"));
+    let main = function(&program, "main");
+    let state = sites(main, O::CacheRehome).into_iter().find(|(_, arguments, _)| arguments.len() == 4)
+        .expect("main passes the admitted Future on in the state form");
+    let (_, arguments, flow) = state;
+    assert!(matches!(arguments[0], A::Destination(s::ExitDestination::Scope(_))));
+    assert_eq!(types(main, &arguments[1..]), [P::Service(K::Pending), P::Service(K::ScopeState),
+        P::Value(s::Type::Future(0))]);
+    let outputs = outputs(flow);
+    assert_eq!([ty(main, outputs[0]), ty(main, outputs[1])], [P::Service(K::ScopeState), P::Service(K::Pending)]);
+    // @make returns its Future with its token, to the caller.
+    let make = function(&program, "make");
+    let token = sites(make, O::CacheRehome);
+    assert_eq!(token.len(), 1);
+    assert_eq!(token[0].1[0], A::Destination(s::ExitDestination::Caller));
+    assert_eq!(types(make, &token[0].1[1..]), [P::Service(K::Pending), P::Service(K::CacheState)]);
 }

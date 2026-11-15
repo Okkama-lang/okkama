@@ -231,7 +231,7 @@ impl Rewrite for DepExpr {
 impl Rewrite for SelectionExpr {
     fn rewrite(&mut self, visitor: &mut impl VisitorMut) {
         match self { Self::Value(value) | Self::OwnerGraph(value) | Self::ViewOwner(value) => value.rewrite(visitor),
-            Self::Admissible(selection) => selection.rewrite(visitor),
+            Self::Admissible(selection) | Self::Held(selection) => selection.rewrite(visitor),
             Self::Projection(projection) => projection.rewrite(visitor), Self::Union(items) => items.rewrite(visitor),
             Self::Descriptor { descriptor, value } => { descriptor.rewrite(visitor); value.rewrite(visitor); } }
     }
@@ -287,7 +287,7 @@ impl Rewrite for HighOperationSite {
 
 fields!(
     CleanupMetadata { closes, schedules, plans, roots, proofs },
-    CleanupClose { source, after_defers, effects }, CleanupSchedule { close, holders, dictionary, protocol },
+    CleanupClose { source, after_defers, effects }, CleanupSchedule { close, holders, dictionary, protocol, dynamic },
     CleanupPlan { close, sources, direct }, RootRequirement { boundary, bindings }, RootBinding { value, trace }
 );
 impl Rewrite for CleanupSource {
