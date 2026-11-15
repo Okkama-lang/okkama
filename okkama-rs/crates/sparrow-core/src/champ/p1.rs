@@ -7,6 +7,9 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     let runtime = unsafe { &mut *(*ctx).runtime };
     let source = runtime.champ.machine.as_ref().expect("Champ program").source.clone();
     let name = source.functions[function].proofs.entry.as_ref().unwrap().external.as_deref().unwrap();
+    if name == s::p1::SYNC_CLOSURE_CLEANUP || name == s::p1::ANY_CLEANUP {
+        return opaque_cleanup(ctx, io);
+    }
     // Acceptance follows the packet ABI for every call-boundary entry, including replace.
     let mut post = CallPost::default();
     if !io.is_null() {
@@ -20,22 +23,7 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     }
     let value = if super::machine::native_symbol(name) {
         let value = runtime::rt_native(ctx, function as u64, args.as_ptr(), args.len() as u64);
-        if unsafe { (*ctx).status } == runtime::FAILED
-            && let Some(FailureKind::Program(message)) = runtime.failure(unsafe { (*ctx).failure })
-                .map(|failure| &failure.kind)
-        {
-            let message = message.clone();
-            let descriptor = runtime.champ.machine.as_ref().unwrap().native_failure;
-            let fields = [
-                runtime.heap.allocate_text("runtime"),
-                runtime.heap.allocate_text("native"),
-                runtime.heap.allocate_text(name),
-                runtime.heap.allocate_text(&message),
-            ];
-            let object = runtime.heap.object_new(descriptor, &fields);
-            let failure = runtime.failure_new(FailureKind::Native(object));
-            unsafe { (*ctx).failure = failure };
-        }
+        native_refusal(ctx, name);
         value
     } else if let Some(check) = name.strip_prefix(s::TEST_INTRINSIC_PREFIX) {
         super::testing::intrinsic(ctx, check, args)
@@ -107,6 +95,55 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     }
 }
 
+/// A synchronous native's entry may fail only with a native failure (`NATIVE_FAILURES`). Every other
+/// refusal of the provider (a program failure, a raised cancellation or error value, a panic) becomes a
+/// `NativeFailure` of the operation carrying the refusal's message; a native failure passes unchanged.
+pub(super) fn native_refusal(ctx: *mut Ctx, name: &str) {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    if unsafe { (*ctx).status } != runtime::FAILED {
+        return;
+    }
+    let message = match runtime.failure(unsafe { (*ctx).failure }).map(|failure| &failure.kind) {
+        Some(FailureKind::Native(_)) => return,
+        Some(FailureKind::Program(message) | FailureKind::Panic(message)) => message.clone(),
+        Some(FailureKind::Cancelled) => "Operation was cancelled".to_owned(),
+        Some(FailureKind::Thrown(object)) => super::machine::error_text(runtime, *object)
+            .unwrap_or_else(|| "native provider raised an error value".to_owned()),
+        None => "native provider failed without a failure record".to_owned(),
+    };
+    let descriptor = runtime.champ.machine.as_ref().unwrap().native_failure;
+    let fields = [
+        runtime.heap.allocate_text("runtime"),
+        runtime.heap.allocate_text("native"),
+        runtime.heap.allocate_text(name),
+        runtime.heap.allocate_text(&message),
+    ];
+    let object = runtime.heap.object_new(descriptor, &fields);
+    let failure = runtime.failure_new(FailureKind::Native(object));
+    unsafe { (*ctx).failure = failure };
+}
+
+/// An opaque cleanup intrinsic releases the complete owner graph of an action value or `any` box: every
+/// identity of the packet it is given, once, through the common cleanup executor, then returns an empty
+/// packet. Its contract has no failure, so a destroy failure stops the machine.
+pub(super) fn opaque_cleanup(ctx: *mut Ctx, io: *mut CallOwn) -> Word {
+    if io.is_null() {
+        return super::helpers::stop(ctx, Error("opaque cleanup without its packet".into()));
+    }
+    let input = unsafe { &mut (*io).input };
+    match super::cleanup::close_packet(ctx, input, 0) {
+        Ok(0) => {}
+        Ok(_) => return super::helpers::stop(ctx, Error("opaque cleanup: a destroy failed".into())),
+        Err(error) => return super::helpers::stop(ctx, error),
+    }
+    let mut post = CallPost::default();
+    if rt_own_empty(ctx, &mut post.packet) != NORMAL {
+        return OUTCOME_STOP;
+    }
+    unsafe { (*io).output.write(post) };
+    NORMAL
+}
+
 pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {
     let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
     if descriptor == runtime.champ.machine.as_ref().unwrap().native_failure as usize {
@@ -137,3 +174,7 @@ pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -
     text.push(')');
     text
 }
+
+#[cfg(test)]
+#[path = "p1_tests.rs"]
+mod tests;

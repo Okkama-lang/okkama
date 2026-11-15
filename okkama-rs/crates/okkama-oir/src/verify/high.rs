@@ -166,9 +166,13 @@ fn operation(
         }
         Operation::Exit(_) => state.error(R::H2, "high permits only the exit.prepare intent"),
         Operation::Async(op) => {
+            // Plan P2.5 §3.1 (#688): `f.done()`, `f.cancel()` and `f.cancelled()` lower to the
+            // observing `fut.done`/`fut.cancel`/`fut.cancelled` in High; own elaborates them.
             if !matches!(op, AsyncOp::Await { .. } | AsyncOp::WorkerBind { .. }
-                | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. }) {
-                state.error(R::H6, "high permits shared await; Future ownership/state operations require own");
+                | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. }
+                | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancel { .. } | AsyncOp::FutureCancelled { .. }) {
+                state.error(R::H6, "high permits shared await, workers and fut.done/cancel/cancelled; \
+                    other Future ownership/state operations require own");
             }
         }
         Operation::Core(CoreOp::ObjNew { declaration, fields, construction, .. }) => {

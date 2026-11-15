@@ -186,9 +186,11 @@ impl Universe {
             let binds = matches!(op, Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. }));
             if module.profile == Profile::High && (partitions_inputs || binds || matches!(op,
                 Operation::Lexical(LexicalOp::Stage { .. }) | Operation::Exit(ExitOp::Prepare { .. })))
+                // A builtin capability (Atomic) holds no obligation, yet elaboration partitions it.
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
                     body.values.get(operand.value).is_ok_and(|value| {
-                        types[&value.ty].may_own() && !(binds && futures::is_future(module, value.ty))
+                        (types[&value.ty].may_own() || types[&value.ty].capabilities)
+                            && !(binds && futures::is_future(module, value.ty))
                     })
                 })) {
                 normal::failures(&mut summary.contract.failures, &[FailureKind::Program]);

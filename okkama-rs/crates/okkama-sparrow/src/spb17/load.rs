@@ -53,7 +53,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
                 index + 1 == locations.len()
             }
-            OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
+            OwnMove | OwnJoin | OwnAdmit | OwnAccept | OwnDynamic | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
             ScopeTransfer => index < 1 + usize::from(between),
@@ -197,9 +197,10 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                     &adapter
                 }
             };
-            require(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
+            enforce(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
                 && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
-                && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;
+                && f.proofs.entry == trusted.proofs.entry,
+                "EXTERNAL_SIGNATURE", "external signature/summary mismatch")?;
             continue;
         }
         check_fallible_data(f)?;
@@ -369,7 +370,7 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
         .fold(0, |mask, entry| mask | entry.failures))
 }
 
-fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence<'_>, destroy_masks: &[u32])
+pub(super) fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence<'_>, destroy_masks: &[u32])
     -> Check
 {
     for (id, _) in f.proofs.plans.iter().enumerate() {
@@ -429,7 +430,9 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
             })), "direct descriptor witness does not match identity")?;
             require(p.functions.get(slot.destroy as usize).and_then(|f| f.proofs.entry.as_ref())
                 .is_some_and(|entry| entry.destroy == Some(object)), "direct destroy descriptor/entry mismatch")?;
-            let actual = reconstructed.identity(slot.identity).ok_or_else(|| error("unknown direct identity origin"))?;
+            let Some(actual) = reconstructed.identity(slot.identity) else {
+                return evidence_rule(reconstructed, false, "SPB_STRUCTURE", "unknown direct identity origin");
+            };
             match slot.origin {
                 CreationOrigin::Singleton => require(evidence.slots.len() <= 1, "singleton proves no serial order")?,
                 CreationOrigin::Create(pc) => {
@@ -457,8 +460,12 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
             require(suffix.roots == roots, "missing direct suffix roots")?;
         }
         let expected = evidence.slots.iter().map(|slot| reconstructed.identity(slot.identity))
-            .collect::<Option<BTreeSet<_>>>().ok_or_else(|| error("unknown direct slots"))?;
-        require(reconstructed.inventory(source[0]) == Some(expected), "direct plan loses owner inventory")?;
+            .collect::<Option<BTreeSet<_>>>();
+        let Some(expected) = expected else {
+            return evidence_rule(reconstructed, false, "SPB_STRUCTURE", "unknown direct slots");
+        };
+        let kept = reconstructed.inventory(source[0]) == Some(expected);
+        evidence_rule(reconstructed, kept, "SPB_STRUCTURE", "direct plan loses owner inventory")?;
         require(creation_pcs.windows(2).all(|pcs| evidence::precedes(f, pcs[1], pcs[0])),
             "direct order is not descending creation on every CFG path")?;
         require(f.proofs.order_witnesses[plan.order_witness as usize].creation_pcs == creation_pcs,
@@ -469,7 +476,7 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
     Ok(())
 }
 
-fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
+pub(super) fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
     if !f.proofs.entry.as_ref().is_some_and(|entry| entry.fresh_singleton) {
         return Ok(());
     }
@@ -483,10 +490,12 @@ fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
             Argument::Location(location) => Some(location), _ => None,
         }).collect::<Vec<_>>();
         require(locations.len() >= 2, "fresh singleton needs value and packet")?;
-        let key = evidence.identity(locations[0])
-            .ok_or_else(|| violation("FRESH_ORIGIN", "fresh result has no successful creation"))?;
-        enforce(evidence.inventory(locations[1]) == Some(BTreeSet::from([key])),
-            "FRESH_PACKET", &format!("{}: fresh summary not supported by every reachable return packet", f.symbol))?;
+        let Some(key) = evidence.identity(locations[0]) else {
+            return evidence_rule(evidence, false, "FRESH_ORIGIN", "fresh result has no successful creation");
+        };
+        let supported = evidence.inventory(locations[1]) == Some(BTreeSet::from([key]));
+        evidence_rule(evidence, supported, "FRESH_PACKET",
+            &format!("{}: fresh summary not supported by every reachable return packet", f.symbol))?;
     }
     enforce(returns != 0, "FRESH_REACHABLE_RETURN", "fresh summary has no reachable return evidence")
 }
@@ -673,7 +682,10 @@ pub(super) fn reachable(f: &Function) -> BTreeSet<usize> {
 /// its own commit in straight-line code, without any other use of the value: nothing returns, stores,
 /// passes or packs it, and no path leaves its scope, before the commit.
 fn check_creations(p: &Program, f: &Function) -> Check {
-    let mut evidence = evidence::Evidence::new(p, f);
+    check_creations_with(p, f, &mut evidence::Evidence::new(p, f))
+}
+
+pub(super) fn check_creations_with(p: &Program, f: &Function, evidence: &mut evidence::Evidence<'_>) -> Check {
     for (pc, instruction) in f.code.iter().enumerate() {
         let Instruction::Data { op: DataOp::ObjNew | DataOp::ObjNext, output: Some(output), .. } = instruction
             else { continue };
@@ -692,8 +704,10 @@ fn check_creations(p: &Program, f: &Function) -> Check {
             falls_through && !allocation::direct_uses(f, between).contains(&created)
         }));
         let committed = commit.map(|commit| (commit as u32, None));
-        enforce(straight && evidence.identity(created) == committed, "CREATION_UNCOMMITTED",
-            &format!("{}: object created at pc {pc} can escape before its own commit", f.symbol))?;
+        let message = format!("{}: object created at pc {pc} can escape before its own commit", f.symbol);
+        enforce(straight, "CREATION_UNCOMMITTED", &message)?;
+        let own = evidence.identity(created) == committed;
+        evidence_rule(evidence, own, "CREATION_UNCOMMITTED", &message)?;
     }
     evidence.check_budget()
 }

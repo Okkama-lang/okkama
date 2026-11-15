@@ -148,6 +148,16 @@ fn numeric_and_scalar_opcode_operands_have_positive_and_mutation_cases() {
             numerator: ValueId::from_u32(0),
             denominator: ValueId::from_u32(1),
         }, vec![Type::Int, Type::Int]),
+        // #679: char conversions type their operand by the source kind.
+        (CoreOp::Convert {
+            value: ValueId::from_u32(0), from: NumericType::Char, to: NumericType::Int,
+        }, vec![Type::Char]),
+        (CoreOp::Convert {
+            value: ValueId::from_u32(0), from: NumericType::Char, to: NumericType::Str,
+        }, vec![Type::Char]),
+        (CoreOp::Convert {
+            value: ValueId::from_u32(0), from: NumericType::Int, to: NumericType::Char,
+        }, vec![Type::Int]),
     ];
     for (op, types) in cases {
         let mut module = ModuleBuilder::new("scalar_types", Profile::High);

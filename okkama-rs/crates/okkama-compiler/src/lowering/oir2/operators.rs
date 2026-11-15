@@ -102,6 +102,8 @@ impl BodyLowerer<'_, '_> {
             (Builtin::StrStartsWith, &[part]) => C::StrStartsWith { value, part },
             (Builtin::StrEndsWith, &[part]) => C::StrEndsWith { value, part },
             (Builtin::StrCharacters, []) => C::StrCharacters { value },
+            // `c.code()`: the code point of a char (#679).
+            (Builtin::CharCode, []) => C::Convert { value, from: ir::NumericType::Char, to: ir::NumericType::Int },
             // Searches give a code-point index or -1 (#210); `contains` is a found index.
             (Builtin::StrContains, &[part]) => {
                 let index = self.core(C::StrFind { value, part })?;

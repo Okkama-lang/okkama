@@ -126,6 +126,8 @@ impl HelperAbi {
         let count = schema.iter().filter(|slot| !erased(slot)).count();
         let offsets = match (opcode, tag) {
             (O::OwnSplitChecked | O::ScopeSplit, Tag::Unwind) => vec![0, 16],
+            // ScopeSplitPost: the state, the unaccepted packet and the failure.
+            (O::OwnDynamic, Tag::Unwind) => vec![0, 8, 16],
             (O::ScopeTransfer, Tag::Unwind) => {
                 if context.between { vec![0, 8, 16] } else { vec![0, 16] }
             }
@@ -164,6 +166,7 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_own_split_checked" => ("SplitPost", Some(O::OwnSplitChecked)),
         "champ_scope_split" | "champ_scope_split_admissible" => ("ScopeSplitPost", Some(O::ScopeSplit)),
         "champ_scope_transfer" => ("TransferPost", Some(O::ScopeTransfer)),
+        "champ_own_dynamic" => ("ScopeSplitPost", Some(O::OwnDynamic)),
         "champ_exit_prepare" => ("PendingSlot", Some(O::ExitPrepare)),
         "champ_exit_extend" => ("PendingSlot", Some(O::ExitExtend)),
         "champ_exit_replace" => ("ReplacePost", Some(O::ExitReplace)),

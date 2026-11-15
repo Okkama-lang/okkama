@@ -74,10 +74,13 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
     let profile = |feature: &o::Feature| *feature == o::Feature::Core
         || *feature == o::Feature::Test && module.tests.is_some();
-    if !module.imports.is_empty() || !module.protocols.is_empty() || !module.requires.iter().all(profile)
+    if !module.imports.is_empty() || !module.requires.iter().all(profile)
         || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
     {
-        return Err(unsupported("unresolved declarations, protocols or service metadata"));
+        return Err(unsupported("unresolved declarations or service metadata"));
+    }
+    for (id, _) in module.protocols.iter() {
+        protocol(module, id)?;
     }
     let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
         name: test.name.clone(),
@@ -170,6 +173,29 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     Ok(AllocatedProgram { program: p, allocations })
 }
 
+/// The SPB 17 protocol of a declared dynamic transfer protocol: the registered open Closure protocol, or the
+/// synchronous `any` protocol (one checked packet-to-scope transfer, as Low admits it). Any other protocol
+/// (storage merges, services) has no SPB 17 form yet.
+pub(crate) fn protocol(module: &o::Module, id: o::ProtocolId) -> Result<s::Protocol, GenerateError> {
+    let declared = module.protocols.get(id)?;
+    if *declared == o::catalogue::open_callable_protocol() {
+        return Ok(s::Protocol::Closure);
+    }
+    let open = o::ProtocolPoststate { holder: o::HolderKind::Scope, state: o::HolderState::Open };
+    let unaccepted = o::ProtocolPoststate { holder: o::HolderKind::Packet, state: o::HolderState::Unaccepted };
+    let transfer = |rule: &o::ProtocolRule| rule.transition == o::ProtocolTransition::Dynamic
+        && rule.from == o::HolderKind::Packet && rule.to == o::HolderKind::Scope
+        && rule.normal == open && rule.unwind == Some(unaccepted) && rule.cancel.is_none()
+        && [o::ProtocolCheck::Owner, o::ProtocolCheck::LiveDependencies, o::ProtocolCheck::Snapshot,
+            o::ProtocolCheck::Transferable].iter().all(|check| rule.checks.contains(check));
+    if declared.kind == o::ProtocolKind::Any && declared.holders == [o::HolderKind::Scope, o::HolderKind::Packet]
+        && matches!(declared.rules.as_slice(), [rule] if transfer(rule)) && declared.roots == [o::RootKind::Operands]
+    {
+        return Ok(s::Protocol::Any);
+    }
+    Err(unsupported(&format!("{:?} protocol", declared.kind)))
+}
+
 pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<Vec<s::Object>, GenerateError> {
     let mut objects = Vec::new();
     for (id, declaration) in module.declarations.iter() {
@@ -247,6 +273,7 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             layout: layout.runtime,
             role,
             implements,
+            any_box: false,
         });
     }
     roles::synthetic_objects(module, &mut objects)?;
@@ -363,6 +390,8 @@ fn translate_with(module: &o::Module, id: o::TypeId, table: &Composites) -> Resu
         }
         o::Type::Role { decl, args } if args.is_empty() => s::Type::Role(decl.as_u32()),
         o::Type::Fn(_) => s::Type::Role(roles::callable_role(module, id)?),
+        // An `any` value is a reference to an any box: the boxed value and, in its descriptor, its type.
+        o::Type::Any => s::Type::Any,
         // A cap holds its owner's complete graph and reads it on every call: it is the owner's reference.
         o::Type::Cap { decl, args } if args.is_empty() => {
             let o::DeclarationKind::Cap { owner, .. } = &module.declarations.get(*decl)?.kind else {
@@ -450,6 +479,7 @@ pub(crate) fn numeric_type(ty: o::NumericType) -> Option<s::Type> {
         o::NumericType::Byte => Some(s::Type::Byte),
         o::NumericType::Float => Some(s::Type::Float),
         o::NumericType::Rat => Some(s::Type::Rat),
+        o::NumericType::Char => Some(s::Type::Char),
     }
 }
 
@@ -528,6 +558,7 @@ pub(crate) fn family_operation(core: &o::CoreOp) -> Option<(s::DataOp, Vec<o::Va
         C::StrStartsWith { value, part } => (D::StrStartsWith, vec![value, part]),
         C::StrEndsWith { value, part } => (D::StrEndsWith, vec![value, part]),
         C::StrUtf8 { value } => (D::StrUtf8, vec![value]),
+        C::StrCharacters { value } => (D::StrCharacters, vec![value]),
         _ => return None,
     })
 }

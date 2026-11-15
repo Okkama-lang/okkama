@@ -41,6 +41,10 @@ impl LiveEnv {
     pub fn value(&self, original: ValueId) -> Result<LatestValue, OwnError> {
         self.values.get(&original).copied().ok_or_else(|| flow_error("value has no latest SSA definition"))
     }
+    /// The state of a retained lexical scope; producer output never makes own panic (#672).
+    pub fn state(&self, scope: ScopeId) -> Result<ValueId, OwnError> {
+        self.scopes.get(&scope).copied().ok_or_else(|| flow_error("lexical scope state is not retained"))
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Landing {

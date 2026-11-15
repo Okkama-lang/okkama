@@ -22,6 +22,11 @@ impl Driver<'_, '_> {
     ) -> Result<Landing, OwnError> {
         let consumed = arrays::consumed_buffer(&instruction.op);
         if let Some(buffer) = consumed {
+            // Every transition, finish and abandon included, lies inside the builder's owner.
+            let owner = *self.builder_owners.get(&buffer)
+                .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+            let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+            arrays::inner_scopes(self.module, scope, owner)?;
             let inserted = self.inserted_values(&point, &instruction.op)?;
             point = self.rehome(point, buffer, &inserted)?;
             // Checked transfers forward every live SSA name: rename again.
@@ -121,7 +126,7 @@ impl Driver<'_, '_> {
             }
             let selection = self.body.selections.alloc(SelectionExpr::Union(selections)).map_err(arena)?;
             let selection = self.body.selections.alloc(SelectionExpr::Admissible(selection)).map_err(arena)?;
-            let states = TransferStates::Between { from: point.env.scopes[scope], to: point.env.scopes[&outer] };
+            let states = TransferStates::Between { from: point.env.state(*scope)?, to: point.env.state(outer)? };
             point = self.emit(point, Operation::Ownership(OwnershipOp::ScopeTransfer { states, selection }))?;
         }
         Ok(point)
@@ -157,7 +162,7 @@ impl Driver<'_, '_> {
         let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
         let owner = stack(self.module, scope)?.into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
             .ok_or_else(|| flow_error("builder journal has no retained lexical owner"))?;
-        let state = point.env.scopes[&owner];
+        let state = point.env.state(owner)?;
         self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))
     }
 }

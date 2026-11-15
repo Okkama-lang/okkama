@@ -168,16 +168,6 @@ macro_rules! through_low {
     };
 }
 
-macro_rules! blocked {
-    ($name:ident, $id:literal, $ticket:literal) => {
-        #[test]
-        #[ignore = $ticket]
-        fn $name() {
-            run_case($id, false).unwrap_or_else(|error| panic!("{}: {error}", $id));
-        }
-    };
-}
-
 // Floats: float.add/sub/mul/div/mod/pow/neg/abs/sign/sqrt.
 case!(float_lex_basic, "L01.lex.float.basic");
 case!(float_lex_integral_text, "L01.lex.float.integral-text");
@@ -233,9 +223,10 @@ case!(rat_constructor, "L02.rat.constructor");
 // `any` coercion passes own and low; maps and closures are SPB 17 types of other lanes.
 through_low!(types_forms, "L01.gram.types.forms");
 
-// Char conversions have no OIR-2 operation yet.
-blocked!(char_raw_string_keeps_cr, "L01.lex.crlf.raw-string-keeps-cr", "#679");
-blocked!(char_code_round_trip, "L02.char.code-round-trip", "#679");
-blocked!(char_string_cast, "L02.char.string-cast", "#679");
-blocked!(char_surrogate_rejected, "L02.char.surrogate-rejected", "#679");
-blocked!(const_values, "L06.const.values", "#679");
+// Char conversions: `cvt` char -> int, int -> char, char -> str (#679).
+case!(char_raw_string_keeps_cr, "L01.lex.crlf.raw-string-keeps-cr");
+case!(char_code_round_trip, "L02.char.code-round-trip");
+case!(char_string_cast, "L02.char.string-cast");
+case!(char_surrogate_rejected, "L02.char.surrogate-rejected");
+// `LETTER.string()` lowers; the collection constants are globals, which the SPB 17 layout does not take yet.
+through_low!(const_values, "L06.const.values");

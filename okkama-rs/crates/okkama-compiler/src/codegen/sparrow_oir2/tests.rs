@@ -754,7 +754,7 @@ fn s2_unwind_does_not_discharge_a_successor_moved_into_its_exit() {
 
 /// Every int, byte, float, rat and str family operation of OIR-2 on parameters of its operand types.
 fn family_module() -> (o::Module, Vec<(o::CoreOp, o::Type)>) {
-    let m = parse("oir 2 low\nmodule all\nscope S action in @f\n\
+    let mut m = parse("oir 2 low\nmodule all\nscope S action in @f\n\
         func @f(%i: int, %j: int, %b: byte, %c: byte, %x: float, %y: float, %r: rat, %q: rat, %s: str, %t: str, \
         %u: str) -> void abi observation {\n^entry in S:\nret\n}\n");
     let value = o::ValueId::from_u32;
@@ -766,6 +766,7 @@ fn family_module() -> (o::Module, Vec<(o::CoreOp, o::Type)>) {
     let str_array = T::Array(str_array.expect("str type of the fixture"));
     let byte_array = m.types.iter().find_map(|(id, ty)| (*ty == T::Byte).then_some(id));
     let byte_array = T::Array(byte_array.expect("byte type of the fixture"));
+    let char_array = T::Array(m.types.intern(T::Char).unwrap());
     let ops = vec![
         (C::IntAnd { left: i, right: j }, T::Int), (C::IntOr { left: i, right: j }, T::Int),
         (C::IntXor { left: i, right: j }, T::Int), (C::IntShl { left: i, right: j }, T::Int),
@@ -800,7 +801,7 @@ fn family_module() -> (o::Module, Vec<(o::CoreOp, o::Type)>) {
         (C::StrTrimEnd { value: s }, T::Str), (C::StrLower { value: s }, T::Str), (C::StrUpper { value: s }, T::Str),
         (C::StrFind { value: s, part: t }, T::Int), (C::StrFindLast { value: s, part: t }, T::Int),
         (C::StrStartsWith { value: s, part: t }, T::Bool), (C::StrEndsWith { value: s, part: t }, T::Bool),
-        (C::StrUtf8 { value: s }, byte_array),
+        (C::StrUtf8 { value: s }, byte_array), (C::StrCharacters { value: s }, char_array),
     ];
     (m, ops)
 }

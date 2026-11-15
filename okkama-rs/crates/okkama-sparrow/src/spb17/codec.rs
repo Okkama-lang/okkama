@@ -332,7 +332,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle, role, implements, any_box,
 } }
 record! { RoleDecl { slots } }
 record! { RoleSlot { name, entry_abi, params, results } }
@@ -443,7 +443,7 @@ tagged! { Type {
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
     23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
     26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32), 29 => Future(id: u32),
-    40 => Role(id: u32), 41 => RoleSuccessor(id: u32),
+    40 => Role(id: u32), 41 => RoleSuccessor(id: u32), 42 => Any,
 } }
 impl Wire for Composite {
     fn put(&self, w: &mut Writer) {
@@ -475,6 +475,7 @@ record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
     0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
     6 => Float, 7 => Char, 8 => Rat, 9 => Variant(id: u32), 10 => Map(id: u32), 11 => Never, 20 => Role(id: u32),
+    21 => Any,
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
@@ -506,8 +507,9 @@ tagged! { Argument {
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
     16 => Destination(destination: ExitDestination), 19 => Continuation(id: u32),
-    40 => Dispatch(dispatch: Dispatch),
+    40 => Dispatch(dispatch: Dispatch), 41 => Protocol(protocol: Protocol),
 } }
+tagged! { Protocol { 0 => Closure, 1 => Any } }
 record! { Evaluation { op, result, immediate } }
 
 impl Wire for DataOp {

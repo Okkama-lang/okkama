@@ -703,7 +703,7 @@ pub extern "C" fn rt_destroy_direct(ctx: *mut Ctx, state: *mut CleanupSlot, key:
 }
 
 /// Internal X runner, also used by entry rejection. Compiled Low may drive the same steps explicitly.
-fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<Word, Error> {
+pub(super) fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<Word, Error> {
     let inputs = CloseInputs {
         scope: std::ptr::null_mut(), packet: input, pending: std::ptr::null_mut(),
         failure: primary, settlements: 0,

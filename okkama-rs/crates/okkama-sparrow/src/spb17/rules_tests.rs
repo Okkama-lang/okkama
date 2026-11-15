@@ -28,7 +28,7 @@ pub(super) fn plain_object(error_cases: Vec<String>) -> Object {
         variant_cases: vec![],
         handle: false,
         role: None,
-        implements: vec![],
+        implements: vec![], any_box: false,
         error_cases,
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int],
@@ -747,7 +747,7 @@ fn resource_object(name: &str) -> Object {
         variant_cases: vec![],
         handle: false,
         role: None,
-        implements: vec![],
+        implements: vec![], any_box: false,
         error_cases: vec![],
         layout: ObjectRuntimeLayout {
             storage_fields: vec![],

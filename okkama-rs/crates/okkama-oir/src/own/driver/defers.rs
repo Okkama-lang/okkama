@@ -68,7 +68,7 @@ impl Driver<'_, '_> {
                     &consumed, &schema, outcome, &op, &[])?;
                 replacements.push(DeferReplaceEdge { label: mapping.label.clone(), edge });
                 let packet = replaced.result(SlotName::Packet)?;
-                let state = replaced.env.scopes[&scope];
+                let state = replaced.env.state(scope)?;
                 if replaced.env.cleanup.failure.is_some() {
                     replaced = self.emit(replaced, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
                 } else {
@@ -110,7 +110,7 @@ impl Driver<'_, '_> {
                         },
                     }))?;
                     let packet = replaced.result(SlotName::Rest)?;
-                    let state = replaced.env.scopes[&scope];
+                    let state = replaced.env.state(scope)?;
                     replaced = self.emit(replaced, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
                     if !replaced.env.cleanup.returning {
                         replaced.env.cleanup.wanted = None;

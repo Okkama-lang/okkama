@@ -169,8 +169,8 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
     // P1 and the synchronous lanes take 57 IDs with the ten async IDs of #601 V6 (64..=95), and #676 adds
-    // the dispatch ids 96 and 97.
-    assert_eq!(Opcode::ALL.len(), 59);
+    // the dispatch ids 96 and 97 and the dynamic transfer 98.
+    assert_eq!(Opcode::ALL.len(), 60);
     for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
@@ -181,6 +181,20 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     }
     assert_eq!(Opcode::from_id(96).unwrap(), Opcode::InvokeDispatch);
     assert_eq!(Opcode::from_id(97).unwrap(), Opcode::InvokeDispatchOwn);
+    assert_eq!(Opcode::from_id(98).unwrap(), Opcode::OwnDynamic);
+    for id in 99..=103 {
+        assert!(Opcode::from_id(id).is_err(), "{id}");
+    }
+    // own.dynamic joins the packet on success and returns state and packet with a failure on a failed check.
+    let plain = ResultContext::default();
+    assert_eq!(Opcode::OwnDynamic.tags(&plain), vec![Tag::Normal, Tag::Unwind]);
+    assert_eq!(Opcode::OwnDynamic.results(Tag::Normal, &plain).unwrap(),
+        vec![ProducedType::Service(ServiceKind::ScopeState)]);
+    assert_eq!(Opcode::OwnDynamic.results(Tag::Unwind, &plain).unwrap(), vec![
+        ProducedType::Service(ServiceKind::ScopeState), ProducedType::Service(ServiceKind::Packet),
+        ProducedType::Value(Type::Failure),
+    ]);
+    assert!(Opcode::OwnDynamic.is_terminator());
     for &op in Opcode::ALL {
         assert_eq!(Opcode::from_id(op.id()).unwrap(), op);
         assert!(!op.name().contains("shield"));
@@ -245,7 +259,7 @@ fn s1_plain_and_identity_layouts_round_trip_and_reject_bad_offsets() {
     p.objects.push(Object {
         error_cases: vec![],
         enum_cases: 0,
-        variant_cases: vec![], handle: false, role: None, implements: vec![],
+        variant_cases: vec![], handle: false, role: None, implements: vec![], any_box: false,
         name: "Plain".into(),
         fields: vec![Field { name: "text".into(), storage: 0, once: false }],
         layout: ObjectRuntimeLayout {

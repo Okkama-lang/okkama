@@ -277,6 +277,133 @@ fn move_chain_deeper_than_the_frame_bound_is_unresolved() {
     assert_eq!(evidence.check_budget().unwrap_err().rule, "LOAD_WORK_BUDGET");
 }
 
+// ---- LOAD_WORK_BUDGET: rules decided from evidence report the budget, not themselves ----
+
+/// The fresh singleton `fresh` of fixture fresh-call and the location of its returned value and packet.
+fn fresh_function() -> (Program, Location, Location) {
+    let (p, _) = fixture("fresh-call");
+    let f = p.functions.iter().find(|f| f.symbol == "fresh").unwrap();
+    let returned = f.code.iter().find_map(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::RetOwn, arguments, .. } => Some(arguments.clone()),
+        _ => None,
+    }).unwrap();
+    let [Argument::Location(value), Argument::Location(packet), ..] = returned[..] else { panic!("ret.own") };
+    (p, value, packet)
+}
+
+fn fresh(p: &Program) -> &Function {
+    p.functions.iter().find(|f| f.symbol == "fresh").unwrap()
+}
+
+#[test]
+fn fresh_return_holds_with_its_evidence() {
+    let (p, _, _) = fresh_function();
+    let f = fresh(&p);
+    load::check_fresh(f, &mut evidence::Evidence::new(&p, f)).unwrap();
+}
+
+#[test]
+fn fresh_packet_must_hold_exactly_the_returned_identity() {
+    let (mut p, _, packet) = fresh_function();
+    let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
+    // Return the empty packet made before the creation instead of the one the commit joined into.
+    let empty = f.code.iter().find_map(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::OwnEmpty, flow: Flow::Next(outputs), .. } => Some(outputs[0]),
+        _ => None,
+    }).unwrap();
+    for instruction in &mut f.code {
+        if let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction {
+            arguments[1] = Argument::Location(empty);
+        }
+    }
+    assert_ne!(empty, packet);
+    let f = fresh(&p);
+    let failure = load::check_fresh(f, &mut evidence::Evidence::new(&p, f)).unwrap_err();
+    assert_eq!(failure.rule, "FRESH_PACKET", "{failure}");
+}
+
+#[test]
+fn fresh_origin_beyond_the_evidence_budget_reports_the_budget() {
+    let (p, _, _) = fresh_function();
+    let f = fresh(&p);
+    let mut evidence = evidence::Evidence::new(&p, f);
+    evidence.spend_budget();
+    let failure = load::check_fresh(f, &mut evidence).unwrap_err();
+    assert_eq!(failure.rule, "LOAD_WORK_BUDGET", "{failure}");
+}
+
+#[test]
+fn fresh_packet_beyond_the_evidence_budget_reports_the_budget() {
+    let (p, value, _) = fresh_function();
+    let f = fresh(&p);
+    let mut evidence = evidence::Evidence::new(&p, f);
+    // The returned identity resolves within the budget; the packet's inventory does not.
+    assert!(evidence.identity(value).is_some());
+    evidence.spend_budget();
+    let failure = load::check_fresh(f, &mut evidence).unwrap_err();
+    assert_eq!(failure.rule, "LOAD_WORK_BUDGET", "{failure}");
+}
+
+#[test]
+fn creation_commit_beyond_the_evidence_budget_reports_the_budget() {
+    let (p, _, _) = fresh_function();
+    let f = fresh(&p);
+    load::check_creations_with(&p, f, &mut evidence::Evidence::new(&p, f)).unwrap();
+    let mut evidence = evidence::Evidence::new(&p, f);
+    evidence.spend_budget();
+    let failure = load::check_creations_with(&p, f, &mut evidence).unwrap_err();
+    assert_eq!(failure.rule, "LOAD_WORK_BUDGET", "{failure}");
+}
+
+/// `main` of fixture fresh-call, whose first close runs a direct plan of two identities, with the destroy
+/// failure masks of its closes.
+fn direct_plan() -> (Program, Vec<u32>) {
+    let (p, _) = fixture("fresh-call");
+    let f = p.functions.iter().find(|f| f.symbol == "main").unwrap();
+    assert!(f.proofs.cleanup_plans.iter().any(|plan| plan.slots.len() == 2), "fixture changed");
+    let mut evidence = evidence::Evidence::new(&p, f);
+    let masks = (0..f.proofs.closes.len() as u32)
+        .map(|close| load::visible_destroy_failures(&p, f, close, &mut evidence).unwrap()).collect();
+    (p, masks)
+}
+
+#[test]
+fn direct_plan_holds_with_its_evidence() {
+    let (p, masks) = direct_plan();
+    let f = main_of(&p);
+    load::check_plans(&p, f, &mut evidence::Evidence::new(&p, f), &masks).unwrap();
+}
+
+fn main_of(p: &Program) -> &Function {
+    p.functions.iter().find(|f| f.symbol == "main").unwrap()
+}
+
+#[test]
+fn direct_identity_origin_beyond_the_evidence_budget_reports_the_budget() {
+    let (p, masks) = direct_plan();
+    let f = main_of(&p);
+    let mut evidence = evidence::Evidence::new(&p, f);
+    evidence.spend_budget();
+    let failure = load::check_plans(&p, f, &mut evidence, &masks).unwrap_err();
+    assert_eq!(failure.rule, "LOAD_WORK_BUDGET", "{failure}");
+}
+
+#[test]
+fn direct_owner_inventory_beyond_the_evidence_budget_reports_the_budget() {
+    let (p, masks) = direct_plan();
+    let f = main_of(&p);
+    let mut evidence = evidence::Evidence::new(&p, f);
+    // Every slot identity resolves within the budget; the closed owner's inventory does not.
+    for plan in &f.proofs.cleanup_plans {
+        for slot in &plan.slots {
+            assert!(evidence.identity(slot.identity).is_some());
+        }
+    }
+    evidence.spend_budget();
+    let failure = load::check_plans(&p, f, &mut evidence, &masks).unwrap_err();
+    assert_eq!(failure.rule, "LOAD_WORK_BUDGET", "{failure}");
+}
+
 // ---- ALLOCATION_WORK and ALLOCATION_MEMORY ----
 
 /// ret of `used` int registers at pc 0, reached by a chain of `chain` branches that each jump one

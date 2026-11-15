@@ -7,3 +7,4 @@ coro-shielded-await	valid/c3-await-unwind.oir	invalid/coro-shielded-await.oir
 coro-body-raises	valid/c2-body-entry-exit.oir	invalid/coro-body-raises.oir
 async-defer-replace	valid/c6-async-defer.oir	invalid/async-defer-replace.oir
 d22-external-with-body	valid/d22-external-new.oir	invalid/d22-external-with-body.oir
+coro-layout-misplaced	valid/c2-body-entry-exit.oir	invalid/coro-layout-misplaced.oir

@@ -24,6 +24,7 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
         Ok(ProducedType::Value(Type::Error)) => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
         Ok(ProducedType::Value(Type::Role(id) | Type::RoleSuccessor(id))) => !verify::role_reaches_resource(p, id),
+        Ok(ProducedType::Value(Type::Any)) => !verify::any_reaches_resource(p),
         Ok(_) => true,
         Err(_) => false,
     })
@@ -45,6 +46,7 @@ pub fn plain_results(p: &Program, f: &Function) -> bool {
         Type::Error => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
         Type::Role(id) | Type::RoleSuccessor(id) => !verify::role_reaches_resource(p, *id),
+        Type::Any => !verify::any_reaches_resource(p),
         _ => true,
     })
 }
@@ -145,6 +147,9 @@ fn callee(p: &Program, instruction: &Instruction) -> Option<u32> {
     })
 }
 
+/// Resolution steps one function's evidence may take before its queries stay unresolved.
+const STEP_BUDGET: usize = 1_000_000;
+
 pub(super) struct Evidence<'a> {
     program: &'a Program,
     function: &'a Function,
@@ -192,6 +197,12 @@ impl<'a> Evidence<'a> {
         arguments(save).get(slot).copied().map(Resumed::Saved)
     }
 
+    /// Spend the whole step budget, so the next unresolved query exhausts it (tests of budget reporting).
+    #[cfg(test)]
+    pub fn spend_budget(&mut self) {
+        self.steps = STEP_BUDGET;
+    }
+
     pub fn check_budget(&self) -> Result<(), Error> {
         enforce(!self.exhausted, "LOAD_WORK_BUDGET", "evidence resolution exceeds step/depth budget")
     }
@@ -221,7 +232,7 @@ impl<'a> Evidence<'a> {
         let mut active = BTreeSet::from([query]);
         while let Some(&(location, mode)) = stack.last() {
             self.steps += 1;
-            if self.steps > 1_000_000 || stack.len() > 65_536 {
+            if self.steps > STEP_BUDGET || stack.len() > 65_536 {
                 self.exhausted = true;
                 self.cache.insert(query, None);
                 return None;
@@ -269,6 +280,10 @@ impl<'a> Evidence<'a> {
                         (Opcode::OwnSplitChecked | Opcode::ScopeSplit, Tag::Normal | Tag::Unwind) => {
                             let input = arguments(&self.function.code[pc])[0];
                             self.query(input, 3)?;
+                        }
+                        // The state and the transferred packet, joined or returned unaccepted.
+                        (Opcode::OwnDynamic, Tag::Normal | Tag::Unwind) => {
+                            for input in arguments(&self.function.code[pc]) { self.query(input, 3)?; }
                         }
                         (op, _) if journal_transition(*op) => {
                             let input = *arguments(&self.function.code[pc]).last()?;
@@ -466,6 +481,12 @@ impl<'a> Evidence<'a> {
                         (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Unwind) if slot == 0 => {
                             self.query(locations[0], 2)?
                         }
+                        (Opcode::OwnDynamic, Tag::Normal) => {
+                            let mut joined = self.query(locations[0], 2)?;
+                            joined.extend(self.query(locations[1], 2)?);
+                            joined
+                        }
+                        (Opcode::OwnDynamic, Tag::Unwind) => self.query(*locations.get(slot as usize)?, 2)?,
                         (Opcode::InvokeCallOwn | Opcode::InvokeDispatchOwn, Tag::Normal) => {
                             self.produced(pc, ordinal, slot as usize, false)?
                         }
@@ -589,9 +610,12 @@ impl<'a> Evidence<'a> {
             Type::Role(id) | Type::RoleSuccessor(id) if verify::role_reaches_resource(self.program, id) => {
                 Some(BTreeSet::from([self.identity(location)?]))
             }
+            // An `any` value is its box: a managed one is selected by its identity.
+            Type::Any if verify::any_reaches_resource(self.program) => Some(BTreeSet::from([self.identity(location)?])),
             Type::Object(_) | Type::Successor(_) | Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
                 | Type::Range | Type::Descriptor | Type::Byte | Type::Float | Type::Char | Type::Rat
-                | Type::Variant(_) | Type::Handle(_) | Type::Map(_) | Type::Role(_) | Type::RoleSuccessor(_) => {
+                | Type::Variant(_) | Type::Handle(_) | Type::Map(_) | Type::Role(_) | Type::RoleSuccessor(_)
+                | Type::Any => {
                 Some(Inventory::new())
             }
             _ => None,
@@ -721,6 +745,18 @@ impl<'a> Evidence<'a> {
             (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Unwind) if slot == 0 => {
                 self.resolve(arguments(&self.function.code[pc])[0], false)
             }
+            // The transferred packet joins the scope inventory; a failed check returns both unchanged.
+            (Opcode::OwnDynamic, Tag::Normal) => {
+                let locations = arguments(&self.function.code[pc]);
+                let mut joined = self.resolve(locations[0], false)?;
+                let packet = self.resolve(locations[1], false)?;
+                if !joined.is_disjoint(&packet) { return None; }
+                joined.extend(packet);
+                Some(joined)
+            }
+            (Opcode::OwnDynamic, Tag::Unwind) if slot < 2 => {
+                self.resolve(arguments(&self.function.code[pc])[slot], false)
+            }
             _ => None,
         }
     }
@@ -781,7 +817,7 @@ pub(super) fn static_selections_with(_p: &Program, f: &Function, evidence: &mut 
             let static_value = matches!(verify::loc_type(f, location), Ok(ProducedType::Value(
                 Type::Object(_) | Type::Bool | Type::Int | Type::Str | Type::Descriptor | Type::Bytes | Type::Range
                 | Type::Array(_) | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Variant(_)
-                | Type::Handle(_) | Type::Role(_) | Type::RoleSuccessor(_))));
+                | Type::Handle(_) | Type::Role(_) | Type::RoleSuccessor(_) | Type::Any)));
             if !static_value {
                 return Err(error("runtime traversal cannot be used as a static selection"));
             }

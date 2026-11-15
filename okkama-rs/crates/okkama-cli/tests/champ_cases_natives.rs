@@ -173,8 +173,6 @@ fn champ_atomic_plain_specializations() {
 
 /// Cell is an ordinary std object over the registered Atomic of its specialization.
 #[test]
-#[ignore = "Cell construction fails the SPB 17 FRESH_PACKET load rule for every specialization, int included \
-    (#671)"]
 fn champ_cell_plain_specializations() {
     expect_output(concat!(
         "module app v1.0.0;\n",
@@ -189,6 +187,65 @@ fn champ_cell_plain_specializations() {
         "    0;\n",
         "}\n",
     ), "true true\n");
+}
+
+/// An object with an Atomic field is constructed, used and destroyed (P2.4 section 4.8, #686): the field is
+/// a capability without an obligation of its own, so construction creates only the object's identity.
+#[test]
+fn champ_object_with_atomic_field_lifecycle() {
+    expect_output(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "import \"async/atomic\" take Atomic;\n",
+        "object Served {\n",
+        "    has count is Atomic<int>;\n",
+        "    Served() {\n",
+        "        count = Atomic(0);\n",
+        "    }\n",
+        "    next() is int {\n",
+        "        let at = count.value();\n",
+        "        count.replace(at + 1);\n",
+        "        at;\n",
+        "    }\n",
+        "    destroy {\n",
+        "        Stdout().writeln(\"destroy \" + count.value().string());\n",
+        "        count.close();\n",
+        "    }\n",
+        "}\n",
+        "object Recorded {\n",
+        "    has served is Atomic<int>;\n",
+        "    has label is string;\n",
+        "    Recorded(label is string) {\n",
+        "        self.label = label;\n",
+        "        served = Atomic(0);\n",
+        "    }\n",
+        "    batch() is string {\n",
+        "        let at = served.value();\n",
+        "        served.replace(at + 1);\n",
+        "        label + at.string();\n",
+        "    }\n",
+        "}\n",
+        "object Probe {\n",
+        "    Probe();\n",
+        "    run() is int {\n",
+        "        let served = Served();\n",
+        "        served.next();\n",
+        "        served.next();\n",
+        "        served.next();\n",
+        "    }\n",
+        "    record() is string {\n",
+        "        let recorded = Recorded(\"batch \");\n",
+        "        recorded.batch();\n",
+        "        recorded.batch();\n",
+        "    }\n",
+        "}\n",
+        "main() is int {\n",
+        "    let out = Stdout();\n",
+        "    out.writeln(Probe().run().string());\n",
+        "    out.writeln(Probe().record());\n",
+        "    0;\n",
+        "}\n",
+    ), "destroy 3\n2\nbatch 1\n");
 }
 
 /// A plain array specialization compares by value; a failed comparison publishes nothing.
