@@ -67,7 +67,8 @@
   - [5.9 Числа в других языках](#59-числа-в-других-языках)
   - [5.10 Разобранный пример: дрейф и точные деньги](#510-разобранный-пример-дрейф-и-точные-деньги)
   - [5.11 Чего стоит точность, в цифрах](#511-чего-стоит-точность-в-цифрах)
-  - [5.12 Ограничения](#512-ограничения)
+  - [5.12 Плавающая точка на практике: потеря цифр и компенсированные суммы](#512-плавающая-точка-на-практике-потеря-цифр-и-компенсированные-суммы)
+  - [5.13 Ограничения](#513-ограничения)
 - [Глава 6. Текст](#глава-6-текст)
   - [6.1 Три слоя текста](#61-три-слоя-текста)
   - [6.2 Выбор Okkama: неизменяемые кодовые точки](#62-выбор-okkama-неизменяемые-кодовые-точки)
@@ -2902,7 +2903,106 @@ Okkama не предлагает, так это выбора, который б�
 умолчанию: округлять после каждой операции, в двоичной системе, по правилу,
 которое никто не записал.
 
-## 5.12 Ограничения
+## 5.12 Плавающая точка на практике: потеря цифр и компенсированные суммы
+
+Раздел 5.10 показал, что `0.1`, сложенное десять раз, — не `1.0`. Два эффекта
+за этой строкой решают, можно ли доверять численной программе, и оба
+обходятся в несколько строк [[Goldberg 1991](#ref-goldberg1991); [Higham 2002](#ref-higham2002)].
+
+```okkama
+module bible/kahan v1.0.0;
+
+// Floating point in practice: a long sum, kept naively, with Kahan's
+// compensation and exactly; and a quadratic whose small root cancels.
+import "io/stdout" take Stdout;
+
+// Kahan's compensated sum: `lost` keeps the low-order part that each
+// addition rounds away, and the next addition puts it back.
+object Compensated {
+    has sum is float;
+    has lost is float;
+    Compensated(:sum, :lost);
+
+    added(x is float) is Compensated {
+        let y = x - lost;
+        let t = sum + y;
+        Compensated(sum: t, lost: (t - sum) - y);
+    }
+
+    value() is float { sum; }
+}
+
+// The roots of x² + b·x + c with b < 0.
+object Quadratic {
+    has b is float;
+    has c is float;
+    Quadratic(:b, :c);
+
+    // The textbook formula for the small root subtracts two nearly equal numbers.
+    naive() is float {
+        (-b - (b * b - 4.0 * c).sqrt()) / 2.0;
+    }
+
+    // The large root has no cancellation; the small one is c divided by it.
+    stable() is float {
+        let large = (-b + (b * b - 4.0 * c).sqrt()) / 2.0;
+        c / large;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let naive = (1..=100000).reduce(0.0) -> sum, k { sum + 0.1; };
+    let compensated = (1..=100000).reduce(Compensated(sum: 0.0, lost: 0.0)) -> sum, k { sum.added(0.1); };
+    let exact = (1..=100000).reduce(0.rat()) -> sum, k { sum + 1 / 10; };
+    out.writeln("naive:       " + naive.string());
+    out.writeln("compensated: " + compensated.value().string());
+    out.writeln("exact:       " + exact.string());
+    out.writeln("1 + 1e-15 - 1 = " + ((1.0 + 0.000000000000001) - 1.0).string());
+    let roots = Quadratic(b: -100000000.0, c: 1.0);
+    out.writeln("small root, naive:  " + roots.naive().string());
+    out.writeln("small root, stable: " + roots.stable().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+naive:       10000.000000018848
+compensated: 10000
+exact:       10000
+1 + 1e-15 - 1 = 1.1102230246251565e-15
+small root, naive:  7.450580596923828e-09
+small root, stable: 1e-08
+```
+
+- **Ошибки округления накапливаются.** Сто тысяч сложений `0.1` дают
+  `10000.000000018848`. Каждое сложение округляет результат до 53 значащих
+  битов, и ошибки не гасят друг друга, потому что в двоичной записи `0.1`
+  чуть больше одной десятой. Точная сумма в `rat` равна `10000`.
+- **Компенсация убирает почти весь дрейф.** Суммирование Кэхэна держит
+  второе число — часть каждого сложения, отброшенную округлением, — и
+  добавляет её в следующее [[Kahan 1965](#ref-kahan1965)]. В Okkama эта пара — объект, а каждый
+  шаг — преемник, `added(x)`. Его результат здесь — `10000` до последнего
+  бита, ценой четырёх операций на элемент вместо одной.
+- **Вычитание съедает значащие цифры.** `1 + 1e-15 - 1` равно
+  `1.1102230246251565e-15`, на 11% мимо истинного `1e-15`: у операндов
+  совпадали старшие цифры, и после вычитания остался шум округления.
+  Школьная формула для малого корня x² − 10⁸x + 1 вычитает два числа,
+  совпадающие во всех цифрах, кроме последних, и возвращает `7.450580596923828e-09`
+  вместо примерно `1e-08`. Устойчивая форма вычисляет большой корень, в
+  котором вычитания нет, и делит на него `c`.
+
+Ничего здесь не присуще именно Okkama: та же программа на любом языке с
+двойной точностью IEEE 754 печатает те же числа. Okkama добавляет выбор в
+типе. Вычисление, которое обязано быть точным, — это `rat`, и оно платит
+цифрами (раздел 5.11); вычисление во `float` приближённое по объявлению, и
+его точность — забота программы, со старыми средствами: компенсированными
+суммами, формулами, переставленными так, чтобы избежать потери цифр, и
+сравнениями с допуском.
+
+## 5.13 Ограничения
 
 - **Нет неконечных float.** Код, полагающийся на бесконечности и NaN IEEE,
   придётся перестроить (раздел 5.5).
@@ -20921,6 +21021,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-hewitt1973"></a>Carl Hewitt, Peter Bishop, Richard Steiger (1973). A Universal Modular ACTOR Formalism for Artificial Intelligence. In *Proceedings of the 3rd International Joint Conference on Artificial Intelligence (IJCAI '73)*, 235–245.
 - <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
+- <a id="ref-higham2002"></a>Nicholas J. Higham (2002). *Accuracy and Stability of Numerical Algorithms*, 2nd edition. Society for Industrial and Applied Mathematics. https://doi.org/10.1137/1.9780898718027
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
@@ -20933,6 +21034,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
 - <a id="ref-junit5"></a>The JUnit Team (2026). *JUnit User Guide*. https://docs.junit.org/current/user-guide/
+- <a id="ref-kahan1965"></a>William Kahan (1965). Pracniques: Further Remarks on Reducing Truncation Errors. *Communications of the ACM* 8(1): 40. https://doi.org/10.1145/363707.363723
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en

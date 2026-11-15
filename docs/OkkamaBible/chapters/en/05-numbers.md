@@ -323,7 +323,42 @@ something a reviewer can read and a test can check. What Okkama does not
 offer is the choice most languages make by default: rounding after every
 operation, in binary, by a rule nobody wrote down.
 
-## 5.12 Limits
+## 5.12 Floating point in practice: cancellation and compensated sums
+
+Section 5.10 showed that `0.1` added ten times is not `1.0`. Two effects
+behind that line decide whether a numerical program can be trusted, and
+both can be written around in a few lines [@goldberg1991; @higham2002].
+
+{{example:05-kahan}}
+
+- **Rounding errors accumulate.** Adding `0.1` a hundred thousand times
+  gives `10000.000000018848`. Every addition rounds its result to 53
+  significant bits, and the errors do not cancel, because `0.1` is a little
+  more than one tenth in binary. The exact sum in `rat` is `10000`.
+- **Compensation removes most of the drift.** Kahan's summation keeps a
+  second number, the part of each addition that rounding threw away, and
+  adds it back into the next one [@kahan1965]. In Okkama the pair is an
+  object and each step a successor, `added(x)`. Its result here is `10000`
+  to the last bit, at the price of four operations per element instead of
+  one.
+- **Subtraction cancels significant digits.** `1 + 1e-15 - 1` is
+  `1.1102230246251565e-15`, 11% away from the true `1e-15`: the operands
+  agreed in their leading digits, and what remained after the subtraction
+  was rounding noise. The textbook formula for the small root of
+  x² − 10⁸x + 1 subtracts two numbers that agree in all but their last
+  digits and
+  returns `7.450580596923828e-09` instead of about `1e-08`. The stable form
+  computes the large root, which has no cancellation, and divides `c` by it.
+
+None of this is particular to Okkama: the same program in any language with
+IEEE 754 doubles prints the same numbers. What Okkama adds is the choice in
+the type. A computation that must be exact is a `rat` and pays for it in
+digits (Section 5.11); a computation that is a `float` is approximate by
+declaration, and its accuracy is the program's job, with the old remedies:
+compensated sums, formulas rearranged to avoid cancellation, and
+comparisons with a tolerance.
+
+## 5.13 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.5).

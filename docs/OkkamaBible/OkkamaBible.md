@@ -67,7 +67,8 @@
   - [5.9 Numbers in other languages](#59-numbers-in-other-languages)
   - [5.10 A worked example: drift and exact money](#510-a-worked-example-drift-and-exact-money)
   - [5.11 What exactness costs, in digits](#511-what-exactness-costs-in-digits)
-  - [5.12 Limits](#512-limits)
+  - [5.12 Floating point in practice: cancellation and compensated sums](#512-floating-point-in-practice-cancellation-and-compensated-sums)
+  - [5.13 Limits](#513-limits)
 - [Chapter 6. Text](#chapter-6-text)
   - [6.1 Three layers of text](#61-three-layers-of-text)
   - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
@@ -2854,7 +2855,108 @@ something a reviewer can read and a test can check. What Okkama does not
 offer is the choice most languages make by default: rounding after every
 operation, in binary, by a rule nobody wrote down.
 
-## 5.12 Limits
+## 5.12 Floating point in practice: cancellation and compensated sums
+
+Section 5.10 showed that `0.1` added ten times is not `1.0`. Two effects
+behind that line decide whether a numerical program can be trusted, and
+both can be written around in a few lines [[Goldberg 1991](#ref-goldberg1991); [Higham 2002](#ref-higham2002)].
+
+```okkama
+module bible/kahan v1.0.0;
+
+// Floating point in practice: a long sum, kept naively, with Kahan's
+// compensation and exactly; and a quadratic whose small root cancels.
+import "io/stdout" take Stdout;
+
+// Kahan's compensated sum: `lost` keeps the low-order part that each
+// addition rounds away, and the next addition puts it back.
+object Compensated {
+    has sum is float;
+    has lost is float;
+    Compensated(:sum, :lost);
+
+    added(x is float) is Compensated {
+        let y = x - lost;
+        let t = sum + y;
+        Compensated(sum: t, lost: (t - sum) - y);
+    }
+
+    value() is float { sum; }
+}
+
+// The roots of x² + b·x + c with b < 0.
+object Quadratic {
+    has b is float;
+    has c is float;
+    Quadratic(:b, :c);
+
+    // The textbook formula for the small root subtracts two nearly equal numbers.
+    naive() is float {
+        (-b - (b * b - 4.0 * c).sqrt()) / 2.0;
+    }
+
+    // The large root has no cancellation; the small one is c divided by it.
+    stable() is float {
+        let large = (-b + (b * b - 4.0 * c).sqrt()) / 2.0;
+        c / large;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let naive = (1..=100000).reduce(0.0) -> sum, k { sum + 0.1; };
+    let compensated = (1..=100000).reduce(Compensated(sum: 0.0, lost: 0.0)) -> sum, k { sum.added(0.1); };
+    let exact = (1..=100000).reduce(0.rat()) -> sum, k { sum + 1 / 10; };
+    out.writeln("naive:       " + naive.string());
+    out.writeln("compensated: " + compensated.value().string());
+    out.writeln("exact:       " + exact.string());
+    out.writeln("1 + 1e-15 - 1 = " + ((1.0 + 0.000000000000001) - 1.0).string());
+    let roots = Quadratic(b: -100000000.0, c: 1.0);
+    out.writeln("small root, naive:  " + roots.naive().string());
+    out.writeln("small root, stable: " + roots.stable().string());
+    0;
+}
+```
+
+Output:
+
+```text
+naive:       10000.000000018848
+compensated: 10000
+exact:       10000
+1 + 1e-15 - 1 = 1.1102230246251565e-15
+small root, naive:  7.450580596923828e-09
+small root, stable: 1e-08
+```
+
+- **Rounding errors accumulate.** Adding `0.1` a hundred thousand times
+  gives `10000.000000018848`. Every addition rounds its result to 53
+  significant bits, and the errors do not cancel, because `0.1` is a little
+  more than one tenth in binary. The exact sum in `rat` is `10000`.
+- **Compensation removes most of the drift.** Kahan's summation keeps a
+  second number, the part of each addition that rounding threw away, and
+  adds it back into the next one [[Kahan 1965](#ref-kahan1965)]. In Okkama the pair is an
+  object and each step a successor, `added(x)`. Its result here is `10000`
+  to the last bit, at the price of four operations per element instead of
+  one.
+- **Subtraction cancels significant digits.** `1 + 1e-15 - 1` is
+  `1.1102230246251565e-15`, 11% away from the true `1e-15`: the operands
+  agreed in their leading digits, and what remained after the subtraction
+  was rounding noise. The textbook formula for the small root of
+  x² − 10⁸x + 1 subtracts two numbers that agree in all but their last
+  digits and
+  returns `7.450580596923828e-09` instead of about `1e-08`. The stable form
+  computes the large root, which has no cancellation, and divides `c` by it.
+
+None of this is particular to Okkama: the same program in any language with
+IEEE 754 doubles prints the same numbers. What Okkama adds is the choice in
+the type. A computation that must be exact is a `rat` and pays for it in
+digits (Section 5.11); a computation that is a `float` is approximate by
+declaration, and its accuracy is the program's job, with the old remedies:
+compensated sums, formulas rearranged to avoid cancellation, and
+comparisons with a tolerance.
+
+## 5.13 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.5).
@@ -20695,6 +20797,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-hewitt1973"></a>Carl Hewitt, Peter Bishop, Richard Steiger (1973). A Universal Modular ACTOR Formalism for Artificial Intelligence. In *Proceedings of the 3rd International Joint Conference on Artificial Intelligence (IJCAI '73)*, 235–245.
 - <a id="ref-hickey2008"></a>Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - <a id="ref-hickey2011"></a>Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
+- <a id="ref-higham2002"></a>Nicholas J. Higham (2002). *Accuracy and Stability of Numerical Algorithms*, 2nd edition. Society for Industrial and Applied Mathematics. https://doi.org/10.1137/1.9780898718027
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
@@ -20707,6 +20810,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
 - <a id="ref-halstead1985"></a>Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
 - <a id="ref-junit5"></a>The JUnit Team (2026). *JUnit User Guide*. https://docs.junit.org/current/user-guide/
+- <a id="ref-kahan1965"></a>William Kahan (1965). Pracniques: Further Remarks on Reducing Truncation Errors. *Communications of the ACM* 8(1): 40. https://doi.org/10.1145/363707.363723
 - <a id="ref-kahan1996"></a>William Kahan (1996). *Lecture Notes on the Status of IEEE Standard 754 for Binary Floating-Point Arithmetic*. University of California, Berkeley. https://people.eecs.berkeley.edu/~wkahan/ieee754status/IEEE754.PDF
 - <a id="ref-kay1993"></a>Alan C. Kay (1993). The Early History of Smalltalk. *ACM SIGPLAN Notices* 28(3): 69–95 (HOPL-II). https://doi.org/10.1145/155360.155364
 - <a id="ref-kay2003"></a>Alan Kay (2003). On the Meaning of "Object-Oriented Programming". E-mail to Stefan Ram, 23 July 2003. https://www.purl.org/stefan_ram/pub/doc_kay_oop_en
