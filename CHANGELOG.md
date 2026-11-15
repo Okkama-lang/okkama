@@ -20,7 +20,7 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   runtime. `L05.reduce.accumulator-in-place`, `L05.variants.search`,
   `L04.roles.contextual-wrap`, `L07.destroy.branch-scope` and
   `L04.invariant.early-self-in-blocks` no longer time out on Champ (debug
-  build: 20–73 s before, 4–13 s after). `L09.compare.failing-order-stops-the-sort`
+  build: 19–73 s before, 5.6–11.4 s after). `L09.compare.failing-order-stops-the-sort`
   still waits for an O(n log n) sort (#678).
   `OKKAMA_PROFILE_PIPELINE=1` prints the OIR-2 pipeline's per-stage wall
   times on stderr.
