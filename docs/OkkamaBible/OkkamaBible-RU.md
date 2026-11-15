@@ -38,7 +38,8 @@
   - [3.9 Правило девятое: ресурсы освобождаются детерминированно](#39-правило-девятое-ресурсы-освобождаются-детерминированно)
   - [3.10 Правило десятое: полномочия явны](#310-правило-десятое-полномочия-явны)
   - [3.11 Правило одиннадцатое: конкурентность структурна](#311-правило-одиннадцатое-конкурентность-структурна)
-  - [3.12 Один дизайн, а не одиннадцать](#312-один-дизайн-а-не-одиннадцать)
+  - [3.12 Одиннадцать правил в одной программе](#312-одиннадцать-правил-в-одной-программе)
+  - [3.13 Один дизайн, а не одиннадцать](#313-один-дизайн-а-не-одиннадцать)
 - [Часть II. Значения](#часть-ii-значения)
 - [Глава 4. Типы с высоты птичьего полёта](#глава-4-типы-с-высоты-птичьего-полёта)
   - [4.1 Зачем нужен тип](#41-зачем-нужен-тип)
@@ -1556,7 +1557,136 @@ RAII Страуструпа связывает освобождение ресу
 урегулирования, сроки, — чем API «запустил и забыл» (тикет #147 обсуждает,
 сколько из этого должен взять на себя язык).
 
-## 3.12 Один дизайн, а не одиннадцать
+## 3.12 Одиннадцать правил в одной программе
+
+Правила проще всего оценить вместе, в программе, достаточно маленькой,
+чтобы прочитать её разом. Вот перевод денег между двумя счетами.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (overdrawn(balance is rat, wanted is rat), unknown(name is string));
+
+// Rules one to three: hidden state, a guarded constructor, change as a new object.
+object Account {
+    has name is string;
+    has balance is rat;
+    Account(:name, :balance) {
+        confirm balance >= 0.rat() else throw Refused.overdrawn(balance, 0.rat());
+    }
+    owner() is string { name; }
+    amount() is rat { balance; }
+    withdrawn(sum is rat) is ^Account {
+        confirm sum <= balance else throw Refused.overdrawn(balance, sum);
+        ^balance = balance - sum;
+    }
+    deposited(sum is rat) is ^Account { ^balance = balance + sum; }
+}
+
+// Rule seven: callers depend on a role, not on a class.
+role Accounts {
+    find(name is string) is Maybe<Account>;
+}
+
+object Branch does Accounts {
+    has accounts is %string:Account;
+    Branch(:accounts);
+    find(name is string) is Maybe<Account> {
+        if accounts.has(name) { Maybe.some(accounts[name]); } else { Maybe.none; }
+    }
+}
+
+// Rule nine: a resource is destroyed when the scope that made it ends.
+object Session {
+    has teller is string;
+    Session(:teller) { Stdout().writeln("session of " + teller + " opened"); }
+    destroy { Stdout().writeln("session of " + teller + " closed"); }
+}
+
+// Rule ten: a teller uses only the bank it was given.
+object Teller {
+    has bank is Accounts;
+    Teller(:bank);
+
+    // Rule four: absence is a Maybe, and a missing account becomes a typed error here.
+    transfer(from is string, to is string, sum is rat) is string {
+        let session = Session(teller: "ada");
+        let payer = bank.find(from) else throw Refused.unknown(from);
+        let payee = bank.find(to) else throw Refused.unknown(to);
+        let paid = payer.withdrawn(sum);
+        let received = payee.deposited(sum);
+        paid.owner() + " " + paid.amount().string() + ", " + received.owner() + " " + received.amount().string();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let bank is Accounts = Branch(accounts: ["kim": Account(name: "kim", balance: 100.rat()),
+                                             "lee": Account(name: "lee", balance: 5.rat())]);
+    let teller = Teller(bank: bank);
+    // Rule six: a third of a hundred is exact.
+    out.writeln(teller.transfer("kim", "lee", 100.rat() / 3.rat()));
+    // Rule eight: a refused transfer is a typed error the caller handles.
+    let refused = try { teller.transfer("lee", "kim", 50.rat()); }
+        catch Refused.overdrawn(balance, wanted) { "refused: " + wanted.string() + " > " + balance.string(); };
+    out.writeln(refused);
+    let unknown = try { teller.transfer("kim", "max", 1.rat()); }
+        catch Refused.unknown(name) { "refused: no account " + name; };
+    out.writeln(unknown);
+    0;
+}
+```
+
+Вывод:
+
+```text
+session of ada opened
+session of ada closed
+kim 200/3, lee 115/3
+session of ada opened
+session of ada closed
+refused: 50 > 5
+session of ada opened
+session of ada closed
+refused: no account max
+```
+
+Почти каждое правило этой главы здесь работает:
+
+- **Правила с первого по третье.** `Account` прячет баланс; вызывающий
+  спрашивает `amount()`. Конструктор отвергает отрицательный баланс, так что
+  ни один счёт в программе такого не держит. `withdrawn` и `deposited`
+  возвращают новые счета, а словарь банка по-прежнему держит старые: перевод
+  вычисляет результат, а не правит банк.
+- **Правило четвёртое.** `bank.find(name)` возвращает `Maybe<Account>`.
+  Кассир решает, что значит отсутствие, именно здесь, через `else throw`, и
+  пропавший счёт становится типизированной ошибкой `Refused.unknown`.
+- **Правило пятое.** Каждое условие, `balance >= 0.rat()` и
+  `sum <= balance`, — `bool`; никакой «истинности», которую можно неверно
+  прочитать.
+- **Правило шестое.** Треть от сотни — ровно `100/3`. Два баланса
+  печатаются как `200/3` и `115/3`, и вместе это по-прежнему ровно 105.
+- **Правило седьмое.** `Teller` зависит от роли `Accounts`, а не от
+  `Branch`. Тест может дать ему фейковый банк (глава 15), не трогая
+  `Teller`.
+- **Правило восьмое.** Перерасход — это `Refused.overdrawn` с балансом и
+  запрошенной суммой. Вызывающий ловит его по случаю и строит своё
+  сообщение. Баг, например индекс за границей, этот `catch` не поймал бы.
+- **Правило девятое.** Каждый перевод открывает `Session`, ресурс. Она
+  закрывается, когда `transfer` заканчивается, — на обычном пути и при обоих
+  отказах, до того как отработает `catch` вызывающего. Никакого `finally`,
+  о котором можно забыть.
+- **Правило десятое.** `Teller` получает банк, которым может пользоваться.
+  Больше он ни до чего не дотягивается: ни глобального реестра, ни
+  статического поиска.
+
+Нет только правила одиннадцатого, структурной конкурентности: здесь ничто
+не ждёт. Раздел 20.6 снова показывает кассира и леджер, где леджер —
+задача, которая владеет своим состоянием и отвечает через канал.
+
+## 3.13 Один дизайн, а не одиннадцать
 
 Правила — не список независимых запретов; каждое заставляет работать
 остальные. Неизменяемость (правило третье) делает сокрытие состояния

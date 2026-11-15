@@ -38,7 +38,8 @@
   - [3.9 Rule nine: resources are released deterministically](#39-rule-nine-resources-are-released-deterministically)
   - [3.10 Rule ten: authority is explicit](#310-rule-ten-authority-is-explicit)
   - [3.11 Rule eleven: concurrency is structured](#311-rule-eleven-concurrency-is-structured)
-  - [3.12 One design, not eleven](#312-one-design-not-eleven)
+  - [3.12 Eleven rules in one program](#312-eleven-rules-in-one-program)
+  - [3.13 One design, not eleven](#313-one-design-not-eleven)
 - [Part II. Values](#part-ii-values)
 - [Chapter 4. Types at a Glance](#chapter-4-types-at-a-glance)
   - [4.1 What a type is for](#41-what-a-type-is-for)
@@ -1530,7 +1531,134 @@ library needs more structure — groups, settlements, deadlines — than a
 fire-and-forget API (issue #147 discusses how much of it the language should
 absorb).
 
-## 3.12 One design, not eleven
+## 3.12 Eleven rules in one program
+
+The rules are easiest to judge together, in a program small enough to read
+at once. Here is a money transfer between two accounts.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (overdrawn(balance is rat, wanted is rat), unknown(name is string));
+
+// Rules one to three: hidden state, a guarded constructor, change as a new object.
+object Account {
+    has name is string;
+    has balance is rat;
+    Account(:name, :balance) {
+        confirm balance >= 0.rat() else throw Refused.overdrawn(balance, 0.rat());
+    }
+    owner() is string { name; }
+    amount() is rat { balance; }
+    withdrawn(sum is rat) is ^Account {
+        confirm sum <= balance else throw Refused.overdrawn(balance, sum);
+        ^balance = balance - sum;
+    }
+    deposited(sum is rat) is ^Account { ^balance = balance + sum; }
+}
+
+// Rule seven: callers depend on a role, not on a class.
+role Accounts {
+    find(name is string) is Maybe<Account>;
+}
+
+object Branch does Accounts {
+    has accounts is %string:Account;
+    Branch(:accounts);
+    find(name is string) is Maybe<Account> {
+        if accounts.has(name) { Maybe.some(accounts[name]); } else { Maybe.none; }
+    }
+}
+
+// Rule nine: a resource is destroyed when the scope that made it ends.
+object Session {
+    has teller is string;
+    Session(:teller) { Stdout().writeln("session of " + teller + " opened"); }
+    destroy { Stdout().writeln("session of " + teller + " closed"); }
+}
+
+// Rule ten: a teller uses only the bank it was given.
+object Teller {
+    has bank is Accounts;
+    Teller(:bank);
+
+    // Rule four: absence is a Maybe, and a missing account becomes a typed error here.
+    transfer(from is string, to is string, sum is rat) is string {
+        let session = Session(teller: "ada");
+        let payer = bank.find(from) else throw Refused.unknown(from);
+        let payee = bank.find(to) else throw Refused.unknown(to);
+        let paid = payer.withdrawn(sum);
+        let received = payee.deposited(sum);
+        paid.owner() + " " + paid.amount().string() + ", " + received.owner() + " " + received.amount().string();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let bank is Accounts = Branch(accounts: ["kim": Account(name: "kim", balance: 100.rat()),
+                                             "lee": Account(name: "lee", balance: 5.rat())]);
+    let teller = Teller(bank: bank);
+    // Rule six: a third of a hundred is exact.
+    out.writeln(teller.transfer("kim", "lee", 100.rat() / 3.rat()));
+    // Rule eight: a refused transfer is a typed error the caller handles.
+    let refused = try { teller.transfer("lee", "kim", 50.rat()); }
+        catch Refused.overdrawn(balance, wanted) { "refused: " + wanted.string() + " > " + balance.string(); };
+    out.writeln(refused);
+    let unknown = try { teller.transfer("kim", "max", 1.rat()); }
+        catch Refused.unknown(name) { "refused: no account " + name; };
+    out.writeln(unknown);
+    0;
+}
+```
+
+Output:
+
+```text
+session of ada opened
+session of ada closed
+kim 200/3, lee 115/3
+session of ada opened
+session of ada closed
+refused: 50 > 5
+session of ada opened
+session of ada closed
+refused: no account max
+```
+
+Nearly every rule of this chapter is at work in it:
+
+- **Rules one to three.** `Account` hides its balance; a caller asks for
+  `amount()`. Its constructor refuses a negative balance, so no account in
+  the program can hold one. `withdrawn` and `deposited` return new accounts,
+  and the bank's map still holds the old ones: the transfer computes a
+  result, it does not edit the bank.
+- **Rule four.** `bank.find(name)` returns a `Maybe<Account>`. The teller
+  decides what absence means at this point, with `else throw`, and the
+  missing account becomes the typed error `Refused.unknown`.
+- **Rule five.** Every condition, `balance >= 0.rat()` and
+  `sum <= balance`, is a `bool`; there is no truthiness to misread.
+- **Rule six.** A third of a hundred is `100/3` exactly. The two balances
+  print as `200/3` and `115/3`, and together they still make exactly 105.
+- **Rule seven.** `Teller` depends on the role `Accounts`, not on
+  `Branch`. A test can hand it a fake bank (Chapter 15) without touching
+  `Teller`.
+- **Rule eight.** An overdraft is `Refused.overdrawn`, carrying the balance
+  and the amount asked for. The caller catches it by case and builds its
+  own message. A bug, such as an index out of range, would not be caught by
+  this `catch`.
+- **Rule nine.** Each transfer opens a `Session`, a resource. It is closed
+  when `transfer` ends, on the normal path and on both refusals, before the
+  caller's `catch` runs. There is no `finally` to forget.
+- **Rule ten.** `Teller` is given the bank it may use. It reaches nothing
+  else: no global registry, no static lookup.
+
+Only Rule eleven, structured concurrency, is absent, because nothing here
+waits. Section 20.6 shows a teller and a ledger again, with the ledger as a
+task that owns its state and answers through a channel.
+
+## 3.13 One design, not eleven
 
 The rules are not a list of independent prohibitions; each makes the others
 work. Immutability (Rule three) makes hiding state (Rule one) cheap, because

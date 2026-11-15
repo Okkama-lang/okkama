@@ -275,7 +275,45 @@ library needs more structure — groups, settlements, deadlines — than a
 fire-and-forget API (issue #147 discusses how much of it the language should
 absorb).
 
-## 3.12 One design, not eleven
+## 3.12 Eleven rules in one program
+
+The rules are easiest to judge together, in a program small enough to read
+at once. Here is a money transfer between two accounts.
+
+{{example:03-together}}
+
+Nearly every rule of this chapter is at work in it:
+
+- **Rules one to three.** `Account` hides its balance; a caller asks for
+  `amount()`. Its constructor refuses a negative balance, so no account in
+  the program can hold one. `withdrawn` and `deposited` return new accounts,
+  and the bank's map still holds the old ones: the transfer computes a
+  result, it does not edit the bank.
+- **Rule four.** `bank.find(name)` returns a `Maybe<Account>`. The teller
+  decides what absence means at this point, with `else throw`, and the
+  missing account becomes the typed error `Refused.unknown`.
+- **Rule five.** Every condition, `balance >= 0.rat()` and
+  `sum <= balance`, is a `bool`; there is no truthiness to misread.
+- **Rule six.** A third of a hundred is `100/3` exactly. The two balances
+  print as `200/3` and `115/3`, and together they still make exactly 105.
+- **Rule seven.** `Teller` depends on the role `Accounts`, not on
+  `Branch`. A test can hand it a fake bank (Chapter 15) without touching
+  `Teller`.
+- **Rule eight.** An overdraft is `Refused.overdrawn`, carrying the balance
+  and the amount asked for. The caller catches it by case and builds its
+  own message. A bug, such as an index out of range, would not be caught by
+  this `catch`.
+- **Rule nine.** Each transfer opens a `Session`, a resource. It is closed
+  when `transfer` ends, on the normal path and on both refusals, before the
+  caller's `catch` runs. There is no `finally` to forget.
+- **Rule ten.** `Teller` is given the bank it may use. It reaches nothing
+  else: no global registry, no static lookup.
+
+Only Rule eleven, structured concurrency, is absent, because nothing here
+waits. Section 20.6 shows a teller and a ledger again, with the ledger as a
+task that owns its state and answers through a channel.
+
+## 3.13 One design, not eleven
 
 The rules are not a list of independent prohibitions; each makes the others
 work. Immutability (Rule three) makes hiding state (Rule one) cheap, because
