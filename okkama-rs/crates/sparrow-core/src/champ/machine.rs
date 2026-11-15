@@ -877,8 +877,14 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
                         let index = index as usize;
                         let (x, y) = (runtime.heap.field(a, index), runtime.heap.field(b, index));
                         // As in Tomato, meeting an unbound field fails before any field is compared. An unbound
-                        // reference or int is the zero word; a raw scalar field has no unbound marker.
-                        if (field.traced() || field == s::Type::Int) && (x == 0 || y == 0) {
+                        // reference or int is the zero word, an unbound raw scalar Tomato's marker.
+                        let unbound = match field {
+                            s::Type::Float | s::Type::Bool | s::Type::Byte | s::Type::Char => {
+                                x == crate::word::UNBOUND_RAW || y == crate::word::UNBOUND_RAW
+                            }
+                            _ => (field.traced() || field == s::Type::Int) && (x == 0 || y == 0),
+                        };
+                        if unbound {
                             return Err("cannot compare unbound object fields".into());
                         }
                         pending.push((x, y, field));
