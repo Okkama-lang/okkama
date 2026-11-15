@@ -276,10 +276,47 @@ impl Runtime {
                 return Some(self.cancelled_failure());
             }
             if flags & (SPAWNED | SHIELDED) != 0 {
-                break;
+                return None;
             }
         }
-        None
+        // The stack starts at a nested frame the scheduler resumed (#670):
+        // its task is suspended above it, awaiting it, and a cancellation
+        // requested there is delivered here.
+        let &outermost = self.running.first()?;
+        let task = self.requested_above(outermost)?;
+        set(task, FLAGS, get(task, FLAGS) | CANCEL_DELIVERED);
+        Some(self.cancelled_failure())
+    }
+
+    /// The frame with an undelivered cancellation request among the frames
+    /// awaiting `frame`, and the frames awaiting those, up to their task
+    /// (#670). Frames that only listen to `frame` do not count.
+    fn requested_above(&self, frame: Word) -> Option<Word> {
+        let waiters = get(frame, WAITER);
+        if waiters == UNBOUND {
+            return None;
+        }
+        if heap::kind(self.heap.header_of(waiters)) == heap::FRAME {
+            return self.requested_from(frame, waiters);
+        }
+        let list = &self.heap.payload::<Waiters>(waiters).expect("waiters").0;
+        list.iter().find_map(|&waiter| self.requested_from(frame, waiter))
+    }
+
+    /// `waiter`, or a frame above it, with an undelivered cancellation
+    /// request, when `waiter` awaits `frame` (see `requested_above`).
+    fn requested_from(&self, frame: Word, waiter: Word) -> Option<Word> {
+        if get(waiter, AWAITING) != frame {
+            return None;
+        }
+        let flags = get(waiter, FLAGS);
+        if flags & CANCEL_REQUESTED != 0 && flags & CANCEL_DELIVERED == 0 {
+            return Some(waiter);
+        }
+        if flags & (SPAWNED | SHIELDED) != 0 {
+            return None;
+        }
+        self.requested_above(waiter)
     }
 
     /// Deliver a cancellation to a suspended task: its innermost waiting
