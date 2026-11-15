@@ -1,0 +1,6 @@
+rule	positive	negative
+coro-token-in-two-places	coro/async-plain-await.oir	coro-invalid/coro-token-in-two-places.oir
+coro-saved-set-incomplete	coro/coro-schedule-duty-live-across-await.oir	coro-invalid/coro-saved-set-incomplete.oir
+coro-read-after-save	coro/async-repeated-await.oir	coro-invalid/coro-read-after-save.oir
+coro-double-resume	coro/async-never-awaited.oir	coro-invalid/coro-double-resume.oir
+coro-sync-suspends	coro/async-await-failure.oir	coro-invalid/coro-sync-suspends.oir

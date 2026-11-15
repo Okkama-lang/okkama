@@ -1219,7 +1219,10 @@ fn function_types(module: &Module, data: &Function, state: &mut State<'_>) -> Ch
                 state.error(R::T5, "object action attribute must name an object declaration");
             }
         }
-        let receiver = |owner| data.signature.params.first().and_then(|id| module.types.get(*id).ok())
+        // C-2: a D21 async body restores its receiver from slot zero of continuation 0.
+        let language = super::coro::language_signature(module, data);
+        let receiver = |owner| language.as_ref().and_then(|signature| signature.params.first())
+            .and_then(|id| module.types.get(*id).ok())
             .is_some_and(|ty| matches!(ty, Type::Object { decl, .. } if *decl == owner));
         match attr {
             FunctionAttr::Extern(name) => {

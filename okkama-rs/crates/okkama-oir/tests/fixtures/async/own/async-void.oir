@@ -1,0 +1,71 @@
+oir 2 own
+// async action log() { }
+// async main() { await log(); }
+// A void body publishes only its packet and deps; the await of a void Future has no value.
+// Hand-written input of the coro pass (V3) until own commit 5a (V2) produces it.
+module async_void
+protocol Services kind services holders [scope, cache, receipt] rules [protocol_rule(transition=settle, from=cache,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled))]
+scope SL action in @log
+scope SM action in @main
+summary Mlc internal results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mlb call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+summary Mmc internal results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mmb call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @log(%inputs: own) -> own [async] abi explicit(input_packet=0, output_packet=0) summary(Mlb)
+    async-creation(Mlc) async-body(Mlb) {
+    boundary B0 call in SL
+    selection s0: selection = union([])
+^entry in SL:
+    %q0: scope<SL> = scope.begin SL
+    %q1: scope<SL> = own.accept %q0, %inputs
+    %e: own = own.empty
+    %pending: pending = exit.prepare return packet %e select s0 at B0
+    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%p: own, %pd: deps) = exit.commit %reserved, destination caller
+    ret %p
+}
+func @main(%inputs: own) -> own [async] abi explicit(input_packet=0, output_packet=0) summary(Mmb)
+    async-creation(Mmc) async-body(Mmb) {
+    boundary B0 call in SM
+    selection s0: selection = union([])
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in SM:
+    %q0: scope<SM> = scope.begin SM
+    %q1: scope<SM> = own.accept %q0, %inputs
+    // A call without arguments offers an empty packet and no external deps.
+    %e0: own = own.empty
+    (%l: own, %r: own, %external: deps) = own.split %e0, selection(0)
+    %offered: own = own.join [%l, %r]
+    (%f: future<void> facts(managed(deps=d0)),
+        %q2: scope<SM>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@log, arguments=[], descriptors=[]), owner SM
+    invoke.own await %f
+        normal ^ok($deps, %q2)
+        unwind ^bad($failure, $task, $receipt, %q2)
+^ok(%xd: deps, %q3: scope<SM>) in SM:
+    %e: own = own.empty
+    %pending: pending = exit.prepare return packet %e select s0 at B0
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SM:
+    (%p: own, %pd: deps) = exit.commit %reserved, destination caller
+    ret %p
+^close_failed(%closed2: closed, %close_failure: failure) in SM:
+    raise %close_failure
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SM>) in SM:
+    (%q5: scope<SM>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    raise %combined
+}

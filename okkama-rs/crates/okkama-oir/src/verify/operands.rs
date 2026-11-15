@@ -1174,7 +1174,11 @@ impl Checker<'_, '_> {
                 match environment {
                     FutureEnvironment::Deferred { function, arguments, descriptors }
                     | FutureEnvironment::External { function, arguments, descriptors } => {
-                        let signature = &self.module.functions.get(*function)?.signature;
+                        // C-2: a D21 async body keeps its language signature in its start continuation.
+                        let target = self.module.functions.get(*function)?;
+                        let language = crate::verify::coro::language_signature(self.module, target);
+                        self.require(language.is_some(), "async body publishes results of different types (C-2)");
+                        let signature = &language.unwrap_or_else(|| target.signature.clone());
                         let params: Vec<_> = signature.params.iter().copied().filter(|ty| {
                             self.module.types.get(*ty).is_ok_and(|ty| !matches!(ty,
                                 Type::Service(_) | Type::Descriptor))

@@ -1,0 +1,205 @@
+oir 2 coro
+// async action inner(n: int) is int { return n; }
+// async action outer(n: int) is int { return await inner(n); }
+// async main() { await outer(7); }
+// A cold Future awaited inside the body of another cold Future: each body brackets its own await.
+// Coro golden (V3): each cold body brackets its own await.
+module coro_nested_cold_await
+protocol Services kind services holders [scope, cache, receipt] rules [protocol_rule(transition=settle, from=cache,
+    to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled))]
+scope SI action in @inner
+scope SO action in @outer
+scope SM action in @main
+summary Mic internal parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary Mib call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+    failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary Moc internal parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary Mob call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+    [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
+    failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary Mmc internal results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<void>], publication=atomic)
+summary Mmb call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @inner(%frame: frame<@inner>) -> void [async] summary(Mib) async-creation(Mic) async-body(Mib) {
+    frame.layout {
+        slot 0: int
+        slot 1: own linear
+    }
+    continuation 0 start saves [0, 1]
+    boundary B0 call in SI
+^entry in SI:
+    (%fr0: frame<@inner>, %n: int, %inputs: own) = frame.resume %frame, continuation 0, slots [
+        saved_slot(slot=0, ty=int, linear=false), saved_slot(slot=1, ty=own, linear=true)]
+    %q0: scope<SI> = scope.begin SI
+    %q1: scope<SI> = own.accept %q0, %inputs
+    %empty: own = own.empty
+    %d: deps = deps.of %n
+    %pending: pending = exit.prepare return %n, %empty, deps(%d) at B0
+    (%closed: closed, %reserved: pending) = scope.end %q1, reserve %pending, effects scope_effects(failures=[],
+        suspends=false, cancel=false)
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    fut.publish %fr0, success(value=%r, packet=%p, deps=%rd)
+    ret
+}
+func @outer(%frame: frame<@outer>) -> void [async] summary(Mob) async-creation(Moc)
+    async-body(Mob) {
+    frame.layout {
+        slot 0: int
+        slot 1: own linear
+        slot 2: scope<SO> linear
+        slot 3: cache-state linear
+        slot 4: future<int>
+        slot 5: pending linear
+        slot 6: failure
+        slot 7: task-state linear
+        slot 8: receipt linear
+    }
+    continuation 0 start saves [0, 1]
+    continuation 1 at ^entry saves [2, 3] operands [4]
+    continuation 2 at ^ok saves [] operands [2, 5, 3]
+    continuation 3 at #90 saves [3] operands [2, 6, 7, 8]
+    continuation 4 at #91 saves [] operands [2, 6, 3]
+    service.schedule Sched0 owner SO, protocol Services, duties [%c3]
+    service.schedule Sched1 owner SO, protocol Services, duties [%c1]
+    boundary B0 call in SO
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+^entry in SO:
+    (%fr0: frame<@outer>, %n: int, %inputs: own) = frame.resume %frame, continuation 0, slots [
+        saved_slot(slot=0, ty=int, linear=false), saved_slot(slot=1, ty=own, linear=true)]
+    %q0: scope<SO> = scope.begin SO
+    %q1: scope<SO> = own.accept %q0, %inputs
+    %offered: own = own.empty
+    %external: deps = deps.of %n
+    (%f: future<int> facts(managed(deps=d0)), %c: cache-state,
+        %q2: scope<SO>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@inner, arguments=[%n], descriptors=[]), result int, owner SO
+    %fr1: frame<@outer> = frame.save %fr0, slots [frame_slot(slot=2, value=%q2, mode=consume),
+        frame_slot(slot=3, value=%c, mode=consume)], continuation 1
+    invoke.own await %f, result int
+        normal ^ok_resume($value, $deps)
+        unwind ^bad_resume($failure, $task, $receipt)
+^ok(%x: int, %xd: deps, %q3: scope<SO>) in SO:
+    %empty: own = own.empty
+    %d: deps = deps.of %x
+    %pending: pending = exit.prepare return %x, %empty, deps(%d) at B0
+    %fr3: frame<@outer> = frame.save %fr2, continuation 2
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SO:
+    %fr4: frame<@outer> = frame.resume %fr3, continuation 2
+    (%r: int, %p: own, %rd: deps) = exit.commit %reserved, destination caller, result int
+    fut.publish %fr4, success(value=%r, packet=%p, deps=%rd)
+    ret
+^close_failed(%closed2: closed, %close_failure: failure) in SO:
+    %fr5: frame<@outer> = frame.resume %fr3, continuation 2
+    fut.publish %fr5, failure(%close_failure)
+    ret
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SO>) in SO:
+    %fr7: frame<@outer> = frame.save %fr6, slots [frame_slot(slot=3, value=%c2, mode=consume)], continuation 3
+    [i90] (%q5: scope<SO>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    (%fr8: frame<@outer>, %c3: cache-state) = frame.resume %fr7, continuation 3, slots [
+        saved_slot(slot=3, ty=cache-state, linear=true)]
+    %fr9: frame<@outer> = frame.save %fr8, continuation 4
+    [i91] %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    %fr10: frame<@outer> = frame.resume %fr9, continuation 4
+    fut.publish %fr10, failure(%combined)
+    ret
+^ok_resume(%x0: int, %xd0: deps) in SO:
+    (%fr2: frame<@outer>, %q2r: scope<SO>, %c1: cache-state) = frame.resume %fr1, continuation 1, slots [
+        saved_slot(slot=2, ty=scope<SO>, linear=true), saved_slot(slot=3,
+        ty=cache-state, linear=true)]
+    br ^ok(%x0, %xd0, %q2r)
+^bad_resume(%failure0: failure, %task0: task-state, %receipt0: receipt) in SO:
+    (%fr6: frame<@outer>, %q2b: scope<SO>, %c2: cache-state) = frame.resume %fr1, continuation 1, slots [
+        saved_slot(slot=2, ty=scope<SO>, linear=true), saved_slot(slot=3,
+        ty=cache-state, linear=true)]
+    br ^bad(%failure0, %task0, %receipt0, %q2b)
+}
+func @main(%frame: frame<@main>) -> void [async] summary(Mmb) async-creation(Mmc)
+    async-body(Mmb) {
+    frame.layout {
+        slot 0: own linear
+        slot 1: scope<SM> linear
+        slot 2: cache-state linear
+        slot 3: future<int>
+        slot 4: pending linear
+        slot 5: failure
+        slot 6: task-state linear
+        slot 7: receipt linear
+    }
+    continuation 0 start saves [0]
+    continuation 1 at ^entry saves [1, 2] operands [3]
+    continuation 2 at ^ok saves [] operands [1, 4, 2]
+    continuation 3 at #90 saves [2] operands [1, 5, 6, 7]
+    continuation 4 at #91 saves [] operands [1, 5, 2]
+    service.schedule Sched0 owner SM, protocol Services, duties [%c3]
+    service.schedule Sched1 owner SM, protocol Services, duties [%c1]
+    boundary B0 call in SM
+    key k0: key = service_of(value=%f, kind=cache)
+    dependency d0: dependency = key(k0)
+    selection s0: selection = union([])
+^entry in SM:
+    (%fr0: frame<@main>, %inputs: own) = frame.resume %frame, continuation 0, slots [saved_slot(slot=0, ty=own,
+        linear=true)]
+    %q0: scope<SM> = scope.begin SM
+    %q1: scope<SM> = own.accept %q0, %inputs
+    %seven: int = const 7
+    %offered: own = own.empty
+    %external: deps = deps.of %seven
+    (%f: future<int> facts(managed(deps=d0)), %c: cache-state,
+        %q2: scope<SM>) = fut.new %offered, %external, %q1, environment deferred(
+        function=@outer, arguments=[%seven], descriptors=[]), result int, owner SM
+    %fr1: frame<@main> = frame.save %fr0, slots [frame_slot(slot=1, value=%q2, mode=consume),
+        frame_slot(slot=2, value=%c, mode=consume)], continuation 1
+    invoke.own await %f, result int
+        normal ^ok_resume($value, $deps)
+        unwind ^bad_resume($failure, $task, $receipt)
+^ok(%x: int, %xd: deps, %q3: scope<SM>) in SM:
+    %e: own = own.empty
+    %pending: pending = exit.prepare return packet %e select s0 at B0
+    %fr3: frame<@main> = frame.save %fr2, continuation 2
+    invoke.own scope.end %q3, reserve %pending, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+        normal ^done($closed, $pending)
+        unwind ^close_failed($closed, $failure)
+^done(%closed: closed, %reserved: pending) in SM:
+    %fr4: frame<@main> = frame.resume %fr3, continuation 2
+    (%p: own, %pd: deps) = exit.commit %reserved, destination caller
+    fut.publish %fr4, success(packet=%p, deps=%pd)
+    ret
+^close_failed(%closed2: closed, %close_failure: failure) in SM:
+    %fr5: frame<@main> = frame.resume %fr3, continuation 2
+    fut.publish %fr5, failure(%close_failure)
+    ret
+^bad(%failure: failure, %task: task-state, %receipt: receipt, %q4: scope<SM>) in SM:
+    %fr7: frame<@main> = frame.save %fr6, slots [frame_slot(slot=2, value=%c2, mode=consume)], continuation 3
+    [i90] (%q5: scope<SM>, %f1: failure) = await.unwind %q4, %failure, %task, %receipt, protocol Services
+    (%fr8: frame<@main>, %c3: cache-state) = frame.resume %fr7, continuation 3, slots [
+        saved_slot(slot=2, ty=cache-state, linear=true)]
+    %fr9: frame<@main> = frame.save %fr8, continuation 4
+    [i91] %combined: failure = scope.unwind %q5, %f1, effects scope_effects(failures=[thrown, program, panic, native],
+        suspends=true, cancel=false)
+    %fr10: frame<@main> = frame.resume %fr9, continuation 4
+    fut.publish %fr10, failure(%combined)
+    ret
+^ok_resume(%x0: int, %xd0: deps) in SM:
+    (%fr2: frame<@main>, %q2r: scope<SM>, %c1: cache-state) = frame.resume %fr1, continuation 1, slots [
+        saved_slot(slot=1, ty=scope<SM>, linear=true), saved_slot(slot=2,
+        ty=cache-state, linear=true)]
+    br ^ok(%x0, %xd0, %q2r)
+^bad_resume(%failure0: failure, %task0: task-state, %receipt0: receipt) in SM:
+    (%fr6: frame<@main>, %q2b: scope<SM>, %c2: cache-state) = frame.resume %fr1, continuation 1, slots [
+        saved_slot(slot=1, ty=scope<SM>, linear=true), saved_slot(slot=2,
+        ty=cache-state, linear=true)]
+    br ^bad(%failure0, %task0, %receipt0, %q2b)
+}
