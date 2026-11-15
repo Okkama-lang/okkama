@@ -185,9 +185,10 @@
   - [15.4 Writing a fake](#154-writing-a-fake)
   - [15.5 State in a fake](#155-state-in-a-fake)
   - [15.6 Properties](#156-properties)
-  - [15.7 The rest of the toolbox](#157-the-rest-of-the-toolbox)
-  - [15.8 What does not work yet](#158-what-does-not-work-yet)
-  - [15.9 What this design costs](#159-what-this-design-costs)
+  - [15.7 A worked suite: a service with a clock and a store](#157-a-worked-suite-a-service-with-a-clock-and-a-store)
+  - [15.8 The rest of the toolbox](#158-the-rest-of-the-toolbox)
+  - [15.9 What does not work yet](#159-what-does-not-work-yet)
+  - [15.10 What this design costs](#1510-what-this-design-costs)
 - [Chapter 16. Enums and pattern matching](#chapter-16-enums-and-pattern-matching)
   - [16.1 A closed set of names](#161-a-closed-set-of-names)
   - [16.2 Cases that carry data](#162-cases-that-carry-data)
@@ -8562,7 +8563,126 @@ A condition that throws a typed error counts as a failure and is reported
 with the error's text. A property is a `Checking` like the other checks of
 `testing/check`, and `AsyncProperty` takes an async condition.
 
-## 15.7 The rest of the toolbox
+## 15.7 A worked suite: a service with a clock and a store
+
+A service that depends on time and on storage is the classic case for test
+doubles, and the one where mocks do the most damage. Here the service
+`Reminders` sees a `Clock` and a `Store` only through their roles, and each
+role ships the fake its tests need.
+
+```okkama
+module bible/reminders v1.0.0;
+
+import "async/atomic" take Atomic;
+
+enum Unsaved is Error = (full(limit is int));
+
+// The clock and the store are roles; each ships the fake its tests need.
+role Clock {
+    // Minutes since midnight.
+    minute() is int;
+
+    fake {
+        minute() is int { 600; }
+    }
+}
+
+role Store {
+    save(at is int, text is string) is void;
+    texts(until is int) is @string;
+
+    fake {
+        has items is Atomic<%int:string> = Atomic([:]);
+        save(at is int, text is string) is void {
+            confirm items.value().size() < 3 else throw Unsaved.full(3);
+            items.replace(items.value() + [at: text]);
+        }
+        texts(until is int) is @string {
+            let saved = items.value();
+            saved.keys().filter() -> at { at <= until; }.map() -> at { saved[at] else ""; };
+        }
+    }
+}
+
+object Reminders {
+    has clock is Clock;
+    has store is Store;
+    Reminders(:clock, :store);
+
+    remind(after is int, text is string) is int {
+        let at = clock.minute() + after;
+        store.save(at, text);
+        at;
+    }
+
+    due() is @string {
+        store.texts(clock.minute());
+    }
+}
+
+test "a reminder for later is not due yet" {
+    let reminders = Reminders(clock: Clock.fake(), store: Store.fake());
+    test.is(reminders.remind(30, "call the plumber"), 630);
+    test.is(reminders.due(), []);
+}
+
+test "past and present reminders are due, in time order" {
+    let store = Store.fake();
+    store.save(590, "water the plants");
+    store.save(540, "take the pills");
+    let reminders = Reminders(clock: Clock.fake(), store: store);
+    reminders.remind(0, "leave for work");
+    test.is(reminders.due(), ["take the pills", "water the plants", "leave for work"]);
+}
+
+test "a full store refuses the fourth reminder and keeps the first three" {
+    let store = Store.fake();
+    let reminders = Reminders(clock: Clock.fake(), store: store);
+    for 1..=3 -> n {
+        reminders.remind(-n, "task " + n.string());
+    }
+    let refused = test.throws(Unsaved) { reminders.remind(-9, "one too many"); };
+    test.is(refused, Unsaved.full(3));
+    test.is(reminders.due().size(), 3);
+}
+
+main() is int { 0; }
+```
+
+Output:
+
+```text
+=== RUN   a reminder for later is not due yet
+--- PASS: a reminder for later is not due yet
+=== RUN   past and present reminders are due, in time order
+--- PASS: past and present reminders are due, in time order
+=== RUN   a full store refuses the fourth reminder and keeps the first three
+--- PASS: a full store refuses the fourth reminder and keeps the first three
+PASS
+```
+
+Three things carry the suite.
+
+- **The clock is a constant.** `Clock.fake()` answers 10:00 every time. A
+  test that needs another moment does not wind a mock; it computes its
+  inputs relative to the one moment the fake defines (`remind(30, …)` is
+  due at 630). Time-dependent code becomes arithmetic.
+- **The store is a working store.** The fake keeps reminders in an `Atomic`
+  map, answers `texts(until:)` by real filtering, and enforces a real limit.
+  The second test saves two reminders directly through the fake before the
+  service adds a third, and the order of the answer, by minute, comes from
+  the map, not from the test's script.
+- **Failures are part of the contract.** The third test fills the store,
+  catches the fourth `save` with `test.throws(Unsaved)`, compares the error
+  value structurally, and then checks that nothing was half-saved. A mock
+  would have been told to throw; the fake throws because it is full.
+
+No test names a call count or an argument list. If `Reminders` later caches
+`due()`, or saves in a different order, the suite still passes as long as the
+behaviour is the same: what the tests pin is the service's contract, not its
+conversation with its collaborators.
+
+## 15.8 The rest of the toolbox
 
 The standard library adds a few more pieces, all usable only inside a
 running test:
@@ -8591,7 +8711,7 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
-## 15.8 What does not work yet
+## 15.9 What does not work yet
 
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
@@ -8600,7 +8720,7 @@ Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
 `test.is(bottle.open().close(), bottle)` compares the two bottles.
 
-## 15.9 What this design costs
+## 15.10 What this design costs
 
 - **A fake must be written.** A mocking library generates a double from an
   interface in one line. A fake is code, and for a large role it is a lot

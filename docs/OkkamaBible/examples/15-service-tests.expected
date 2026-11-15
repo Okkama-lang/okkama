@@ -1,0 +1,7 @@
+=== RUN   a reminder for later is not due yet
+--- PASS: a reminder for later is not due yet
+=== RUN   past and present reminders are due, in time order
+--- PASS: past and present reminders are due, in time order
+=== RUN   a full store refuses the fourth reminder and keeps the first three
+--- PASS: a full store refuses the fourth reminder and keeps the first three
+PASS

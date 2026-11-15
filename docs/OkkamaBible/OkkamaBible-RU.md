@@ -185,9 +185,10 @@
   - [15.4 Как написать фейк](#154-как-написать-фейк)
   - [15.5 Состояние в фейке](#155-состояние-в-фейке)
   - [15.6 Свойства](#156-свойства)
-  - [15.7 Остальной инструментарий](#157-остальной-инструментарий)
-  - [15.8 Что пока не работает](#158-что-пока-не-работает)
-  - [15.9 Чего стоит такой замысел](#159-чего-стоит-такой-замысел)
+  - [15.7 Разобранный набор: сервис с часами и хранилищем](#157-разобранный-набор-сервис-с-часами-и-хранилищем)
+  - [15.8 Остальной инструментарий](#158-остальной-инструментарий)
+  - [15.9 Что пока не работает](#159-что-пока-не-работает)
+  - [15.10 Чего стоит такой замысел](#1510-чего-стоит-такой-замысел)
 - [Глава 16. Перечисления и сопоставление с образцом](#глава-16-перечисления-и-сопоставление-с-образцом)
   - [16.1 Закрытый набор имён](#161-закрытый-набор-имён)
   - [16.2 Варианты с данными](#162-варианты-с-данными)
@@ -8664,7 +8665,126 @@ exit 1
 отчёт с текстом ошибки. Свойство — это `Checking`, как и другие проверки
 `testing/check`, а `AsyncProperty` принимает асинхронное условие.
 
-## 15.7 Остальной инструментарий
+## 15.7 Разобранный набор: сервис с часами и хранилищем
+
+Сервис, который зависит от времени и от хранилища, — классический случай для
+тестовых двойников и тот, где моки наносят больше всего вреда. Здесь сервис
+`Reminders` видит `Clock` и `Store` только через их роли, и каждая роль несёт
+фейк, нужный её тестам.
+
+```okkama
+module bible/reminders v1.0.0;
+
+import "async/atomic" take Atomic;
+
+enum Unsaved is Error = (full(limit is int));
+
+// The clock and the store are roles; each ships the fake its tests need.
+role Clock {
+    // Minutes since midnight.
+    minute() is int;
+
+    fake {
+        minute() is int { 600; }
+    }
+}
+
+role Store {
+    save(at is int, text is string) is void;
+    texts(until is int) is @string;
+
+    fake {
+        has items is Atomic<%int:string> = Atomic([:]);
+        save(at is int, text is string) is void {
+            confirm items.value().size() < 3 else throw Unsaved.full(3);
+            items.replace(items.value() + [at: text]);
+        }
+        texts(until is int) is @string {
+            let saved = items.value();
+            saved.keys().filter() -> at { at <= until; }.map() -> at { saved[at] else ""; };
+        }
+    }
+}
+
+object Reminders {
+    has clock is Clock;
+    has store is Store;
+    Reminders(:clock, :store);
+
+    remind(after is int, text is string) is int {
+        let at = clock.minute() + after;
+        store.save(at, text);
+        at;
+    }
+
+    due() is @string {
+        store.texts(clock.minute());
+    }
+}
+
+test "a reminder for later is not due yet" {
+    let reminders = Reminders(clock: Clock.fake(), store: Store.fake());
+    test.is(reminders.remind(30, "call the plumber"), 630);
+    test.is(reminders.due(), []);
+}
+
+test "past and present reminders are due, in time order" {
+    let store = Store.fake();
+    store.save(590, "water the plants");
+    store.save(540, "take the pills");
+    let reminders = Reminders(clock: Clock.fake(), store: store);
+    reminders.remind(0, "leave for work");
+    test.is(reminders.due(), ["take the pills", "water the plants", "leave for work"]);
+}
+
+test "a full store refuses the fourth reminder and keeps the first three" {
+    let store = Store.fake();
+    let reminders = Reminders(clock: Clock.fake(), store: store);
+    for 1..=3 -> n {
+        reminders.remind(-n, "task " + n.string());
+    }
+    let refused = test.throws(Unsaved) { reminders.remind(-9, "one too many"); };
+    test.is(refused, Unsaved.full(3));
+    test.is(reminders.due().size(), 3);
+}
+
+main() is int { 0; }
+```
+
+Вывод:
+
+```text
+=== RUN   a reminder for later is not due yet
+--- PASS: a reminder for later is not due yet
+=== RUN   past and present reminders are due, in time order
+--- PASS: past and present reminders are due, in time order
+=== RUN   a full store refuses the fourth reminder and keeps the first three
+--- PASS: a full store refuses the fourth reminder and keeps the first three
+PASS
+```
+
+Набор держится на трёх вещах.
+
+- **Часы — константа.** `Clock.fake()` каждый раз отвечает 10:00. Тест,
+  которому нужен другой момент, не заводит мок, а вычисляет свои входы
+  относительно единственного момента, который задаёт фейк (`remind(30, …)`
+  наступает в 630). Код, зависящий от времени, превращается в арифметику.
+- **Хранилище — работающее хранилище.** Фейк держит напоминания в словаре
+  внутри `Atomic`, отвечает на `texts(until:)` настоящей фильтрацией и
+  соблюдает настоящий предел. Второй тест сохраняет два напоминания прямо
+  через фейк, прежде чем сервис добавит третье, а порядок ответа по минутам
+  берётся из словаря, а не из сценария теста.
+- **Отказы — часть контракта.** Третий тест заполняет хранилище, ловит
+  четвёртый `save` через `test.throws(Unsaved)`, структурно сравнивает
+  значение ошибки и затем проверяет, что ничего не сохранилось наполовину.
+  Мок бросил бы, потому что ему велели; фейк бросает, потому что заполнен.
+
+Ни один тест не называет число вызовов или список аргументов. Если
+`Reminders` потом начнёт кэшировать `due()` или сохранять в другом порядке,
+набор всё равно пройдёт, пока поведение то же: тесты закрепляют контракт
+сервиса, а не его разговор с соавторами.
+
+## 15.8 Остальной инструментарий
 
 Стандартная библиотека добавляет ещё несколько частей, все — только внутри
 идущего теста:
@@ -8694,7 +8814,7 @@ exit 1
 поэтому тест, который может зависнуть, должен ограничить себя бюджетом или
 сроком.
 
-## 15.8 Что пока не работает
+## 15.9 Что пока не работает
 
 - Форматов отчёта, seed и параллельных исполнителей в командной строке
   нет; они запланированы вместе с переписанной стандартной библиотекой
@@ -8704,7 +8824,7 @@ exit 1
 использованным (#275). Теперь это обычный аргумент:
 `test.is(bottle.open().close(), bottle)` сравнивает две бутылки.
 
-## 15.9 Чего стоит такой замысел
+## 15.10 Чего стоит такой замысел
 
 - **Фейк надо написать.** Библиотека моков порождает двойника из
   интерфейса одной строкой. Фейк — это код, и для большой роли его много.

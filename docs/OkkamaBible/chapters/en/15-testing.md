@@ -257,7 +257,37 @@ A condition that throws a typed error counts as a failure and is reported
 with the error's text. A property is a `Checking` like the other checks of
 `testing/check`, and `AsyncProperty` takes an async condition.
 
-## 15.7 The rest of the toolbox
+## 15.7 A worked suite: a service with a clock and a store
+
+A service that depends on time and on storage is the classic case for test
+doubles, and the one where mocks do the most damage. Here the service
+`Reminders` sees a `Clock` and a `Store` only through their roles, and each
+role ships the fake its tests need.
+
+{{example:15-service-tests}}
+
+Three things carry the suite.
+
+- **The clock is a constant.** `Clock.fake()` answers 10:00 every time. A
+  test that needs another moment does not wind a mock; it computes its
+  inputs relative to the one moment the fake defines (`remind(30, …)` is
+  due at 630). Time-dependent code becomes arithmetic.
+- **The store is a working store.** The fake keeps reminders in an `Atomic`
+  map, answers `texts(until:)` by real filtering, and enforces a real limit.
+  The second test saves two reminders directly through the fake before the
+  service adds a third, and the order of the answer, by minute, comes from
+  the map, not from the test's script.
+- **Failures are part of the contract.** The third test fills the store,
+  catches the fourth `save` with `test.throws(Unsaved)`, compares the error
+  value structurally, and then checks that nothing was half-saved. A mock
+  would have been told to throw; the fake throws because it is full.
+
+No test names a call count or an argument list. If `Reminders` later caches
+`due()`, or saves in a different order, the suite still passes as long as the
+behaviour is the same: what the tests pin is the service's contract, not its
+conversation with its collaborators.
+
+## 15.8 The rest of the toolbox
 
 The standard library adds a few more pieces, all usable only inside a
 running test:
@@ -286,7 +316,7 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
-## 15.8 What does not work yet
+## 15.9 What does not work yet
 
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
@@ -295,7 +325,7 @@ Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
 `test.is(bottle.open().close(), bottle)` compares the two bottles.
 
-## 15.9 What this design costs
+## 15.10 What this design costs
 
 - **A fake must be written.** A mocking library generates a double from an
   interface in one line. A fake is code, and for a large role it is a lot
