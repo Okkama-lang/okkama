@@ -76,6 +76,7 @@ impl Engine<'_, '_> {
             if before.active_failure_origin.is_some() && before.active_failure_origin != failure_origin {
                 self.error(R::B104, "cleanup.begin dropped or substituted the active primary failure/Error");
             }
+            self.final_close_delivers(before, *close, failure.is_some());
             let mut fact = CleanupFact {
                 aborted: false,
                 // Plan §3.4: in a D21 async body of Low the shield is a property of the close, not an
@@ -476,6 +477,29 @@ impl Engine<'_, '_> {
                 slot.aliases = before.aliases[index].clone();
                 slot.identity = before.identities[index];
             }
+        }
+    }
+
+    /// D18 (#716): in Low the successful close of an async action's root scope is the `cleanup.begin` that
+    /// lowers its `scope.end`, and it carries the final cancellation delivery just as that close does.
+    fn final_close_delivers(&mut self, before: &Flow, close: CleanupCloseId, failing: bool) {
+        if self.module.profile != Profile::Low || !self.declaration.attrs.contains(&FunctionAttr::Async) || failing
+            || before.active_failure != 0 {
+            return;
+        }
+        let entry = self.declaration.attrs.iter().any(|attr| {
+            matches!(attr, FunctionAttr::DeferEntry { .. } | FunctionAttr::Destroy(_))
+        });
+        let Ok(close) = self.body.cleanup.closes.get(close) else {
+            return;
+        };
+        let CleanupSource::Scope(owner) = close.source else {
+            return;
+        };
+        let root = self.module.scopes.get(owner)
+            .is_ok_and(|scope| scope.parent.is_none() && scope.kind == ScopeKind::Action);
+        if !entry && root && !close.active_failure && !close.effects.cancel {
+            self.error(R::B105, "the successful close of an async action's root scope needs cancel=true (D18)");
         }
     }
 
