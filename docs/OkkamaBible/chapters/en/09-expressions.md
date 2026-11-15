@@ -301,7 +301,35 @@ either function first, and a program whose output depends on the order is
 legal and unpredictable. Java fixed the order as left to right [@gosling2023],
 and Okkama does the same.
 
-## 9.8 What is not there
+## 9.8 A worked example: a small calculator
+
+The constructs of this chapter combine into programs without loops that
+mutate a variable. A reverse Polish calculator reads tokens left to right:
+a number is pushed, an operator replaces the top two numbers with their
+result.
+
+{{example:09-rpn}}
+
+- **The loop is a `reduce`.** The stack is the accumulator: each step
+  returns a new array, `items + [number]` or `rest + [result]`, so no
+  variable is ever reassigned (§9.2). The empty starting stack needs a
+  declared type, `let start is @int = [];`, because `[]` alone has no
+  element type.
+- **Every branch is a value.** The operator case ends with an array built
+  from a nested `if` expression; the number case ends with an array built
+  from a `try` expression. Neither branch "assigns the result somewhere".
+- **Failures carry their reason.** A missing operand is `confirm … else
+  throw Bad.underflow(t)`; a token that is not a number turns the parser's
+  `InvalidInteger` into `Bad.token(t)` inside the `try`; leftovers at the
+  end are a third case. The caller's `try` matches each case of the error
+  enum and prints its own message, so the calculator never decides how an
+  error is shown.
+
+The program is short not because it is clever but because there is nothing
+to keep in sync: no index variable, no stack pointer, no flag for "an error
+happened". Each token's effect is the value of one block.
+
+## 9.9 What is not there
 
 | Elsewhere | In Okkama |
 |---|---|
@@ -325,7 +353,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.9 Limits
+## 9.10 Limits
 
 - **One binding per `for`.** An index comes from a range, not from a second
   binding.

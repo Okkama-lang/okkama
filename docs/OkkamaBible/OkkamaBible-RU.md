@@ -104,8 +104,9 @@
   - [9.5 Циклы](#95-циклы)
   - [9.6 `return`](#96-return)
   - [9.7 Порядок вычисления](#97-порядок-вычисления)
-  - [9.8 Чего нет](#98-чего-нет)
-  - [9.9 Ограничения](#99-ограничения)
+  - [9.8 Разобранный пример: маленький калькулятор](#98-разобранный-пример-маленький-калькулятор)
+  - [9.9 Чего нет](#99-чего-нет)
+  - [9.10 Ограничения](#910-ограничения)
 - [Глава 10. Отказ: throw, panic, try/catch, причины, confirm](#глава-10-отказ-throw-panic-trycatch-причины-confirm)
   - [10.1 Кому нужно узнать об отказе](#101-кому-нужно-узнать-об-отказе)
   - [10.2 Краткая история: коды, исключения, значения](#102-краткая-история-коды-исключения-значения)
@@ -4139,7 +4140,93 @@ C оставляет порядок операндов и аргументов �
 порядка, законна и непредсказуема. Java зафиксировала порядок слева направо
 [[Gosling 2023](#ref-gosling2023)], и Okkama делает так же.
 
-## 9.8 Чего нет
+## 9.8 Разобранный пример: маленький калькулятор
+
+Конструкции этой главы складываются в программы без циклов, которые меняют
+переменную. Калькулятор обратной польской записи читает лексемы слева
+направо: число кладётся на стек, оператор заменяет два верхних числа их
+результатом.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/parse" take Number, InvalidInteger;
+
+enum Bad is Error = (token(text is string), underflow(op is string), leftover(count is int));
+
+// A reverse Polish calculator: each token either pushes a number or combines the top two.
+object Calculator {
+    Calculator();
+
+    value(text is string) is int {
+        let start is @int = [];
+        let stack = text.split(" ").filter() -> t { !t.empty(); }.reduce(start) -> items, t {
+            if t == "+" || t == "-" || t == "*" {
+                confirm items.size() >= 2 else throw Bad.underflow(t);
+                let right = items.last();
+                let left = items[items.size() - 2] else 0;
+                let rest = items.take(items.size() - 2);
+                rest + [if t == "+" { left + right; } else { if t == "-" { left - right; } else { left * right; } }];
+            } else {
+                items + [try { Number(t).int(); } catch failure is InvalidInteger { throw Bad.token(t); }];
+            }
+        };
+        confirm stack.size() == 1 else throw Bad.leftover(stack.size());
+        stack.first();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let calc = Calculator();
+    for ["3 4 +", "5 1 2 + 4 * + 3 -", "2 3", "1 +", "7 x *"] -> line {
+        let shown = try {
+            calc.value(line).string();
+        } catch Bad.token(text) {
+            "not a number: " + text;
+        } catch Bad.underflow(op) {
+            op + " needs two numbers";
+        } catch Bad.leftover(count) {
+            count.string() + " numbers left";
+        };
+        out.writeln(line + " => " + shown);
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+3 4 + => 7
+5 1 2 + 4 * + 3 - => 14
+2 3 => 2 numbers left
+1 + => + needs two numbers
+7 x * => not a number: x
+```
+
+- **Цикл — это `reduce`.** Стек — аккумулятор: каждый шаг возвращает новый
+  массив, `items + [number]` или `rest + [result]`, так что ни одна
+  переменная не переприсваивается (§9.2). Пустому начальному стеку нужен
+  объявленный тип, `let start is @int = [];`, потому что `[]` сам по себе не
+  имеет типа элемента.
+- **Каждая ветвь — значение.** Случай оператора заканчивается массивом,
+  построенным из вложенного выражения `if`; случай числа — массивом,
+  построенным из выражения `try`. Ни одна ветвь не «присваивает результат
+  куда-то».
+- **Отказы несут свою причину.** Недостающий операнд — это `confirm … else
+  throw Bad.underflow(t)`; лексема, которая не число, внутри `try` превращает
+  `InvalidInteger` разборщика в `Bad.token(t)`; остаток в конце — третий
+  случай. `try` вызывающего сопоставляет каждый случай перечисления ошибок и
+  печатает своё сообщение, так что калькулятор никогда не решает, как
+  показать ошибку.
+
+Программа коротка не потому, что хитра, а потому, что в ней нечего
+синхронизировать: нет индексной переменной, указателя стека или флага
+«случилась ошибка». Действие каждой лексемы — значение одного блока.
+
+## 9.9 Чего нет
 
 | В других языках | В Okkama |
 |---|---|
@@ -4163,7 +4250,7 @@ syntax error at "=": Okkama has no compound assignment: a name is bound once; bi
 semantic error: Undefined variable "break"; Okkama leaves a loop with `last`
 ```
 
-## 9.9 Ограничения
+## 9.10 Ограничения
 
 - **Одно связывание на `for`.** Индекс берётся из диапазона, а не из второго
   связывания.

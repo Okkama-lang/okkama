@@ -1,0 +1,46 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/parse" take Number, InvalidInteger;
+
+enum Bad is Error = (token(text is string), underflow(op is string), leftover(count is int));
+
+// A reverse Polish calculator: each token either pushes a number or combines the top two.
+object Calculator {
+    Calculator();
+
+    value(text is string) is int {
+        let start is @int = [];
+        let stack = text.split(" ").filter() -> t { !t.empty(); }.reduce(start) -> items, t {
+            if t == "+" || t == "-" || t == "*" {
+                confirm items.size() >= 2 else throw Bad.underflow(t);
+                let right = items.last();
+                let left = items[items.size() - 2] else 0;
+                let rest = items.take(items.size() - 2);
+                rest + [if t == "+" { left + right; } else { if t == "-" { left - right; } else { left * right; } }];
+            } else {
+                items + [try { Number(t).int(); } catch failure is InvalidInteger { throw Bad.token(t); }];
+            }
+        };
+        confirm stack.size() == 1 else throw Bad.leftover(stack.size());
+        stack.first();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let calc = Calculator();
+    for ["3 4 +", "5 1 2 + 4 * + 3 -", "2 3", "1 +", "7 x *"] -> line {
+        let shown = try {
+            calc.value(line).string();
+        } catch Bad.token(text) {
+            "not a number: " + text;
+        } catch Bad.underflow(op) {
+            op + " needs two numbers";
+        } catch Bad.leftover(count) {
+            count.string() + " numbers left";
+        };
+        out.writeln(line + " => " + shown);
+    }
+    0;
+}
