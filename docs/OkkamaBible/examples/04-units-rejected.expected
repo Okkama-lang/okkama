@@ -1,1 +1,2 @@
 04-units-rejected.ok:18:17: semantic error: No action "plus" on object "NewtonSeconds" accepts (PoundSeconds)
+Available: plus(other is NewtonSeconds)
