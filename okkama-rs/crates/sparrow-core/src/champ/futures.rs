@@ -102,9 +102,9 @@ impl FrameMap {
         })
     }
 
-    /// The offset of the input packet's slot.
-    pub fn packet(&self) -> u64 {
-        self.slots[*self.start.last().expect("verified start packet") as usize].offset
+    /// The offset of the input packet's slot; a fixed root, whose start is empty (#667), has none.
+    pub fn packet(&self) -> Option<u64> {
+        self.start.last().map(|&slot| self.slots[slot as usize].offset)
     }
 }
 
@@ -262,7 +262,9 @@ impl Runtime {
         for (&slot, &word) in words.zip(args) {
             set(frame, map.slots[slot as usize].offset, word);
         }
-        set(frame, map.packet(), packet);
+        if let Some(offset) = map.packet() {
+            set(frame, offset, packet);
+        }
     }
 
     /// Start a cold Future on this stack (draft 3 §4.3). A Future started by another inherits its task; a
@@ -378,6 +380,7 @@ impl Runtime {
     /// Settle-time view of a cache duty, with no change (draft 3 §6.2; ABI D24.2).
     pub(super) fn champ_cache_settlement(&self, duty: Word, closing: Option<OwnerId>) -> Result<CacheSettle, Error> {
         let packet_slot = self.champ_body(duty)?.packet();
+        let inputs = packet_slot.map_or(0, |offset| get(duty, offset));
         let cache = self.champ_cache(duty)?;
         if Some(cache.owner) != closing {
             return Ok(CacheSettle::Nothing);
@@ -390,7 +393,7 @@ impl Runtime {
             return Ok(CacheSettle::Detach);
         }
         let outcome = if state == tasks::DONE { cache.packet } else { 0 };
-        Ok(CacheSettle::Release { inputs: get(duty, packet_slot), outcome, cold: state == tasks::COLD })
+        Ok(CacheSettle::Release { inputs, outcome, cold: state == tasks::COLD })
     }
 
     /// Apply a checked settlement: L, no collection, no callback.
@@ -408,8 +411,8 @@ impl Runtime {
                 self.spawned.push(duty);
             }
             CacheSettle::Release { inputs, outcome, cold } => {
-                if inputs != 0 {
-                    set(duty, packet_slot, 0);
+                if let (Some(offset), true) = (packet_slot, inputs != 0) {
+                    set(duty, offset, 0);
                 }
                 if outcome != 0 {
                     self.champ_cache_mut(duty)?.packet = 0;

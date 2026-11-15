@@ -293,12 +293,18 @@ pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *m
         let task = runtime.champ_task_of(this)?;
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
-            ready(cleanup)?;
+            // Decision L2: after the settle phase and the first plan, which may have run to done; once.
+            let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
+            if !idle || !cleanup.planned || cleanup.delivered || cleanup.second {
+                return Err(error("a deferred cancellation is delivered once, between the two plans"));
+            }
+            cleanup.delivered = true;
             let current = get(task, FLAGS);
             let requested = current & flags::CANCEL_REQUESTED != 0 && current & flags::CANCEL_DELIVERED == 0;
             if requested && cleanup.failure == 0 {
                 let failure = runtime.champ_take_emergency(this)?;
-                record_failure(runtime, cleanup, failure)?;
+                cleanup.failure = failure;
+                abort(runtime, cleanup);
                 set(task, FLAGS, current | flags::CANCEL_DELIVERED);
             }
             Ok(())
@@ -350,8 +356,11 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
             .ok_or_else(|| error("unknown cleanup plan"))?;
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
+            if cleanup.planned {
+                return second_plan(runtime, cleanup, plan);
+            }
             ready(cleanup)?;
-            if !cleanup.settled || cleanup.planned || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+            if !cleanup.settled || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
                 return Err(error("cleanup plan inventory/settlement mismatch"));
             }
             let reserve_empty = cleanup.pending.as_ref().is_none_or(|pending| pending.reserve.words().next().is_none());
@@ -368,6 +377,22 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
         }
         Ok(())
     })
+}
+/// The aborted reserve's executor plan (OIR-2 D18 at an async body's final exit, decision L2): it follows the
+/// delivery that follows the first plan, and no close has a third. The stream then holds what the delivery
+/// aborted, or nothing when no cancellation was delivered and the reserve stays pending.
+fn second_plan(runtime: &Runtime, cleanup: &mut Cleanup, plan: CleanupPlan) -> Result<(), Error> {
+    let idle = cleanup.active.is_none() && cleanup.selected.is_none() && cleanup.captured == 0;
+    if !cleanup.delivered || cleanup.second || !idle {
+        return Err(error("a second plan follows a delivered cancellation; a close has at most two plans"));
+    }
+    if plan.direct || plan.reserve != (cleanup.pending.is_some() || cleanup.aborted) {
+        return Err(error("the aborted reserve runs its own executor plan"));
+    }
+    stream_append(runtime, &mut cleanup.stream, std::mem::take(&mut cleanup.remainder));
+    cleanup.second = true;
+    cleanup.done = false;
+    Ok(())
 }
 fn select(runtime: &Runtime, cleanup: &mut Cleanup) -> Option<(Word, u64, HolderId, OwnerId)> {
     let (serial, index) = cleanup.stream.heads.pop()?;
@@ -839,7 +864,12 @@ pub extern "C" fn rt_body_reject(ctx: *mut Ctx, frame: Word) -> Outcome {
         return stop(ctx, error("stack exhausted while resuming an async body"));
     }
     let start = map.start.iter().map(|&slot| map.slots[slot as usize].offset).collect::<Vec<_>>();
-    let mut input = PacketSlot { record: get(frame, map.packet()) };
+    let packet = map.packet();
+    // A fixed root starts empty (#667): it offers no inputs, and an empty packet closes with the overflow alone.
+    let mut input = match packet {
+        Some(offset) => PacketSlot { record: get(frame, offset) },
+        None => PacketSlot { record: store(runtime, Data::Packet(Packet::default())) },
+    };
     for offset in start {
         set(frame, offset, 0);
     }

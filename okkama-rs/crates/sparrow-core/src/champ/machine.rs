@@ -248,7 +248,12 @@ impl Runtime {
                 heap_layouts.frames[index] = map.trace.clone();
             }
         }
+        // The final heap keeps what `Runtime::new` configured: collector stress and allocation counts.
+        let stress = std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1");
+        let allocations = runtime.heap.allocations.take();
         runtime.heap = Heap::new_champ(heap_layouts, layouts.into_boxed_slice());
+        runtime.heap.set_stress(stress);
+        runtime.heap.allocations = allocations;
         let plans = runtime.champ_load_cleanup_plans(source, &catalog)?;
         let schedules = source.functions.iter().map(|function| {
             function.proofs.schedules.iter()
