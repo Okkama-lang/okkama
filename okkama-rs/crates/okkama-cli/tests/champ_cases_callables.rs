@@ -136,7 +136,8 @@ macro_rules! case {
     };
 }
 
-macro_rules! stops_before_low {
+/// A case that runs once its named blocker is fixed.
+macro_rules! blocked {
     ($name:ident, $id:literal, $reason:literal) => {
         #[test]
         #[ignore = $reason]
@@ -161,8 +162,8 @@ case!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked")
 case!(open_successor_closure_transferred, "L04.successor.closure-transferred");
 // Managed arrays and maps of role values that reach resources (#711).
 case!(open_regions_role_instances, "L07.regions.role-instances");
-stops_before_low!(open_collections_ordered_sets, "L09.collections.ordered-sets",
-    "#687: low cleanup inventory inference exceeds the step budget");
+blocked!(open_collections_ordered_sets, "L09.collections.ordered-sets",
+    "#723: own gives OrderedSet a fresh identity the SPB 17 layout has not (FRESH_ORIGIN)");
 
 /// A single-file program of this test, run in Champ: its exit status and stdout.
 fn run_source(text: &str) -> Observed {

@@ -491,7 +491,8 @@ pub(super) fn check_fresh(f: &Function, evidence: &mut evidence::Evidence<'_>) -
         }).collect::<Vec<_>>();
         require(locations.len() >= 2, "fresh singleton needs value and packet")?;
         let Some(key) = evidence.identity(locations[0]) else {
-            return evidence_rule(evidence, false, "FRESH_ORIGIN", "fresh result has no successful creation");
+            return evidence_rule(evidence, false, "FRESH_ORIGIN",
+                &format!("{}: fresh result has no successful creation", f.symbol));
         };
         let supported = evidence.inventory(locations[1]) == Some(BTreeSet::from([key]));
         evidence_rule(evidence, supported, "FRESH_PACKET",
