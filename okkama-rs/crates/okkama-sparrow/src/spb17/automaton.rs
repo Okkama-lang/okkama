@@ -23,6 +23,8 @@ struct Cleanup {
     released: bool,
     /// `cleanup.deliver_cancel` ran in this close.
     delivered: bool,
+    /// Plans this close has begun: the plan, then for a delivered cancellation the aborted reserve's.
+    plans: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingType { value: Option<Type>, kind: ExitKind }
@@ -57,6 +59,17 @@ pub fn infer_plan_reserves(p: &Program, f: &Function) -> Result<Vec<Option<bool>
         load::visible_destroy_failures(p, f, close as u32, &mut evidence)
     }).collect::<Result<Vec<_>, _>>()?;
     infer(p, f, &masks)
+}
+
+/// Whether the close's current plan has run: the executor reached done, or the direct chain its last slot.
+fn plan_complete(f: &Function, cleanup: &Cleanup) -> Result<bool, Error> {
+    let plan = cleanup.plan.ok_or_else(|| error("no current plan"))?;
+    if f.proofs.plans[plan as usize].merge {
+        return Ok(cleanup.phase == Phase::Done);
+    }
+    let evidence = f.proofs.cleanup_plans.iter().find(|evidence| evidence.plan == plan)
+        .ok_or_else(|| error("missing suffix evidence"))?;
+    Ok(cleanup.phase == Phase::Ready && cleanup.index as usize == evidence.slots.len())
 }
 
 /// One step of a nonempty schedule: the next duty in order, owned by the closing scope.
@@ -94,6 +107,8 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
     let mut reserves = vec![None; f.proofs.plans.len()];
     if f.code.is_empty() { return Ok(reserves) }
     let origins = suspension::cache_origins(p, f);
+    let fixed_root = p.functions.iter().position(|function| std::ptr::eq(function, f))
+        .is_some_and(|index| suspension::fixed_root(p, index as u32));
     // Facts of the values each continuation's frame.save stored, for its resumes.
     let mut saved = BTreeMap::<u32, Vec<Option<Fact>>>::new();
     let mut incoming = vec![None; f.code.len()];
@@ -168,7 +183,8 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         && arguments.contains(&Argument::Boundary(contract.boundary)), "close descriptor mismatch")?;
                     unary(Cleanup { close: close as u32, plan: None, index: 0, phase: Phase::Begun,
                         pending: contract.reserve, aborted: false, failure: contract.active_failure,
-                        payload, step: None, settled: 0, schedule: None, released: false, delivered: false })
+                        payload, step: None, settled: 0, schedule: None, released: false, delivered: false,
+                        plans: 0 })
                 }
                 CleanupSettle => {
                     let mut cleanup = cleanup()?;
@@ -187,18 +203,27 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     }
                     unary(cleanup)
                 }
+                // D18 at the final exit: settle, the plan, then the delivery, then the aborted reserve's plan.
                 CleanupDeliverCancel => {
                     let mut cleanup = cleanup()?;
                     let close = &f.proofs.closes[cleanup.close as usize];
+                    let envelope = f.proofs.envelopes[close.envelope as usize].failures;
+                    enforce(envelope & ENVELOPE_CANCEL != 0, suspension::ASYNC_ENTRY,
+                        "a close delivers a deferred cancellation exactly when its envelope declares one: none here")?;
                     let root = p.tables.boundaries.get(close.boundary as usize)
                         .and_then(|boundary| p.tables.scopes.get(boundary.scope as usize))
                         .is_some_and(|scope| scope.parent.is_none());
-                    let returns = cleanup.pending
-                        && cleanup.payload.is_some_and(|payload| payload.kind == ExitKind::Return);
-                    enforce(root && returns, suspension::ASYNC_ENTRY,
+                    // The successful final exit: a body's returns; a fixed root has no caller and closes without a
+                    // reserve (#667).
+                    let final_exit = match cleanup.payload {
+                        Some(payload) => payload.kind == ExitKind::Return,
+                        None => !cleanup.pending && fixed_root,
+                    };
+                    enforce(root && final_exit && !close.active_failure, suspension::ASYNC_ENTRY,
                         "a deferred cancellation is delivered only at the final exit of the body")?;
-                    enforce(cleanup.phase == Phase::Settled && !cleanup.delivered, suspension::ASYNC_ENTRY,
-                        "a deferred cancellation is delivered once, after the settle phase and before the plan")?;
+                    enforce(!cleanup.delivered, suspension::ASYNC_ENTRY, "a deferred cancellation is delivered once")?;
+                    enforce(cleanup.plans == 1 && plan_complete(f, &cleanup)?, suspension::ASYNC_ENTRY,
+                        "a deferred cancellation is delivered after the settle phase and the first plan")?;
                     cleanup.delivered = true;
                     unary(cleanup)
                 }
@@ -222,12 +247,20 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                 }
                 CleanupPlan => {
                     let mut cleanup = cleanup()?;
-                    require(cleanup.phase == Phase::Settled, "plan before complete settle")?;
-                    let envelope = &f.proofs.envelopes[f.proofs.closes[cleanup.close as usize].envelope as usize];
-                    enforce(cleanup.delivered == (envelope.failures & ENVELOPE_CANCEL != 0), suspension::ASYNC_ENTRY,
-                        "a close delivers a deferred cancellation exactly when its envelope declares one")?;
                     let id = arguments.iter().find_map(|arg| match arg { Argument::Plan(id) => Some(*id), _ => None })
                         .ok_or_else(|| error("missing plan id"))?;
+                    if cleanup.plans == 0 {
+                        require(cleanup.phase == Phase::Settled, "plan before complete settle")?;
+                    } else {
+                        // The second plan executes the reserve that the delivered cancellation aborts.
+                        enforce(cleanup.plans == 1 && cleanup.delivered, suspension::ASYNC_ENTRY,
+                            "a second plan follows a delivered cancellation; a close has at most two plans")?;
+                        let merge = f.proofs.plans.get(id as usize).is_some_and(|plan| plan.merge);
+                        enforce(cleanup.plan != Some(id) && merge, suspension::ASYNC_ENTRY,
+                            "the aborted reserve runs its own executor plan")?;
+                        cleanup.index = 0;
+                    }
+                    cleanup.plans += 1;
                     let evidence = f.proofs.cleanup_plans.iter().find(|plan| plan.plan == id)
                         .ok_or_else(|| error("plan has no evidence"))?;
                     require(evidence.close == cleanup.close, "plan belongs to another close")?;
@@ -322,6 +355,12 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         cleanup.phase == Phase::Ready && cleanup.index as usize == evidence.slots.len()
                     };
                     require(complete, "cleanup.finish loses current or suffix")?;
+                    let envelope = &f.proofs.envelopes[f.proofs.closes[cleanup.close as usize].envelope as usize];
+                    let declared = envelope.failures & ENVELOPE_CANCEL != 0;
+                    enforce(cleanup.delivered || !declared, suspension::ASYNC_ENTRY,
+                        "a close delivers a deferred cancellation exactly when its envelope declares one: never here")?;
+                    enforce(!cleanup.delivered || cleanup.plans == 2, suspension::ASYNC_ENTRY,
+                        "a delivered cancellation runs the aborted reserve's plan before the close finishes")?;
                     vec![None, Some(Fact::Failure(cleanup.close)), Some(Fact::Exit(cleanup.close, cleanup.payload))]
                 }
                 ExitDispatch => {

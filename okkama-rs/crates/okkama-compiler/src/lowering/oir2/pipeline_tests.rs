@@ -52,28 +52,11 @@ macro_rules! w1_loads {
     };
 }
 
-/// The W1 cases whose async `main` needs the loader to accept a fixed root's start without an input packet and a
-/// deferred cancellation delivered after the first plan of a final close (V7 report).
-macro_rules! w1_loads_blocked {
-    ($($test:ident => $id:literal,)*) => {
-        $(
-            #[test]
-            #[ignore = "loader: async root start without input packet; deliver_cancel after the first plan (V7 report)"]
-            fn $test() {
-                spb17($id, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
-            }
-        )*
-    };
-}
-
 w1_loads! {
-    oir2_w1_future_never_awaited_loads_as_spb17 => "L08.future.never-awaited",
-}
-
-w1_loads_blocked! {
     oir2_w1_await_in_async_main_loads_as_spb17 => "L08.await.in-async-main",
     oir2_w1_failure_rethrown_at_every_await_loads_as_spb17 => "L08.failure.rethrown-at-every-await",
     oir2_w1_future_lazy_and_cached_loads_as_spb17 => "L08.future.lazy-and-cached",
+    oir2_w1_future_never_awaited_loads_as_spb17 => "L08.future.never-awaited",
     oir2_w1_future_passed_and_awaited_elsewhere_loads_as_spb17 => "L08.future.passed-and-awaited-elsewhere",
     oir2_w1_order_across_suspension_loads_as_spb17 => "L08.order.across-suspension",
     oir2_w1_order_lazy_branches_loads_as_spb17 => "L08.order.lazy-branches",

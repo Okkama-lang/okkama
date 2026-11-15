@@ -48,8 +48,32 @@ struct Body {
     sites: BTreeMap<u32, u32>,
     /// A counterexample: closes run the empty settle form before settling their duties.
     settle_empty_first: bool,
-    /// A counterexample: a cancelling close delivers before it settles.
-    cancel_before_settle: bool,
+    /// How a cancelling close delivers its deferred cancellation: the D18 form or one counterexample.
+    delivery: Delivery,
+    /// Executors emitted so far, for their block labels.
+    executors: usize,
+}
+
+/// A close with `cancel=true` settles, runs its plan, delivers, then runs the aborted reserve's executor plan
+/// (D18, decision L2 of #601 V7). The other variants each break one step of that form.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Delivery {
+    #[default]
+    AfterPlan,
+    /// Delivers before the settle phase.
+    BeforeSettle,
+    /// Delivers after the settle phase, before its only plan.
+    BeforePlan,
+    /// Delivers twice after the plan.
+    Twice,
+    /// Delivers after the plan and finishes without the aborted reserve's plan.
+    NoSecondPlan,
+    /// Runs the aborted reserve's plan without the executor.
+    DirectSecondPlan,
+    /// Runs a third plan after the aborted reserve's.
+    ThirdPlan,
+    /// Runs a second plan without delivering.
+    UndeliveredSecondPlan,
 }
 
 impl Body {
@@ -59,7 +83,7 @@ impl Body {
             blocks: vec![], proofs: FunctionProofs::default(), code: vec![],
         };
         Self { f, labels: BTreeMap::new(), targets: vec![], sites: BTreeMap::new(), settle_empty_first: false,
-            cancel_before_settle: false }
+            delivery: Delivery::AfterPlan, executors: 0 }
     }
 
     /// An async body: its only parameter is its frame.
@@ -155,8 +179,9 @@ impl Body {
     }
 
     /// A close with a direct plan over an empty inventory, or the executor of a merge plan, and the D18
-    /// envelope `failures`. It settles `duties` of a new schedule in order and delivers a deferred
-    /// cancellation when the envelope declares one. Returns the cleanup.finish outputs.
+    /// envelope `failures`. It settles `duties` of a new schedule in order; when the envelope declares a deferred
+    /// cancellation, it delivers it after the plan and runs the aborted reserve's executor plan. Returns the
+    /// cleanup.finish outputs.
     #[allow(clippy::too_many_arguments)]
     fn close(&mut self, state: Location, pending: Option<Location>, failure: Option<Location>, scope: u32,
         duties: &[Location], failures: u32, merge: bool) -> (Location, Location, Location)
@@ -174,8 +199,9 @@ impl Body {
         arguments.extend([A::Boundary(scope), A::Envelope(envelope)]);
         let mut cleanup = self.emit(O::CleanupBegin, arguments, K::Cleanup);
         let cancel = failures & ENVELOPE_CANCEL != 0;
-        if cancel && self.cancel_before_settle {
-            cleanup = self.emit(O::CleanupDeliverCancel, vec![l(cleanup)], K::Cleanup);
+        let delivery = if cancel { self.delivery } else { Delivery::AfterPlan };
+        if cancel && delivery == Delivery::BeforeSettle {
+            cleanup = self.deliver(cleanup);
         }
         if duties.is_empty() || self.settle_empty_first {
             cleanup = self.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule)], K::Cleanup);
@@ -183,27 +209,50 @@ impl Body {
         for &duty in duties {
             cleanup = self.emit(O::CleanupSettle, vec![l(cleanup), A::Schedule(schedule), l(duty)], K::Cleanup);
         }
-        if cancel && !self.cancel_before_settle {
-            cleanup = self.emit(O::CleanupDeliverCancel, vec![l(cleanup)], K::Cleanup);
+        if cancel && delivery == Delivery::BeforePlan {
+            cleanup = self.deliver(cleanup);
         }
+        cleanup = self.plan(cleanup, close, pending.is_some(), merge);
+        let after_plan = matches!(delivery, Delivery::AfterPlan | Delivery::Twice | Delivery::NoSecondPlan
+            | Delivery::DirectSecondPlan | Delivery::ThirdPlan);
+        if cancel && after_plan {
+            cleanup = self.deliver(cleanup);
+            if delivery == Delivery::Twice {
+                cleanup = self.deliver(cleanup);
+            }
+        }
+        if cancel && !matches!(delivery, Delivery::NoSecondPlan | Delivery::BeforePlan) {
+            // The aborted reserve's plan: its inventory is decided at run time, so it runs the executor.
+            cleanup = self.plan(cleanup, close, pending.is_some(), delivery != Delivery::DirectSecondPlan);
+            if delivery == Delivery::ThirdPlan {
+                cleanup = self.plan(cleanup, close, pending.is_some(), true);
+            }
+        }
+        let outputs = [self.service(K::Closed), self.service(K::FailureState), self.service(K::ExitState)];
+        self.next(O::CleanupFinish, vec![l(cleanup)], outputs.to_vec());
+        (outputs[0], outputs[1], outputs[2])
+    }
+
+    fn deliver(&mut self, cleanup: Location) -> Location {
+        self.emit(O::CleanupDeliverCancel, vec![l(cleanup)], K::Cleanup)
+    }
+
+    /// One plan of close `close` and its evidence, then its executor when it merges. Returns the cleanup state
+    /// after the plan has run.
+    fn plan(&mut self, cleanup: Location, close: u32, reserve: bool, merge: bool) -> Location {
         let selection = self.selection();
         let proofs = &mut self.f.proofs;
         proofs.order_witnesses.push(OrderWitness { creation_pcs: vec![] });
         let plan = proofs.plans.len() as u32;
         proofs.plans.push(Plan { merge, selection, order_witness: proofs.order_witnesses.len() as u32 - 1 });
         let mut sources = vec![MergeSource::Scope];
-        if pending.is_some() {
+        if reserve {
             sources.push(MergeSource::Reserve);
         }
-        proofs.cleanup_plans.push(CleanupPlan { plan, reserve: pending.is_some(), close, reserve_empty: !merge,
+        proofs.cleanup_plans.push(CleanupPlan { plan, reserve, close, reserve_empty: !merge,
             sources, slots: vec![], preserves: vec![], joins: vec![], suffixes: vec![] });
-        cleanup = self.emit(O::CleanupPlan, vec![l(cleanup), A::Plan(plan)], K::Cleanup);
-        if merge {
-            cleanup = self.executor(cleanup);
-        }
-        let outputs = [self.service(K::Closed), self.service(K::FailureState), self.service(K::ExitState)];
-        self.next(O::CleanupFinish, vec![l(cleanup)], outputs.to_vec());
-        (outputs[0], outputs[1], outputs[2])
+        let planned = self.emit(O::CleanupPlan, vec![l(cleanup), A::Plan(plan)], K::Cleanup);
+        if merge { self.executor(planned) } else { planned }
     }
 
     /// The merge executor: destroy selected keys until done, capturing failures. Returns the done cleanup.
@@ -213,18 +262,24 @@ impl Body {
             self.service(K::FailureState), self.service(K::Cleanup), self.register(Type::Failure),
             self.service(K::Cleanup), self.service(K::Cleanup),
         ];
-        self.br("x_loop", vec![s(cleanup)]);
-        self.block("x_loop", &[looping]);
+        // Each executor has its own blocks; the labels live as long as the test.
+        let label = |name: &str, index: usize| -> &'static str { Box::leak(format!("{name}{index}").into_boxed_str()) };
+        let index = self.executors;
+        self.executors += 1;
+        let [looping_label, destroy_label, failed_label, finish_label] =
+            ["x_loop", "x_destroy", "x_failed", "x_finish"].map(|name| label(name, index));
+        self.br(looping_label, vec![s(cleanup)]);
+        self.block(looping_label, &[looping]);
         self.outcomes(O::CleanupNext, vec![l(looping)],
-            vec![(Tag::Selected, "x_destroy", vec![p(0), p(1)]), (Tag::Done, "x_finish", vec![p(0)])]);
-        self.block("x_destroy", &[selected, key]);
+            vec![(Tag::Selected, destroy_label, vec![p(0), p(1)]), (Tag::Done, finish_label, vec![p(0)])]);
+        self.block(destroy_label, &[selected, key]);
         self.next(O::CleanupDestroy, vec![l(selected), l(key)], vec![destroyed, failure_state]);
         self.outcomes(O::FailureDispatch, vec![l(failure_state)],
-            vec![(Tag::None, "x_loop", vec![s(destroyed)]), (Tag::Some, "x_failed", vec![s(destroyed), p(0)])]);
-        self.block("x_failed", &[failed, failure]);
+            vec![(Tag::None, looping_label, vec![s(destroyed)]), (Tag::Some, failed_label, vec![s(destroyed), p(0)])]);
+        self.block(failed_label, &[failed, failure]);
         self.next(O::CleanupFailure, vec![l(failed), l(failure)], vec![recorded]);
-        self.br("x_loop", vec![s(recorded)]);
-        self.block("x_finish", &[done]);
+        self.br(looping_label, vec![s(recorded)]);
+        self.block(finish_label, &[done]);
         done
     }
 
@@ -261,7 +316,9 @@ impl Body {
     }
 }
 
-/// The program around async bodies and their layouts; scopes as the constants above name them.
+/// The program around async bodies and their layouts; scopes as the constants above name them. A `main` with an
+/// input packet is an ordinary async body: a fixed root (the entry, a test) starts empty (#667), which
+/// `fixed_root_program` builds.
 fn program(functions: Vec<Function>, frames: Vec<FrameLayout>, entry: Option<u32>) -> Program {
     let scopes = [(0, None), (1, None), (1, Some(MAIN)), (2, None), (3, None)].into_iter()
         .filter(|&(function, _)| function < functions.len() as u32).collect::<Vec<_>>();
@@ -330,6 +387,8 @@ enum Main {
     PendingAcross,
     /// The final close delivers its deferred cancellation before settling the duty.
     CancelBeforeSettle,
+    /// The final close delivers its deferred cancellation in the given way.
+    Delivers(Delivery),
 }
 
 /// @main's slots: 0 inputs, 1 owner state, 2 cache duty, 3 the Future, 4–6 the unwind operands, 7–9 a second
@@ -428,8 +487,13 @@ fn main(variant: Main) -> (Function, FrameLayout) {
                 A::Selection(selection)], K::Pending)
         }
     };
-    let cancel = matches!(variant, Main::Cancelling | Main::CancelBeforeSettle);
-    b.cancel_before_settle = variant == Main::CancelBeforeSettle;
+    let cancel = matches!(variant, Main::Cancelling | Main::CancelBeforeSettle | Main::Delivers(_));
+    if variant == Main::CancelBeforeSettle {
+        b.delivery = Delivery::BeforeSettle;
+    }
+    if let Main::Delivers(delivery) = variant {
+        b.delivery = delivery;
+    }
     let failures = if cancel { ENVELOPE_CANCEL } else { 0 };
     let finished = b.close(q3, Some(pending), None, MAIN, &[c1], failures, false);
     let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
@@ -498,7 +562,7 @@ fn main(variant: Main) -> (Function, FrameLayout) {
 fn plain_with(variant: Main) -> Program {
     let (work, work_layout) = work();
     let (main, main_layout) = main(variant);
-    program(vec![work, main], vec![work_layout, main_layout], Some(1))
+    program(vec![work, main], vec![work_layout, main_layout], None)
 }
 
 fn plain() -> Program {
@@ -578,7 +642,7 @@ fn lazy_program(futures: usize) -> Program {
 fn lazy_variant(futures: usize, settle_empty_first: bool) -> Program {
     let (work, work_layout) = work();
     let (lazy, lazy_layout) = lazy(futures, settle_empty_first);
-    program(vec![work, lazy], vec![work_layout, lazy_layout], Some(1))
+    program(vec![work, lazy], vec![work_layout, lazy_layout], None)
 }
 
 /// `async action twice() is int { let f = work(7); let a = await f; let b = await f; return a + b; }`: the
@@ -759,7 +823,7 @@ fn owner_failing(merge: bool, destroys: u32, envelope: u32) -> Program {
     let (main, main_layout) = main(Main::Plain);
     let (consume, consume_layout) = consume(destroys);
     let mut p = program(vec![work, main, consume, make(merge, envelope), destroy(destroys)],
-        vec![work_layout, main_layout, consume_layout], Some(1));
+        vec![work_layout, main_layout, consume_layout], None);
     p.objects.push(res());
     p
 }
@@ -1431,4 +1495,214 @@ fn the_start_is_resumed_once() {
 #[test]
 fn deferred_cancellation_follows_the_settle_phase() {
     reject_with(&plain_with(Main::CancelBeforeSettle), suspension::ASYNC_ENTRY, "after the settle phase");
+}
+
+// --- #601 V7: fixed roots, deps inputs and the D18 delivery (decisions L1–L3) ------------------------------------
+
+/// `async main() { let x = await work(7); }` whose final close has no reserve, as a fixed root's (#667). With
+/// `packet` it starts with an input packet like an ordinary body, without it starts empty like a fixed root. Its
+/// final close delivers a deferred cancellation after its plan; with `cancel_on_failure` its failure close does too.
+fn rooted(packet: bool, cancel_on_failure: bool) -> (Function, FrameLayout) {
+    let slots = main_slots();
+    let (mut b, frame) = Body::asynchronous("main", 1, vec![]);
+    b.block("entry", &[frame]);
+    let start_types = if packet { vec![ProducedType::Service(K::Packet)] } else { vec![] };
+    let (body, start) = b.resume(frame, 0, &start_types);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
+    let q1 = if packet { b.emit(O::OwnAccept, vec![l(q0), l(start[0])], K::ScopeState) } else { q0 };
+    let seven = b.constant(Constant::Int("7".into()), Type::Int);
+    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let [future, cache, q2] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
+    b.next(O::FutureNew, vec![A::Entry(0), A::Scope(MAIN), A::Result(Some(FUTURE_INT)), l(seven), l(offered),
+        l(q1)], vec![future, cache, q2]);
+    let first = b.save(body, 1, &[q2, cache]);
+    b.outcomes(O::Await, vec![l(future)], vec![(Tag::Normal, "ok", vec![p(0), p(1)]),
+        (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
+    let [x, xd] = [b.register(Type::Int), b.service(K::Deps)];
+    b.block("ok", &[x, xd]);
+    let (body_ok, resumed) = b.resume(first, 1, &slot_types(&slots, &[1, 2]));
+    let finished = b.close(resumed[0], None, None, MAIN, &[resumed[1]], ENVELOPE_CANCEL, false);
+    let closed = b.service(K::Closed);
+    b.dispatch(finished, [false, false, true], vec![(Tag::Success, "done", vec![p(0)]),
+        (Tag::Failure, "cancelled", vec![p(0), p(1)])]);
+    b.block("done", &[closed]);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let deps = b.emit(O::DepsEmpty, vec![], K::Deps);
+    b.next(O::FuturePublish, vec![l(body_ok), A::Flag(true), l(empty), l(deps)], vec![]);
+    b.ret();
+    let [cancelled_closed, cancelled] = [b.service(K::Closed), b.register(Type::Failure)];
+    b.block("cancelled", &[cancelled_closed, cancelled]);
+    b.next(O::FuturePublish, vec![l(body_ok), A::Flag(false), l(cancelled)], vec![]);
+    b.ret();
+    let unwind = [b.register(Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
+    b.block("bad", &unwind);
+    let (body_bad, resumed) = b.resume(first, 1, &slot_types(&slots, &[1, 2]));
+    adapter(&mut b, &slots, body_bad, 2, resumed[0], unwind, resumed[1], None, "failed", cancel_on_failure);
+    let start_saved = if packet { vec![0] } else { vec![] };
+    let continuations = vec![
+        Continuation { site: None, saved: start_saved, operands: vec![] },
+        Continuation { site: Some(b.sites[&1]), saved: vec![1, 2], operands: vec![3] },
+        Continuation { site: Some(b.sites[&2]), saved: vec![2], operands: vec![1, 4, 5, 6] },
+    ];
+    (b.finish(), FrameLayout { slots, continuations })
+}
+
+fn rooted_program(entry: Option<u32>, packet: bool, cancel_on_failure: bool) -> Program {
+    let (work, work_layout) = work();
+    let (main, main_layout) = rooted(packet, cancel_on_failure);
+    program(vec![work, main], vec![work_layout, main_layout], entry)
+}
+
+#[test]
+fn a_fixed_root_starts_empty_and_delivers_at_its_close() {
+    verify_load(&rooted_program(Some(1), false, false), &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn a_fixed_root_starts_without_a_packet() {
+    reject_with(&rooted_program(Some(1), true, false), suspension::ASYNC_ENTRY, "a fixed root starts without inputs");
+    reject_with(&plain_with_entry(Some(1)), suspension::ASYNC_ENTRY, "a fixed root starts without inputs");
+}
+
+#[test]
+fn an_ordinary_async_body_starts_with_its_packet() {
+    reject_with(&rooted_program(None, false, false), suspension::ASYNC_ENTRY, "start holds the language inputs");
+}
+
+#[test]
+fn fut_new_cannot_create_a_fixed_root() {
+    let mut p = rooted_program(Some(1), false, false);
+    let f = main_of(&mut p);
+    let new = find(f, O::FutureNew);
+    arguments(f, new)[0] = A::Entry(1);
+    reject_with(&p, suspension::ASYNC_ENTRY, "fut.new cannot create a fixed root");
+}
+
+#[test]
+fn only_a_fixed_root_delivers_without_a_reserve() {
+    reject_with(&rooted_program(None, true, false), suspension::ASYNC_ENTRY, "only at the final exit");
+}
+
+#[test]
+fn a_failure_close_never_delivers() {
+    reject_with(&rooted_program(Some(1), false, true), suspension::ASYNC_ENTRY, "only at the final exit");
+}
+
+fn plain_with_entry(entry: Option<u32>) -> Program {
+    let mut p = plain();
+    p.entry = entry;
+    p
+}
+
+/// `async work(n is int) is int { return n; }` whose start holds the deps of a borrowed input as well: after `n`,
+/// or, with `deps_first`, before it.
+fn work_with_deps(deps_first: bool) -> (Function, FrameLayout) {
+    let (mut b, frame) = Body::asynchronous("work", 0, vec![Type::Int]);
+    b.block("entry", &[frame]);
+    let (int, deps) = (ProducedType::Value(Type::Int), ProducedType::Service(K::Deps));
+    let types = if deps_first { [deps, int] } else { [int, deps] };
+    let (body, start) = b.resume(frame, 0, &[types[0], types[1], ProducedType::Service(K::Packet)]);
+    let n = if deps_first { start[1] } else { start[0] };
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(WORK), A::Boundary(WORK)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(start[2])], K::ScopeState);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(WORK), l(n), l(empty),
+        A::Selection(selection)], K::Pending);
+    let finished = b.close(q1, Some(pending), None, WORK, &[], 0, false);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let [result, packet, deps] = [b.register(Type::Int), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(ExitDestination::Caller)], vec![result, packet, deps]);
+    b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(result), l(packet), l(deps)], vec![]);
+    b.ret();
+    let slot = |ty: ProducedType| FrameSlot { ty, linear: false };
+    let layout = FrameLayout {
+        slots: vec![slot(types[0]), slot(types[1]), service(K::Packet)],
+        continuations: vec![Continuation { site: None, saved: vec![0, 1, 2], operands: vec![] }],
+    };
+    (b.finish(), layout)
+}
+
+fn deps_program(deps_first: bool) -> Program {
+    let (work, work_layout) = work_with_deps(deps_first);
+    let (main, main_layout) = main(Main::Plain);
+    program(vec![work, main], vec![work_layout, main_layout], None)
+}
+
+#[test]
+fn the_start_holds_the_deps_of_its_inputs_before_the_packet() {
+    verify_load(&deps_program(false), &NoExternalContracts).unwrap();
+    reject_with(&deps_program(true), suspension::ASYNC_ENTRY, "start holds the language inputs");
+}
+
+#[test]
+fn a_cancelling_close_delivers_after_its_plan_then_runs_the_aborted_reserve() {
+    verify_load(&plain_with(Main::Delivers(Delivery::AfterPlan)), &NoExternalContracts).unwrap();
+    let p = plain_with(Main::Delivers(Delivery::AfterPlan));
+    let main = &p.functions[1];
+    let cancelling = main.proofs.closes.iter().position(|close| {
+        main.proofs.envelopes[close.envelope as usize].failures & ENVELOPE_CANCEL != 0
+    }).unwrap() as u32;
+    let plans = main.proofs.cleanup_plans.iter().filter(|plan| plan.close == cancelling).count();
+    assert_eq!(plans, 2, "the plan and the aborted reserve's plan");
+}
+
+#[test]
+fn a_delivery_follows_the_first_plan() {
+    reject_with(&plain_with(Main::Delivers(Delivery::BeforePlan)), suspension::ASYNC_ENTRY,
+        "after the settle phase and the first plan");
+}
+
+#[test]
+fn a_deferred_cancellation_is_delivered_once() {
+    reject_with(&plain_with(Main::Delivers(Delivery::Twice)), suspension::ASYNC_ENTRY, "is delivered once");
+}
+
+#[test]
+fn a_delivery_runs_the_aborted_reserves_plan() {
+    reject_with(&plain_with(Main::Delivers(Delivery::NoSecondPlan)), suspension::ASYNC_ENTRY,
+        "runs the aborted reserve's plan before the close finishes");
+    reject_with(&plain_with(Main::Delivers(Delivery::DirectSecondPlan)), suspension::ASYNC_ENTRY,
+        "the aborted reserve runs its own executor plan");
+}
+
+#[test]
+fn a_second_plan_follows_a_delivery_and_there_is_no_third() {
+    reject_with(&plain_with(Main::Delivers(Delivery::UndeliveredSecondPlan)), suspension::ASYNC_ENTRY,
+        "a second plan follows a delivered cancellation");
+    reject_with(&plain_with(Main::Delivers(Delivery::ThirdPlan)), suspension::ASYNC_ENTRY, "at most two plans");
+}
+
+#[test]
+fn a_settled_duty_is_dead_while_its_schedule_continues() {
+    // Two duties of one schedule: after the first settle only the second duty and the cleanup state stay live.
+    let p = lazy_program(2);
+    let f = &p.functions[1];
+    let settles = f.code.iter().enumerate().filter_map(|(pc, instruction)| match instruction {
+        Instruction::Champ { op: O::CleanupSettle, arguments, .. } if arguments.len() == 3 => {
+            let A::Location(duty) = arguments[2] else { panic!("duty operand") };
+            Some((pc, duty))
+        }
+        _ => None,
+    }).collect::<Vec<_>>();
+    let [(_, first), (second_pc, second)] = settles[..] else { panic!("two duty settles") };
+    let live = live_locations(f).unwrap();
+    assert!(!live[second_pc].contains(&first), "the first duty was consumed by its settle");
+    assert!(live[second_pc].contains(&second));
+}
+
+#[test]
+fn a_delivery_needs_a_cancelling_envelope() {
+    let mut p = plain_with(Main::Cancelling);
+    main_of(&mut p).proofs.envelopes[0].failures = 0;
+    reject_with(&p, suspension::ASYNC_ENTRY, "exactly when its envelope declares one: none here");
+}
+
+#[test]
+fn a_cancelling_envelope_finishes_only_after_its_delivery() {
+    let mut p = plain();
+    main_of(&mut p).proofs.envelopes[0].failures = ENVELOPE_CANCEL;
+    reject_with(&p, suspension::ASYNC_ENTRY, "exactly when its envelope declares one: never here");
 }

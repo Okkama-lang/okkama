@@ -388,6 +388,24 @@ fn v7_root_duty_words_adds_only_active_duty_tokens_after_straight_line_operation
     assert_eq!(f.proofs.post_roots, [s::RootRequirement { pc: 0, locations: vec![L::Register(0), L::Service(0)] }]);
 }
 
+#[test]
+fn v7_root_dependency_anchors_add_the_traced_anchors_of_rooted_locations() {
+    let mut f = duty_function();
+    // Service(1) is a deps-like location over the int register; a bool anchor takes no root.
+    f.registers.push(s::Type::Bool);
+    f.proofs.dependencies = vec![
+        s::Dependency { value: L::Service(1), obligations: vec![L::Register(0), L::Register(1)] },
+        s::Dependency { value: L::Service(2), obligations: vec![L::Register(0)] },
+    ];
+    let mut locations = BTreeSet::from([L::Service(1)]);
+    root_dependency_anchors(&f, &mut locations);
+    assert_eq!(locations, BTreeSet::from([L::Service(1), L::Register(0)]));
+    // Anchors of locations outside the map stay out.
+    let mut locations = BTreeSet::from([L::Service(0)]);
+    root_dependency_anchors(&f, &mut locations);
+    assert_eq!(locations, BTreeSet::from([L::Service(0)]));
+}
+
 /// Edits `module`'s function `symbol`.
 fn edit(module: &mut o::Module, symbol: &str, change: impl FnOnce(&mut o::Function)) {
     let (_, function) = module.functions.iter_mut().find(|(_, function)| function.symbol == symbol).unwrap();
@@ -499,30 +517,22 @@ fn loads(name: &str) {
     s::verify_load(&decoded, &s::p1::P1Contracts::new(&objects).unwrap()).unwrap();
 }
 
-/// The Low goldens of V4 whose bodies all start with an input packet: a sync owner's cache settle, and an
-/// async main with await and await.unwind.
+/// Every async Low golden of V4 with plain forms: a sync owner's cache settle, async bodies with await and
+/// await.unwind, fixed roots that start without an input packet (#667), and final closes that deliver a deferred
+/// cancellation after their plan, then run the aborted reserve's plan (D18).
 #[test]
 fn v7_low_goldens_compile_and_load() {
-    for name in ["async-never-awaited", "low-suspending-close"] {
-        loads(name);
-    }
-}
-
-/// The Low goldens with an async `main` entry. They need the loader to accept a fixed root's start without an
-/// input packet, and a deferred cancellation delivered after the first plan of a final close (see the V7 report).
-#[test]
-#[ignore = "loader: async root start without input packet; deliver_cancel after the first plan (V7 report)"]
-fn v7_async_main_goldens_compile_and_load() {
-    for name in ["async-await-failure", "async-caught-throw", "async-plain-await", "async-repeated-await",
-        "async-void", "coro-nested-cold-await", "coro-schedule-duty-live-across-await", "coro-start-continuation"]
+    for name in ["async-await-failure", "async-caught-throw", "async-never-awaited", "async-plain-await",
+        "async-repeated-await", "async-void", "coro-nested-cold-await", "coro-schedule-duty-live-across-await",
+        "coro-start-continuation", "low-suspending-close"]
     {
         loads(name);
     }
 }
 
-/// C-2 with descriptor parameters: the S2 transport has no descriptor bindings yet.
+/// C-2 with descriptor parameters: the S2 transport has no descriptor bindings yet (open calls, lane cr).
 #[test]
-#[ignore = "S2 descriptor bindings (generic descriptors) are not in the backend yet"]
+#[ignore = "#689"]
 fn v7_descriptor_start_golden_compiles_and_loads() {
     loads("coro-start-descriptors");
 }

@@ -1204,6 +1204,31 @@ fn root_duty_words(function: &mut s::Function) {
     }
 }
 
+/// Low roots a value with its full dependencies (`RootTrace::FullDependencies`, managed facts). In SPB 17 a location
+/// keeps the anchors its dependencies name alive (`proofs.dependencies`), so every traced anchor joins each map that
+/// holds the location: for instance a fixed root's deps of its result, taken before its scope closes, keep the
+/// result's register alive up to fut.publish.
+fn root_dependency_anchors(function: &s::Function, locations: &mut BTreeSet<s::Location>) {
+    let traced = |location: &s::Location| match *location {
+        s::Location::Register(id) => !matches!(function.registers[id as usize], s::Type::Bool | s::Type::Never
+            | s::Type::Descriptor | s::Type::Byte | s::Type::Float | s::Type::Char),
+        s::Location::Service(id) => !s::layout::service_layout(function.services[id as usize]).references.is_empty(),
+    };
+    let mut reached = locations.clone();
+    loop {
+        let before = reached.len();
+        for dependency in &function.proofs.dependencies {
+            if reached.contains(&dependency.value) {
+                reached.extend(&dependency.obligations);
+            }
+        }
+        if reached.len() == before {
+            break;
+        }
+    }
+    locations.extend(reached.into_iter().filter(traced));
+}
+
 /// Relocated Low roots remain authoritative for services. Scalar register liveness fills the gaps
 /// introduced by machine expansion (range.len, switch, construction); it never synthesizes Low proofs.
 fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateError> {
@@ -1228,6 +1253,20 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
     }
     let low_roots = !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty();
     root_duty_words(function);
+    for locations in roots.values_mut() {
+        root_dependency_anchors(function, locations);
+    }
+    let mut post = std::mem::take(&mut function.proofs.post_roots);
+    for root in &mut post {
+        let mut locations = root.locations.iter().copied().collect::<BTreeSet<_>>();
+        root_dependency_anchors(function, &mut locations);
+        for location in locations {
+            if !root.locations.contains(&location) {
+                root.locations.push(location);
+            }
+        }
+    }
+    function.proofs.post_roots = post;
     if low_roots {
         // Cleanup-bearing Low has complete #591 roots. Never repair a missing Low root here.
         // Only the explicitly recorded machine-expansion boundaries were added by the emitter.
