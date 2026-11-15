@@ -265,7 +265,8 @@ impl Universe {
             }
         }
         for (function, data) in module.functions.iter() {
-            if !data.attrs.contains(&FunctionAttr::Async) {
+            // #730, async ABI C-6: an async defer entry runs inside its owner's cleanup and creates no Future.
+            if !futures::is_async(module, function) {
                 continue;
             }
             budget.work(1)?;

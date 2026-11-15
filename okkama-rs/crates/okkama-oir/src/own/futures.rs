@@ -26,8 +26,12 @@ pub(super) fn is_future(module: &Module, ty: TypeId) -> bool {
     matches!(module.types.get(ty), Ok(Type::Future(_)))
 }
 
+/// An async action: its call creates a Future and its body publishes through an exit transaction. An async
+/// defer entry (`defer await`, async ABI C-6) is none: it runs inside its owner's cleanup through
+/// `invoke.defer` and leaves like any defer entry (#730).
 pub(super) fn is_async(module: &Module, function: FuncId) -> bool {
-    module.functions.get(function).is_ok_and(|function| function.attrs.contains(&FunctionAttr::Async))
+    module.functions.get(function).is_ok_and(|function| function.attrs.contains(&FunctionAttr::Async)
+        && !function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })))
 }
 
 /// The language result of an async entry: the value its Future publishes.

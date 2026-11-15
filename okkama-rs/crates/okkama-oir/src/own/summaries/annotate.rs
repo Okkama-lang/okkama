@@ -18,6 +18,9 @@ impl Universe {
                 // The body summary is the ordinary entry summary (plan §3.2).
                 data.async_creation_summary = Some(ids[*creation]);
                 data.async_body_summary = data.summary;
+            } else if data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })) {
+                // #730, C-6: an async defer entry has only its entry summary; High's envelope does not survive.
+                data.async_body_summary = None;
             }
             let Some(body) = &mut data.body else {
                 continue;

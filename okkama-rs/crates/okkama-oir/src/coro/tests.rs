@@ -39,9 +39,9 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // R2: a resource held across an await; a temporary take whose proof coro rechecks.
     variant!("r2-resource-across-await"),
     variant!("r2-take-proof-recheck"),
-    // R2, C-6: async defers whose entry awaits, after a body failure and across a pending exit.
-    variant!("r2-defer-await-body-failure"),
-    variant!("r2-defer-await-reserve"),
+    // R2, C-6: async defers whose entry awaits, after a body failure and across a pending exit (own's output, #730).
+    golden!("r2-defer-await-body-failure"),
+    golden!("r2-defer-await-reserve"),
     // R2: closes that suspend while the body owns a resource.
     variant!("r2-resource-suspending-close"),
     // K1: cancellation before start, the elaboration §13.4 fixture, a nested close before the next await.
@@ -176,7 +176,7 @@ fn later_slices_keep_their_forms_unsupported() {
 #[test]
 fn an_async_defer_entry_never_replaces() {
     // C-6 (R2): an async defer entry is lowered as an async body; a replacement inside it stays forbidden.
-    let source = include_str!("../../tests/fixtures/async/own/r2-defer-await-body-failure.oir");
+    let source = include_str!("../own/tests/async-goldens/r2-defer-await-body-failure.oir");
     let replacing = edited(source, "    ret defer continue\n", "    ret defer replace return\n");
     assert!(matches!(lower(&replacing), Err(CoroError::InvalidInput { message, .. }) if message.contains("C-6")));
 }

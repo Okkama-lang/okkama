@@ -72,6 +72,9 @@ const WITNESSES: &[&str] = &[
     "start-deps",
     // #733: an async successor action publishes its successor.
     "async-successor",
+    // #730, C-6: async defers whose entry awaits, after a body failure and across a pending exit.
+    "r2-defer-await-body-failure",
+    "r2-defer-await-reserve",
 ];
 
 #[test]
@@ -111,15 +114,29 @@ fn async_invariants(name: &str, module: &Module) {
     assert_eq!(services.len(), 1, "{name}");
     for (id, data) in module.functions.iter() {
         let Some(body) = &data.body else { continue };
-        let asynchronous = data.attrs.contains(&FunctionAttr::Async);
+        // C-6 (#730): an async defer entry runs inside its owner's cleanup; it creates no Future, has only its
+        // entry summary and never delivers cancellation at its close.
+        let defer_entry = data.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. }));
+        let asynchronous = data.attrs.contains(&FunctionAttr::Async) && !defer_entry;
         if asynchronous {
             async_summaries(name, module, id, data);
+        }
+        if defer_entry && data.attrs.contains(&FunctionAttr::Async) {
+            assert_eq!((data.async_creation_summary, data.async_body_summary), (None, None), "{name}");
+            assert!(module.summaries.get(data.summary.unwrap()).unwrap().contract.suspends, "{name}");
+            assert!(matches!(data.signature.ownership_abi, OwnershipAbi::Explicit { .. }), "{name}");
         }
         // D12: own holds no cache-state value.
         for (_, value) in body.values.iter() {
             assert_ne!(module.types.get(value.ty), Ok(&Type::Service(ServiceType::CacheState)), "{name}");
         }
         let operations = operations(body);
+        // Own projects the failures of a scope's defers into its close envelope, as for sync defers; the
+        // close runs no defer, so a defer never makes it suspend (#730).
+        let deferred: Vec<FailureKind> = body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+            TermKind::InvokeDefer { call, .. } => call.summary,
+            _ => None,
+        }).flat_map(|summary| module.summaries.get(summary).unwrap().contract.failures.clone()).collect();
         cache_duties(name, body, &operations, &services);
         await_adapters(name, body, &services);
         // D18: cancel=true only on the final successful close of an async action.
@@ -133,7 +150,8 @@ fn async_invariants(name: &str, module: &Module) {
                         assert!(module.scopes.get(*scope).unwrap().parent.is_none(), "{name}: nested cancel");
                     }
                     // D24.2: a plain cache settle neither fails nor waits.
-                    assert!(effects.failures.is_empty() && !effects.suspends, "{name}");
+                    assert!(effects.failures.iter().all(|kind| deferred.contains(kind)) && !effects.suspends,
+                        "{name}");
                 }
                 Operation::Ownership(OwnershipOp::ScopeUnwind { effects, .. }) => {
                     assert!(!effects.cancel, "{name}");
@@ -732,4 +750,62 @@ fn k1_cancellation_requests_observe_the_future_and_keep_its_duty() {
         && scope.parent.is_none()).unwrap().0;
     let schedule = body.service_schedules.iter().find(|schedule| schedule.owner == root).unwrap();
     assert_eq!(schedule.duties, [ScheduleDuty::Value(created[0])]);
+}
+
+/// The H6 diagnostics of `verify_high` on a High input.
+fn high_rules(text: &str) -> Vec<RuleId> {
+    let module = crate::text::parse(text).unwrap();
+    match crate::verify_high(&module) {
+        Ok(_) => vec![],
+        Err(report) => report.diagnostics.into_iter().map(|diagnostic| diagnostic.rule).collect(),
+    }
+}
+
+const CLOSER: &str = "func @closer() -> void [defer(), async] async-body(Mcl) {";
+
+#[test]
+fn c6_an_async_defer_entry_has_a_body_summary_and_no_creation_summary() {
+    // #730, async ABI C-6: a defer entry creates no Future. H6 asks it for its body summary only; every other
+    // async action keeps both summaries.
+    let source = input("r2-defer-await-body-failure");
+    assert_eq!(high_rules(&source), []);
+    let creation = edit(&source, "[defer(), async] async-body(Mcl)",
+        "[defer(), async] async-creation(MtC) async-body(Mcl)");
+    assert!(high_rules(&creation).contains(&RuleId::H6), "a defer entry with a creation summary");
+    let bodiless = edit(&source, CLOSER, "func @closer() -> void [defer(), async] {");
+    assert!(high_rules(&bodiless).contains(&RuleId::H6), "a defer entry without a body summary");
+    let task = edit(&source, "func @task() -> void [async] async-creation(MtC) async-body(MtB) {",
+        "func @task() -> void [async] async-body(MtB) {");
+    assert!(high_rules(&task).contains(&RuleId::H6), "an async action without a creation summary");
+}
+
+#[test]
+fn c6_own_runs_an_async_defer_entry_with_its_input_packet() {
+    // #730, C-6, plan §3.2: own accepts the suspending defer of an async owner. The entry keeps no creation
+    // summary and takes the explicit packet ABI; each exit of f runs it through `invoke.defer` with an input
+    // packet, and f's closes do not suspend for it (the close runs no defer).
+    let output = rewrite_async(&input("r2-defer-await-body-failure")).unwrap();
+    let module = &output.module;
+    let (closer, data) = function(module, "closer");
+    assert_eq!((data.async_creation_summary, data.async_body_summary), (None, None));
+    assert_eq!(data.signature.ownership_abi, OwnershipAbi::Explicit { input_packet: 0, output_packet: 0 });
+    let body = function(module, "f").1.body.as_ref().unwrap();
+    let packets: Vec<_> = body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+        TermKind::InvokeDefer { function, call, .. } if *function == closer => Some(call.packet.is_some()),
+        _ => None,
+    }).collect();
+    assert_eq!(packets, [true, true], "the normal and the failure exit of f");
+    for op in operations(body) {
+        if let Operation::Ownership(OwnershipOp::ScopeEnd { effects, .. } | OwnershipOp::ScopeUnwind { effects, .. })
+            = op {
+            assert!(!effects.suspends, "{op:?}");
+        }
+    }
+    // A sync owner cannot run a suspending defer.
+    let sync = edit(&input("r2-defer-await-body-failure"),
+        "func @f() -> void [async] async-creation(MfC) async-body(MfB) {", "func @f() -> void {");
+    let error = rewrite_async(&sync).unwrap_err();
+    let OwnError::Diagnostics { diagnostics, .. } = error else { panic!("{error:?}") };
+    assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::UnsupportedAsync);
+    assert!(diagnostics[0].message.contains("may own suspending cleanup"), "{diagnostics:?}");
 }
