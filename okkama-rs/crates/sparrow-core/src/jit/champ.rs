@@ -921,10 +921,10 @@ impl Emit<'_, '_> {
                 args.push(self.pointer(locations[1]));
             }
             O::ScopeTransfer => {
-                helper = if s::transfer_admissible(arguments) {
-                    "champ_scope_transfer_admissible"
-                } else {
-                    "champ_scope_transfer"
+                helper = match s::transfer_filter(arguments) {
+                    s::TransferFilter::Admitted => "champ_scope_transfer_admissible",
+                    s::TransferFilter::Held => "champ_scope_transfer_held",
+                    s::TransferFilter::Strict => "champ_scope_transfer",
                 };
                 let between = arguments.first() == Some(&A::Flag(true));
                 let from = self.pointer(locations[0]);

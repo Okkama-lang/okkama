@@ -516,6 +516,7 @@ impl Lowering<'_, '_> {
             SelectionExpr::Admissible(inner) => {
                 SelectionExpr::Admissible(self.substituted_selection(*inner, substitution)?)
             }
+            SelectionExpr::Held(inner) => SelectionExpr::Held(self.substituted_selection(*inner, substitution)?),
             SelectionExpr::Union(parts) => {
                 let mut substituted = Vec::with_capacity(parts.len());
                 for part in parts {

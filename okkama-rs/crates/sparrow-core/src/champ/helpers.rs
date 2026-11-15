@@ -884,11 +884,21 @@ pub extern "C" fn rt_own_dynamic(ctx: *mut Ctx, state: *mut ScopeSlot, input: *m
     }
     outcome
 }
+/// Which selected identities of its source a scope.transfer moves (`TRANSFER_ADMISSION`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferFilter {
+    /// Every selected identity; the source must hold each one, live.
+    Strict,
+    /// Only the selected identities the source admitted.
+    Admitted,
+    /// The selected identities the source admitted or bound (#697); staged and outside identities stay.
+    Held,
+}
 /// A transfer moves every selected identity of its source, which must hold each one it is given.
 pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
 {
-    scope_transfer(ctx, inputs, selection, post, false)
+    scope_transfer(ctx, inputs, selection, post, TransferFilter::Strict)
 }
 /// An admissible transfer (`TRANSFER_ADMISSION`) moves only the selected identities its source admitted. Bound,
 /// staged and outside identities stay with their owners: the value may borrow an identity an enclosing scope
@@ -896,10 +906,19 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
 pub extern "C" fn rt_scope_transfer_admissible(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
 {
-    scope_transfer(ctx, inputs, selection, post, true)
+    scope_transfer(ctx, inputs, selection, post, TransferFilter::Admitted)
+}
+/// A held transfer (`TRANSFER_ADMISSION`, #697) moves the selected identities its source admitted or bound.
+/// Staged identities stay with their action, and identities outside the source stay with their owners without a
+/// failure: a builder element may borrow an identity that a nested scope binds (the step of a cursor) or one that
+/// an enclosing scope owns.
+pub extern "C" fn rt_scope_transfer_held(ctx: *mut Ctx, inputs: *const TransferInputs,
+    selection: *const Selection, post: *mut TransferPost) -> Outcome
+{
+    scope_transfer(ctx, inputs, selection, post, TransferFilter::Held)
 }
 fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *const Selection,
-    post: *mut TransferPost, admissible: bool) -> Outcome
+    post: *mut TransferPost, filter: TransferFilter) -> Outcome
 {
     if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("checked helper entered with active bridge failure"));
@@ -910,7 +929,7 @@ fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *cons
     let to = unsafe { (*inputs.to).record };
     let same = inputs.from == inputs.to;
     let result = (|| {
-        if !admissible
+        if filter == TransferFilter::Strict
             && let Some(object) = checked_endpoint(runtime, from, unsafe { &*selection }, true)?
         {
             if same {
@@ -921,10 +940,14 @@ fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *cons
         }
         let mut source = scope(runtime, from)?;
         let all = source.all();
-        let authority = if admissible { Authority::Any } else { Authority::Source };
+        let authority = if filter == TransferFilter::Strict { Authority::Source } else { Authority::Any };
         let mut selected = checked_selection(runtime, &all, unsafe { &*selection }, authority)?;
-        if admissible {
-            let eligible = source.admission.words().collect::<HashSet<_>>();
+        let eligible: Option<HashSet<_>> = match filter {
+            TransferFilter::Strict => None,
+            TransferFilter::Admitted => Some(source.admission.words().collect()),
+            TransferFilter::Held => Some(source.admission.words().chain(source.bound.words()).collect()),
+        };
+        if let Some(eligible) = eligible {
             selected.retain(|object| eligible.contains(object));
         }
         if same {

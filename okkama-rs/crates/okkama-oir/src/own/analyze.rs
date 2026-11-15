@@ -271,6 +271,12 @@ fn transfer_selected(
     }
 }
 
+/// A builder transition's `held(...)` transfers (#697): every scope inside the builder's owner gives the owner what
+/// it holds of the inserted values, admitted or bound. Scopes outside `sources` keep theirs.
+fn rehome_held(state: &mut FlowState, owner: ScopeId, sources: &[ScopeId], inserted: &BTreeSet<Atom>) {
+    transfer_selected(state, owner, Some(sources), inserted, false, 1);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn transfer(
     module: &Module,
@@ -337,8 +343,8 @@ fn transfer(
         }
         match &instruction.op {
             Operation::Collection(CollectionOp::BuilderNew { .. } | CollectionOp::MapBuilderNew { .. }) => {}
-            // A transition moves the admissible parts of inserted values from
-            // the scopes inside the builder's owner into the owner's journal.
+            // A transition moves the held parts of inserted values, admitted or bound (#697),
+            // from the scopes inside the builder's owner into the owner's journal.
             Operation::Collection(collection) if arrays::consumed_buffer(&instruction.op).is_some() => {
                 let buffer = arrays::consumed_buffer(&instruction.op).unwrap();
                 let mut deps = state.values[buffer].deps.clone();
@@ -351,7 +357,7 @@ fn transfer(
                     .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
                 let sources = arrays::inner_scopes(module, data.lexical_scope, owner)?;
                 if !inserted.is_empty() {
-                    transfer_selected(&mut state, owner, Some(&sources), &inserted, true, 1);
+                    rehome_held(&mut state, owner, &sources, &inserted);
                     deps.extend(inserted);
                 }
                 for result in &instruction.results {
@@ -656,5 +662,31 @@ mod tests {
         }
         assert_eq!(state.journals[&(source, bound)], Quantity::ONE);
         assert!(!state.journals.contains_key(&(target, bound)));
+    }
+
+    /// #697: a builder element may borrow what a scope inside the builder's owner binds (a cursor step bound in
+    /// the iteration scope). The held rehome moves the admitted and the bound parts to the owner; a scope outside
+    /// the transition's sources keeps its part.
+    #[test]
+    fn builder_rehome_moves_admitted_and_bound_parts_of_inner_scopes_only() {
+        let owner = ScopeId::from_u32(0);
+        let iteration = ScopeId::from_u32(1);
+        let elsewhere = ScopeId::from_u32(2);
+        let admitted = Atom::current(ShapeId(0));
+        let bound = Atom::current(ShapeId(1));
+        let outside = Atom::current(ShapeId(2));
+        let mut state = FlowState::default();
+        for (scope, atom, mask) in [(iteration, admitted, 1), (iteration, bound, 2), (elsewhere, outside, 2)] {
+            state.journals.insert((scope, atom), Quantity::ONE);
+            state.provenance.insert((scope, atom), mask);
+        }
+        rehome_held(&mut state, owner, &[iteration], &BTreeSet::from([admitted, bound, outside]));
+        // Several inserted atoms make each move possible, not definite (§4.3: no correlated state).
+        for atom in [admitted, bound] {
+            assert_eq!(state.journals[&(iteration, atom)], Quantity::new(Presence::Maybe, Multiplicity::One));
+            assert_eq!(state.journals[&(owner, atom)], Quantity::new(Presence::Maybe, Multiplicity::One));
+        }
+        assert_eq!(state.journals[&(elsewhere, outside)], Quantity::ONE);
+        assert!(!state.journals.contains_key(&(owner, outside)));
     }
 }

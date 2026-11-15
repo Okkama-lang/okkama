@@ -376,11 +376,30 @@ pub fn cancelled(p: &Program) -> Option<u32> {
     }).map(|id| id as u32)
 }
 
-/// Whether a scope.transfer's arguments carry the admission filter (`TRANSFER_ADMISSION`): it moves only the
-/// selected identities its source admitted, and leaves bound, staged and outside identities where they are.
-pub fn transfer_admissible(arguments: &[Argument]) -> bool {
-    matches!(arguments.last(), Some(Argument::Flag(true)))
-        && arguments.iter().any(|argument| matches!(argument, Argument::Selection(_)))
+/// Which selected identities of its source a scope.transfer moves (`TRANSFER_ADMISSION`, #697).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferFilter {
+    /// No flag after the selection: every selected identity, each of which the source must hold.
+    Strict,
+    /// A `true` flag: only the selected identities its source admitted; bound, staged and outside identities
+    /// stay where they are.
+    Admitted,
+    /// A `false` flag: the selected identities its source admitted or bound; staged and outside identities stay
+    /// where they are.
+    Held,
+}
+
+/// The filter a scope.transfer's arguments carry after its selection (`TRANSFER_ADMISSION`). The loader accepts
+/// no other filter shape.
+pub fn transfer_filter(arguments: &[Argument]) -> TransferFilter {
+    if !arguments.iter().any(|argument| matches!(argument, Argument::Selection(_))) {
+        return TransferFilter::Strict;
+    }
+    match arguments.last() {
+        Some(Argument::Flag(true)) => TransferFilter::Admitted,
+        Some(Argument::Flag(false)) => TransferFilter::Held,
+        _ => TransferFilter::Strict,
+    }
 }
 
 /// A retag of a collection whose leaves cannot exist (an uninferred `[]` or `[:]`): no element is reinterpreted.

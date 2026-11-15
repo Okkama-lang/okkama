@@ -12,7 +12,8 @@ const NEVER_FIELD: &str = "NEVER_FIELD";
 const NEVER_OPERAND: &str = "NEVER_OPERAND";
 /// A collection of never leaves is retagged to another shape, or a key-less map to another value type.
 const NEVER_RETAG: &str = "NEVER_RETAG";
-/// The admission filter of a scope.transfer is anything but a single `true` flag right after its selection.
+/// The admission filter of a scope.transfer is anything but nothing or a single flag right after its selection
+/// (`true`: admitted identities; `false`: admitted or bound ones, #697).
 const TRANSFER_ADMISSION: &str = "TRANSFER_ADMISSION";
 /// `array.order` of anything but an array of int, float, rat, char or str or a byte array, or into another type.
 const ARRAY_ORDER_TYPE: &str = "ARRAY_ORDER_TYPE";
@@ -885,11 +886,12 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         ctx.between = flags.first().copied().ok_or_else(|| error("missing Same/Between discriminator"))?;
     }
     if op == Opcode::ScopeTransfer {
-        // An admissible transfer moves only what its source admitted (OIR-2 `admissible(...)` selections).
+        // An admissible transfer moves only what its source admitted (OIR-2 `admissible(...)`), a held one what its
+        // source admitted or bound (`held(...)`, #697); a plain transfer takes no filter.
         let filter = args.iter().skip_while(|arg| !matches!(arg, Argument::Selection(_))).skip(1)
             .collect::<Vec<_>>();
-        enforce(filter.is_empty() || filter == [&Argument::Flag(true)], TRANSFER_ADMISSION,
-            "a transfer's admission filter is one true flag after its selection")?;
+        let shape = filter.is_empty() || filter == [&Argument::Flag(true)] || filter == [&Argument::Flag(false)];
+        enforce(shape, TRANSFER_ADMISSION, "a transfer's admission filter is one flag after its selection")?;
     }
     if op == Opcode::ExitDispatch {
         require(flags.len() == 3, "exit.dispatch requires reserve/active-failure/may-fail close contract")?;

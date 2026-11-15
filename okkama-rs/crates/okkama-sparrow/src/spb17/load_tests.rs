@@ -618,21 +618,45 @@ fn transfer(filter: Vec<Argument>) -> Program {
     Program { functions: vec![f], tables, ..Program::default() }
 }
 
-/// The admission filter of a transfer is one `true` flag right after its selection (#697): an admissible
-/// transfer moves only what its source admitted, a plain one every selected identity.
+/// The admission filter of a transfer is at most one flag right after its selection (#697): `true` makes an
+/// admissible transfer, which moves only what its source admitted; `false` a held one, which moves what its source
+/// admitted or bound; no flag a plain one, which moves every selected identity.
 #[test]
-fn a_transfer_admission_filter_is_one_true_flag_after_its_selection() {
-    verify(&transfer(vec![])).unwrap();
-    let admissible = transfer(vec![Argument::Flag(true)]);
-    verify(&admissible).unwrap();
-    let Instruction::Champ { arguments, .. } = &admissible.functions[0].code[3] else { unreachable!() };
-    assert!(transfer_admissible(arguments));
-    let Instruction::Champ { arguments, .. } = &transfer(vec![]).functions[0].code[3] else { unreachable!() };
-    assert!(!transfer_admissible(arguments));
-    for filter in [vec![Argument::Flag(false)], vec![Argument::Flag(true), Argument::Flag(true)]] {
+fn a_transfer_admission_filter_is_one_flag_after_its_selection() {
+    let filter_of = |p: &Program| {
+        let Instruction::Champ { arguments, .. } = &p.functions[0].code[3] else { unreachable!() };
+        transfer_filter(arguments)
+    };
+    for (filter, expected) in [
+        (vec![], TransferFilter::Strict),
+        (vec![Argument::Flag(true)], TransferFilter::Admitted),
+        (vec![Argument::Flag(false)], TransferFilter::Held),
+    ] {
+        let program = transfer(filter);
+        verify(&program).unwrap();
+        assert_eq!(filter_of(&program), expected);
+    }
+    for filter in [
+        vec![Argument::Flag(true), Argument::Flag(true)],
+        vec![Argument::Flag(false), Argument::Flag(false)],
+        vec![Argument::Flag(false), Argument::Flag(true)],
+        vec![Argument::Scope(0)],
+    ] {
         let failure = verify(&transfer(filter.clone())).unwrap_err();
         assert_eq!(failure.rule, "TRANSFER_ADMISSION", "{filter:?}: {failure}");
     }
+}
+
+/// A held transfer (#697) survives the binary codec and the assembler unchanged.
+#[test]
+fn a_held_transfer_round_trips() {
+    let program = transfer(vec![Argument::Flag(false)]);
+    let decoded = decode(&encode(&program).unwrap()).unwrap();
+    assert_eq!(decoded, program);
+    let assembled = assemble(&disassemble(&program).unwrap()).unwrap();
+    assert_eq!(assembled, program);
+    let Instruction::Champ { arguments, .. } = &assembled.functions[0].code[3] else { unreachable!() };
+    assert_eq!(transfer_filter(arguments), TransferFilter::Held);
 }
 
 /// The system NativeFailure declaration: four public `str` fields in storage order.

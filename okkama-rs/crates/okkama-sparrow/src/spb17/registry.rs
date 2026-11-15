@@ -552,6 +552,7 @@ helper_registry! {
         "champ_scope_transfer" => &[C, P, P, P], G, Some(O::ScopeTransfer);
         "champ_own_dynamic" => &[C, P, P, P], G, Some(O::OwnDynamic);
         "champ_scope_transfer_admissible" => &[C, P, P, P], G, Some(O::ScopeTransfer);
+        "champ_scope_transfer_held" => &[C, P, P, P], G, Some(O::ScopeTransfer);
         "champ_exit_prepare" => &[C, P, P], L, Some(O::ExitPrepare);
         "champ_exit_extend" => &[C, P, P, P], L, Some(O::ExitExtend);
         "champ_exit_replace" => &[C, P, P, P], L, Some(O::ExitReplace);

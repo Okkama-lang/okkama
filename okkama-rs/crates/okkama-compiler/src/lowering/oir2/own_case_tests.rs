@@ -211,6 +211,46 @@ fn oir2_own_managed_builder_rehomes_fresh_elements_to_the_builder_owner() {
         ir::OwnershipOp::ScopeTransfer { states: ir::TransferStates::Between { .. }, .. }))));
 }
 
+/// #697: an element a builder collects may borrow what a nested scope binds: here the step of the cursor, bound
+/// in the iteration scope as `$cursor`, owns the resource `item()` returns. The rehome of every scope inside the
+/// builder's owner is a `held(...)` transfer, which takes the bound parts too, so the iteration scope gives up
+/// the borrowed resource and it lives as long as the collection (Tomato, `L07.traversal.escaping`).
+#[test]
+fn oir2_own_builder_rehome_holds_what_the_cursor_scope_binds() {
+    let source = concat!(
+        "module app; import \"collections/iteration\" take Iterating, Cursor; ",
+        "object Res { has id is int; Res(:id); destroy { } } ",
+        "object Owned does Iterating<Res> { Owned(); cursor() is Cursor<Res> { Step(mine: Res(id: 0), at: 0); } } ",
+        "object Step does Cursor<Res> { has mine is Res; has at is int; Step(:mine, :at); ",
+        "available() is bool { at < 3; } item() is Res { mine; } ",
+        "successor() is Cursor<Res> { Step(mine: Res(id: at + 1), at: at + 1); } } ",
+        "object T { T(); kept() is int { let all is @Res = Owned().map() -> res { res; }; all.size(); } } ",
+        "main() is int { T().kept(); }",
+    );
+    let low = own_to_low(source, None, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let kept = low.functions.iter().find(|(_, function)| function.symbol == "app.T.kept#0").unwrap().1;
+    let body = kept.body.as_ref().unwrap();
+    let cursor = body.bindings.iter().find(|(_, binding)| binding.name == "$cursor").unwrap().1.scope;
+    let mut held = vec![];
+    for (_, block) in body.blocks.iter() {
+        let ops = block.insts.iter().map(|inst| &body.insts.get(*inst).unwrap().op)
+            .chain(match &block.term.kind {
+                ir::TermKind::InvokeOwn { op, .. } => Some(op.as_ref()),
+                _ => None,
+            });
+        for op in ops {
+            if let ir::Operation::Ownership(ir::OwnershipOp::ScopeTransfer {
+                states: ir::TransferStates::Between { from, .. }, selection,
+            }) = op {
+                let filter = body.selections.get(*selection).unwrap();
+                assert!(matches!(filter, ir::SelectionExpr::Held(_)), "builder rehome filter {filter:?}");
+                held.push(state_scope(&low, body, *from));
+            }
+        }
+    }
+    assert!(held.contains(&cursor), "the scope binding $cursor {cursor:?} gives up its part: {held:?}");
+}
+
 /// #668 F7: a failure Own introduces after `builder.finish` has no buffer left for the block's
 /// High handler, so Own routes it past that handler only when the handler is a buffer cleanup
 /// block: it abandons its buffers and re-raises. Any other handler is an elaboration error.

@@ -28,6 +28,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   keeps only the locations that hold scopes; `L10.stdin.lines` compiles and
   runs in 10 s instead of 104 s.
 
+- **Elements a cursor step owns live as long as the collection on Champ (#697).**
+  `Owned(...).map() -> res { res; }` collects the resource each cursor step
+  owns; the step is bound in the iteration scope, so the admissible rehome of
+  the builder left that resource behind and Champ destroyed it with the
+  iteration while the array still held it (`L07.traversal.escaping`). The
+  rehome is now a `held(...)` transfer: it moves what the inner scope admitted
+  or bound among the identities the element reaches; staged identities and
+  identities outside the source stay with their owners without a failure.
+  OIR-2 gains `SelectionExpr::Held` (text `held(...)`, only the whole
+  selection of a `scope.transfer` between non-action scopes, verifier rule
+  T1); SPB 17 carries it as a `false` flag after the transfer's selection
+  (`TRANSFER_ADMISSION`), and Champ runs it with `champ_scope_transfer_held`.
 - **Async tests load on Champ (#725).** The SPB 17 loader took only a
   synchronous `() -> void` observation body as a test (`TEST_ENTRY`), so the
   program of an async test, a void async body that starts with an empty
