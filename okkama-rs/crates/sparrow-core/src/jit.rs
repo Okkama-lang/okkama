@@ -230,6 +230,9 @@ helpers! {
     champ_machine_external = crate::champ::machine::rt_machine_external as (ctx,
         function: u64, io: *mut crate::champ::CallOwn, args: *const Word, count: u64) -> u64;
         [Allocates, Collects, Reenters, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
+    champ_machine_order = crate::champ::ordering::rt_machine_order as (ctx,
+        function: u64, pc: u64, array: Word) -> u64; [Allocates, Collects, Reenters, Fails, Stops];
     #[cfg(all(test, feature = "champ-abi"))]
     test_champ_safepoint = crate::champ::machine::rt_machine_safepoint as (ctx); [Collects];
     #[cfg(feature = "champ-abi")]
