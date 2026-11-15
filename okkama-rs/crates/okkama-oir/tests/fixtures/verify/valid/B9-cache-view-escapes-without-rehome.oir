@@ -1,9 +1,9 @@
 oir 2 coro
 // B9.4 (OIR-2 §10.2): f awaits a Future it borrows, and the cached view of the result stays inside the owner S1.
-// #696: the D21 form that the coro pass produces from the Own body, except that the resumed result of the await
-// has its own retention d2: the pass copies the retention of the join parameter, which names a value of another
-// block. Every D21 body closes its owner before it publishes, so the cached view of a borrowed Future cannot leave
-// the body without a rehome; the layout-less positive that returned it is gone.
+// #696: the D21 form that the coro pass produces from async/own/b9-cache-view.oir; the landing parameter of the
+// await's normal edge has its own retention d2 (#715). Every D21 body closes its owner before it publishes, so the
+// cached view of a borrowed Future cannot leave the body without a rehome; the layout-less positive that returned
+// it is gone.
 module cache_view
 object R {
     field x: int

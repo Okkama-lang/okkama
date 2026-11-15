@@ -359,3 +359,28 @@ fn a_fixed_root_whose_exit_follows_its_close_through_a_branch_takes_its_deps_bef
     let TermKind::InvokeOwn { op, .. } = &data.term.kind else { panic!("the deps block ends with the close") };
     assert!(matches!(**op, Operation::Ownership(OwnershipOp::ScopeEnd { .. })));
 }
+
+#[test]
+fn a_landing_parameter_depends_on_values_that_its_landing_sees() {
+    // #715: the normal edge of the await passes a managed view to a join block. The landing of that edge takes
+    // the join parameter's place, so its dependency names the landing parameter, not the join parameter that the
+    // landing does not see; the output verifies in full and is the reviewed fixture.
+    let source = include_str!("../../tests/fixtures/async/own/b9-cache-view.oir");
+    let output = lowered("b9-cache-view", source);
+    let f = body(&output, "f");
+    let mut checked = 0;
+    for (block, data) in f.blocks.iter() {
+        let resumes = data.insts.first().is_some_and(|inst| matches!(f.insts.get(*inst).unwrap().op,
+            Operation::Async(AsyncOp::FrameResume { continuation: 1.., .. })));
+        for &param in data.params.iter().filter(|_| resumes) {
+            let ValueFacts::Managed { deps } = f.values.get(param).unwrap().facts else { continue };
+            let DepExpr::Retention { value, selection } = f.deps.get(deps).unwrap() else { panic!("{block:?}") };
+            assert_eq!(*value, param);
+            assert_eq!(f.selections.get(*selection).unwrap(), &SelectionExpr::Value(param));
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 1, "the landing of the await's normal edge takes the managed view");
+    let expected = parsed(include_str!("../../tests/fixtures/verify/valid/B9-cache-view-escapes-without-rehome.oir"));
+    assert!(text::normalized_eq(&output, &expected).unwrap(), "{}", text::print(&output).unwrap());
+}
