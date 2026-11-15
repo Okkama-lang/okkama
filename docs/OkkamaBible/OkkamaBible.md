@@ -137,8 +137,9 @@
   - [11.8 async destroy](#118-async-destroy)
   - [11.9 Resources and tasks](#119-resources-and-tasks)
   - [11.10 Close early, destroy anyway](#1110-close-early-destroy-anyway)
-  - [11.11 What is not promised](#1111-what-is-not-promised)
-  - [11.12 What this design costs](#1112-what-this-design-costs)
+  - [11.11 A worked example: a connection pool](#1111-a-worked-example-a-connection-pool)
+  - [11.12 What is not promised](#1112-what-is-not-promised)
+  - [11.13 What this design costs](#1113-what-this-design-costs)
 - [Chapter 12. Objects, fields and constructors](#chapter-12-objects-fields-and-constructors)
   - [12.1 Declaring an object](#121-declaring-an-object)
   - [12.2 Fields are private and permanent](#122-fields-are-private-and-permanent)
@@ -5891,7 +5892,91 @@ The pattern costs one rule for authors of resource objects: `close()` must
 be idempotent, and every other action of a closed resource should fail with
 a catchable `already_closed`, not misbehave.
 
-## 11.11 What is not promised
+## 11.11 A worked example: a connection pool
+
+A pool is the textbook case where resources outlive the code that uses them.
+In Okkama a pool is an ordinary object whose field holds its connections;
+lending one out is a borrow, and nothing else is needed.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Connection {
+    has id is int;
+    Connection(:id) { Stdout().writeln("open " + id.string()); }
+    query(text is string) is string { "#" + id.string() + " " + text; }
+    destroy { Stdout().writeln("close " + id.string()); }
+}
+
+// The pool owns its connections through its field; lending one only borrows it.
+object Pool {
+    has connections is @Connection;
+    Pool(size is int) {
+        self.connections = (1..=size).map() -> id { Connection(id: id); };
+    }
+    lend(turn is int) is Connection { connections[turn % connections.size()]; }
+    destroy { Stdout().writeln("drain pool of " + connections.size().string()); }
+}
+
+object Worker {
+    has pool is Pool;
+    Worker(:pool);
+    run(jobs is @string) is int {
+        for 0..jobs.size() -> turn {
+            Stdout().writeln(pool.lend(turn).query(jobs[turn] else ""));
+        }
+        jobs.size();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    {
+        let pool = Pool(size: 2);
+        let done = Worker(pool: pool).run(["select 1", "select 2", "select 3"]);
+        out.writeln(done.string() + " jobs");
+    }
+    out.writeln("after the block");
+    0;
+}
+```
+
+Output:
+
+```text
+open 1
+open 2
+#1 select 1
+#2 select 2
+#1 select 3
+3 jobs
+drain pool of 2
+close 2
+close 1
+after the block
+```
+
+- **The pool owns, through its field.** The constructor builds an array of
+  fresh connections with `map`, and the array becomes the pool's field, so
+  the pool's owner owns every connection in it (§11.5).
+- **Lending borrows.** `lend` returns a connection that the pool still owns.
+  The worker queries it and never closes it: a borrower cannot destroy what
+  it does not own, and no "return to pool" call exists to be forgotten.
+- **One end, in a fixed order.** When the block that holds the pool ends, the
+  pool's own `destroy` runs first and sees intact connections, then the
+  connections close, newest first: `drain pool of 2`, `close 2`, `close 1`.
+  The worker's three jobs used the connections in turn and released nothing.
+
+What the example does not do is as telling. There is no reference counting
+on the connections and no `release` in a `finally`. The worker holds the pool
+it borrowed and lives inside the same block, so every connection it used is
+still owned when it uses it, and released once, by the pool's owner. A pool
+that must hand a connection to code that outlives it moves the connection
+out instead, and that is a different, visible operation.
+
+## 11.12 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -5908,7 +5993,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.12 What this design costs
+## 11.13 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama

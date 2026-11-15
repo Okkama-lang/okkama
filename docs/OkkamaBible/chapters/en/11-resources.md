@@ -292,7 +292,33 @@ The pattern costs one rule for authors of resource objects: `close()` must
 be idempotent, and every other action of a closed resource should fail with
 a catchable `already_closed`, not misbehave.
 
-## 11.11 What is not promised
+## 11.11 A worked example: a connection pool
+
+A pool is the textbook case where resources outlive the code that uses them.
+In Okkama a pool is an ordinary object whose field holds its connections;
+lending one out is a borrow, and nothing else is needed.
+
+{{example:11-pool}}
+
+- **The pool owns, through its field.** The constructor builds an array of
+  fresh connections with `map`, and the array becomes the pool's field, so
+  the pool's owner owns every connection in it (§11.5).
+- **Lending borrows.** `lend` returns a connection that the pool still owns.
+  The worker queries it and never closes it: a borrower cannot destroy what
+  it does not own, and no "return to pool" call exists to be forgotten.
+- **One end, in a fixed order.** When the block that holds the pool ends, the
+  pool's own `destroy` runs first and sees intact connections, then the
+  connections close, newest first: `drain pool of 2`, `close 2`, `close 1`.
+  The worker's three jobs used the connections in turn and released nothing.
+
+What the example does not do is as telling. There is no reference counting
+on the connections and no `release` in a `finally`. The worker holds the pool
+it borrowed and lives inside the same block, so every connection it used is
+still owned when it uses it, and released once, by the pool's owner. A pool
+that must hand a connection to code that outlives it moves the connection
+out instead, and that is a different, visible operation.
+
+## 11.12 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -309,7 +335,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.12 What this design costs
+## 11.13 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama
