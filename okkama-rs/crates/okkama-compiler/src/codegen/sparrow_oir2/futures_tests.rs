@@ -484,14 +484,16 @@ fn v7_settle_of_a_duty_outside_its_close_schedule_is_rejected() {
 }
 
 #[test]
-fn v7_only_the_services_protocol_family_is_accepted() {
+/// Services protocols are carried by opcodes and need no SPB 17 protocol; a protocol of another family must be
+/// one of the dynamic transfer protocols SPB 17 has (#676), so a Closure protocol of another shape is rejected.
+fn v7_services_protocols_pass_and_other_shapes_are_rejected() {
     let module = golden("async-plain-await");
     translated(&module);
     let mut other = module.clone();
     for (_, protocol) in other.protocols.iter_mut() {
         protocol.kind = o::ProtocolKind::Closure;
     }
-    rejected(&other, "unresolved declarations, protocols or service metadata");
+    rejected(&other, "Closure protocol");
 }
 
 #[test]
@@ -500,7 +502,7 @@ fn v7_a_module_that_requires_async_is_translated() {
     module.requires = vec![o::Feature::Core, o::Feature::Async];
     translated(&module);
     module.requires.push(o::Feature::Process);
-    rejected(&module, "unresolved declarations, protocols or service metadata");
+    rejected(&module, "unresolved declarations or service metadata");
 }
 
 /// The gate of every SPB 17 program: generation, verify_load, and its codec and assembly round trips.
