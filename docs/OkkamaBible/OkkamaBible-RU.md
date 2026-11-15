@@ -280,12 +280,15 @@
   - [25.1 Из чего состоит сервис](#251-из-чего-состоит-сервис)
   - [25.2 Сервис](#252-сервис)
   - [25.3 Endpoints](#253-endpoints)
-  - [25.4 Отказы становятся статусами](#254-отказы-становятся-статусами)
-  - [25.5 Код вокруг endpoints](#255-код-вокруг-endpoints)
-  - [25.6 Состояние, общее для запросов](#256-состояние-общее-для-запросов)
-  - [25.7 Тесты без сети](#257-тесты-без-сети)
-  - [25.8 Запуск](#258-запуск)
-  - [25.9 Во что обходится такой дизайн](#259-во-что-обходится-такой-дизайн)
+  - [25.4 Списки приходят страницами](#254-списки-приходят-страницами)
+  - [25.5 Отказы становятся статусами](#255-отказы-становятся-статусами)
+  - [25.6 Области исключений](#256-области-исключений)
+  - [25.7 Код вокруг endpoints](#257-код-вокруг-endpoints)
+  - [25.8 Состояние, общее для запросов](#258-состояние-общее-для-запросов)
+  - [25.9 База данных за ролью](#259-база-данных-за-ролью)
+  - [25.10 Тесты без сети](#2510-тесты-без-сети)
+  - [25.11 Запуск](#2511-запуск)
+  - [25.12 Во что обходится такой дизайн](#2512-во-что-обходится-такой-дизайн)
 - [Глава 26. Паттерны и антипаттерны](#глава-26-паттерны-и-антипаттерны)
   - [26.1 Что такое паттерн и что с ним делает язык](#261-что-такое-паттерн-и-что-с-ним-делает-язык)
   - [26.2 Поведение через композицию, а не через флаги](#262-поведение-через-композицию-а-не-через-флаги)
@@ -14908,7 +14911,7 @@ successor-ов перестраивает `Tally` на каждую строку
 чтение, создание и удаление:
 
 ```text
-GET    /api/notes        заметки, массивом JSON
+GET    /api/notes        страница заметок: {"items": […], "next": "…"}
 POST   /api/notes        создать из {"title": "…"}; 201 и адрес
 GET    /api/notes/:id    одна заметка или 404
 DELETE /api/notes/:id    удалить; 204 или 404
@@ -14917,7 +14920,9 @@ DELETE /api/notes/:id    удалить; 204 или 404
 Привычки прошлой главы переносятся: решения — значениями, внешний мир — за
 ролью, тесты — без настоящего мира. Новое — конкурентность. Запросы
 перекрываются, так что у общего между ними состояния должен быть владелец
-(раздел 26.8), а каждый endpoint — действие `async` (глава 20).
+(раздел 26.8), а каждый endpoint — действие `async` (глава 20). Сначала
+глава строит сервис над памятью, потом ставит PostgreSQL за ту же роль, не
+трогая ни строки API.
 
 ## 25.1 Из чего состоит сервис
 
@@ -14958,9 +14963,10 @@ import "async/atomic" take Atomic;
 import "json" take Json, JsonField;
 import "http/message" take Responding;
 import "web/request" take WebRequest;
+import "http/status" take Status;
 import "web/reply" take JsonReply, CreatedReply, NoContentReply;
-import "web/exception" take Exception;
-import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete;
+import "web/exception" take Exception, ProblemReply;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete, ExceptionScope;
 
 object Note {
     has id is int;
@@ -14969,18 +14975,24 @@ object Note {
     Note(:id, :title);
 
     id() is int { id; }
+    title() is string { title; }
 
     json() is Json {
         Json(JsonField("id", id), JsonField("title", title));
     }
 }
 
+// What a store refuses. The store knows the rule; the service knows the status.
+enum StoreRefusal is Error = (duplicate(title is string));
+
 // Where notes live. The API sees a role; memory and a database are two doers.
 role NoteStore {
-    all() is @Note;
-    find(id is int) is Maybe<Note>;
-    added(title is string) is Note;
-    removed(id is int) is bool;
+    // Up to count notes with identifiers above id, in identifier order.
+    async after(id is int, count is int) is @Note;
+    async find(id is int) is Maybe<Note>;
+    // A new note; StoreRefusal.duplicate if the title is taken.
+    async added(title is string) is Note;
+    async removed(id is int) is bool;
 }
 
 // Everything the store holds, as one value: replaced whole, never edited.
@@ -15001,19 +15013,21 @@ object MemoryStore does NoteStore {
         shelf = Atomic(Shelf());
     }
 
-    all() is @Note {
-        shelf.value().notes().values();
+    async after(id is int, count is int) is @Note {
+        shelf.value().notes().values().filter() -> note { note.id() > id; }.take(count);
     }
 
-    find(id is int) is Maybe<Note> {
+    async find(id is int) is Maybe<Note> {
         let notes = shelf.value().notes();
         if notes.has(id) { Maybe.some(notes[id]); } else { Maybe.none; }
     }
 
     // Read, decide, publish only if nobody published in between.
-    added(title is string) is Note {
+    async added(title is string) is Note {
         loop {
             let current = shelf.value();
+            let taken = current.notes().values().filter() -> note { note.title() == title; };
+            confirm taken.size() == 0 else throw StoreRefusal.duplicate(title);
             let note = Note(id: current.upcoming(), title: title);
             let revised = Shelf(upcoming: current.upcoming() + 1, notes: current.notes() + [note.id(): note]);
             if shelf.compare_and_replace(expected: current, revised: revised) {
@@ -15022,7 +15036,7 @@ object MemoryStore does NoteStore {
         };
     }
 
-    removed(id is int) is bool {
+    async removed(id is int) is bool {
         loop {
             let current = shelf.value();
             if !current.notes().has(id) {
@@ -15041,13 +15055,25 @@ object NotesApi {
 
     NotesApi(:store);
 
+    // One page: ?after=<id>&limit=<n>, and where the next page starts.
     async list(request is WebRequest) is Responding {
-        JsonReply(value: Json(items: store.all().map() -> note { note.json(); }));
+        let after = request.query().maybe("after").int() else 0;
+        let limit = request.query().maybe("limit").int() else 20;
+        confirm limit >= 1 && limit <= 100 else throw Exception.status(400, "limit must be from 1 to 100");
+        let found = await store.after(after, limit + 1);
+        let shown = found.take(limit);
+        let items = JsonField("items", Json(items: shown.map() -> note { note.json(); }));
+        if found.size() > limit {
+            let onward = "/api/notes?after=" + shown[limit - 1].id().string() + "&limit=" + limit.string();
+            JsonReply(value: Json(items, JsonField("next", onward)));
+        } else {
+            JsonReply(value: Json(items));
+        }
     }
 
     async show(request is WebRequest) is Responding {
         let id = request.path().int("id");
-        match store.find(id) {
+        match await store.find(id) {
             case Maybe.some(note) { JsonReply(value: note.json()); }
             case Maybe.none { throw Exception.status(404, "no note " + id.string()); }
         };
@@ -15057,14 +15083,29 @@ object NotesApi {
         let body = await request.json(4096);
         let title = body.text("title").trim();
         confirm !title.empty() else throw Exception.status(422, "title is empty");
-        let note = store.added(title);
+        let note = await store.added(title);
         CreatedReply(location: "/api/notes/" + note.id().string(), value: note.json());
     }
 
     async remove(request is WebRequest) is Responding {
         let id = request.path().int("id");
-        confirm store.removed(id) else throw Exception.status(404, "no note " + id.string());
+        confirm await store.removed(id) else throw Exception.status(404, "no note " + id.string());
         NoContentReply();
+    }
+}
+
+// Turns the store's refusals into statuses; any other error passes outwards.
+object StoreRefusals does ExceptionScope {
+    StoreRefusals();
+
+    async scoped(request is WebRequest, endpoint is async (WebRequest) is Responding) is Responding {
+        let reply is Responding = try {
+            await endpoint(request);
+        }
+        catch StoreRefusal.duplicate(title) {
+            ProblemReply(status: Status.conflict, detail: "a note titled '" + title + "' exists");
+        };
+        reply;
     }
 }
 
@@ -15076,7 +15117,7 @@ object NotesService {
 
     routes() is WebRoutes {
         WebRoutes(
-            Scope("/api",
+            Scope("/api", StoreRefusals(),
                 Resource("/notes", Get(api.list), Post(api.add)),
                 Resource("/notes/:id", Get(api.show), Delete(api.remove)),
             ),
@@ -15089,11 +15130,16 @@ object NotesService {
   JSON.
 - **`NoteStore`** — роль хранилища. API зависит от роли, так что память
   сегодня и база данных завтра — две реализации одного контракта
-  (раздел 26.5).
+  (раздел 26.5). Её действия — `async`, потому что база данных отвечает не
+  сразу; такую реализацию показывает раздел 25.9.
+- **`StoreRefusal`** — то, в чём хранилище может отказать: заголовок уже
+  занят. Хранилище знает правило; про HTTP оно не знает.
 - **`MemoryStore`** хранит все заметки в одном значении `Shelf` внутри
-  `Atomic`. Почему именно так, объясняет раздел 25.6.
+  `Atomic`. Почему именно так, объясняет раздел 25.8.
 - **`NotesApi`** — контроллер. Каждый endpoint читает из запроса то, что ему
   нужно, спрашивает хранилище и возвращает ответ.
+- **`StoreRefusals`** — область исключений: она превращает отказы хранилища
+  в статусы (раздел 25.6).
 - **`NotesService.routes()`** — таблица маршрутов: одно место, где сказано,
   какой URL ведёт к какому действию. `Scope("/api", …)` пишет префикс один
   раз, а `Resource` — путь один раз для нескольких методов.
@@ -15104,8 +15150,11 @@ Endpoint читает запрос через типизированные ме�
 `request.path().int("id")` читает `:id` шаблона как `int`; значение, которое
 не является числом, получает ответ 400 от фреймворка, прежде чем endpoint
 продолжит, так что `/api/notes/seven` до хранилища не доходит. Query и поля
-заголовка читаются так же, с `maybe` для значений, которых может не быть
-(глава 7).
+заголовка читаются так же. Параметр, которого может не быть, читается через
+`maybe`, который даёт `Maybe` (глава 7), так что значение по умолчанию — один
+`else`: `request.query().maybe("limit").int() else 20`. Нет параметра —
+берётся умолчание; есть, но испорчен, `?limit=many`, — всё равно 400.
+Endpoint никогда не видит строку там, где просил число.
 
 Тело читается с ограничением: `await request.json(4096)` принимает не больше
 4096 байт, требует медиатип JSON и разбирает документ сразу. Слишком большое
@@ -15123,16 +15172,69 @@ endpoint. Чтения без ограничения не предлагаетс
 status: Status.no_content)` отвергается с `InvalidReply`, потому что 204 не
 может нести тело, даже пустое. Сказать «ничего» — это `NoContentReply`.
 
-## 25.4 Отказы становятся статусами
+Endpoint заканчивается одним ответом или одной брошенной ошибкой, и ничто
+между ними не пишет в сеть. `add` типичен: прочитать тело, проверить
+заголовок, спросить хранилище, ответить 201. В нём нет кодов статуса для
+отказов самого тела, нет работы с заголовками и нет кода сериализации,
+потому что всё это принадлежит значениям, которые уже это знают.
+
+## 25.4 Списки приходят страницами
+
+Endpoint списка, который возвращает все заметки, работает в первый день и
+ломается в какой-то следующий, когда клиент просит сто тысяч заметок и
+сервис строит весь ответ в памяти. Поэтому список в API — это страница:
+сколько-то элементов и способ попросить следующие за ними.
+
+Сказать «следующие за ними» можно двумя распространёнными способами.
+Страница по *смещению* просит «элементы с 40-го по 59-й»:
+`?offset=40&limit=20`. Её легко написать, и у неё два изъяна. Заметка,
+созданная или удалённая до позиции 40, пока клиент читает, сдвигает все
+дальнейшие элементы на один, так что клиент видит одну заметку дважды или
+пропускает одну. А база данных отвечает на смещение, читая и выбрасывая
+первые сорок строк, так что сороковая страница стоит в сорок раз дороже
+первой. Страница по *ключу*, её ещё называют страницей с курсором, просит
+«элементы после последнего, который я видел»: `?after=40&limit=20`, где 40 —
+идентификатор последней заметки прошлой страницы. Создания и удаления в
+других местах списка её не сдвигают, а база данных отвечает на неё по
+индексу ключа, так что каждая страница стоит одинаково.
+
+`NotesApi.list` — страница по ключу:
+
+- `after` и `limit` берутся из query, по умолчанию `0` и `20`. `limit` вне
+  1..100 — это 400; верхнюю границу сервис ставит сам, потому что клиент,
+  которому можно попросить любое число элементов, может попросить все.
+- Endpoint просит у хранилища `limit + 1` заметок. Если пришло больше
+  `limit`, следующая страница есть, а лишняя заметка не показывается; это
+  стоит один элемент и экономит второй запрос, который бы считал.
+- Ответ — `{"items": […]}`, плюс `"next": "/api/notes?after=2&limit=2"`,
+  когда есть следующая страница. Клиент идёт по ссылке, которую ему дали, и
+  сам её никогда не строит. Нет `next` — список кончился.
+
+Порядок задаёт хранилище, и он должен быть устойчивым. `MemoryStore.after`
+фильтрует и берёт из `notes().values()`, а они идут в порядке
+идентификаторов, потому что словарь хранит ключи отсортированными
+(раздел 8.3): порядок обхода никогда не зависит ни от хеширования, ни от
+порядка вставки, так что два вызова с одним `after` видят одну и ту же
+последовательность. Хранилище над базой данных записывает тот же контракт
+как `ORDER BY id`.
+
+Курсор здесь — сам идентификатор, и для списка, упорядоченного по
+идентификатору, этого достаточно. Списку, упорядоченному по другому полю,
+дате или заголовку, нужен курсор, который несёт каждый ключ порядка, и
+сервисы обычно делают его непрозрачным (закодированным токеном), чтобы
+клиенты не строили его руками. Меняется endpoint; форма — элементы плюс
+ссылка — остаётся.
+
+## 25.5 Отказы становятся статусами
 
 У сервиса те же три рода отказов, что у утилиты (раздел 24.5), и HTTP даёт
 каждому своё место.
 
 **Ошибки клиента** — статусы 4xx. Endpoint называет свои через
 `throw Exception.status(404, "no note 9")`, а `confirm … else throw`
-превращает предусловие в такую ошибку (`confirm store.removed(id) else throw
-…`). На брошенный `Exception` фреймворк отвечает телом problem details —
-стандартной формой ошибок в JSON из RFC 9457 [[RFC 9457](#ref-rfc9457)]:
+превращает предусловие в такую ошибку (`confirm await store.removed(id) else
+throw …`). На брошенный `Exception` фреймворк отвечает телом problem
+details — стандартной формой ошибок в JSON из RFC 9457 [[RFC 9457](#ref-rfc9457)]:
 
 ```text
 HTTP/1.1 404 Not Found
@@ -15144,17 +15246,72 @@ Content-Type: application/problem+json
 Клиенты получают одну форму для любой ошибки, а `detail` уходит к ним, так
 что в нём никогда не должно быть внутренней диагностики.
 
-**Переведённые отказы** нижних слоёв — база данных отвергла повторяющийся
-ключ, превышена квота — превращает в статусы область исключений вокруг
-маршрутов, которые о них знают: `Scope` или таблица принимает
-`ExceptionScope`, который ловит известные ему ошибки и отвечает на них, а
-остальные пропускает наружу. Это граница раздела 10.12 в форме HTTP.
+**Переведённым отказам** нижних слоёв посвящён следующий раздел: хранилище
+отказывает в своих терминах, а область исключений превращает отказ в
+статус.
 
 **Ошибки в программе** не ловятся. Любая другая ошибка доходит до сервера,
 который отвечает 500 без тела. Клиент узнаёт, что запрос не удался, и ничего
-о причине — это и безопасный ответ, и честный.
+о причине — это и безопасный ответ, и честный. Отказ самой базы данных,
+потерянное соединение или таймаут, идёт тем же путём: это не ошибка клиента,
+и ничто из того, что клиент мог бы изменить, её не исправит.
 
-## 25.5 Код вокруг endpoints
+## 25.6 Области исключений
+
+Хранилище отказывает в повторяющемся заголовке через
+`StoreRefusal.duplicate(title)`, собственную ошибку. Оно могло бы сразу
+бросить `Exception.status(409, …)`, и это было бы неправильно: хранилищем,
+которое говорит на HTTP, не может пользоваться утилита импорта из командной
+строки, а каждому другому вызывающему пришлось бы знать, что 409 значит
+«занято». Отказ принадлежит хранилищу; статус принадлежит сервису.
+
+Перевод — объект, исполняющий `ExceptionScope`. Его единственное действие,
+`scoped`, получает запрос и endpoint, выполняет endpoint и отвечает на то,
+что тот бросил:
+
+```okkama
+object StoreRefusals does ExceptionScope {
+    StoreRefusals();
+
+    async scoped(request is WebRequest, endpoint is async (WebRequest) is Responding) is Responding {
+        let reply is Responding = try {
+            await endpoint(request);
+        }
+        catch StoreRefusal.duplicate(title) {
+            ProblemReply(status: Status.conflict, detail: "a note titled '" + title + "' exists");
+        };
+        reply;
+    }
+}
+```
+
+Место ей даёт таблица: `Scope("/api", StoreRefusals(), …)` ставит её вокруг
+каждого маршрута области. Область исключений может стоять на всей таблице,
+на `Scope` или на `Resource` — на том уровне, где её ошибки могут
+случиться, — и правила у неё те же, что у границы из раздела 10.12:
+
+- **Она ловит то, что знает.** `StoreRefusals` называет один вариант одного
+  перечисления. Любая другая ошибка уходит наружу без изменений, к следующей
+  области или к фреймворку.
+- **Внешняя раньше внутренней.** Области исключений и обёртки выполняются
+  от внешней к внутренней, а внутри одного уровня — в порядке записи.
+  Ошибка, брошенная endpoint, первой встречает самую внутреннюю область.
+- **Фреймворк последний.** Когда каждая область получила свой шанс,
+  фреймворк отвечает на брошенный `Exception` его problem-ответом, а всё
+  остальное пропускает к 500 сервера.
+
+Область отвечает ответом, здесь `ProblemReply(status:, detail:)`, который
+даёт то же тело RFC 9457, что и брошенный `Exception`. Она могла бы и
+бросить `Exception.status(409, …)`, предоставив ответ фреймворку; ответ
+прямее и позволяет области добавить поля заголовка, например `Retry-After`
+для квоты.
+
+Проверяет её тест клиента: дважды отправить один заголовок и прочитать 409
+с `detail` проблемы. Когда раздел 25.9 заменит хранилище, отказ придёт от
+ограничения базы данных, а не от перебора, а эта область и этот тест
+останутся как есть.
+
+## 25.7 Код вокруг endpoints
 
 Некоторые заботы принадлежат каждому запросу, а не одному endpoint: лог
 доступа, аутентификация, режим обслуживания, заголовки, которые несёт каждый
@@ -15295,11 +15452,17 @@ PASS
   обслуживание решается раньше аутентификации, а аутентификация — раньше
   endpoint.
 
+Обёртка и область исключений похожи, а различаются тем, что видят. Обёртка
+видит каждый запрос и каждый ответ, в том числе problem-ответ на
+`Exception`, брошенный глубже; область исключений видит только ошибки,
+которые бросает endpoint, и только те, что она называет. Лог и
+аутентификация — обёртки; перевод ошибок слоя — область.
+
 Обёртка — место для сквозного кода, и только она. Endpoint, который сам
 проверяет токен или сам пишет строку лога, — это запах «один и тот же `defer`
 вокруг каждого использования» из раздела 26.6 в форме HTTP.
 
-## 25.6 Состояние, общее для запросов
+## 25.8 Состояние, общее для запросов
 
 Запросы обслуживаются конкурентно, так что хранилище общее для всех задач,
 обслуживающих запросы. Okkama не даёт объектам меняться на месте, а `Cell` не
@@ -15309,20 +15472,170 @@ PASS
 
 `MemoryStore` использует `Atomic` и держит всё своё в одном значении, `Shelf`:
 следующий идентификатор и словарь заметок. Добавление заметки читает полку,
-строит новую с добавленной заметкой и публикует её через
-`compare_and_replace(expected:, revised:)`, который удаётся, только если с
-момента чтения никакая другая задача ничего не опубликовала. Если
-опубликовала, цикл читает заново и повторяет. Удаление устроено так же.
-Каждая операция — одна атомарная публикация целого, согласованного значения,
-так что читатель никогда не увидит заметку без учтённого идентификатора, а
-два конкурентных создания никогда не получат один идентификатор.
+проверяет, что заголовок свободен, строит новую полку с добавленной
+заметкой и публикует её через `compare_and_replace(expected:, revised:)`,
+который удаётся, только если с момента чтения никакая другая задача ничего
+не опубликовала. Если опубликовала, цикл читает заново и решает заново.
+Удаление устроено так же. Каждая операция — одна атомарная публикация
+целого, согласованного значения, так что читатель никогда не увидит заметку
+без учтённого идентификатора, а два конкурентных создания никогда не получат
+один идентификатор.
+
+Проверка и публикация — одно решение. Если бы `added` проверял заголовок по
+одной полке, а публиковал поверх другой, два запроса с одинаковым
+заголовком могли бы оба пройти проверку. Поскольку проверка внутри цикла,
+повтор проверяет заново по той полке, поверх которой будет публиковать, и
+правило «заголовки уникальны» выполняется для каждого значения, которое
+когда-либо опубликовано.
+
+Когда повтор на самом деле случается? Раздел 20.3 говорит, что код задачи
+между двумя точками приостановки никогда не перемежается с кодом другой
+задачи. `MemoryStore.added` — `async`, но ничего не ждёт, так что два запроса
+не могут перемежаться внутри него, и сегодня его цикл всегда удаётся с
+первого раза. Цикл нужен для версии, которая ждёт: хранилище, которое между
+чтением полки и публикацией спрашивает о заголовке спам-фильтр, имеет точку
+приостановки посередине, там выполняются другие запросы, и именно
+`compare_and_replace` замечает, что полка сдвинулась. Удачный цикл стоит
+одного сравнения, а хранилище остаётся верным при изменении, которое никто
+не вспомнит проверить на конкурентность.
 
 Форма задачи-владельца из раздела 26.8 подходит хранилищам, которые делают
-медленную работу, например пишут в файл по порядку. Хранилищу, которое уже
+медленную работу по порядку, например дописывают файл. Хранилищу, которое уже
 живёт в другом месте, — базе данных — не нужна ни та, ни другая: это роль,
 реализация которой отправляет запросы, а владелец — сама база.
 
-## 25.7 Тесты без сети
+## 25.9 База данных за ролью
+
+`NoteStore` писалась ради этого момента. Хранилище над PostgreSQL — ещё один
+исполнитель той же роли, в своём модуле:
+
+```okkama
+module notes/postgres v1.0.0;
+
+// The same NoteStore over PostgreSQL, with this table:
+//
+//     CREATE TABLE notes (id bigserial PRIMARY KEY, title text NOT NULL UNIQUE);
+import "db/pool" take DbPool;
+import "db/error" take DbFailure;
+import "db/value" take DbInteger, DbText;
+import "db/row" take Row;
+import "api" take Note, NoteStore, StoreRefusal;
+
+object PostgresStore does NoteStore {
+    has pool is DbPool;
+
+    PostgresStore(:pool);
+
+    async after(id is int, count is int) is @Note {
+        let db = await pool.connection();
+        defer db.close();
+        let rows = await db.query("SELECT id, title FROM notes WHERE id > $1 ORDER BY id LIMIT $2",
+            DbInteger(id), DbInteger(count)).all(count);
+        rows.map() -> row { self.note(row); };
+    }
+
+    async find(id is int) is Maybe<Note> {
+        let db = await pool.connection();
+        defer db.close();
+        match await db.query("SELECT id, title FROM notes WHERE id = $1", DbInteger(id)).maybe() {
+            case Maybe.some(row) { Maybe.some(self.note(row)); }
+            case Maybe.none { Maybe.none; }
+        };
+    }
+
+    // The UNIQUE constraint decides, and SQLSTATE 23505 says it refused.
+    async added(title is string) is Note {
+        let db = await pool.connection();
+        defer db.close();
+        let row = try {
+            await db.query("INSERT INTO notes (title) VALUES ($1) RETURNING id, title", DbText(title)).one();
+        }
+        catch DbFailure.detailed(kind, operation, code, message) {
+            if code == "23505" {
+                throw StoreRefusal.duplicate(title);
+            }
+            throw;
+        };
+        self.note(row);
+    }
+
+    async removed(id is int) is bool {
+        let db = await pool.connection();
+        defer db.close();
+        match await db.query("DELETE FROM notes WHERE id = $1 RETURNING id", DbInteger(id)).maybe() {
+            case Maybe.some(row) { true; }
+            case Maybe.none { false; }
+        };
+    }
+
+    hidden note(row is Row) is Note {
+        Note(id: row.int("id"), title: row.text("title"));
+    }
+}
+```
+
+- **Оно держит пул, а не соединение.** `DbPool` (`db/pool`) выдаёт
+  соединения и забирает их обратно. Каждое действие берёт одно, и
+  `defer db.close()` возвращает его в пул на любом пути выхода, отказ
+  включительно (глава 11). Запросы выполняются конкурентно, а одно
+  соединение выполняет одну команду за раз, так что хранилище с одним
+  соединением заставило бы каждый запрос ждать остальные.
+- **Параметры никогда не становятся текстом SQL.** `$1` и `$2` —
+  плейсхолдеры PostgreSQL, а значения едут отдельно, как `DbInteger(id)` и
+  `DbText(title)`. Заголовок вроде `'); DROP TABLE notes; --` — странная
+  заметка, и не более того.
+- **Уникальность решает база.** Таблица объявляет `title` `UNIQUE`, и вставка
+  занятого заголовка падает с SQLSTATE 23505, о чём драйвер сообщает как
+  `DbFailure.detailed` с этим кодом. `added` ловит её, бросает
+  `StoreRefusal.duplicate` роли, а любой другой отказ бросает дальше голым
+  `throw;` (раздел 10.6). Нет ни «прочитать, потом записать», ни гонки между
+  двумя серверами: ограничение проверяется там, где живут данные.
+- **Страницы приходят из индекса.** `WHERE id > $1 ORDER BY id LIMIT $2` —
+  страница по ключу из раздела 25.4 на SQL. С индексом первичного ключа
+  тысячная страница стоит столько же, сколько первая. `.all(count)` читает
+  не больше строк, чем попросили.
+- **Каждое чтение берёт только нужное.** `.maybe()` — не больше одной
+  строки, `.one()` — ровно одна, `.all(max_rows)` — ограниченный список
+  (`db/row`). `removed` просит вернуть удалённую строку, `RETURNING id`, так
+  что «была ли заметка» — это наличие строки, а не счётчик для сравнения.
+
+Главное — что не изменилось. `NotesApi`, `StoreRefusals`, таблица маршрутов
+и каждый тест раздела 25.10 — тот же код. Повторяющийся заголовок — всё ещё
+409, потому что `StoreRefusals` переводит отказ роли, кто бы из исполнителей
+его ни поднял. Действия роли стали `async` один раз, когда роль писалась, и
+хранилище в памяти платит за это немного: действие, которое ничего не ждёт,
+выполняет своё тело до конца при первом же `await` (раздел 20.3).
+
+Подключение — другой `main` (раздел 25.11), и это единственное место, где
+названа PostgreSQL:
+
+```okkama
+let pool = DbPool(
+    origin: PostgresConnector(PostgresDatabase(url: "postgresql://notes@127.0.0.1:5432/notes")),
+    options: PoolOptions(minimum: 0, maximum: 8, idle_timeout: Duration(minutes: 5),
+        lifetime: Duration(minutes: 30), acquisition_timeout: Duration(seconds: 5)),
+    clock: SystemClock(),
+);
+defer pool.close();
+let service = NotesService(api: NotesApi(store: PostgresStore(pool: pool)));
+```
+
+Построение пула ничего не открывает; первое соединение создаётся, когда оно
+понадобится первому запросу. `PoolOptions` ограничивает пул: здесь не больше
+восьми соединений, которые заменяются после пяти минут простоя или тридцати
+минут службы, а запрос, который не получил соединение за пять секунд,
+падает с `TimedOut` и доходит до клиента как 500, а не как зависание.
+
+Тесты этой главы идут над `MemoryStore`, в песочнице книги, без базы данных.
+Они проверяют контракт HTTP, одинаковый для обоих хранилищ. Чего они
+проверить не могут, так это правильность SQL: что `RETURNING` называет
+столбцы, которые читает `note`, что у ограничения тот код, которого ждёт
+хранилище. Это дело второго прогона тех же тестов, в котором `Fresh` строит
+`PostgresStore` над одноразовой базой, в CI, где база — часть окружения.
+Один набор тестов, два хранилища: роль — это контракт, и оба исполнителя
+проверяются по нему.
+
+## 25.10 Тесты без сети
 
 `web/testing` даёт `WebTestClient`, который вызывает таблицу маршрутов так
 же, как настоящий HTTP-клиент вызывает сервер, но без сокета. Запрос
@@ -15334,6 +15647,7 @@ module bible/notes_tests v1.0.0;
 
 import "json" take Json, JsonField;
 import "http/body" take JsonBody;
+import "async/collect" take AllFutures;
 import "web/testing" take WebTestClient;
 import "notes/api" take NotesService, NotesApi, MemoryStore;
 
@@ -15353,7 +15667,7 @@ async test "a created note can be listed and read" {
     test.is(page::Head::code, 200);
     test.is((await page.json()).text("title"), "buy tea");
     let all = await client.get("/api/notes");
-    test.is((await all.json()).size(), 1);
+    test.is((await all.json()).get("items").size(), 1);
 }
 
 async test "a missing note is a 404 problem" {
@@ -15378,6 +15692,61 @@ async test "a removed note is gone" {
 async test "a non-number id is a 400" {
     test.is((await Fresh().client().get("/api/notes/seven"))::Head::code, 400);
 }
+
+async test "a page links to the next one until the end" {
+    let client = Fresh().client();
+    for ["tea", "milk", "bread", "eggs", "salt"] -> title {
+        await client.post("/api/notes", JsonBody(Json(JsonField("title", title))));
+    }
+    let first = await (await client.get("/api/notes?limit=2")).json();
+    test.is(first.get("items").size(), 2);
+    test.is(first.text("next"), "/api/notes?after=2&limit=2");
+    let second = await (await client.get(first.text("next"))).json();
+    test.is(second.get("items").at(0).text("title"), "bread");
+    let third = await (await client.get(second.text("next"))).json();
+    test.is(third.get("items").size(), 1);
+    test.is(third.has("next"), false);
+}
+
+async test "a limit out of range is a 400" {
+    test.is((await Fresh().client().get("/api/notes?limit=0"))::Head::code, 400);
+    test.is((await Fresh().client().get("/api/notes?limit=many"))::Head::code, 400);
+}
+
+async test "a taken title is a 409 problem" {
+    let client = Fresh().client();
+    await client.post("/api/notes", JsonBody(Json(JsonField("title", "buy tea"))));
+    let again = await client.post("/api/notes", JsonBody(Json(JsonField("title", "buy tea"))));
+    test.is(again::Head::code, 409);
+    test.is((await again.json()).text("detail"), "a note titled 'buy tea' exists");
+}
+
+// One client creating one note, as a task of its own.
+object Poster {
+    has client is WebTestClient;
+    has title is string;
+
+    Poster(:client, :title);
+
+    async run() is int {
+        let reply = await client.post("/api/notes", JsonBody(Json(JsonField("title", title))));
+        reply::Head::code;
+    }
+}
+
+async test "concurrent creations all land, each with its own id" {
+    let client = Fresh().client();
+    let posting is @Future<int> = [
+        spawn Poster(client: client, title: "one").run(),
+        spawn Poster(client: client, title: "two").run(),
+        spawn Poster(client: client, title: "three").run(),
+        spawn Poster(client: client, title: "four").run(),
+    ];
+    await AllFutures(origins: posting).results();
+    let page = await (await client.get("/api/notes")).json();
+    let ids = page.get("items").items().map() -> item { item.int("id"); };
+    test.is(ids, [1, 2, 3, 4]);
+}
 ```
 
 Вывод:
@@ -15393,6 +15762,14 @@ async test "a non-number id is a 400" {
 --- PASS: a removed note is gone
 === RUN   a non-number id is a 400
 --- PASS: a non-number id is a 400
+=== RUN   a page links to the next one until the end
+--- PASS: a page links to the next one until the end
+=== RUN   a limit out of range is a 400
+--- PASS: a limit out of range is a 400
+=== RUN   a taken title is a 409 problem
+--- PASS: a taken title is a 409 problem
+=== RUN   concurrent creations all land, each with its own id
+--- PASS: concurrent creations all land, each with its own id
 PASS
 ```
 
@@ -15400,12 +15777,32 @@ PASS
   каждый тест начинает с нуля и тесты не видят заметок друг друга.
 - Тесты проверяют то, что видит клиент: статусы (`::Head::code`), тела JSON
   и `detail` проблемы. Они проверяют и собственные ответы фреймворка: 400 на
-  нечисловой идентификатор и 404 на отсутствующую заметку.
+  нечисловой идентификатор или limit и 404 на отсутствующую заметку.
+- Тест страниц идёт по `next` точно так же, как клиент, с первой страницы до
+  последней, и проверяет, что у последней ссылки нет. После первого URL он
+  ни одного не строит сам.
 - Тесты — `async test`, потому что endpoints — действия `async`.
 - Здесь ничто не слушает порт, так что тесты идут параллельно с другими, в
   песочнице книги и в CI без сети.
 
-## 25.8 Запуск
+Последний тест — о конкурентности. `Poster` — один клиент, создающий одну
+заметку, а `spawn Poster(…).run()` запускает его задачей текущего прогона
+(раздел 20.4); четыре такие задачи конкурентно работают с одним сервисом, а
+`AllFutures(origins:).results()` ждёт все четыре. Затем тест читает список и
+ждёт идентификаторы с 1 по 4. Потерянное обновление здесь проявилось бы:
+заметки хранятся по идентификатору, так что два создания с одинаковым
+идентификатором оставили бы три заметки, а не четыре.
+
+Как объяснил раздел 25.8, сегодня это хранилище потерять обновление не
+может, потому что внутри `added` ничто не перемежается. Тест всё равно стоит
+своих строк. Он формулирует свойство, на которое полагаются клиенты, —
+четыре создания дают четыре заметки — в тех терминах, в которых они его
+видят, и продолжает его формулировать, когда кто-нибудь добавит `await` в
+`added`. Тест конкурентности, который проходит на верном коде и упал бы на
+правдоподобной ошибочной правке, стоит хранить; тест, который только
+проходит, — нет.
+
+## 25.11 Запуск
 
 Программа, которая обслуживает API по-настоящему, коротка:
 
@@ -15417,39 +15814,53 @@ async main() is int {
 }
 ```
 
+С PostgreSQL `main` вместо `MemoryStore()` строит пул и хранилище из
+раздела 25.9, а всё остальное оставляет.
+
 `listen` обслуживает, пока процесс не получит SIGTERM или SIGINT. Тогда
 сервер перестаёт принимать соединения, даёт запросам в работе десять секунд
 на завершение, закрывается, и `listen` возвращается, так что `main` может
-закончить собственную очистку. Второй сигнал завершает процесс сразу.
-Развёртывание, которое останавливает сервис через SIGTERM, получает плавную
-остановку без единой строки в сервисе.
+закончить собственную очистку: `defer pool.close()` версии с базой
+выполняется после того, как последний запрос закончил со своим соединением.
+Второй сигнал завершает процесс сразу. Развёртывание, которое останавливает
+сервис через SIGTERM, получает плавную остановку без единой строки в
+сервисе.
 
-Адрес — IP-литерал; `web/app` имена не разрешает. Порт, адрес и прочие
-настройки приходят теми же слоями, что у утилиты (раздел 24.8): флаг, затем
-окружение, затем значение по умолчанию, прочитанные в `main` и переданные
-вниз. HTTPS принимает TLS-идентичность, `listen(address:, port:, tls:)`, и
-тогда предлагает клиентам HTTP/2 и HTTP/1.1.
+Адрес — IP-литерал; `web/app` имена не разрешает. Порт, адрес, URL базы и
+прочие настройки приходят теми же слоями, что у утилиты (раздел 24.8): флаг,
+затем окружение, затем значение по умолчанию, прочитанные в `main` и
+переданные вниз. Паролю базы не место в URL, который может напечатать лог:
+`PostgresDatabase(url:, password:)` принимает его отдельно, как
+`SecretBytes`. HTTPS принимает TLS-идентичность,
+`listen(address:, port:, tls:)`, и тогда предлагает клиентам HTTP/2 и
+HTTP/1.1.
 
-## 25.9 Во что обходится такой дизайн
+## 25.12 Во что обходится такой дизайн
 
 Сервис длиннее скрипта, который отвечал бы на те же четыре запроса
 изменяемым словарём и обработчиком на каждый URL. Что покупает лишняя длина:
 
 - **Каждый запрос проверен до того, как дошёл до endpoint:** маршрут, метод,
-  параметры пути, медиатип и размер тела. Endpoint начинает со значений,
-  которые уже осмысленны.
-- **У ошибок одна форма** (RFC 9457) и верный статус, а ошибки программы не
-  выдаются за ошибки клиента.
+  параметры пути и query, медиатип и размер тела. Endpoint начинает со
+  значений, которые уже осмысленны.
+- **У ошибок одна форма** (RFC 9457) и верный статус. Отказы слоя
+  переводятся в одном месте, а ошибки программы не выдаются за ошибки
+  клиента.
+- **Списки ограничены.** Никакой запрос не заставит сервис строить ответ из
+  всех заметок, а страницы остаются верными, пока список меняется.
 - **Общее состояние нельзя разорвать.** Хранилище публикует целые значения,
   а язык не даёт способа разделить изменяемый объект между задачами.
+- **Хранилище заменяемо.** База данных пришла новым исполнителем роли, а
+  API, маршруты и тесты не изменились.
 - **Сервис проверяется так, как его видят клиенты,** без сети и без
   запущенного сервера.
 
-Цена — копия полки при каждом изменении. Для хранилища на несколько тысяч
-заметок она незаметна; для миллионов хранилище переезжает в базу данных за
-той же ролью, и копия исчезает. Endpoints `async` стоят на запрос немного
-больше синхронных; что это покупает, объясняет глава 20, а во что обходится
-— глава 23.
+Хранилище в памяти платит за это копией полки при каждом изменении и
+перебором всех заголовков при каждом создании. Для хранилища на несколько
+тысяч заметок и то и другое незаметно; для миллионов хранилище переезжает в
+базу данных за той же ролью, где перебор делает индекс, а копии нет.
+Endpoints `async` и роль `async` стоят на запрос немного больше синхронных;
+что это покупает, объясняет глава 20, а во что обходится — глава 23.
 
 # Глава 26. Паттерны и антипаттерны
 

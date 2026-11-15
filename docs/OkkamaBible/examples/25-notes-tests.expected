@@ -8,4 +8,12 @@
 --- PASS: a removed note is gone
 === RUN   a non-number id is a 400
 --- PASS: a non-number id is a 400
+=== RUN   a page links to the next one until the end
+--- PASS: a page links to the next one until the end
+=== RUN   a limit out of range is a 400
+--- PASS: a limit out of range is a 400
+=== RUN   a taken title is a 409 problem
+--- PASS: a taken title is a 409 problem
+=== RUN   concurrent creations all land, each with its own id
+--- PASS: concurrent creations all land, each with its own id
 PASS

@@ -422,10 +422,15 @@ Written:
 - running (listen, graceful shutdown on SIGTERM/SIGINT);
 - costs.
 
-To add:
-- an Around: an access log, and authentication with web/session;
-- an exception scope translating a store error;
-- a database behind NoteStore (Postgres; db/postgres), tested through the role, with no network in the book's sandbox;
-- query parameters and pagination;
-- a concurrency test (many creations, distinct ids);
+Second pass (2026-11-15), 9.9 pages:
+- arounds (`25-guarded-tests`: BearerAuth on a scope, an own Maintenance around);
+- keyset pagination (`?after=&limit=`, limit + 1, a `next` link; offset vs keyset);
+- an exception scope (`StoreRefusals`: `StoreRefusal.duplicate` from the store becomes 409);
+- the store role became `async`, so a database can do it; honest note that the CAS loop never retries while `added` has no suspension point (Section 20.3);
+- PostgreSQL behind NoteStore (`notes/postgres`: a pool, `$n` parameters, UNIQUE + SQLSTATE 23505 → the role's refusal, keyset in SQL); compiled through `25-postgres-wiring`, never connected in the sandbox;
+- a concurrency test (four spawned creations, ids 1..4).
+
+To add for the floor:
+- the same suite over PostgresStore in CI (a role contract suite), only if the book's check gets a database;
+- a session/login walkthrough with web/session;
 - the server-perf notes, only with measured numbers.
