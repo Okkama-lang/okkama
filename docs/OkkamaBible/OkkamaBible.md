@@ -670,7 +670,8 @@ the main ones; later chapters return to each.
   name more things: a new object per state, a role per capability. Okkama's
   standard library shows both sides — clear contracts, and occasionally
   constructions like `BigQuotient(left: a, right: b).value()` where a method
-  would read better (issue #190 proposes exactly that).
+  would read better. That one became `a.divided(b)` in 0.5.5 (issue #190),
+  and the review of the library looked for the rest (Chapter 22).
 - **Performance of immutable updates.** A new object per change costs
   allocations; collection updates without in-place mutation cost copies.
   Repeatedly rebuilding a collection with `map` can be quadratic; use
@@ -6942,10 +6943,13 @@ The rule is transitive. An object that holds an async-destroy resource in a
 field, an array or a map has to be owned in async code too. Borrowing one,
 by passing it to a synchronous action that does not keep it, is fine.
 
-An async destroy replaces a pattern that needed two `defer`s, a `close`
-and an awaited `settled()`. The standard library still has helper objects
-that exist only to await in cleanup. Moving them onto async destroy is
-[#264](https://github.com/shootnix/okkama/issues/264).
+An async destroy replaces a pattern that needed two `defer`s, a `close` and
+an awaited `settled()`. In 0.4.2 the standard library dropped 33 helper
+objects that existed only to await one child in cleanup, because a
+structured `await` already waits for it
+([#264](https://github.com/shootnix/okkama/issues/264)). Its remaining
+cleanup guards still close through `defer await`; moving them onto
+`async destroy` is [#329](https://github.com/shootnix/okkama/issues/329).
 
 ## 11.9 Resources and tasks
 
@@ -14631,22 +14635,7 @@ with `for await`. The source is anything with an `async next()` that returns
 module bible/stream v1.0.0;
 
 import "io/stdout" take Stdout;
-import "async/channel" take Channel, Sending, Receiving, ChannelClosed;
-
-object Lines {
-    has input is Receiving<string>;
-
-    Lines(:input);
-
-    async next() is Maybe<string> {
-        try {
-            Maybe.some(await input.item());
-        }
-        catch e is ChannelClosed {
-            Maybe.none;
-        }
-    }
-}
+import "async/channel" take Channel, Sending;
 
 object Reader {
     has output is Sending<string>;
@@ -14665,7 +14654,7 @@ object Reader {
 async main() is int {
     let channel is Channel<string> = Channel(capacity: 1);
     let reader = spawn Reader(output: channel.sending()).run();
-    for await Lines(input: channel.receiving()) -> line {
+    for await channel.receiving() -> line {
         Stdout().writeln("line: " + line);
     }
     Stdout().writeln("lines sent: " + (await reader).string());
@@ -14688,6 +14677,12 @@ asking again, `next` goes to the next item, and failures and cancellation
 unwind as in an ordinary loop. The loop does not close its source: here the
 reader closes the channel when it has sent everything, and that close is what
 `next()` turns into `Maybe.none`.
+
+A channel's receiving end is such a source since 0.5.5 (issue #199): its
+`next()` gives `Maybe.none` once the channel is closed and drained. Before
+that, a program wrapped the receiver in a small object of its own with that
+one action, and any object with an `async next()` of that shape still works
+the same way.
 
 ### What in the standard library is async
 
@@ -15355,10 +15350,12 @@ an effect: the place where the rest of the program may change things.
   `Cancellation` token.
 - **std's cleanup guards still use `defer await`.** Moving them to
   `async destroy` waits for the std rewrite (issue #329).
-- **Most of std is synchronous.** Asynchronous files, pipes, CSV streams and
-  decorators are open work (issues #121, #196, #204, #131), and `for await`
-  over a channel's receiving end needs the small adapter of Section 20.10
-  (issue #199).
+- **Parts of std are still synchronous.** Since 0.5.5 a server reads rooted
+  files off the program's thread (issue #121), a child process's pipes are
+  asynchronous (issue #196), and CSV streams are walked with `for await`
+  (issue #204). Asynchronous I/O decorators are still open (issue #131),
+  and waiting on several channels at once, a `select`, is postponed (issue
+  #509).
 
 ## 20.16 What this design costs
 

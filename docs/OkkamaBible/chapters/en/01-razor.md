@@ -270,7 +270,8 @@ the main ones; later chapters return to each.
   name more things: a new object per state, a role per capability. Okkama's
   standard library shows both sides — clear contracts, and occasionally
   constructions like `BigQuotient(left: a, right: b).value()` where a method
-  would read better (issue #190 proposes exactly that).
+  would read better. That one became `a.divided(b)` in 0.5.5 (issue #190),
+  and the review of the library looked for the rest (Chapter 22).
 - **Performance of immutable updates.** A new object per change costs
   allocations; collection updates without in-place mutation cost copies.
   Repeatedly rebuilding a collection with `map` can be quadratic; use

@@ -469,6 +469,12 @@ unwind as in an ordinary loop. The loop does not close its source: here the
 reader closes the channel when it has sent everything, and that close is what
 `next()` turns into `Maybe.none`.
 
+A channel's receiving end is such a source since 0.5.5 (issue #199): its
+`next()` gives `Maybe.none` once the channel is closed and drained. Before
+that, a program wrapped the receiver in a small object of its own with that
+one action, and any object with an `async next()` of that shape still works
+the same way.
+
 ### What in the standard library is async
 
 About a hundred std modules have async actions, and they are where a program
@@ -700,10 +706,12 @@ an effect: the place where the rest of the program may change things.
   `Cancellation` token.
 - **std's cleanup guards still use `defer await`.** Moving them to
   `async destroy` waits for the std rewrite (issue #329).
-- **Most of std is synchronous.** Asynchronous files, pipes, CSV streams and
-  decorators are open work (issues #121, #196, #204, #131), and `for await`
-  over a channel's receiving end needs the small adapter of Section 20.10
-  (issue #199).
+- **Parts of std are still synchronous.** Since 0.5.5 a server reads rooted
+  files off the program's thread (issue #121), a child process's pipes are
+  asynchronous (issue #196), and CSV streams are walked with `for await`
+  (issue #204). Asynchronous I/O decorators are still open (issue #131),
+  and waiting on several channels at once, a `select`, is postponed (issue
+  #509).
 
 ## 20.16 What this design costs
 

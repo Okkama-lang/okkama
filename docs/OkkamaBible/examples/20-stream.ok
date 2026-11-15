@@ -1,22 +1,7 @@
 module bible/stream v1.0.0;
 
 import "io/stdout" take Stdout;
-import "async/channel" take Channel, Sending, Receiving, ChannelClosed;
-
-object Lines {
-    has input is Receiving<string>;
-
-    Lines(:input);
-
-    async next() is Maybe<string> {
-        try {
-            Maybe.some(await input.item());
-        }
-        catch e is ChannelClosed {
-            Maybe.none;
-        }
-    }
-}
+import "async/channel" take Channel, Sending;
 
 object Reader {
     has output is Sending<string>;
@@ -35,7 +20,7 @@ object Reader {
 async main() is int {
     let channel is Channel<string> = Channel(capacity: 1);
     let reader = spawn Reader(output: channel.sending()).run();
-    for await Lines(input: channel.receiving()) -> line {
+    for await channel.receiving() -> line {
         Stdout().writeln("line: " + line);
     }
     Stdout().writeln("lines sent: " + (await reader).string());

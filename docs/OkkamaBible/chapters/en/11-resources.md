@@ -247,10 +247,13 @@ The rule is transitive. An object that holds an async-destroy resource in a
 field, an array or a map has to be owned in async code too. Borrowing one,
 by passing it to a synchronous action that does not keep it, is fine.
 
-An async destroy replaces a pattern that needed two `defer`s, a `close`
-and an awaited `settled()`. The standard library still has helper objects
-that exist only to await in cleanup. Moving them onto async destroy is
-[#264](https://github.com/shootnix/okkama/issues/264).
+An async destroy replaces a pattern that needed two `defer`s, a `close` and
+an awaited `settled()`. In 0.4.2 the standard library dropped 33 helper
+objects that existed only to await one child in cleanup, because a
+structured `await` already waits for it
+([#264](https://github.com/shootnix/okkama/issues/264)). Its remaining
+cleanup guards still close through `defer await`; moving them onto
+`async destroy` is [#329](https://github.com/shootnix/okkama/issues/329).
 
 ## 11.9 Resources and tasks
 
