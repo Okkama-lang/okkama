@@ -172,9 +172,6 @@ fn run() -> Result<u8, Failure> {
     let Some((first, rest)) = args.split_first() else {
         return Err(usage());
     };
-    if cfg!(feature = "champ-abi") && !matches!(first.as_str(), "--help" | "-h" | "help" | "--version" | "-V") {
-        return Err((1, "Champ CLI driver is not yet available: requires #572 and #573-P1".into()));
-    }
     match first.as_str() {
         "--help" | "-h" | "help" => {
             print!("{HELP}");
