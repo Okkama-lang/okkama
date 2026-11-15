@@ -36,9 +36,10 @@ pub(super) fn compare(
     function: Option<FuncId>,
     candidate: &Result<VerifiedModule<'_>, VerifyReport>,
 ) {
-    // Budget tests exercise representation-specific allocation charges. Their
-    // compact assertions still run, but only default limits define the oracle.
-    if options.limits != VerifyLimits::default() {
+    // Work and allocation charges depend on the representation. All other
+    // limit configurations still compare against the precise solver.
+    let defaults = VerifyLimits::default();
+    if options.limits.steps != defaults.steps || options.limits.memory_bytes != defaults.memory_bytes {
         return;
     }
     for errors in [ErrorPolicy::All, ErrorPolicy::First] {

@@ -433,7 +433,12 @@ impl Flow {
                 if let Some(label) = contained.iter().next() {
                     let class = &old[label.as_u32() as usize];
                     state.step(contained.comparison_work(class));
-                    if contained == class {
+                    let uniform = contained == class && contained.iter().all(|member| {
+                        let aliases = &old[member.as_u32() as usize];
+                        state.step(1 + aliases.comparison_work(class));
+                        aliases == class
+                    });
+                    if uniform {
                         let desired = classes.get(class).cloned().unwrap_or_default();
                         return (desired.root_id() != contained.root_id()).then_some(desired);
                     }

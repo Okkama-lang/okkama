@@ -432,6 +432,10 @@ impl Engine<'_, '_> {
         incoming[self.body.entry.as_u32() as usize].push(initial);
         // State indices are stable: alternatives are appended and only masks
         // are joined in place. One dirty bit coalesces versions awaiting a visit.
+        // Every new or changed mask is queued; a queued visit reads the latest
+        // mask, and a later change queues another visit. Thus every state is
+        // processed with its final mask before replay emits diagnostics.
+        // Verdict equality with the old block schedule is checked by the differential.
         let mut dirty = vec![Vec::new(); self.body.blocks.len()];
         dirty[self.body.entry.as_u32() as usize].reserve_exact(1);
         dirty[self.body.entry.as_u32() as usize].push(true);

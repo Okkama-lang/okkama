@@ -199,6 +199,12 @@ zsh does not split `$var`; use `${=var}` or a function when passing commands.
 
 ## 5. Tests
 
+For the #634 verifier differential gate, run `./tools/verifier-differential.sh` from `okkama-rs/`.
+It runs the full OIR test corpus and compiler `oir2` tests with `verifier-differential` and
+`OKKAMA_634_DIFFERENTIAL=1`, offline with four cargo jobs. It prints compared runs, precise completions,
+precise rejections, both-Incomplete runs and mismatches, and fails on a mismatch or a candidate
+Incomplete when the precise solver completes; steps and memory limits remain unchanged.
+
 For every 0.6.0 ownership rebuild step, use the [ownership oracle](../tools/ownership/README.md): `tools/ownership/oracle-docker.sh engines|ab|stats|tap` (bounded Docker runs, A/B census and traces, TAP, JSON reports).
 
 | What | How | Notes |

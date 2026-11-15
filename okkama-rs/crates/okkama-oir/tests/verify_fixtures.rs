@@ -567,14 +567,12 @@ fn normalization_preserves_rejections_under_dead_prefixes_and_ssa_permutations()
                     let Some(body) = &mut function.body else {
                         continue;
                     };
-                    // Low has independent root-map obligations at every added
-                    // instruction. Its SSA permutation still runs below.
                     let input_packet = body.blocks.get(body.entry).unwrap().params.iter().any(|value| {
                         types.get(body.values.get(*value).unwrap().ty) == Ok(&Type::Service(ServiceType::Own))
                     });
                     // An explicit packet ABI forbids body evaluation before
                     // own.accept. Do not turn a dead prefix into an ABI error.
-                    if profile != Profile::Low && !input_packet {
+                    if !input_packet {
                         let mut prefix = Vec::new();
                         for bit in 0..8 {
                             let inst = InstId::from_u32(body.insts.len() as u32);
@@ -590,6 +588,38 @@ fn normalization_preserves_rejections_under_dead_prefixes_and_ssa_permutations()
                         }
                         if reverse_prefix {
                             prefix.reverse();
+                        }
+                        if profile == Profile::Low {
+                            // Bool constants need no trace. Root all entry inputs
+                            // even when an invalid fixture omits its entry map.
+                            let bindings: Vec<_> = body.blocks.get(body.entry).unwrap().params.iter()
+                                .filter_map(|value| {
+                                    let ty = body.values.get(*value).unwrap().ty;
+                                    let trace = match types.get(ty).unwrap() {
+                                        Type::Service(ServiceType::CleanupState) => RootTrace::CleanupActivation,
+                                        Type::Service(ServiceType::Scope(_)) => RootTrace::ScopeInventory,
+                                        Type::Service(ServiceType::Own) => RootTrace::PacketInventory,
+                                        Type::Service(ServiceType::Pending) => RootTrace::PendingValueReserveDeps,
+                                        Type::Service(ServiceType::Failure | ServiceType::FailureState) => {
+                                            RootTrace::FailureGraph
+                                        }
+                                        Type::Service(ServiceType::ExitState) => RootTrace::ExitReserve,
+                                        Type::Service(ServiceType::Deps) => RootTrace::FullDependencies,
+                                        Type::Service(_) => return None,
+                                        _ => RootTrace::Value(ty),
+                                    };
+                                    Some(RootBinding { value: *value, trace })
+                                }).collect();
+                            for inst in &prefix {
+                                for boundary in [
+                                    RootBoundary::BeforeInstruction(*inst),
+                                    RootBoundary::AfterInstruction(*inst),
+                                ] {
+                                    body.cleanup.roots.alloc(RootRequirement {
+                                        boundary, bindings: bindings.clone(), through_suspend: true,
+                                    }).unwrap();
+                                }
+                            }
                         }
                         let entry = body.blocks.get_mut(body.entry).unwrap();
                         prefix.append(&mut entry.insts);
@@ -614,6 +644,15 @@ fn normalization_preserves_rejections_under_dead_prefixes_and_ssa_permutations()
                 }
             }
         }
+    }
+}
+
+#[test]
+fn normalization_keeps_dead_scalar_named_by_cleanup_root_map() {
+    let source = include_str!("fixtures/verify/valid/B10-dead-scalar-cleanup-root.oir");
+    let module = text::parse(source).unwrap();
+    for errors in [ErrorPolicy::All, ErrorPolicy::First] {
+        fixture_result(&module, errors).unwrap();
     }
 }
 

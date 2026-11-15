@@ -138,8 +138,8 @@ impl BoundaryHistory {
             }
         };
         // Input summary anchors, dictionaries, schedules and all expression DAG
-        // leaves are kept even outside their ordinary SSA live ranges. Cleanup
-        // root maps are intentionally never read as a liveness authority.
+        // leaves are kept even outside their ordinary SSA live ranges. Root-map
+        // bindings only add anchors: they never authorize dropping a value.
         anchor(leaves(&body.blocks.get(body.entry).ok()?.params, body, state));
         anchor(leaves(&body.deps, body, state));
         anchor(leaves(&body.keys, body, state));
@@ -150,6 +150,7 @@ impl BoundaryHistory {
         anchor(leaves(&body.cleanup.schedules, body, state));
         anchor(leaves(&body.cleanup.plans, body, state));
         anchor(leaves(&body.cleanup.proofs, body, state));
+        anchor(leaves(&body.cleanup.roots, body, state));
         let mut future = vec![vec![0u64; words]; blocks];
         let mut predecessors = vec![Vec::new(); blocks];
         // graph::edges includes exceptional block edges, invoke unwind/cancel,
@@ -431,6 +432,7 @@ impl Roots {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use super::super::super::{VerifyContext, VerifyOptions, VerifyStats};
 
     fn with_state(module: &Module, run: impl FnOnce(&mut State<'_>)) {
@@ -461,6 +463,59 @@ func @f() -> void {
 ^done in S:
     ret
 }").unwrap()
+    }
+
+    #[test]
+    fn two_results_with_shared_stale_aliases_remap_containment_by_exact_union() {
+        let mut module = module();
+        let function = FuncId::from_u32(0);
+        let value = ValueId::from_u32;
+        let instruction = InstId::from_u32(1);
+        let body = module.functions.get_mut(function).unwrap().body.as_mut().unwrap();
+        body.insts.get_mut(instruction).unwrap().results = vec![value(0), value(2)];
+        body.values.get_mut(value(0)).unwrap().def = Definition::InstResult { inst: instruction, index: 0 };
+        body.values.get_mut(value(2)).unwrap().def = Definition::InstResult { inst: instruction, index: 1 };
+        body.blocks.get_mut(body.entry).unwrap().insts = vec![instruction];
+        with_state(&module, |state| {
+            let module = state.module;
+            let declaration = module.functions.get(function).unwrap();
+            let body = declaration.body.as_ref().unwrap();
+            let managed = managed_types(module, state);
+            let mut engine = Engine {
+                module, function, declaration, body, state, emit: true,
+                reported: BTreeSet::new(), managed: &managed, flow_memory: 0,
+                materialized_scopes: None, witnesses: witnesses(module, body),
+                diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
+                defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+            };
+            let mut flow = Flow::new(4, witnesses(module, body));
+            flow.availability[1] = AVAILABLE;
+            flow.aliases[1].insert(value(1));
+            flow.contained[1].insert(value(1));
+            // Like operation(), capture both result slots before either define().
+            let slot = Slot {
+                aliases: flow.aliases[1].clone(), contained: flow.contained[1].clone(),
+                ..Slot::default()
+            };
+            for result in &body.insts.get(instruction).unwrap().results {
+                engine.define(&mut flow, *result, slot.clone());
+            }
+            assert_eq!(flow.aliases[0], SharedSet::from([value(0), value(1)]));
+            assert_eq!(flow.aliases[1], SharedSet::from([value(1), value(2)]));
+            // The first result's labels include the source, whose class was
+            // changed by the second result defined from the captured slot.
+            flow.contained[3] = flow.aliases[0].clone();
+            let classes = BTreeMap::from([
+                (flow.aliases[0].clone(), SharedSet::from([value(0)])),
+                (flow.aliases[1].clone(), SharedSet::from([value(2)])),
+            ]);
+            let expected: SharedSet<_> = flow.contained[3].iter().flat_map(|label| {
+                classes.get(&flow.aliases[label.as_u32() as usize]).into_iter().flatten().copied()
+            }).collect();
+            assert_eq!(expected, SharedSet::from([value(0), value(2)]));
+            flow.remap_aliases(&classes, engine.state);
+            assert_eq!(flow.contained[3], expected);
+        });
     }
 
     #[test]
