@@ -1081,7 +1081,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             input(0, Pending)?;
             input(1, Cleanup)?;
         }
-        CleanupPlan | CleanupNext | CleanupFinish | CleanupDeliverCancel => input(0, Cleanup)?,
+        CleanupPlan | CleanupNext | CleanupFinish | CleanupDeliverCancel | CleanupSettleDynamic => {
+            input(0, Cleanup)?
+        }
         CleanupSettle => {
             input(0, Cleanup)?;
             if let Some(&duty) = locations.get(1) {
@@ -1151,6 +1153,18 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         CacheRehome => {
             input(0, Pending)?;
             input(1, CacheState)?;
+        }
+        // ABI D25.2: a packet and the Future whose cache duty's entry leaves it.
+        ServiceMaterialize => {
+            input(0, Packet)?;
+            enforce(matches!(loc_type(f, locations[1])?, ProducedType::Value(Type::Future(_))), FUTURE_TYPES,
+                "service.materialize names a Future holder")?;
+        }
+        // A packet and the duty token whose entry joins it: a cache-state, or a task-state of a spawn (D24).
+        ServiceAbsorb => {
+            input(0, Packet)?;
+            require(matches!(loc_type(f, locations[1])?, ProducedType::Service(CacheState | TaskState)),
+                "service.absorb takes a cache-state or task-state token")?;
         }
         FuturePublish => {
             input(0, Frame)?;
@@ -1394,6 +1408,9 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         AwaitTake => shape == "lls",
         // The exit's destination, the pending reserve and the cache duty (C-4, token form).
         CacheRehome => shape == "xll",
+        // The closing scope's cleanup state (D25.3); a packet and the holder or the token (D25.2).
+        CleanupSettleDynamic => shape == "l",
+        ServiceMaterialize | ServiceAbsorb => shape == "ll",
         FuturePublish => shape.len() > 2 && shape.starts_with("l?") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameSave => shape.starts_with("lc") && shape[2..].chars().all(|ch| ch == 'l'),
         FrameResume => shape == "lc",
@@ -2156,7 +2173,7 @@ pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     match (op, tag) {
         // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
         (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
-            | CleanupDestroy | CacheRehome, Tag::Normal) => Carry::Slot(0),
+            | CleanupDestroy | CacheRehome | CleanupSettleDynamic, Tag::Normal) => Carry::Slot(0),
         (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
         (CleanupFinish, Tag::Normal) => Carry::Slot(2),
         (ExitDispatch, Tag::Pending) => Carry::Slot(1),

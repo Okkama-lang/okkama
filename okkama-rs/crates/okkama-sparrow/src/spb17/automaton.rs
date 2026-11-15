@@ -25,6 +25,10 @@ struct Cleanup {
     delivered: bool,
     /// Plans this close has begun: the plan, then for a delivered cancellation the aborted reserve's.
     plans: u32,
+    /// The close's `cleanup.settle.dynamic` ran (ABI D25.3).
+    dynamic: bool,
+    /// The closing scope may have admitted a service entry, so the dynamic step is required (D25.3).
+    admits: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingType { value: Option<Type>, kind: ExitKind, rehome: Option<Rehome> }
@@ -116,6 +120,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
     let mut reserves = vec![None; f.proofs.plans.len()];
     if f.code.is_empty() { return Ok(reserves) }
     let origins = suspension::cache_origins(p, f);
+    let admitting = services::admitting_closes(p, f)?;
     let fixed_root = p.functions.iter().position(|function| std::ptr::eq(function, f))
         .is_some_and(|index| suspension::fixed_root(p, index as u32));
     // Facts of the values each continuation's frame.save stored, for its resumes.
@@ -235,7 +240,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     unary(Cleanup { close: close as u32, plan: None, index: 0, phase: Phase::Begun,
                         pending: contract.reserve, aborted: false, failure: contract.active_failure,
                         payload, step: None, settled: 0, schedule: None, released: false, delivered: false,
-                        plans: 0 })
+                        plans: 0, dynamic: false, admits: admitting.contains(&(pc as u32)) })
                 }
                 CleanupSettle => {
                     let mut cleanup = cleanup()?;
@@ -252,6 +257,16 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         require(cleanup.phase == Phase::Begun, "settle outside begin phase")?;
                         cleanup.phase = Phase::Settled;
                     }
+                    unary(cleanup)
+                }
+                // D25.3: after the static duties, once, before the plan. Its entries may release obligations.
+                CleanupSettleDynamic => {
+                    let mut cleanup = cleanup()?;
+                    enforce(cleanup.phase == Phase::Settled && cleanup.plans == 0, suspension::SCHEDULE,
+                        "cleanup.settle.dynamic follows the static duties and precedes the plan")?;
+                    enforce(!cleanup.dynamic, suspension::SCHEDULE, "a close settles its dynamic entries once")?;
+                    cleanup.dynamic = true;
+                    cleanup.released = true;
                     unary(cleanup)
                 }
                 // D18 at the final exit: settle, the plan, then the delivery, then the aborted reserve's plan.
@@ -302,6 +317,8 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         .ok_or_else(|| error("missing plan id"))?;
                     if cleanup.plans == 0 {
                         require(cleanup.phase == Phase::Settled, "plan before complete settle")?;
+                        enforce(cleanup.dynamic || !cleanup.admits, suspension::SCHEDULE,
+                            "a close of a scope that may admit service entries settles them dynamically first")?;
                     } else {
                         // The second plan executes the reserve that the delivered cancellation aborts.
                         enforce(cleanup.plans == 1 && cleanup.delivered, suspension::ASYNC_ENTRY,

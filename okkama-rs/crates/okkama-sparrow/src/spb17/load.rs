@@ -50,7 +50,9 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             // and the success packet; frame.save the frame and the saved tokens; await.unwind the state, task and
             // receipt; cleanup.settle the cleanup state and its duty.
             FutureNew | FuturePublish | FrameSave | FrameResume | AwaitUnwind | CleanupDeliverCancel
-                | CleanupSettle | CacheRehome => true,
+                | CleanupSettle | CacheRehome | CleanupSettleDynamic | ServiceAbsorb => true,
+            // The holder of a materialized entry is a language value; only the packet is consumed.
+            ServiceMaterialize => index == 0,
             // The journal packet travels with the buffer; the buffer is a register (check_builders).
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
                 index + 1 == locations.len()
@@ -175,6 +177,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                 "destroy entry signature mismatch")?;
         }
     }
+    // D25.1: which calls return their Future's entry, proved from the callees' returns.
+    let fresh = services::fresh_futures(p)?;
     for (index, f) in p.functions.iter().enumerate() {
         if matches!(f.entry_abi, EntryAbi::Owned | EntryAbi::Defer { .. }) {
             require(f.params.iter().filter(|&&location| verify::loc_type(f, location)
@@ -212,6 +216,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         check_service_results(p, f)?;
         suspension::check_flow(p, f)?;
         take::check(p, index as u32, f)?;
+        services::check_materialize(p, f, &fresh)?;
         let states = service_states(f)?;
         enforce(f.proofs.states == states, "EVIDENCE_STATES",
             "service maps differ from reconstructed lifetimes")?;

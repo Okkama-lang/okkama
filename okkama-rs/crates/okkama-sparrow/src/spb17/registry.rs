@@ -111,8 +111,8 @@ registry! {
     60 => BuilderAbandon, "builder.abandon";
     61 => Lookup, "lookup";
     // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
-    // await, wave 2 (#601 R4) the temporary take, its proof and the rehome; spawn (65), pins (78–80), workers
-    // (81–83), the dynamic settle (84) and service materialize/absorb (85–86) stay reserved.
+    // await, wave 2 the temporary take, its proof and the rehome (#601 R4), the dynamic settle and service
+    // materialize/absorb (#601 D25); spawn (65), pins (78–80) and workers (81–83) stay reserved.
     64 => FutureNew, "fut.new";
     66 => Await, "await";
     67 => AwaitTake, "await.take";
@@ -126,6 +126,9 @@ registry! {
     75 => FrameResume, "frame.resume";
     76 => AwaitUnwind, "await.unwind";
     77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
+    84 => CleanupSettleDynamic, "cleanup.settle.dynamic";
+    85 => ServiceMaterialize, "service.materialize";
+    86 => ServiceAbsorb, "service.absorb";
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
     98 => OwnDynamic, "own.dynamic";
@@ -174,7 +177,8 @@ impl Opcode {
             (ExitPrepare | ExitExtend, Tag::Normal) => vec![S(Pending)],
             (ExitReplace, Tag::Normal) => vec![S(Pending), S(Packet)],
             (ExitCommit, Tag::Normal) => valued(),
-            (ExitAbort | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure, Tag::Normal) => vec![S(Cleanup)],
+            (ExitAbort | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | CleanupSettleDynamic,
+                Tag::Normal) => vec![S(Cleanup)],
             (CleanupNext, Tag::Selected) => vec![S(Cleanup), S(StableKey)],
             (CleanupNext, Tag::Done) => vec![S(Cleanup)],
             (DestroyDirect | CleanupDestroy, Tag::Normal) => vec![S(Cleanup), S(FailureState)],
@@ -252,6 +256,10 @@ impl Opcode {
             }
             (AwaitUnwind, Tag::Normal) => vec![S(ScopeState), Value(Type::Failure)],
             (CleanupDeliverCancel, Tag::Normal) => vec![S(Cleanup)],
+            // ABI D25.2: the packet without the entry and the entry as its cache duty token (the frame kind's
+            // task-state comes with spawn, D24); absorb gives the packet that now carries the token's entry.
+            (ServiceMaterialize, Tag::Normal) => vec![S(Packet), S(CacheState)],
+            (ServiceAbsorb, Tag::Normal) => vec![S(Packet)],
             _ => return Err(error(format!("invalid outcome {tag:?} for {}", self.name()))),
         };
         Ok(slots)
@@ -320,7 +328,8 @@ impl Opcode {
             Self::FutureNew => G,
             Self::Await | Self::AwaitTake | Self::AwaitUnwind => S,
             Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
-                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome => L,
+                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome
+                | Self::CleanupSettleDynamic | Self::ServiceMaterialize | Self::ServiceAbsorb => L,
             _ => return None,
         })
     }
@@ -489,6 +498,9 @@ impl Opcode {
                 Self::FutureCancel => "champ_future_cancel",
                 Self::FutureCancelled => "champ_future_cancelled",
                 Self::CleanupDeliverCancel => "champ_cleanup_deliver_cancel",
+                Self::CleanupSettleDynamic => "champ_cleanup_settle_dynamic",
+                Self::ServiceMaterialize => "champ_service_materialize",
+                Self::ServiceAbsorb => "champ_service_absorb",
                 // These forms lower to CFG, return transport, or parallel slot moves.
                 _ => return None,
             }
@@ -590,6 +602,12 @@ helper_registry! {
         "champ_future_cancelled" => &[C, W, P], HELPER_STOPS, Some(O::FutureCancelled);
         "champ_cleanup_deliver_cancel" => &[C, W, P, P], L, Some(O::CleanupDeliverCancel);
         "champ_cleanup_settle" => &[C, W, P, W, W, W, P], L, Some(O::CleanupSettle);
+        // ABI D25: the dynamic settle of a close (84), and a duty's entry out of or into a packet (85, 86).
+        "champ_cleanup_settle_dynamic" => &[C, W, P, P], L, Some(O::CleanupSettleDynamic);
+        "champ_service_materialize" => &[C, P, W, W, P], L, Some(O::ServiceMaterialize);
+        "champ_service_absorb" => &[C, P, W, W, P], L, Some(O::ServiceAbsorb);
+        // `invoke.defer` of an async defer entry (ID 29 is S for `AsyncDefer`, draft 3 §§11, 14.4).
+        "champ_invoke_defer_async" => &[C, W, W, P, W, P, P, P], SUSPENDING | HELPER_UNWINDS, Some(O::InvokeDefer);
         "champ_machine_future_destination" => &[C, W, P], HELPER_STOPS, None;
         "champ_body_reject" => &[C, W], X, None;
 }
