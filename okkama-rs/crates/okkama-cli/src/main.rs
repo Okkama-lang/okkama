@@ -60,18 +60,29 @@ fn spb16_refusal(command: &str, rest: &[String]) -> Option<Outcome> {
     let message = "okkama: this build has the champ-abi feature and runs only SPB 17: \
         set OKKAMA_PIPELINE=oir2, or use a build without champ-abi for SPB 16\n";
     let refused = match command {
-        "run" => !oir2_selected(),
-        "exec" => {
-            let path = rest.iter().find(|argument| argument.ends_with(".spb"));
-            path.is_some_and(|path| {
-                let mut header = [0u8; 6];
-                let read = std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut header));
-                read.is_ok() && header != [b'S', b'P', b'R', b'W', 0, 17]
-            })
-        }
+        "run" | "-t" => !oir2_selected(),
+        "exec" => exec_input(rest).is_some_and(|path| {
+            let mut header = [0u8; 6];
+            let read = std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut header));
+            read.is_ok() && header != [b'S', b'P', b'R', b'W', 0, 17]
+        }),
         _ => command.ends_with(".ok") && !oir2_selected(),
     };
     refused.then(|| Outcome::failure(message.into(), EXIT_DIAGNOSTICS))
+}
+
+/// The bytecode file `exec` would run: the first argument after its budget options.
+#[cfg(feature = "champ-abi")]
+fn exec_input(args: &[String]) -> Option<&String> {
+    let mut limits = sparrow_core::budget::Limits::default();
+    let mut args = args;
+    while let [option, value, rest @ ..] = args {
+        if limits.option(option, value) != Ok(true) {
+            break;
+        }
+        args = rest;
+    }
+    args.first()
 }
 
 #[cfg(feature = "champ-abi")]
