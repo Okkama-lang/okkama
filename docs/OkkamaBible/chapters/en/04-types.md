@@ -150,7 +150,75 @@ switches the checker off for everything it touches; in Okkama it switches
 trusted native layer — which receives them unboxed — or a future explicit
 narrowing construct can open them.
 
-## 4.7 What the compiler checks, and what remains for run time
+## 4.7 Equality and order
+
+`==` asks whether two values are the same value, and the answer depends only
+on what the values are, never on where they live. Okkama has no reference
+equality: there is no "same object" test, because two objects with equal
+fields are interchangeable everywhere a program can observe them.
+
+{{example:04-equality}}
+
+- **Objects compare structurally.** Two `Square(side: 2)` are equal; Chapter
+  12 shows how this extends to nested objects, and why it lets objects serve
+  as map keys.
+- **Collections compare element by element.** Arrays are equal when they
+  have the same length and equal elements in order; maps when they have the
+  same keys with equal values.
+- **Values behind a role** are equal when they are the same kind of object
+  with equal fields. A `Square` and a `Circle` behind `Shape` are simply
+  unequal: the comparison is allowed, because both are `Shape` values, and
+  its answer is `false`.
+- **Numbers.** `int`, `byte` and `rat` are exact, so `1 / 2 == 2 / 4` is
+  true: both are the rational one half. A `float` is equal only to the same
+  binary64 value, so `0.1 + 0.2 == 0.3` is false (Chapter 5).
+
+Comparing values of two different concrete types is not `false` but a
+compile-time error. A program that asks whether an `int` equals a `float`, or
+an `Invoice` equals a `Customer`, has made a mistake that no run can make
+meaningful, and the compiler says so:
+
+{{example:04-compare-rejected}}
+
+Order is narrower than equality. `<`, `<=`, `>` and `>=` apply to numbers and
+to objects that perform the standard role `Comparing<T>`, whose
+`order(other)` they call (Chapter 14). Text has no operators: `order(other)`
+and `less(other)` compare strings by code point, so `"Zebra"` comes before
+`"apple"`, which is what a program that sorts identifiers wants and what a
+program that sorts names for people does not; a locale-aware order is a
+library's job, not an operator's (Chapter 6). Booleans, characters, arrays
+and maps have no order at all, and asking for one is a compile-time error.
+
+## 4.8 Conversions are explicit
+
+Okkama never converts a value from one type to another behind the
+programmer's back. Every conversion is an action with a name, and the name
+says what is lost.
+
+| From → to | Written | What happens |
+|---|---|---|
+| `int` → `rat` | `n.rat()` | exact |
+| `int` → `float` | `n.float()` | the nearest binary64 value |
+| `int` → `byte` | `n.byte()`, `byte(n)` | fails outside 0..255 |
+| `byte` → `int` | `b.int()` | exact |
+| `float` → `int` | `x.int()` | drops the fraction toward zero; fails outside the signed 64-bit range |
+| `float` → `rat` | `x.rat()` | exact: `2.5.rat()` is `5/2` |
+| `rat` → `int` | `q.int()` | drops the fraction toward zero |
+| `rat` → `float` | `q.float()` | the nearest binary64 value |
+| `int` → `char` | `n.char()` | the character with that code point; fails for a surrogate or a value beyond 0x10FFFF |
+| `char` → `int` | `c.code()` | its code point |
+| any value → `string` | `v.string()` | its canonical text |
+
+Two operations change type by design rather than by conversion, and both are
+exact. Dividing integers gives a rational, `7 / 2` is `7/2`; and arithmetic
+on bytes gives an integer, `byte(250) + byte(10)` is `260`, because a byte is
+an octet to store and send, not a number that wraps. Mixing kinds in one
+operation is a compile-time error too: `1 + 1.0` is rejected with "Operator +
+cannot be applied to int and float". The cost is a call where C or JavaScript would convert
+silently; the gain is that every place a value changes its kind is written
+down, with the name of what it does.
+
+## 4.9 What the compiler checks, and what remains for run time
 
 The Okkama compiler checks, before anything runs:
 
@@ -175,7 +243,7 @@ errors, that a caller may catch.
 
 Types are checked before execution; the remaining dynamic checks concern values, such as bounds and divisors.
 
-## 4.8 Limits
+## 4.10 Limits
 
 - **No union or intersection types.** A value is of one type; a choice
   between types is expressed by a role or by an enum with cases.
