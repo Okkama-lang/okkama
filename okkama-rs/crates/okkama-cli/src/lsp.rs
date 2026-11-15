@@ -31,7 +31,7 @@ use lsp_types::{
     },
 };
 use okkama_compiler::ide::{self, Inspection, LineIndex, OutlineItem, OutlineKind};
-use okkama_compiler::{SourceFile, lowering};
+use okkama_compiler::SourceFile;
 use serde_json::Value;
 
 use super::FileLoader;
@@ -298,9 +298,7 @@ impl Server {
         let Ok(source) = SourceFile::new(name, document.text.clone()) else {
             return;
         };
-        let test_mode = ide::has_tests(&source);
-        let mut loader = self.loader(test_mode);
-        let inspection = lowering::inspect(&source, &mut loader, test_mode);
+        let inspection = super::inspect_file(&source, |test_mode| self.loader(test_mode));
 
         // Диагностики по файлам; ошибки других файлов — ещё и на первом импорте корня.
         let mut by_path: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
