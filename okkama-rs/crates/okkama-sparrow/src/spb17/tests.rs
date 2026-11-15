@@ -168,13 +168,15 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 #[test]
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
-    assert_eq!(Opcode::ALL.len(), 47);
+    // P1 and the synchronous lanes take 57 IDs; #601 V6 assigns ten of the async block 64..=95.
+    assert_eq!(Opcode::ALL.len(), 57);
     for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
-    // #622: builders and lookup take 56..=61; 47..=55 and 62..=95 stay unassigned here.
+    // #622: builders and lookup take 56..=61; plain await takes 64, 66 and 70..=77 (Champ draft 3 §14.1).
     for id in 47..96 {
-        assert_eq!(Opcode::from_id(id).is_ok(), (56..=61).contains(&id), "{id}");
+        let assigned = (56..=61).contains(&id) || matches!(id, 64 | 66 | 70..=77);
+        assert_eq!(Opcode::from_id(id).is_ok(), assigned, "{id}");
     }
     for &op in Opcode::ALL {
         assert_eq!(Opcode::from_id(op.id()).unwrap(), op);
@@ -184,7 +186,7 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     use ServiceKind::*;
     let ctx = ResultContext { value: Some(Type::Int), between: true, may_fail: true,
         labels: vec![DeferLabel { label: 9, result: Some(Type::Int) }, DeferLabel { label: 10, result: None }],
-        reserve: true, active_failure: false, buffer: None };
+        reserve: true, active_failure: false, buffer: None, slots: vec![] };
     assert_eq!(Opcode::DepsOf.id(), 40);
     assert_eq!(Opcode::InvokeObserve.id(), 41);
     assert_eq!(Opcode::DepsOf.results(Tag::Normal, &ctx).unwrap(), vec![S(Deps)]);

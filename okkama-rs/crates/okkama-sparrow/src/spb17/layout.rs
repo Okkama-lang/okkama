@@ -271,9 +271,12 @@ pub struct ServiceLayout {
 pub const fn service_layout(kind: s::ServiceKind) -> ServiceLayout {
     use s::ServiceKind::*;
     match kind {
-        Deps | Closed => ServiceLayout { words: 0, references: &[] },
+        // The frame token names the activation's own frame word, which is a root of its own (draft 3 §13).
+        Deps | Closed | Frame => ServiceLayout { words: 0, references: &[] },
         StableKey => ServiceLayout { words: 2, references: &[0] },
         DestroyBorrow => ServiceLayout { words: 5, references: &[0, 32] },
+        // A receipt is a raw enumeration word (draft 3 §14.2).
+        Receipt => ServiceLayout { words: 1, references: &[] },
         _ => ServiceLayout { words: 1, references: &[0] },
     }
 }

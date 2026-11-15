@@ -32,6 +32,8 @@ pub struct ResultContext {
     pub active_failure: bool,
     /// The consumed builder of a builder transition: its normal (or unwind) result keeps this type.
     pub buffer: Option<Type>,
+    /// The saved slot types `frame.resume` reloads, in its continuation's order (D21).
+    pub slots: Vec<ProducedType>,
 }
 
 macro_rules! registry {
@@ -51,7 +53,8 @@ macro_rules! registry {
             pub fn from_id(id: u32) -> Result<Self, Error> {
                 match id {
                     $( $id => Ok(Self::$variant), )*
-                    0 | 19 | 25 | 34..=36 => Err(error(format!("reserved Champ opcode {id}"))),
+                    // 64..=95 is the async block (Champ draft 3 §14.1); its unassigned IDs stay reserved.
+                    0 | 19 | 25 | 34..=36 | 64..=95 => Err(error(format!("reserved Champ opcode {id}"))),
                     _ => Err(error(format!("unknown Champ opcode {id}"))),
                 }
             }
@@ -107,6 +110,19 @@ registry! {
     59 => BuilderFinish, "builder.finish";
     60 => BuilderAbandon, "builder.abandon";
     61 => Lookup, "lookup";
+    // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
+    // await; spawn (65), take (67), its proof (68), rehome (69), pins (78–80), workers (81–83), the dynamic
+    // settle (84) and service materialize/absorb (85–86) stay reserved.
+    64 => FutureNew, "fut.new";
+    66 => Await, "await";
+    70 => FuturePublish, "fut.publish";
+    71 => FutureCancel, "fut.cancel";
+    72 => FutureDone, "fut.done";
+    73 => FutureCancelled, "fut.cancelled";
+    74 => FrameSave, "frame.save";
+    75 => FrameResume, "frame.resume";
+    76 => AwaitUnwind, "await.unwind";
+    77 => CleanupDeliverCancel, "cleanup.deliver_cancel";
 }
 
 impl Opcode {
@@ -199,6 +215,26 @@ impl Opcode {
             (BuilderAbandon, Tag::Normal) => vec![S(Packet)],
             (Lookup, Tag::Some) => context.value.into_iter().map(Value).collect(),
             (Lookup, Tag::None) => vec![],
+            (FutureNew, Tag::Normal) => {
+                let future = context.value.ok_or_else(|| error("fut.new without a Future type"))?;
+                vec![Value(future), S(CacheState), S(ScopeState)]
+            }
+            (Await, Tag::Normal) => {
+                let mut slots = context.value.into_iter().map(Value).collect::<Vec<_>>();
+                slots.push(S(Deps));
+                slots
+            }
+            (Await, Tag::Unwind) => vec![Value(Type::Failure), S(TaskState), S(Receipt)],
+            (FuturePublish | FutureCancel, Tag::Normal) => vec![],
+            (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],
+            (FrameSave, Tag::Normal) => vec![S(Frame)],
+            (FrameResume, Tag::Normal) => {
+                let mut slots = vec![S(Frame)];
+                slots.extend(context.slots.iter().copied());
+                slots
+            }
+            (AwaitUnwind, Tag::Normal) => vec![S(ScopeState), Value(Type::Failure)],
+            (CleanupDeliverCancel, Tag::Normal) => vec![S(Cleanup)],
             _ => return Err(error(format!("invalid outcome {tag:?} for {}", self.name()))),
         };
         Ok(slots)
@@ -210,7 +246,9 @@ impl Opcode {
             Catch | Lookup => vec![Tag::Some, Tag::None],
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish => vec![Tag::Normal, Tag::Unwind],
             Fail => vec![Tag::Unwind],
-            OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate => vec![Tag::Normal, Tag::Unwind],
+            OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate | Await => {
+                vec![Tag::Normal, Tag::Unwind]
+            }
             InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
             InvokeCallOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
@@ -244,7 +282,40 @@ impl Opcode {
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
             Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
             | Self::Catch | Self::BuilderPush | Self::BuilderAppend | Self::BuilderRange | Self::BuilderFinish
-            | Self::Lookup)
+            | Self::Lookup | Self::Await)
+    }
+}
+
+/// The helper classes of Champ G1 §5.4 and draft 3 §1.1. S may also return PENDING: it has then consumed no
+/// linear operand, kept its progress in records reachable from its operands, and registered a wake entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelperClass { L, G, X, S }
+
+impl Opcode {
+    /// The class of an async operation (Champ draft 3 §14.4), including the nonempty form of
+    /// `cleanup.settle`, which is L in 0.6.0 because no settle waits. Synchronous operations take their
+    /// effects from `HELPER_TABLE`; the async helpers enter that table with the runtime (#601 V8).
+    pub const fn helper_class(self) -> Option<HelperClass> {
+        use HelperClass::*;
+        Some(match self {
+            Self::FutureNew => G,
+            Self::Await | Self::AwaitUnwind => S,
+            Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
+                | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle => L,
+            _ => return None,
+        })
+    }
+
+    /// A suspension site: an S-class operation bracketed by `frame.save` and `frame.resume` (D20).
+    pub const fn suspends(self) -> bool {
+        matches!(self.helper_class(), Some(HelperClass::S))
+    }
+
+    /// Operations that act on the running body's own frame (draft 3 helpers taking `Word this`): they
+    /// belong to async bodies only.
+    pub const fn frame_bound(self) -> bool {
+        matches!(self, Self::Await | Self::AwaitUnwind | Self::FuturePublish | Self::FrameSave | Self::FrameResume
+            | Self::CleanupDeliverCancel)
     }
 }
 

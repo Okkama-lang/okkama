@@ -11,10 +11,12 @@ mod evidence;
 pub use evidence::{static_selections, plain_inputs, plain_results, redundant_admission_filters};
 mod automaton;
 pub use automaton::infer_plan_reserves;
+mod suspension;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
 pub use codec::{assemble, decode, disassemble, encode};
-pub use registry::{CallAbi, CleanupAbi, Helper, MachineArgument, Opcode, ProducedType, ResultContext, Tag};
+pub use registry::{CallAbi, CleanupAbi, Helper, HelperClass, MachineArgument, Opcode, ProducedType, ResultContext};
+pub use registry::Tag;
 pub use registry::{helper, HELPER_TABLE, HELPER_ALLOCATES, HELPER_COLLECTS, HELPER_REENTERS, HELPER_UNWINDS, HELPER_STOPS};
 pub use verify::{verify, result_context};
 pub use load::{ExternalContracts, NoExternalContracts, verify_load, service_states};
@@ -159,6 +161,8 @@ pub enum Type {
     MapBuilder(u32),
     /// A unique array builder: `Composite::Builder` at this index.
     Builder(u32),
+    /// A Future: a reference to its frame. Its outcome type is `ChampTables::future_results` at this index.
+    Future(u32),
 }
 
 impl Type {
@@ -166,7 +170,7 @@ impl Type {
     pub fn traced(self) -> bool {
         matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
             | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
-            | Self::Builder(_))
+            | Self::Builder(_) | Self::Future(_))
     }
 }
 
@@ -276,6 +280,23 @@ pub enum ServiceKind {
     DestroyBorrow,
     /// Proof position only: zero machine words, not a GC pointer.
     Deps,
+    /// The running async body's frame token (OIR `frame<@f>`): linear, zero words. The frame word itself is
+    /// the activation's entry argument, never a slot.
+    Frame,
+    /// The owner's cache duty of one Future: one word, the Future frame.
+    CacheState,
+    /// A waiter's handle on the Future it awaited, from an await's unwind outcome: one word, the Future frame.
+    TaskState,
+    /// An await receipt (NotStarted 0, Settled 1, Withdrawn 2, ChildCancelled 3): one raw word.
+    Receipt,
+}
+
+impl ServiceKind {
+    /// A linear token: consumed exactly once on every path, never copied.
+    pub fn linear(self) -> bool {
+        matches!(self, Self::Packet | Self::ScopeState | Self::Pending | Self::Cleanup | Self::StableKey
+            | Self::FailureState | Self::ExitState | Self::Frame | Self::CacheState | Self::TaskState | Self::Receipt)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -320,6 +341,9 @@ pub enum EntryAbi {
     Observation,
     Owned,
     Defer { labels: Vec<DeferLabel> },
+    /// An async body (Champ draft 3 §13): it takes exactly its frame and publishes its outcome through
+    /// `fut.publish`. `layout` indexes `ChampTables::frames`.
+    AsyncBody { layout: u32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -420,6 +444,8 @@ pub enum Argument {
     Kind(ExitKind),
     Registration(u32),
     Destination(ExitDestination),
+    /// A continuation of the function's frame layout (`frame.save`, `frame.resume`).
+    Continuation(u32),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -770,6 +796,53 @@ pub struct ChampTables {
     pub scopes: Vec<Scope>,
     pub boundaries: Vec<Boundary>,
     pub summaries: Vec<Summary>,
+    /// D21 frame layouts, one for each async body (`EntryAbi::AsyncBody`).
+    pub frames: Vec<FrameLayout>,
+    /// The outcome value of each Future type (`Type::Future`); `None` is a void Future. Entries are distinct.
+    pub future_results: Vec<Option<Type>>,
+}
+
+/// D21 layout of one async body: typed slots and its continuations. Continuation 0 is the start.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FrameLayout {
+    pub slots: Vec<FrameSlot>,
+    pub continuations: Vec<Continuation>,
+}
+
+/// One type per slot for the whole function. Machine words and traced offsets follow from the type
+/// (`layout::service_layout` for services, the register representation for values).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSlot {
+    pub ty: ProducedType,
+    pub linear: bool,
+}
+
+/// What one suspension stores in the frame. `site` is the pc of the suspending operation; the start has
+/// none. `saved` lists the slots of `frame.save`/`frame.resume` in order; `operands` the slots of the
+/// suspending operation's location operands, in operand order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Continuation {
+    pub site: Option<u32>,
+    pub saved: Vec<u32>,
+    pub operands: Vec<u32>,
+}
+
+impl FrameLayout {
+    /// The slot types of a continuation's saved set, in order.
+    pub fn saved_types(&self, continuation: u32) -> Option<Vec<ProducedType>> {
+        let continuation = self.continuations.get(continuation as usize)?;
+        continuation.saved.iter().map(|&slot| self.slots.get(slot as usize).map(|slot| slot.ty)).collect()
+    }
+}
+
+impl Program {
+    /// The frame layout of an async body.
+    pub fn frame_layout(&self, f: &Function) -> Option<&FrameLayout> {
+        match f.entry_abi {
+            EntryAbi::AsyncBody { layout } => self.tables.frames.get(layout as usize),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -843,11 +916,15 @@ pub struct Schedule {
     pub services: Vec<Location>,
 }
 
-/// D18 mask: Thrown=1, Program=2, Panic=4, Native=8. No async/cancel bits.
+/// D18 mask: Thrown=1, Program=2, Panic=4, Native=8, and `ENVELOPE_CANCEL` for the final exit of an async body
+/// whose close delivers a deferred cancellation (`cleanup.deliver_cancel`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Envelope {
     pub failures: u32,
 }
+
+/// The D18 bit of a close that may deliver a deferred cancellation (OIR `scope_effects(cancel=true)`).
+pub const ENVELOPE_CANCEL: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateRecord {
@@ -961,3 +1038,5 @@ mod testmode_tests;
 mod rules_tests;
 #[cfg(test)]
 mod budget_tests;
+#[cfg(test)]
+mod async_tests;

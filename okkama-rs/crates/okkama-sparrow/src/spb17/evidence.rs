@@ -7,8 +7,16 @@ type Inventory = BTreeSet<(u32, Option<u32>)>;
 
 /// A call packet contains only obligations of its actual language arguments.
 /// The loader checks every call, and the machine entry checks the host boundary.
+/// An async body's inputs are the values of its start continuation (D21), not its frame parameter.
 pub fn plain_inputs(p: &Program, f: &Function) -> bool {
-    f.params.iter().all(|&location| match verify::loc_type(f, location) {
+    let inputs: Vec<Result<ProducedType, Error>> = match p.frame_layout(f) {
+        Some(layout) => match layout.saved_types(0) {
+            Some(types) => types.into_iter().map(Ok).collect(),
+            None => vec![Err(error("an async body without its start continuation"))],
+        },
+        None => f.params.iter().map(|&location| verify::loc_type(f, location)).collect(),
+    };
+    inputs.into_iter().all(|ty| match ty {
         Ok(ProducedType::Value(ty @ (Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
             | Type::Variant(_)))) => {
             !verify::reaches_resource(p, ty)
@@ -18,6 +26,14 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
         Ok(_) => true,
         Err(_) => false,
     })
+}
+
+/// Where a `frame.resume` output comes from.
+enum Resumed {
+    /// The value its continuation's `frame.save` stored at this position.
+    Saved(Location),
+    /// A start value of the body, written by `fut.new`.
+    Start,
 }
 
 pub fn plain_results(p: &Program, f: &Function) -> bool {
@@ -145,6 +161,28 @@ impl<'a> Evidence<'a> {
             resource_free: resource_free(program, function) }
     }
 
+    /// The source of output `slot` of a `frame.resume` at `pc`; slot 0 is the frame token.
+    fn resumed(&self, pc: usize, slot: usize) -> Option<Resumed> {
+        let Instruction::Champ { op: Opcode::FrameResume, arguments: args, .. } = &self.function.code[pc] else {
+            return None;
+        };
+        let continuation = suspension::continuation_of(args)?;
+        if slot == 0 {
+            return None;
+        }
+        if continuation == 0 {
+            return Some(Resumed::Start);
+        }
+        let layout = self.program.frame_layout(self.function)?;
+        let site = layout.continuations.get(continuation as usize)?.site? as usize;
+        let save = self.function.code.get(site.checked_sub(1)?)?;
+        if !matches!(save, Instruction::Champ { op: Opcode::FrameSave, .. }) {
+            return None;
+        }
+        // The frame operand comes first, then the saved values in slot order, as the resume's outputs.
+        arguments(save).get(slot).copied().map(Resumed::Saved)
+    }
+
     pub fn check_budget(&self) -> Result<(), Error> {
         enforce(!self.exhausted, "LOAD_WORK_BUDGET", "evidence resolution exceeds step/depth budget")
     }
@@ -230,8 +268,16 @@ impl<'a> Evidence<'a> {
                         _ => return None,
                     }
                 }
-                Definition::Instruction(pc, _) => {
+                Definition::Instruction(pc, slot) => {
                     let Instruction::Champ { op, .. } = &self.function.code[pc] else { return None };
+                    match self.resumed(pc, slot) {
+                        Some(Resumed::Saved(source)) => {
+                            self.query(source, 3)?;
+                            continue;
+                        }
+                        Some(Resumed::Start) => return self.inventory(location).filter(Inventory::is_empty),
+                        None => {}
+                    }
                     match op {
                         Opcode::ExitCommit | Opcode::OwnCreateCommit | Opcode::OwnEmpty
                             | Opcode::InvokeCallOwn => {}
@@ -296,6 +342,21 @@ impl<'a> Evidence<'a> {
     }
 
     fn instruction(&mut self, pc: usize, slot: usize, location: Location, identity: bool) -> Option<Inventory> {
+        match self.resumed(pc, slot) {
+            Some(Resumed::Saved(source)) => return self.resolve(source, identity),
+            // A start value is an entry input: its packet is plain or opaque, as an owned entry's.
+            Some(Resumed::Start) => {
+                let Location::Service(id) = location else { return None };
+                if identity || self.function.services[id as usize] != ServiceKind::Packet {
+                    return None;
+                }
+                if plain_inputs(self.program, self.function) {
+                    return Some(BTreeSet::new());
+                }
+                return Some(BTreeSet::from([(u32::MAX, Some(id))]));
+            }
+            None => {}
+        }
         let instruction = &self.function.code[pc];
         if identity {
             if matches!(instruction, Instruction::Data { op: DataOp::ObjNew | DataOp::ObjNext, .. }) {
@@ -363,6 +424,10 @@ impl<'a> Evidence<'a> {
             }
             ExitExtend if identity => self.resolve(locations[0], true),
             ExitCommit => self.resolve(locations[0], identity),
+            // The owner state keeps its identities: the input packet moves into the Future, and the cache
+            // duty is a service token of its own.
+            FutureNew if !identity && slot == 2 => self.resolve(*locations.last()?, false),
+            AwaitUnwind if !identity && slot == 0 => self.resolve(locations[0], false),
             _ => None,
         }
     }
@@ -402,6 +467,14 @@ impl<'a> Evidence<'a> {
                         return None;
                     };
                     let locations = arguments(&self.function.code[pc]);
+                    match (op, self.resumed(pc, slot)) {
+                        (_, Some(Resumed::Saved(source))) => return self.query(source, 2),
+                        // Call-entry consumes fresh admission, as for an owned entry's packet parameter.
+                        (_, Some(Resumed::Start)) => return Some(Inventory::new()),
+                        (Opcode::FutureNew, _) if slot == 2 => return self.query(*locations.last()?, 2),
+                        (Opcode::AwaitUnwind, _) if slot == 0 => return self.query(locations[0], 2),
+                        _ => {}
+                    }
                     match op {
                         Opcode::OwnEmpty | Opcode::ScopeBegin => Inventory::new(),
                         Opcode::OwnCreateCommit | Opcode::InvokeCallOwn => {

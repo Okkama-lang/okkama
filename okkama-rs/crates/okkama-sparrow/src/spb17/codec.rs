@@ -356,8 +356,12 @@ record! { Block {
 } }
 
 record! { ChampTables {
-    scopes, boundaries, summaries,
+    scopes, boundaries, summaries; frames, future_results,
 } }
+
+record! { FrameLayout { slots, continuations } }
+record! { FrameSlot { ty, linear } }
+record! { Continuation { site, saved, operands } }
 
 record! { Scope {
     function, parent, boundary,
@@ -434,7 +438,7 @@ tagged! { Type {
     6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
     23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
-    26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32),
+    26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32), 29 => Future(id: u32),
 } }
 impl Wire for Composite {
     fn put(&self, w: &mut Writer) {
@@ -470,7 +474,9 @@ tagged! { ArrayLeaf {
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
     5 => FailureState, 6 => ExitState, 7 => Closed, 8 => DestroyBorrow, 9 => Deps,
+    10 => Frame, 11 => CacheState, 12 => TaskState, 13 => Receipt,
 } }
+tagged! { ProducedType { 0 => Value(ty: Type), 1 => Service(kind: ServiceKind) } }
 tagged! { ExitKind { 0 => Return, 1 => Last, 2 => Next, 3 => Fallthrough } }
 tagged! { Location { 0 => Register(id: u32), 1 => Service(id: u32) } }
 tagged! { Source { 0 => Location(loc: Location), 1 => ProducedSlot(slot: u32) } }
@@ -494,7 +500,7 @@ tagged! { Argument {
     4 => Selection(id: u32), 5 => Plan(id: u32), 6 => Schedule(id: u32), 7 => Envelope(id: u32),
     8 => Entry(id: u32), 9 => Object(id: u32), 10 => Binding(id: u32), 11 => Field(id: u32),
     12 => Label(id: u32), 13 => Flag(flag: bool), 14 => Kind(kind: ExitKind), 15 => Registration(id: u32),
-    16 => Destination(destination: ExitDestination),
+    16 => Destination(destination: ExitDestination), 19 => Continuation(id: u32),
 } }
 record! { Evaluation { op, result, immediate } }
 
@@ -521,6 +527,10 @@ impl Wire for EntryAbi {
                 w.number(2);
                 labels.put(w);
             }
+            Self::AsyncBody { layout } => {
+                w.number(3);
+                layout.put(w);
+            }
         }
     }
     fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
@@ -528,6 +538,7 @@ impl Wire for EntryAbi {
             0 => Ok(Self::Observation),
             1 => Ok(Self::Owned),
             2 => Ok(Self::Defer { labels: Vec::get(r)? }),
+            3 => Ok(Self::AsyncBody { layout: u32::get(r)? }),
             _ => Err(r.fail("unknown entry ABI")),
         }
     }

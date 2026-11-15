@@ -14,7 +14,7 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
     items.get(index as usize).ok_or_else(|| error(format!("invalid table/location index {index}")))
 }
 
-fn ty_valid(ty: Type, p: &Program) -> Check {
+pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
     match ty {
         Type::Object(id) | Type::Successor(id) => {
             enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
@@ -66,10 +66,18 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
             enforce(matches!(p.composites.get(id as usize), Some(Composite::Builder { .. })),
                 "COMPOSITE_TYPE", "builder type names no builder composite")?;
         }
+        Type::Future(id) => {
+            enforce((id as usize) < p.tables.future_results.len(), FUTURE_TYPES,
+                "a Future type names no future_results entry")?;
+        }
         _ => {}
     }
     Ok(())
 }
+
+/// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; a Future is
+/// held only in registers (no object storage holds one before the service entries of D25).
+pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
 
 /// Whether a value of `ty` may refer to an identity that reaches a resource: a resource object or successor,
 /// or a managed array or map of them. Plain collections never do (`ARRAY_PLAIN`, `MAP_PLAIN`).
@@ -313,6 +321,16 @@ pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
     }
+    let mut results = std::collections::HashSet::new();
+    for &result in &p.tables.future_results {
+        if let Some(ty) = result {
+            ty_valid(ty, p)?;
+            enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
+                "a Future cannot publish a unique builder")?;
+        }
+        enforce(results.insert(result), FUTURE_TYPES, "future_results entries must be distinct")?;
+    }
+    suspension::check_layouts(p)?;
     for (index, &composite) in p.composites.iter().enumerate() {
         composite_valid(p, index, composite)?;
     }
@@ -359,6 +377,7 @@ pub fn verify(p: &Program) -> Check {
         unique(&layout.selection_layout)?;
         for (index, &ty) in layout.storage_fields.iter().enumerate() {
             ty_valid(ty, p)?;
+            enforce(!matches!(ty, Type::Future(_)), FUTURE_TYPES, "object storage cannot hold a Future")?;
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
                 "object storage cannot hold a unique builder")?;
             // Retention flags are checked object by object, so a managed collection's leaf flag can be trusted.
@@ -508,10 +527,18 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
         }
     }
     for schedule in &f.proofs.schedules {
-        require(schedule.services.is_empty(), "P1 D16 service schedule must be empty")?;
+        let mut seen = BTreeSet::new();
+        for &duty in &schedule.services {
+            enforce(loc_type(f, duty)? == ProducedType::Service(ServiceKind::CacheState), suspension::SCHEDULE,
+                "a scheduled duty is not a cache-state")?;
+            enforce(seen.insert(duty), suspension::SCHEDULE, "a schedule names one duty twice")?;
+        }
     }
+    let asynchronous = matches!(f.entry_abi, EntryAbi::AsyncBody { .. });
     for envelope in &f.proofs.envelopes {
-        require(envelope.failures & !15 == 0, "invalid P1 D18 failure mask")?;
+        require(envelope.failures & !(15 | ENVELOPE_CANCEL) == 0, "invalid D18 failure mask")?;
+        enforce(asynchronous || envelope.failures & ENVELOPE_CANCEL == 0, suspension::ASYNC_ENTRY,
+            "only an async body delivers a deferred cancellation")?;
     }
     for state in &f.proofs.states {
         at(&f.code, state.pc)?;
@@ -563,8 +590,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             Argument::Destination(ExitDestination::Scope(id)) => { at(&p.tables.scopes, id)?; }
             Argument::Flag(flag) => flags.push(flag),
             Argument::Registration(id) => { at(&f.proofs.registrations, id)?; }
-            Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_) => {}
+            Argument::Binding(_) | Argument::Field(_) | Argument::Label(_) | Argument::Kind(_)
+                | Argument::Continuation(_) => {}
         }
+    }
+    if op.frame_bound() {
+        enforce(matches!(f.entry_abi, EntryAbi::AsyncBody { .. }), suspension::ASYNC_ENTRY,
+            &format!("{} belongs to async bodies only", op.name()))?;
     }
     if matches!(op, Opcode::ScopeTransfer | Opcode::OwnStage) {
         ctx.between = flags.first().copied().ok_or_else(|| error("missing Same/Between discriminator"))?;
@@ -777,7 +809,100 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             input(0, Pending)?;
             input(1, Cleanup)?;
         }
-        CleanupSettle | CleanupPlan | CleanupNext | CleanupFinish => input(0, Cleanup)?,
+        CleanupPlan | CleanupNext | CleanupFinish | CleanupDeliverCancel => input(0, Cleanup)?,
+        CleanupSettle => {
+            input(0, Cleanup)?;
+            if let Some(&duty) = locations.get(1) {
+                enforce(loc_type(f, duty)? == ProducedType::Service(CacheState), suspension::SCHEDULE,
+                    "a settled duty is not a cache-state")?;
+            }
+        }
+        FutureNew => {
+            let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
+                .ok_or_else(|| error("fut.new requires an entry"))?;
+            let callee = at(&p.functions, entry)?;
+            let layout = p.frame_layout(callee)
+                .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
+            let start = layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?;
+            let inputs = start.iter().filter(|ty| matches!(ty, ProducedType::Value(_))).count();
+            let future = args.iter().find_map(|arg| match arg {
+                Argument::Result(result) => *result,
+                _ => None,
+            });
+            let Some(Type::Future(index)) = future else {
+                return Err(violation(FUTURE_TYPES, "fut.new must produce a Future type"));
+            };
+            enforce(p.tables.future_results.get(index as usize) == Some(&callee.results.first().copied()),
+                FUTURE_TYPES, "the Future type differs from the async body's result")?;
+            require(locations.len() >= inputs + 2, "fut.new needs its arguments, input packet and owner state")?;
+            for (&location, expected) in locations.iter().zip(&start[..inputs]) {
+                require(loc_type(f, location)? == *expected, "fut.new argument type mismatch")?;
+            }
+            input(inputs, Packet)?;
+            for index in inputs + 1..locations.len() - 1 {
+                input(index, Deps)?;
+            }
+            input(locations.len() - 1, ScopeState)?;
+            ctx.value = future;
+        }
+        Await | FutureCancel | FutureDone | FutureCancelled => {
+            let Some(Type::Future(index)) = locations.first().and_then(|&location| match loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty),
+                _ => None,
+            }) else {
+                return Err(violation(FUTURE_TYPES, format!("{} needs a Future", op.name())));
+            };
+            if op == Await {
+                ctx.value = *p.tables.future_results.get(index as usize)
+                    .ok_or_else(|| violation(FUTURE_TYPES, "a Future type names no future_results entry"))?;
+                ctx.may_fail = true;
+            }
+        }
+        FuturePublish => {
+            input(0, Frame)?;
+            let rest = &locations[1..];
+            if flags.first() == Some(&true) {
+                let value = f.results.first().copied();
+                let offset = usize::from(value.is_some());
+                require(rest.len() > offset, "fut.publish success needs its value and packet")?;
+                if let Some(ty) = value {
+                    enforce(loc_type(f, rest[0])? == ProducedType::Value(ty), FUTURE_TYPES,
+                        "the published value differs from the Future type")?;
+                }
+                input(1 + offset, Packet)?;
+                for index in 2 + offset..locations.len() {
+                    input(index, Deps)?;
+                }
+            } else {
+                require(rest.len() == 1 && loc_type(f, rest[0])? == ProducedType::Value(Type::Failure),
+                    "fut.publish failure needs exactly one failure")?;
+            }
+        }
+        FrameSave | FrameResume => {
+            input(0, Frame)?;
+            let continuation = args.iter().find_map(|arg| match arg {
+                Argument::Continuation(id) => Some(*id),
+                _ => None,
+            }).ok_or_else(|| error("frame operation without a continuation"))?;
+            let layout = p.frame_layout(f).ok_or_else(|| error("async body without a frame layout"))?;
+            let saved = layout.saved_types(continuation)
+                .ok_or_else(|| violation(suspension::RESUME_TABLE, "unknown continuation"))?;
+            if op == FrameSave {
+                enforce(continuation != 0, suspension::SUSPEND_BRACKET, "the start continuation is never saved")?;
+                let actual = locations[1..].iter().map(|&location| loc_type(f, location))
+                    .collect::<Result<Vec<_>, _>>()?;
+                enforce(actual == saved, suspension::FRAME_LINEAR,
+                    "frame.save values differ from the continuation's saved slots")?;
+            } else {
+                ctx.slots = saved;
+            }
+        }
+        AwaitUnwind => {
+            input(0, ScopeState)?;
+            require(loc_type(f, locations[1])? == ProducedType::Value(Type::Failure), "expected failure view")?;
+            input(2, TaskState)?;
+            input(3, Receipt)?;
+        }
         CleanupFailure => {
             input(0, Cleanup)?;
             require(loc_type(f, locations[1])? == ProducedType::Value(Type::Failure), "expected failure view")?;
@@ -892,6 +1017,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
             Selection(_) => 'e', Plan(_) => 'p', Schedule(_) => 'd', Envelope(_) => 'v',
             Entry(_) => 'f', Object(_) => 'o', Binding(_) => 'i', Field(_) => 't',
             Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm', Destination(_) => 'x',
+            Continuation(_) => 'c',
         }
     };
     let shape: String = args.iter().map(kind).collect();
@@ -918,7 +1044,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         ExitReplace => shape == "lkble" || shape == "lkblle",
         ExitCommit => matches!(shape.as_str(), "lx" | "lb" | "lxr"),
         CleanupBegin => matches!(shape.as_str(), "lbv" | "llbv" | "lllbv"),
-        CleanupSettle => shape == "ld",
+        CleanupSettle => shape == "ld" || shape == "ldl",
         CleanupPlan => shape == "lp",
         CleanupNext | CleanupFinish | FailureDispatch => shape == "l",
         DestroyDirect => shape == "llof",
@@ -932,6 +1058,12 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         BuilderAppend => shape == "lll",
         BuilderRange => shape == "?llll",
         BuilderFinish | BuilderAbandon | Lookup => shape == "ll",
+        FutureNew => shape.len() >= 5 && shape.starts_with("fsr") && shape[3..].chars().all(|ch| ch == 'l'),
+        Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel => shape == "l",
+        FuturePublish => shape.len() > 2 && shape.starts_with("l?") && shape[2..].chars().all(|ch| ch == 'l'),
+        FrameSave => shape.starts_with("lc") && shape[2..].chars().all(|ch| ch == 'l'),
+        FrameResume => shape == "lc",
+        AwaitUnwind => shape == "llll",
     };
     require(valid, &format!("invalid operands for {}", op.name()))
 }
@@ -1263,6 +1395,7 @@ fn uses(inst: &Instruction) -> Vec<Location> {
 
 fn verify_function(p: &Program, f: &Function) -> Check {
     check_proofs(p, f)?;
+    suspension::check_entry(f)?;
     if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
         require(f.code.is_empty() && f.blocks.is_empty(), "external entry cannot carry code")?;
         for &param in &f.params {
@@ -1306,6 +1439,10 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                 }
                 Instruction::Raise(value) => {
                     require(at(&f.registers, *value)? == &Type::Failure, "raise needs failure")?;
+                }
+                Instruction::Ret(values) if matches!(f.entry_abi, EntryAbi::AsyncBody { .. }) => {
+                    enforce(values.is_empty(), suspension::ASYNC_ENTRY,
+                        "an async body publishes instead of returning")?;
                 }
                 Instruction::Ret(values) => {
                     enforce(f.entry_abi == EntryAbi::Observation, "ENTRY_RETURN_ABI",
@@ -1416,6 +1553,7 @@ fn verify_function(p: &Program, f: &Function) -> Check {
             }
         }
     }
+    suspension::check_structure(p, f)?;
     check_unbound(f)?;
     check_successors(p, f, &pcs)?;
     check_builders(p, f, &pcs)?;
@@ -1629,7 +1767,10 @@ pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
 /// Register operands of `op` whose successor permission moves away from the register: returned values of
 /// ret.own/ret.defer, the value of exit.prepare and the replacement value of exit.replace (into the exit).
 fn successor_operands(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<Location> {
-    let moves = matches!(op, Opcode::RetOwn | Opcode::RetDefer | Opcode::ExitPrepare | Opcode::ExitReplace);
+    // frame.save moves a saved permission into the frame (its resume produces it again); fut.publish into the
+    // Future's outcome.
+    let moves = matches!(op, Opcode::RetOwn | Opcode::RetDefer | Opcode::ExitPrepare | Opcode::ExitReplace
+        | Opcode::FrameSave | Opcode::FuturePublish);
     arguments.iter().filter_map(|argument| match argument {
         Argument::Location(location @ Location::Register(_)) if moves => Some(*location),
         _ => None,

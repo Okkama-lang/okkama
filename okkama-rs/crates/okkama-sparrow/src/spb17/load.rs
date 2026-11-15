@@ -27,9 +27,7 @@ fn require(condition: bool, message: &str) -> Check {
 }
 
 fn linear(f: &Function, location: Location) -> bool {
-    matches!(location, Location::Service(id) if matches!(f.services[id as usize],
-        ServiceKind::Packet | ServiceKind::ScopeState | ServiceKind::Pending | ServiceKind::Cleanup
-        | ServiceKind::StableKey | ServiceKind::FailureState | ServiceKind::ExitState))
+    matches!(location, Location::Service(id) if f.services[id as usize].linear())
 }
 
 /// Operand consumption table. Language values, captures, selections and erased proofs never consume services.
@@ -44,6 +42,13 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
         let consume = match op {
             ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
+            // A Future is a language value: awaiting, cancelling or reading it consumes nothing.
+            Await | FutureCancel | FutureDone | FutureCancelled => false,
+            // Every linear operand: fut.new takes the input packet and the owner state; fut.publish the frame
+            // and the success packet; frame.save the frame and the saved tokens; await.unwind the state, task and
+            // receipt; cleanup.settle the cleanup state and its duty.
+            FutureNew | FuturePublish | FrameSave | FrameResume | AwaitUnwind | CleanupDeliverCancel
+                | CleanupSettle => true,
             // The journal packet travels with the buffer; the buffer is a register (check_builders).
             BuilderPush | BuilderAppend | BuilderRange | BuilderFinish | BuilderAbandon => {
                 index + 1 == locations.len()
@@ -52,7 +57,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
             ScopeTransfer => index < 1 + usize::from(between),
-            OwnSplit | OwnSplitChecked | ScopeSplit | DeferRegister | ExitCommit | CleanupSettle
+            OwnSplit | OwnSplitChecked | ScopeSplit | DeferRegister | ExitCommit
                 | CleanupPlan | CleanupNext | CleanupFinish | CleanupFailure | DestroyDirect | FailureDispatch => {
                     index == 0
                 }
@@ -176,7 +181,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         enforce(f.params.iter().all(|&location| !matches!(verify::loc_type(f, location),
             Ok(ProducedType::Service(ServiceKind::Pending | ServiceKind::Cleanup | ServiceKind::ExitState
                 | ServiceKind::StableKey | ServiceKind::DestroyBorrow | ServiceKind::ScopeState
-                | ServiceKind::FailureState)))),
+                | ServiceKind::FailureState | ServiceKind::CacheState | ServiceKind::TaskState
+                | ServiceKind::Receipt)))),
             "ENTRY_PRIVATE_SERVICE", "private service contents cannot be entry arguments")?;
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
@@ -200,6 +206,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         check_failure_mask(p, f)?;
         check_call_contracts(p, f)?;
         check_service_results(p, f)?;
+        suspension::check_flow(p, f)?;
         let states = service_states(f)?;
         enforce(f.proofs.states == states, "EVIDENCE_STATES",
             "service maps differ from reconstructed lifetimes")?;
@@ -224,7 +231,7 @@ fn traced(f: &Function, location: Location) -> bool {
     match location {
         Location::Register(id) => !matches!(f.registers[id as usize],
             Type::Bool | Type::Never | Type::Descriptor | Type::Byte | Type::Float | Type::Char),
-        Location::Service(id) => !matches!(f.services[id as usize], ServiceKind::Deps | ServiceKind::Closed),
+        Location::Service(id) => !layout::service_layout(f.services[id as usize]).references.is_empty(),
     }
 }
 
@@ -286,7 +293,14 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
     let empty_reserve = !reserve || contract.reserve && locations.get(1)
         .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
     evidence.check_budget()?;
-    if empty_source && empty_reserve { return Ok(0); }
+    // A settled cache releases its Future's outcome or unstarted inputs into the plan, outside the inventory.
+    let releases = f.code.iter().any(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::FutureNew, arguments, .. } => arguments.iter().any(|arg| matches!(arg,
+            Argument::Entry(id) if !plain_inputs(p, &p.functions[*id as usize])
+                || !plain_results(p, &p.functions[*id as usize]))),
+        _ => false,
+    });
+    if empty_source && empty_reserve && !releases { return Ok(0); }
     // A scope can only acquire input obligations or packets produced by this activation's calls.
     // Reconstruct their descriptor closure; unrelated module destroys cannot enter this inventory.
     let mut functions = vec![f];
@@ -303,6 +317,12 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                 Ok(ProducedType::Value(ty)) => Some(ty), _ => None,
             }));
         }
+        // An async body's inputs arrive through its start continuation.
+        if let Some(start) = p.frame_layout(function).and_then(|layout| layout.saved_types(0)) {
+            types.extend(start.into_iter().filter_map(|ty| match ty {
+                ProducedType::Value(ty) => Some(ty), _ => None,
+            }));
+        }
         for instruction in &function.code {
             let Instruction::Champ { op, arguments, .. } = instruction else { continue };
             if *op == Opcode::OwnCreateCommit {
@@ -310,11 +330,13 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                     Argument::Object(id) => Some(Type::Object(*id)), _ => None,
                 }));
             }
-            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
+            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer | Opcode::FutureNew) {
                 for callee in arguments.iter().filter_map(|arg| match arg {
                     Argument::Entry(id) => Some(&p.functions[*id as usize]), _ => None,
                 }) {
-                    if !plain_results(p, callee) || *op == Opcode::InvokeDefer {
+                    // A settled cache releases a Future's outcome and its unstarted inputs into the plan.
+                    let released = *op == Opcode::FutureNew && !plain_inputs(p, callee);
+                    if !plain_results(p, callee) || *op == Opcode::InvokeDefer || released {
                         if callee.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
                             return Ok(p.functions.iter().filter_map(|f| f.proofs.entry.as_ref())
                                 .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures));
@@ -497,6 +519,39 @@ fn evidence_rule(evidence: &evidence::Evidence, holds: bool, rule: &'static str,
 fn check_call_contracts(p: &Program, f: &Function) -> Check {
     let mut reconstructed = evidence::Evidence::new(p, f);
     for instruction in &f.code {
+        if let Instruction::Champ { op: Opcode::FutureNew, arguments, .. } = instruction {
+            let callee = arguments.iter().find_map(|arg| match *arg {
+                Argument::Entry(id) => p.functions.get(id as usize), _ => None,
+            }).ok_or_else(|| error("fut.new has no entry"))?;
+            if plain_inputs(p, callee) {
+                let packet = arguments.iter().find_map(|arg| match arg {
+                    Argument::Location(location) if verify::loc_type(f, *location)
+                        == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+                    _ => None,
+                }).ok_or_else(|| violation("CALL_PLAIN_PACKET", "fut.new omits its input packet"))?;
+                let empty = reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty());
+                evidence_rule(&reconstructed, empty, "CALL_PLAIN_PACKET",
+                    &format!("{} -> {}: plain Future inputs cannot carry resource obligations", f.symbol,
+                        callee.symbol))?;
+            }
+        }
+        if let Instruction::Champ { op: Opcode::FuturePublish, arguments, .. } = instruction
+            && let Some(packet) = arguments.iter().find_map(|arg| match arg {
+                Argument::Location(location) if verify::loc_type(f, *location)
+                    == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+                _ => None,
+            })
+        {
+            // A published success packet goes to the cache as a returned packet goes to the caller.
+            if plain_results(p, f) {
+                let empty = reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty());
+                evidence_rule(&reconstructed, empty, "RETURN_PLAIN_PACKET",
+                    "a plain outcome cannot carry resource obligations")?;
+            }
+            let flat = reconstructed.flat_packet(packet);
+            evidence_rule(&reconstructed, flat, "RETURN_PACKET_NOT_FLAT",
+                "a published packet must have identical admission and full inventories")?;
+        }
         if let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction {
             let packet = arguments.iter().find_map(|arg| match arg {
                 Argument::Location(location) if verify::loc_type(f, *location)
@@ -642,6 +697,8 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                             .fold(0, |mask, envelope| mask | envelope.failures)
                             | masks.values().fold(0, |mask, value| mask | value),
                         (Opcode::FailureDispatch, Tag::Some) => destroy_mask,
+                        // An awaited Future fails with whatever its body published.
+                        (Opcode::Await, Tag::Unwind) => 15,
                         (_, Tag::Unwind) => 2,
                         _ => 0,
                     }
