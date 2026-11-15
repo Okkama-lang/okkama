@@ -127,6 +127,13 @@ impl OperandSource for RehomeForm {
     }
 }
 
+/// The destination of a `cache.rehome` (async ABI C-4, ruling of #601 R1): the
+/// destination of the exit whose pending reserve receives the duties, the same
+/// one its `exit.commit` names. A nested scope's exit lands in a scope of the
+/// same function; a returned Future reaches the caller (D25.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RehomeTarget { Scope(ScopeId), Caller }
+
 /// A service entry `ServiceOf{holder, kind}` of a packet (async ABI D25.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServiceEntry { pub holder: ValueId, pub kind: ServiceKeyKind }
@@ -148,7 +155,7 @@ operation_group! { AsyncOp {
         => ("await.take", [future: Borrow, unique: Consume], Rule::Await { future: *future, result: *result, take: Some((*unique, *boundary)), shielded: false });
     UniqueCacheProof { proof: UniqueCacheProof }
         => ("unique_cache.proof", [proof: Observe], Rule::UniqueProof(proof.clone()));
-    CacheRehome { form: RehomeForm, target: ScopeId, protocol: ProtocolId }
+    CacheRehome { form: RehomeForm, target: RehomeTarget, protocol: ProtocolId }
         => ("cache.rehome", [form: Consume], match form {
             RehomeForm::State(state) => Rule::Protocol { state: *state, owner: None, packet: None,
                 protocol: *protocol, transition: ProtocolTransition::Rehome }

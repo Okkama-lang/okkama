@@ -53,7 +53,10 @@ const WITNESSES: &[&str] = &[
     "coro-start-continuation",
     // Commit 5b (R1): resources across the Future boundary.
     "r1-cached-outcome",
+    "r1-cold-escape",
+    "r1-make-escape",
     "r1-never-started-close",
+    "r1-view-escape",
 ];
 
 #[test]
@@ -340,4 +343,164 @@ fn r1_a_shared_await_borrows_the_cached_outcome() {
         assert!(matches!(main_body.values.get(view).unwrap().facts, ValueFacts::Managed { .. }));
     }
     assert_eq!(awaits, 2);
+}
+
+/// The `cache.rehome`s of a function: (owner scope of the state, target).
+fn rehomes(module: &Module, body: &Body) -> Vec<(ScopeId, RehomeTarget)> {
+    body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Scope { state, .. }, target, .. }) => {
+            let Ok(Type::Service(ServiceType::Scope(scope))) = module.types.get(body.values.get(*state).unwrap().ty)
+            else { panic!("rehome state") };
+            Some((*scope, *target))
+        }
+        _ => None,
+    }).collect()
+}
+
+fn scope_named(module: &Module, function: FuncId, parent: bool) -> ScopeId {
+    module.scopes.iter().find(|(_, scope)| scope.function == function && scope.parent.is_none() != parent)
+        .map(|(id, _)| id).unwrap()
+}
+
+/// OIR-2 §10.1 make(), async ABI C-4 and D25.1: a returned cold Future takes its duty and its fresh inputs to the
+/// caller. make rehomes the duty into the pending reserve of its return (target caller), its summary marks the
+/// Future's fresh family and returns the inputs with it, and main's scope that admits the packet settles it by the
+/// dynamic step (D25.3). When the Future leaves main's inner block, its duty is rehomed again (target S).
+#[test]
+fn r1_a_returned_future_takes_its_cache_duty_to_the_caller() {
+    let output = rewrite_async(&input("r1-make-escape")).unwrap();
+    let module = &output.module;
+    let (make_id, make) = function(module, "make");
+    let body = make.body.as_ref().unwrap();
+    assert_eq!(rehomes(module, body), [(scope_named(module, make_id, false), RehomeTarget::Caller)]);
+    // No split selects the Future: its duty leaves only through the rehome.
+    for (_, block) in body.blocks.iter() {
+        if let TermKind::InvokeOwn { op, .. } = &block.term.kind
+            && let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref()
+            && let Ok(SelectionExpr::Value(value)) = body.selections.get(*selection) {
+            assert!(!matches!(module.types.get(body.values.get(*value).unwrap().ty), Ok(Type::Future(_))),
+                "a Future's duty never leaves by a split");
+        }
+    }
+    let summary = module.summaries.get(make.summary.unwrap()).unwrap();
+    assert_eq!(summary.results[0].fresh.len(), 3, "the Future's duty and the fresh R and A");
+    assert_eq!(summary.parameters[0].destination, TransferDestination::Result);
+    let (main_id, main) = function(module, "main");
+    let main_body = main.body.as_ref().unwrap();
+    let outer = scope_named(module, main_id, false);
+    let inner = scope_named(module, main_id, true);
+    assert_eq!(rehomes(module, main_body), [(inner, RehomeTarget::Scope(outer))]);
+    for scope in [inner, outer] {
+        let dynamic = main_body.service_schedules.iter().filter(|schedule| schedule.owner == scope)
+            .flat_map(|schedule| &schedule.duties).filter(|duty| **duty == ScheduleDuty::Dynamic).count();
+        assert_eq!(dynamic, 1, "{scope:?} admits a service entry");
+    }
+}
+
+/// OIR-2 §10.2, C-4: a cold Future created in an inner block and a view of a cached outcome escaping it both
+/// rehome the cache duty to the block's destination; the commit names the same scope.
+#[test]
+fn r1_an_escape_from_a_block_rehomes_into_the_destination() {
+    for name in ["r1-cold-escape", "r1-view-escape"] {
+        let output = rewrite_async(&input(name)).unwrap();
+        let module = &output.module;
+        let (main_id, main) = function(module, "main");
+        let body = main.body.as_ref().unwrap();
+        let outer = scope_named(module, main_id, false);
+        let inner = scope_named(module, main_id, true);
+        assert_eq!(rehomes(module, body), [(inner, RehomeTarget::Scope(outer))], "{name}");
+        let commits: Vec<_> = body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+            Operation::Exit(ExitOp::Commit { destination, .. }) => Some(*destination),
+            _ => None,
+        }).collect();
+        assert_eq!(commits, [ExitDestination::Scope(outer)], "{name}");
+        // The inner block keeps its static duty; the outer scope admits the entry.
+        let duties = |scope: ScopeId| body.service_schedules.iter().filter(|schedule| schedule.owner == scope)
+            .flat_map(|schedule| schedule.duties.clone()).collect::<Vec<_>>();
+        assert!(matches!(duties(inner).as_slice(), [ScheduleDuty::Value(_)]), "{name}");
+        assert_eq!(duties(outer), [ScheduleDuty::Dynamic], "{name}");
+    }
+}
+
+fn golden(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("src/own/tests/async-goldens/{name}.oir"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+/// The diagnostics of the full own verifier, with their locations.
+fn rejections(text: &str) -> Vec<(RuleId, EntityLocation, String)> {
+    let module = crate::text::parse(text).unwrap();
+    match verify_own(&module) {
+        Ok(_) => vec![],
+        Err(report) => report.diagnostics.into_iter()
+            .map(|diagnostic| (diagnostic.rule, diagnostic.primary.entity, diagnostic.message)).collect(),
+    }
+}
+
+fn rejected_by(text: &str, rule: RuleId, message: &str) -> bool {
+    rejections(text).iter().any(|(actual, _, text)| *actual == rule && text == message)
+}
+
+fn edit(text: &str, from: &str, to: &str) -> String {
+    assert!(text.contains(from), "{from}");
+    text.replacen(from, to, 1)
+}
+
+const COLD_REHOME: &str = "(%46: scope<S4>, %47: pending) = cache.rehome %42, %45, future %41, target S3, protocol P0";
+
+/// C-4, ruling of #601 R1: the target of a rehome is a live scope that encloses the duty's owner, or the caller.
+#[test]
+fn r1_a_rehome_target_encloses_the_owner_scope() {
+    let valid = golden("r1-cold-escape");
+    assert_eq!(rejections(&valid), []);
+    let message = "cache rehome requires a live sufficient target boundary";
+    let inner = edit(&valid, COLD_REHOME, &COLD_REHOME.replace("target S3", "target S4"));
+    assert!(rejected_by(&inner, RuleId::B94, message), "{:?}", rejections(&inner));
+}
+
+/// C-4 step 2: the rehomed duties reach the destination their rehome named; the commit checks it.
+#[test]
+fn r1_a_rehome_names_the_destination_of_its_exit() {
+    let message = "rehomed cache duties reach a destination other than their rehome target";
+    let valid = golden("r1-cold-escape");
+    let caller = edit(&valid, COLD_REHOME, &COLD_REHOME.replace("target S3", "target caller"));
+    assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
+    let make = golden("r1-make-escape");
+    let returned = "cache.rehome %47, %50, future %46, target caller, protocol P0";
+    assert!(make.contains(returned));
+    // make's own scope is no destination of its return.
+    let own = edit(&make, returned, &returned.replace("target caller", "target S3"));
+    let boundary = "cache rehome requires a live sufficient target boundary";
+    assert!(rejected_by(&own, RuleId::B94, boundary), "{:?}", rejections(&own));
+}
+
+/// C-4: a rehome moves the cache duty its scope state holds; a second rehome of the same duty finds none, and
+/// the duties of one pending exit name one destination.
+#[test]
+fn r1_a_rehome_moves_a_duty_its_state_holds() {
+    let valid = golden("r1-cold-escape");
+    let again = |target: &str| {
+        let second = format!("{COLD_REHOME}\n    (%90: scope<S4>, %91: pending) = cache.rehome %46, %47, future %41, \
+            target {target}, protocol P0");
+        let text = edit(&valid, COLD_REHOME, &second);
+        let text = edit(&text, "%49: pending = exit.extend %47, %48", "%49: pending = exit.extend %91, %48");
+        edit(&text, "scope.end %46, reserve %49", "scope.end %90, reserve %49")
+    };
+    let twice = again("S3");
+    let absent = "cache.rehome names a Future whose cache duty its scope state does not hold";
+    assert!(rejected_by(&twice, RuleId::B94, absent), "{:?}", rejections(&twice));
+    let conflict = again("caller");
+    let message = "the duties rehomed into one pending exit name different destinations";
+    assert!(rejected_by(&conflict, RuleId::B94, message), "{:?}", rejections(&conflict));
+}
+
+/// The pre-C-4 form over one cache-state token keeps naming a scope.
+#[test]
+fn r1_the_token_state_rehome_names_a_scope() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/spec/10-cache-rehome.oir");
+    let valid = std::fs::read_to_string(path).unwrap();
+    let message = "the pre-C-4 cache.rehome form needs a target scope";
+    assert!(!rejected_by(&valid, RuleId::B94, message));
+    let caller = edit(&valid, "target Souter", "target caller");
+    assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
 }

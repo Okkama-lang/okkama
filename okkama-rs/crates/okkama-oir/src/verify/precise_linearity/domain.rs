@@ -165,6 +165,8 @@ pub(super) struct Token {
     pub pending_type: Option<TypeId>,
     pub pending_kind: Option<ExitKind>,
     pub pending_boundary: Option<BoundaryId>,
+    /// The destination named by the `cache.rehome`s into this pending exit (C-4).
+    pub rehome: Option<RehomeTarget>,
     pub failure_origin: Option<Origin>,
     pub cleanup: Option<CleanupFact>,
     pub snapshot: Option<(BTreeSet<Origin>, bool)>,

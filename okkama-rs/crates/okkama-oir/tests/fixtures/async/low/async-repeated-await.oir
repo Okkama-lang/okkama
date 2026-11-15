@@ -27,11 +27,11 @@ summary M7 call-boundary results [result_relation(provenance=unbound_result)] co
 summary M8 internal contract call_contract(publication=atomic)
 summary M9 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
     failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
-protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle,
     from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
     protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
     normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
-    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
 func @work(%0: frame<@work>) -> void [async] summary(M4) async-creation(M6) async-body(M4) {
     frame.layout {
         slot 0: int

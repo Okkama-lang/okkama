@@ -251,6 +251,11 @@ fn transfer_selected(
     for atom in deps {
         if let Some(quantity) = state.journals.get(&(owner, *atom)) {
             let mask = state.provenance.entry((owner, *atom)).or_default();
+            // A cache duty stays in its owner state: binding or staging its Future neither
+            // binds nor stages the duty (D12, OIR-2 §10.2), so it can still leave by cache.rehome.
+            if *mask & futures::CACHE_DUTY != 0 {
+                continue;
+            }
             if deps.len() == 1 && atom.incarnation == Incarnation::Current && *quantity == Quantity::ONE {
                 *mask = provenance;
             } else {
@@ -476,6 +481,11 @@ fn transfer(
                     Operation::Call(CallOp::Direct { function, .. }) if futures::is_async(module, *function) => {
                         futures::CACHE_DUTY
                     }
+                    // A returned Future brings its cache duty in the result packet (D25.1): the same
+                    // duty, never offered, and leaving a scope only by cache.rehome.
+                    Operation::Call(_) if instruction.results.iter().any(|result| {
+                        body.values.get(*result).is_ok_and(|value| futures::is_future(module, value.ty))
+                    }) => futures::CACHE_DUTY,
                     _ => 1,
                 };
                 for result in &instruction.results {
@@ -581,10 +591,13 @@ fn edge_state(
         let moving: Vec<_> = state.journals.iter().filter(|((scope, atom), _)| {
             edge.plan.close.contains(scope) && deps.contains(atom)
         }).map(|(key, quantity)| (*key, *quantity)).collect();
-        for ((_, atom), quantity) in moving {
+        for ((source, atom), quantity) in moving {
             let target = state.journals.entry((destination, atom)).or_default();
             *target = target.append(quantity);
-            state.provenance.insert((destination, atom), 1);
+            // A cache duty stays a cache duty in the landing scope: cache.rehome moves it,
+            // and it never becomes admissible for an offer (C-4, OIR-2 §10.2).
+            let duty = state.provenance.get(&(source, atom)).is_some_and(|mask| mask & futures::CACHE_DUTY != 0);
+            state.provenance.insert((destination, atom), if duty { futures::CACHE_DUTY } else { 1 });
         }
     }
     for scope in &edge.plan.close {

@@ -151,6 +151,10 @@ pub enum TransferRule {
     FrameSave { frame: ValueId, values: Vec<ValueId> },
     FrameResume { frame: ValueId, slots: Vec<u32> },
     CompleteIdentity { identity: ValueId, state: ValueId, output: SlotName },
+    /// C-4: the duties of one Future leave their holders for the pending reserve
+    /// of the exit. The verifier executes it from the operation's form and target,
+    /// never as a generic `Move`.
+    Rehome { inputs: Vec<ValueId>, outputs: Vec<SlotName> },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Postcondition {
@@ -169,7 +173,7 @@ pub enum Postcondition {
     PreserveProvenance, CacheConsumedIfSettled(ValueId), NonLinearSlotOnly,
     Dynamic { target: ScopeId, reason: DynamicReason, protocol: ProtocolId },
     LexicalExit { kind: ExitKind, boundary: BoundaryId, selection: SelectionId },
-    CacheRehome(ScopeId), ConstructorFieldWrite(FieldRef), OnceValuePlain,
+    CacheRehome(RehomeTarget), ConstructorFieldWrite(FieldRef), OnceValuePlain,
     IncompleteIdentity, CompleteIdentity(ValueId), DischargeMustUse(ValueId), CreatesMustUse,
     NoActiveFailureReplacement, FullCarrierGraphOwner, NativeTransferableOnly,
     ProtocolState { holder: HolderKind, state: HolderState },
@@ -374,7 +378,7 @@ pub(crate) enum Rule {
     Publish { frame: ValueId, packet: Option<ValueId> },
     Spawn { state: ValueId },
     AwaitUnwind { state: ValueId, task: ValueId, receipt: ValueId, protocol: ProtocolId },
-    Rehome { form: RehomeForm, target: ScopeId, protocol: ProtocolId },
+    Rehome { form: RehomeForm, target: RehomeTarget, protocol: ProtocolId },
     Materialize { packet: ValueId, kind: ServiceKeyKind },
     Absorb { packet: ValueId, token: ValueId },
     CleanupSettleDynamic { cleanup: ValueId, protocol: ProtocolId },
@@ -864,7 +868,7 @@ impl<'a> ContractRegistry<'a> {
                 };
                 c.normal.results.push(ResultSlot::service(N::Pending, S::Pending));
                 let outputs = c.normal.results.iter().map(|slot| slot.name).collect();
-                c.normal.transfers.push(TransferRule::Move { inputs, outputs });
+                c.normal.transfers.push(TransferRule::Rehome { inputs, outputs });
                 c.normal.postconditions.extend([Postcondition::CacheRehome(target), Postcondition::NoFreshAdmission]);
                 c.roots.roots.extend([RootKind::PendingExit, RootKind::Cache]);
                 self.protocol(protocol, ProtocolTransition::Rehome, c, validate)?;

@@ -1,7 +1,7 @@
 //! Commit 5a, plain async (#601 V2): Future creation, shared await, the final
 //! cancellation envelope and the cache-duty schedules of one function.
 use super::*;
-use crate::own::futures::{is_future, outcome, services_protocol, unsupported_async};
+use crate::own::futures::{is_future, outcome, services_protocol, CACHE_DUTY};
 
 impl Driver<'_, '_> {
     /// `call @f(args)` of an async entry creates a cold Future (elaboration
@@ -168,22 +168,71 @@ impl Driver<'_, '_> {
         Ok(point)
     }
 
-    /// A Future leaving its cache owner needs `cache.rehome` in the exit
-    /// protocol (OIR-2 §10.2, C-4), which arrives with R1.
-    pub(super) fn contained_futures(&self, values: &[ValueId]) -> Result<(), OwnError> {
-        for value in values {
-            if is_future(self.module, self.high.values.get(*value).map_err(arena)?.ty) {
-                return Err(unsupported_async("a Future escapes its cache owner scope: cache.rehome arrives with R1"));
+    /// OIR-2 §10.2, async ABI C-4: a Future, or a view of its cached outcome,
+    /// leaving the scope that owns its cache duty takes the duty along. Before
+    /// the scope's close, `cache.rehome` moves the duty (and the packets its
+    /// cache holds) from the scope state into the pending reserve of the exit,
+    /// targeted at the exit's destination; `exit.commit` hands it over there.
+    /// The escaping values are the reserved result or the carried edge values;
+    /// a duty escapes with them when their deps reach its analysis atom.
+    pub(super) fn rehome_caches(&mut self, mut point: Landing, scope: ScopeId) -> Result<Landing, OwnError> {
+        let escaping: Vec<_> = point.env.cleanup.wanted.iter().chain(&point.env.cleanup.carried).copied().collect();
+        let Some(state) = self.flow.before_edges.get(&self.current_high) else {
+            return Ok(point);
+        };
+        let atoms: BTreeSet<_> = escaping.iter()
+            .flat_map(|value| state.values[value.as_u32() as usize].deps.iter().copied()).collect();
+        let duties: BTreeSet<_> = state.journals.iter().filter(|((owner, atom), quantity)| {
+            *owner == scope && atoms.contains(atom)
+                && !matches!(quantity.presence, domain::Presence::Absent | domain::Presence::Bottom)
+                && state.provenance.get(&(*owner, *atom)).is_some_and(|mask| mask & CACHE_DUTY != 0)
+        }).map(|((_, atom), _)| atom.origin).collect();
+        if duties.is_empty() {
+            return Ok(point);
+        }
+        let target = self.exit_landing.map_or(RehomeTarget::Caller, RehomeTarget::Scope);
+        let protocol = services_protocol(self.module)?;
+        for future in self.high_futures() {
+            if !self.flow.value_shapes.get(&future).is_some_and(|shape| duties.contains(shape)) {
+                continue;
+            }
+            let value = match point.env.values.get(&future) {
+                Some(latest) => latest.value,
+                None => *self.definitions.get(&future)
+                    .ok_or_else(|| flow_error("an escaping cache duty's Future has no SSA definition"))?,
+            };
+            let state = point.env.state(scope)?;
+            let pending = point.env.cleanup.pending.ok_or_else(|| flow_error("cache.rehome has no reserve"))?;
+            let form = RehomeForm::Scope { state, pending, future: value };
+            point = self.emit(point, Operation::Async(AsyncOp::CacheRehome { form, target, protocol }))?;
+            point.env.cleanup.rehomed = true;
+        }
+        Ok(point)
+    }
+
+    /// The High Futures whose cache duty a call gives the calling scope, in body order: Future creations
+    /// (calls of async entries, D12) and Futures returned with their duty in the result packet (D25.1).
+    fn high_futures(&self) -> Vec<ValueId> {
+        let mut futures = vec![];
+        for (_, instruction) in self.high.insts.iter() {
+            if !matches!(instruction.op, Operation::Call(_)) {
+                continue;
+            }
+            for result in &instruction.results {
+                if self.high.values.get(*result).is_ok_and(|value| is_future(self.module, value.ty)) {
+                    futures.push(*result);
+                }
             }
         }
-        Ok(())
+        futures
     }
 
     /// D16 schedules for cache duties: each scope that owns duties gets one
     /// schedule covering each duty once. A High schedule of that scope is the
     /// admissible order input: its duties name the Futures and must agree with
     /// the duties own assigns. Without one, own declares the schedule in
-    /// creation order.
+    /// creation order. A scope that admits service entries at run time ends
+    /// its schedule with the one dynamic step (D25.3).
     pub(super) fn cache_schedules(&mut self) -> Result<(), OwnError> {
         for schedule in &mut self.body.service_schedules {
             for duty in &mut schedule.duties {
@@ -194,26 +243,36 @@ impl Driver<'_, '_> {
             }
         }
         let mut owners: Vec<ScopeId> = vec![];
-        for (owner, _) in &self.cache_duties {
+        for owner in self.cache_duties.iter().map(|(owner, _)| owner).chain(&self.dynamic_owners) {
             if !owners.contains(owner) {
                 owners.push(*owner);
             }
         }
         for owner in owners {
-            let duties: Vec<_> = self.cache_duties.iter().filter(|(scope, _)| *scope == owner)
+            let mut duties: Vec<_> = self.cache_duties.iter().filter(|(scope, _)| *scope == owner)
                 .map(|(_, future)| ScheduleDuty::Value(*future)).collect();
+            let dynamic = self.dynamic_owners.contains(&owner);
             if let Some(schedule) = self.body.service_schedules.iter_mut().find(|schedule| schedule.owner == owner) {
-                if schedule.duties.is_empty() {
+                let declared: Vec<_> = schedule.duties.iter().copied().filter(|duty| *duty != ScheduleDuty::Dynamic)
+                    .collect();
+                if declared.is_empty() {
                     schedule.duties = duties;
-                    continue;
+                } else {
+                    let unique: BTreeSet<_> = declared.iter().copied().collect();
+                    if unique.len() != declared.len() || unique != duties.iter().copied().collect() {
+                        return Err(phase_error(OwnDiagnosticKind::InvalidEquation, format!(
+                            "service schedule {} differs from the cache duties of its scope", schedule.name,
+                        )));
+                    }
+                    schedule.duties = declared;
                 }
-                let declared: BTreeSet<_> = schedule.duties.iter().copied().collect();
-                if declared.len() != schedule.duties.len() || declared != duties.iter().copied().collect() {
-                    return Err(phase_error(OwnDiagnosticKind::InvalidEquation, format!(
-                        "service schedule {} differs from the cache duties of its scope", schedule.name,
-                    )));
+                if dynamic {
+                    schedule.duties.push(ScheduleDuty::Dynamic);
                 }
                 continue;
+            }
+            if dynamic {
+                duties.push(ScheduleDuty::Dynamic);
             }
             let protocol = services_protocol(self.module)?;
             let mut index = 0usize;

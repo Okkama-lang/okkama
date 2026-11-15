@@ -408,7 +408,11 @@ impl Universe {
                         // selected field alias into retention of its container.
                     }
                 }
-                if !relation.fresh.is_empty() {
+                // Creating a cold Future gives its owner the duty ServiceOf{future, Cache} (D12), a fresh
+                // family named the way an identity is (D25.1): a returned Future carries it to the caller.
+                let creates = matches!(op, Operation::Call(CallOp::Direct { function: callee, .. })
+                    if futures::is_async(module, *callee));
+                if !relation.fresh.is_empty() || creates {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
                     result.provenance = relation.provenance;
@@ -552,12 +556,17 @@ fn retain_inputs(
         items.push(selection);
         effect.retention = Some(SummarySelection::Union(normal::selections(&items, budget)?));
         effect.deps.extend_from_slice(&relation.external_deps);
-        if effect.destination != TransferDestination::None && effect.destination != destination {
-            return Err(budget.fail(OwnDiagnosticKind::IncompatibleDestinationJoin, format!(
-                "parameter {parameter}: {:?} conflicts with {destination:?}", effect.destination,
-            )));
-        }
-        effect.destination = destination.clone();
+        effect.destination = match (&effect.destination, &destination) {
+            (TransferDestination::None, _) => destination.clone(),
+            (old, new) if old == new => destination.clone(),
+            // A cold Future that retains the input in its cache and is returned takes the
+            // input along with its cache duty (OIR-2 §10.1, C-4): the input reaches the result.
+            (TransferDestination::Cache, TransferDestination::Result)
+            | (TransferDestination::Result, TransferDestination::Cache) => TransferDestination::Result,
+            (old, _) => return Err(budget.fail(OwnDiagnosticKind::IncompatibleDestinationJoin, format!(
+                "parameter {parameter}: {old:?} conflicts with {destination:?}",
+            ))),
+        };
     }
     Ok(())
 }

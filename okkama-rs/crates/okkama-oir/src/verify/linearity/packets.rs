@@ -473,6 +473,7 @@ impl Engine<'_, '_> {
                             .map(|value| value.ty);
                         next.pending_kind = Some(replacement.kind);
                         next.pending_boundary = Some(replacement.boundary);
+                        next.rehome = before.tokens[pending.as_u32() as usize].rehome;
                         if let Ok(boundary) = self.body.boundaries.get(replacement.boundary) {
                             next.reserve.insert(boundary.scope);
                         }
@@ -517,6 +518,7 @@ impl Engine<'_, '_> {
                     token.pending_type = pending_token.pending_type;
                     token.pending_kind = pending_token.pending_kind;
                     token.pending_boundary = pending_token.pending_boundary;
+                    token.rehome = pending_token.rehome;
                     token.scope = before.tokens[pending.as_u32() as usize].scope;
                     if let Some(i) = slot_index(SlotName::State) {
                         slots[i].token = token;
@@ -595,7 +597,7 @@ impl Engine<'_, '_> {
                 // is accepted as a substitute for executing their transfer.
                 TransferRule::Publish { .. } | TransferRule::Extract { .. }
                 | TransferRule::AbortReservation { .. } | TransferRule::FrameSave { .. }
-                | TransferRule::FrameResume { .. } => {}
+                | TransferRule::FrameResume { .. } | TransferRule::Rehome { .. } => {}
             }
         }
         self.buffer(op, outcome, &before, schema, &mut slots);
@@ -771,10 +773,26 @@ impl Engine<'_, '_> {
                 slot.token.scope = Some(*scope);
             }
             if let Operation::Exit(ExitOp::Commit { pending, destination, .. }) = op {
+                // C-4: rehomed duties take the exit's destination, the one their rehome named. A loop
+                // exit names no scope; the packet then carries the rehome's scope to its admission.
+                let rehome = before.tokens[pending.as_u32() as usize].rehome;
+                let landing = match (rehome, destination) {
+                    (None, _) | (Some(RehomeTarget::Caller), ExitDestination::Caller) => None,
+                    (Some(RehomeTarget::Scope(target)), ExitDestination::Scope(scope)) if target == *scope => None,
+                    (Some(RehomeTarget::Scope(target)), ExitDestination::Loop(_)) => Some(target),
+                    _ => {
+                        self.error(R::B94, "rehomed cache duties reach a destination other than their rehome target");
+                        None
+                    }
+                };
                 for (schema, slot) in schema.results.iter().zip(slots.iter_mut()) {
                     if schema.name == SlotName::Packet
                         && let ExitDestination::Scope(scope) = destination {
                         slot.token.destinations.insert(*scope);
+                    }
+                    if schema.name == SlotName::Packet
+                        && let Some(scope) = landing {
+                        slot.token.destinations.insert(scope);
                     }
                     slot.refs.extend(&before.full_deps[pending.as_u32() as usize]);
                     if schema.name == SlotName::Value {
@@ -785,7 +803,11 @@ impl Engine<'_, '_> {
                         slot.lifetime = before.lifetimes[pending.as_u32() as usize];
                     }
                     slot.token.pieces = slot.token.pieces.iter().cloned().map(|mut piece| {
-                        piece.provenance = 1;
+                        // A rehomed cache duty and the packets its cache holds stay cache-owned
+                        // (C-4, OIR-2 §10.2): the commit hands them over, it admits nothing fresh.
+                        if piece.holder.is_none() {
+                            piece.provenance = 1;
+                        }
                         piece.owner = None;
                         piece.journal = false;
                         if !matches!(piece.origin, Origin::Input(_)) {

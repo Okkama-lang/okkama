@@ -196,6 +196,14 @@ impl Driver<'_, '_> {
             } else {
                 self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?
             };
+            // A result that can hold a Future (or another service holder) brings its duties in the
+            // packet; they join the scope's dynamic inventory (D25.1, D25.3).
+            let services = instruction.results.iter().any(|original| self.high.values.get(*original).ok()
+                .and_then(|value| self.analysis.types.get(&value.ty))
+                .is_some_and(|classification| !classification.service_types.is_empty()));
+            if services {
+                self.dynamic_owners.insert(scope);
+            }
         }
         Ok(point)
     }
