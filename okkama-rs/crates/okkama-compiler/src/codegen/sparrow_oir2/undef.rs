@@ -117,7 +117,7 @@ fn undef_params(body: &mut o::Body) -> Result<BTreeSet<(o::BlockId, usize)>, Gen
         }
     }
     let mut params = BTreeSet::new();
-    for (&(block, index), _) in incoming.iter() {
+    for &(block, index) in incoming.keys() {
         if undef.contains(&body.blocks.get(block)?.params[index]) {
             params.insert((block, index));
         }
