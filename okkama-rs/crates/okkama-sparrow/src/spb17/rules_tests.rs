@@ -863,8 +863,6 @@ fn scope_split_takes_at_most_one_admissible_flag() {
 }
 
 #[test]
-#[ignore = "#680: check_successors does not model the exit protocol yet, so ret.own accepts a path that \
-    neither takes nor returns a live successor"]
 fn ret_own_cannot_drop_a_successor_permission() {
     // successor_commit's function returns the original object instead of taking the successor.
     let (mut p, catalog) = successor_commit(0);
@@ -874,5 +872,371 @@ fn ret_own_cannot_drop_a_successor_permission() {
     let Instruction::Champ { arguments, .. } = &mut f.code[6] else { panic!("ret.own") };
     arguments[0] = Argument::Location(Location::Register(1));
     refresh(f);
-    reject_message(&p, &catalog, "SPB_STRUCTURE", "successor must-use permission");
+    reject_message(&p, &catalog, "SUCCESSOR_DROPPED", "successor must-use permission");
+}
+
+// ---- Successor must-use permissions (#680) ----
+// A permission is taken (SUCCESSOR_TAKEN when it is already gone), never lost on a normal path
+// (SUCCESSOR_DROPPED), never created from nothing or duplicated (SUCCESSOR_FORGED), and paths that join
+// agree on it (SUCCESSOR_JOIN).
+
+fn successor_program(functions: Vec<Function>, summaries: Vec<Summary>) -> Program {
+    Program {
+        objects: vec![plain_object(vec![])],
+        functions,
+        tables: ChampTables { summaries, ..ChampTables::default() },
+        ..Program::default()
+    }
+}
+
+fn obj_next(input: u32, output: u32) -> Instruction {
+    Instruction::Data { op: DataOp::ObjNext, inputs: vec![input], output: Some(output),
+        immediate: Immediate::Updates(vec![]) }
+}
+
+/// `next(r0: Plain) -> ^Plain`: derives and returns the successor of its argument.
+fn derive_next() -> Function {
+    let mut f = scalar(1, vec![Type::Object(0), Type::Successor(0)], vec![Type::Successor(0)], vec![
+        obj_next(0, 1),
+        Instruction::Ret(vec![1]),
+    ]);
+    f.symbol = "next".into();
+    f
+}
+
+/// main(r0: Plain) observes `next(r0)`, which cannot fail, so the successor result r1 arrives through
+/// `Flow::Next`; `tail` then uses it. r2 and r3 are Plain registers for takes.
+fn observed_successor(tail: Vec<Instruction>) -> Program {
+    let mut code = vec![Instruction::Champ { op: Opcode::InvokeObserve,
+        arguments: vec![Argument::Entry(1), Argument::Summary(0), Argument::Location(Location::Register(0))],
+        flow: Flow::Next(vec![Location::Register(1)]) }];
+    code.extend(tail);
+    let registers = vec![Type::Object(0), Type::Successor(0), Type::Object(0), Type::Object(0)];
+    let main = scalar(1, registers, vec![], code);
+    successor_program(vec![main, derive_next()], vec![Summary { entry: 1, may_fail: false, retained_params: vec![] }])
+}
+
+#[test]
+fn observed_successor_result_is_taken_once() {
+    let p = observed_successor(vec![data(DataOp::Move, vec![1], 2), Instruction::Ret(vec![])]);
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn observed_successor_result_cannot_be_dropped() {
+    let p = observed_successor(vec![Instruction::Ret(vec![])]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_DROPPED", "return loses successor must-use permission");
+}
+
+#[test]
+fn observed_successor_result_cannot_be_taken_twice() {
+    let p = observed_successor(vec![
+        data(DataOp::Move, vec![1], 2),
+        data(DataOp::Move, vec![1], 3),
+        Instruction::Ret(vec![]),
+    ]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_TAKEN", "successor permission already taken");
+}
+
+/// main(r0: Plain) observes `next(r0)` that may fail: the normal outcome's produced successor is assigned
+/// to the parameters `normal` lists of the block at pc 1 (each from produced slot 0), which takes the first
+/// one and returns; the unwind outcome raises.
+fn fallible_observed_successor(normal: usize) -> Program {
+    let params = (0..normal as u32).map(|index| Location::Register(3 + index)).collect::<Vec<_>>();
+    let assignments = params.iter().map(|&destination| Assignment { destination, source: Source::ProducedSlot(0) })
+        .collect();
+    let mut registers = vec![Type::Object(0), Type::Failure, Type::Object(0)];
+    registers.extend(params.iter().map(|_| Type::Successor(0)));
+    let mut tail = params.iter().take(1).map(|_| data(DataOp::Move, vec![3], 2)).collect::<Vec<_>>();
+    tail.push(Instruction::Ret(vec![]));
+    let mut code = vec![Instruction::Champ { op: Opcode::InvokeObserve,
+        arguments: vec![Argument::Entry(1), Argument::Summary(0), Argument::Location(Location::Register(0))],
+        flow: Flow::Outcomes(vec![
+            Outcome { tag: Tag::Normal, edge: Edge { target_pc: 1, assignments } },
+            Outcome { tag: Tag::Unwind, edge: Edge { target_pc: 1 + tail.len() as u32, assignments: vec![
+                Assignment { destination: Location::Register(1), source: Source::ProducedSlot(0) }] } },
+        ]) }];
+    let raise_pc = 1 + tail.len() as u32;
+    code.extend(tail);
+    code.push(Instruction::Raise(1));
+    let mut main = scalar(1, registers, vec![], code);
+    main.blocks.push(Block { pc: 1, params });
+    main.blocks.push(Block { pc: raise_pc, params: vec![Location::Register(1)] });
+    main.proofs.entry.as_mut().unwrap().failures = 15;
+    refresh(&mut main);
+    let mut next = derive_next();
+    next.proofs.entry.as_mut().unwrap().failures = 15;
+    successor_program(vec![main, next], vec![Summary { entry: 1, may_fail: true, retained_params: vec![] }])
+}
+
+#[test]
+fn outcome_successor_result_is_assigned_once() {
+    verify_load(&fallible_observed_successor(1), &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn outcome_successor_result_cannot_be_dropped() {
+    let p = fallible_observed_successor(0);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_DROPPED", "drops a produced successor permission");
+}
+
+#[test]
+fn outcome_successor_result_cannot_be_duplicated() {
+    let p = fallible_observed_successor(2);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_FORGED", "duplicates a produced successor permission");
+}
+
+/// fixture valued's owning main returns its parameter r0 through the exit protocol: exit.prepare (pc 3) moves
+/// r0 into the pending exit, cleanup and exit.dispatch thread it, exit.commit (pc 8) produces r1 and ret.own
+/// (pc 9) returns r1. `parameter` and `result` retype r0 and r1 (with the function result) to `^Res`.
+fn successor_exit(parameter: bool, result: bool) -> (Program, Catalog) {
+    let (mut p, catalog) = fixture("valued");
+    let f = main(&mut p);
+    assert!(matches!(f.code[3], Instruction::Champ { op: Opcode::ExitPrepare, .. }), "fixture changed");
+    assert!(matches!(f.code[8], Instruction::Champ { op: Opcode::ExitCommit, .. }), "fixture changed");
+    assert!(matches!(f.code[9], Instruction::Champ { op: Opcode::RetOwn, .. }), "fixture changed");
+    assert_eq!((f.registers[0], f.registers[1], f.params[0]), (Type::Object(0), Type::Object(0),
+        Location::Register(0)), "fixture changed");
+    if parameter {
+        f.registers[0] = Type::Successor(0);
+    }
+    if result {
+        f.registers[1] = Type::Successor(0);
+        f.results[0] = Type::Successor(0);
+    }
+    (p, catalog)
+}
+
+#[test]
+fn exit_commit_returns_the_successor_its_exit_holds() {
+    let (p, catalog) = successor_exit(true, true);
+    verify_load(&p, &catalog).unwrap();
+}
+
+#[test]
+fn exit_commit_cannot_produce_a_successor_its_exit_does_not_hold() {
+    let (p, catalog) = successor_exit(false, true);
+    reject_message(&p, &catalog, "SUCCESSOR_FORGED", "exit.commit produces a successor from an exit that holds none");
+}
+
+#[test]
+fn exit_commit_cannot_store_a_held_successor_in_a_plain_register() {
+    let (p, catalog) = successor_exit(true, false);
+    reject_message(&p, &catalog, "SUCCESSOR_DROPPED", "non-successor register");
+}
+
+#[test]
+fn exit_prepare_moves_the_successor_into_the_exit() {
+    // ret.own returns the parameter r0 itself, whose permission exit.prepare moved into the exit at pc 3.
+    let (mut p, catalog) = successor_exit(true, true);
+    let Instruction::Champ { arguments, .. } = &mut main(&mut p).code[9] else { unreachable!() };
+    arguments[0] = Argument::Location(Location::Register(0));
+    reject_message(&p, &catalog, "SUCCESSOR_TAKEN", "ret.own uses a taken successor permission");
+}
+
+#[test]
+fn exit_dispatch_cannot_succeed_without_the_held_successor() {
+    // The normal path's exit.dispatch (pc 21) is declared without a reserve, so it succeeds with only the
+    // closed state, into a new block at the end: nothing continues the exit that holds r0.
+    let (mut p, catalog) = successor_exit(true, true);
+    let f = main(&mut p);
+    let closed = f.services.len() as u32;
+    f.services.push(ServiceKind::Closed);
+    let end = f.code.len() as u32;
+    let Instruction::Champ { op: Opcode::ExitDispatch, arguments, flow: Flow::Outcomes(outcomes) } = &mut f.code[21]
+    else {
+        panic!("fixture changed")
+    };
+    assert_eq!((arguments[3].clone(), outcomes[0].tag), (Argument::Flag(true), Tag::Pending), "fixture changed");
+    arguments[3] = Argument::Flag(false);
+    outcomes[0] = Outcome { tag: Tag::Success, edge: Edge { target_pc: end, assignments: vec![Assignment {
+        destination: Location::Service(closed), source: Source::ProducedSlot(0) }] } };
+    f.code.push(Instruction::Unreachable);
+    f.blocks.push(Block { pc: end, params: vec![Location::Service(closed)] });
+    reject_message(&p, &catalog, "SUCCESSOR_DROPPED", "an outcome drops the successor held by its exit");
+}
+
+#[test]
+fn ret_own_cannot_return_a_taken_successor() {
+    // successor_commit's function returns its successor r2 after taking it into r3.
+    let (mut p, catalog) = successor_commit(0);
+    let f = function_named(&mut p, "advance");
+    f.results[0] = Type::Successor(0);
+    let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = &mut f.code[7] else { panic!("ret.own") };
+    arguments[0] = Argument::Location(Location::Register(2));
+    refresh(f);
+    reject_message(&p, &catalog, "SUCCESSOR_TAKEN", "ret.own uses a taken successor permission");
+}
+
+#[test]
+fn ret_own_returns_a_live_successor() {
+    // successor_commit's function returns its successor r2 itself instead of taking it.
+    let (mut p, catalog) = successor_commit(0);
+    let f = function_named(&mut p, "advance");
+    f.results[0] = Type::Successor(0);
+    f.code[5] = Instruction::Champ { op: Opcode::DepsEmpty, arguments: vec![],
+        flow: Flow::Next(vec![Location::Service(4)]) };
+    f.code.remove(6);
+    let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = &mut f.code[6] else { panic!("ret.own") };
+    arguments[0] = Argument::Location(Location::Register(2));
+    refresh(f);
+    verify_load(&p, &catalog).unwrap();
+}
+
+/// `pass(r0: Plain)` derives r1 = ^r0 and runs `tail`; r2, r3: Plain, r4, r5: ^Plain, r6: Bool.
+fn plain_successor(tail: Vec<Instruction>, blocks: Vec<Block>) -> Program {
+    let registers = vec![Type::Object(0), Type::Successor(0), Type::Object(0), Type::Object(0), Type::Successor(0),
+        Type::Successor(0), Type::Bool];
+    let mut code = vec![obj_next(0, 1)];
+    code.extend(tail);
+    let mut f = scalar(1, registers, vec![], code);
+    f.blocks.extend(blocks);
+    refresh(&mut f);
+    successor_program(vec![f], vec![])
+}
+
+fn jump(target_pc: u32, sources: &[(u32, u32)]) -> Instruction {
+    Instruction::Br(Edge { target_pc, assignments: sources.iter().map(|&(destination, source)| Assignment {
+        destination: Location::Register(destination), source: Source::Location(Location::Register(source)),
+    }).collect() })
+}
+
+fn block(pc: u32, params: &[u32]) -> Block {
+    Block { pc, params: params.iter().copied().map(Location::Register).collect() }
+}
+
+#[test]
+fn successor_take_and_forward_load() {
+    let p = plain_successor(vec![jump(2, &[(4, 1)]), data(DataOp::Move, vec![4], 2), Instruction::Ret(vec![])],
+        vec![block(2, &[4])]);
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn successor_cannot_be_dropped_at_unreachable() {
+    let p = plain_successor(vec![Instruction::Unreachable], vec![]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_DROPPED", "unreachable loses successor must-use permission");
+}
+
+#[test]
+fn successor_cannot_be_returned_after_its_take() {
+    let mut p = plain_successor(vec![data(DataOp::Move, vec![1], 2), Instruction::Ret(vec![1])], vec![]);
+    p.functions[0].results = vec![Type::Successor(0)];
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_TAKEN", "successor returned twice or after take");
+}
+
+#[test]
+fn successor_cannot_come_from_another_data_operation() {
+    let p = plain_successor(vec![
+        Instruction::Data { op: DataOp::Undef, inputs: vec![], output: Some(4), immediate: Immediate::None },
+        data(DataOp::Move, vec![1], 2),
+        Instruction::Ret(vec![]),
+    ], vec![]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_FORGED", "invalid successor producer");
+}
+
+#[test]
+fn edge_cannot_forward_a_taken_successor() {
+    let p = plain_successor(vec![data(DataOp::Move, vec![1], 2), jump(3, &[(4, 1)]), data(DataOp::Move, vec![4], 3),
+        Instruction::Ret(vec![])], vec![block(3, &[4])]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_TAKEN", "edge forwards a taken successor");
+}
+
+#[test]
+fn edge_cannot_duplicate_a_successor() {
+    let p = plain_successor(vec![jump(2, &[(4, 1), (5, 1)]), data(DataOp::Move, vec![4], 2),
+        data(DataOp::Move, vec![5], 3), Instruction::Ret(vec![])], vec![block(2, &[4, 5])]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_FORGED", "edge duplicates successor permission");
+}
+
+#[test]
+fn successor_paths_cannot_disagree_at_a_join() {
+    // One branch takes r1, the other does not; both join at pc 6, which returns.
+    let p = plain_successor(vec![
+        Instruction::Data { op: DataOp::Const, inputs: vec![], output: Some(6),
+            immediate: Immediate::Constant(Constant::Bool(true)) },
+        Instruction::Cond { condition: 6, yes: Edge { target_pc: 3, assignments: vec![] },
+            no: Edge { target_pc: 5, assignments: vec![] } },
+        data(DataOp::Move, vec![1], 2),
+        jump(6, &[]),
+        jump(6, &[]),
+        data(DataOp::Move, vec![1], 3),
+        Instruction::Ret(vec![]),
+    ], vec![block(3, &[]), block(5, &[]), block(6, &[])]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_JOIN", "inconsistent successor permissions at CFG join");
+}
+
+/// fixture exit-updates' owning main prepares its parameter r0 as the exit value (pc 3), replaces the
+/// value with r1 (pc 6, defined at pc 4) and commits it into r2, which ret.own returns.
+fn replaced_exit() -> (Program, Catalog) {
+    let (mut p, catalog) = fixture("exit-updates");
+    let f = main(&mut p);
+    assert!(matches!(f.code[3], Instruction::Champ { op: Opcode::ExitPrepare, .. }), "fixture changed");
+    assert!(matches!(f.code[4], Instruction::Data { output: Some(1), .. }), "fixture changed");
+    assert!(matches!(f.code[6], Instruction::Champ { op: Opcode::ExitReplace, .. }), "fixture changed");
+    assert_eq!((f.registers[0], f.registers[2], f.params[0]), (Type::Object(0), Type::Int, Location::Register(0)),
+        "fixture changed");
+    (p, catalog)
+}
+
+#[test]
+fn exit_replace_moves_a_successor_value_into_the_exit() {
+    // pc 4 derives r1 = ^r0 instead of a constant; the replaced exit then holds r1 and commits it into r2.
+    let (mut p, _) = replaced_exit();
+    let f = main(&mut p);
+    f.code[4] = obj_next(0, 1);
+    f.registers[1] = Type::Successor(0);
+    f.registers[2] = Type::Successor(0);
+    f.results[0] = Type::Successor(0);
+    refresh(f);
+    // The structural verifier runs every successor check; the load gate would further require r1's own
+    // commit (CREATION_UNCOMMITTED), which this fixture has no packet for.
+    verify(&p).unwrap();
+}
+
+#[test]
+fn exit_replace_cannot_replace_a_held_successor() {
+    let (mut p, catalog) = replaced_exit();
+    main(&mut p).registers[0] = Type::Successor(0);
+    reject_message(&p, &catalog, "SUCCESSOR_DROPPED", "exit.replace drops the successor held by its exit");
+}
+
+#[test]
+fn exit_carry_follows_the_exit_service_of_each_schema() {
+    use verify::{Carry, exit_carry};
+    let contexts = [
+        ResultContext::default(),
+        ResultContext { reserve: true, ..ResultContext::default() },
+        ResultContext { may_fail: true, ..ResultContext::default() },
+        ResultContext { value: Some(Type::Successor(0)), ..ResultContext::default() },
+    ];
+    let mut slots = 0;
+    for &op in Opcode::ALL {
+        for context in &contexts {
+            for tag in op.tags(context) {
+                let Carry::Slot(slot) = exit_carry(op, tag) else { continue };
+                let schema = op.results(tag, context).unwrap();
+                assert!(matches!(schema.get(slot), Some(ProducedType::Service(
+                    ServiceKind::Pending | ServiceKind::Cleanup | ServiceKind::ExitState))),
+                    "{} {tag:?}: slot {slot} of {schema:?}", op.name());
+                slots += 1;
+            }
+        }
+    }
+    assert!(slots > 0);
+    // The exit ends only on failure paths; a successful dispatch without a reserve has no pending to carry on.
+    assert_eq!(exit_carry(Opcode::ExitAbort, Tag::Normal), Carry::Lapses);
+    assert_eq!(exit_carry(Opcode::ExitDispatch, Tag::Failure), Carry::Lapses);
+    assert_eq!(exit_carry(Opcode::ExitDispatch, Tag::Success), Carry::Lost);
+    assert_eq!(exit_carry(Opcode::ExitDispatch, Tag::Pending), Carry::Slot(1));
+    assert_eq!(exit_carry(Opcode::ExitCommit, Tag::Normal), Carry::Commit);
+    assert_eq!(exit_carry(Opcode::ExitReplace, Tag::Normal), Carry::Lost);
+    assert_eq!(exit_carry(Opcode::InvokeCallOwn, Tag::Normal), Carry::Lost);
+}
+
+#[test]
+fn edge_cannot_overwrite_a_live_successor() {
+    // The loop at pc 2 derives r5 and binds it to its parameter r4 again, which still holds the previous one.
+    let p = plain_successor(vec![jump(2, &[(4, 1)]), obj_next(0, 5), jump(2, &[(4, 5)])], vec![block(2, &[4])]);
+    reject_message(&p, &NoExternalContracts, "SUCCESSOR_DROPPED", "edge overwrites live successor permission");
 }
