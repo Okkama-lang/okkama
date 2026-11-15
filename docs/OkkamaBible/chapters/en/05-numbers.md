@@ -287,7 +287,43 @@ steps belongs in `float`. The language makes the choice explicit in the
 type, so it is made once, where the number is created, not discovered later
 in a rounding difference.
 
-## 5.11 Limits
+## 5.11 What exactness costs, in digits
+
+Section 5.4 warned that the numerators and denominators of rationals can
+grow. The program below measures the growth and shows the two usual answers
+to it: use `float` where the result does not need to be exact, and round at
+the points the domain defines.
+
+{{example:05-growth}}
+
+- **Harmonic numbers.** H(n) is 1 + 1/2 + … + 1/n, and H(10) is already
+  `7381/2520`. The denominator of H(n) divides the least common multiple of
+  1 to n, a number that grows exponentially with n, so the digits grow in
+  proportion to n: the text of the fraction roughly doubles each time n
+  doubles, from 9 characters at n = 10 to 136 at n = 160, and every further
+  addition works on longer numbers. Over the same range the `float` sum
+  never strays more than 2·10⁻¹⁵ from the exact value. For a quantity like
+  this, exactness buys nothing and costs a growing amount of work, so it
+  belongs in a `float`.
+- **Daily interest.** A deposit at 5% a year earns 1/7300 of its balance a
+  day. Kept exact, a year of daily growth multiplies the principal by
+  (1 + 1/7300)³⁶⁵, and the balance becomes a fraction of 2,820 characters,
+  about 1,410 digits above the line and as many below it. A bank does not
+  book that number. It rounds every day to a cent, by a rule written in its
+  terms, and the `booked` action states that rule in one line: half up, to a
+  hundredth (for a balance that is not negative, since `int` truncates
+  toward zero). The booked balance is still a fraction of eight characters
+  at the end of the year, and it differs from the exact one by about 17
+  cents. That difference is the bank's rounding, by design, not an error.
+
+This is the pattern Section 5.4 recommended for the bill: exact arithmetic
+between the points where the domain rounds, and a written rounding rule at
+each of them. It keeps the numbers small, and it makes the rounding
+something a reviewer can read and a test can check. What Okkama does not
+offer is the choice most languages make by default: rounding after every
+operation, in binary, by a rule nobody wrote down.
+
+## 5.12 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.5).

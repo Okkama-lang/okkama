@@ -66,7 +66,8 @@
   - [5.8 Numbers from text](#58-numbers-from-text)
   - [5.9 Numbers in other languages](#59-numbers-in-other-languages)
   - [5.10 A worked example: drift and exact money](#510-a-worked-example-drift-and-exact-money)
-  - [5.11 Limits](#511-limits)
+  - [5.11 What exactness costs, in digits](#511-what-exactness-costs-in-digits)
+  - [5.12 Limits](#512-limits)
 - [Chapter 6. Text](#chapter-6-text)
   - [6.1 Three layers of text](#61-three-layers-of-text)
   - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
@@ -2745,7 +2746,111 @@ steps belongs in `float`. The language makes the choice explicit in the
 type, so it is made once, where the number is created, not discovered later
 in a rounding difference.
 
-## 5.11 Limits
+## 5.11 What exactness costs, in digits
+
+Section 5.4 warned that the numerators and denominators of rationals can
+grow. The program below measures the growth and shows the two usual answers
+to it: use `float` where the result does not need to be exact, and round at
+the points the domain defines.
+
+```okkama
+module bible/growth v1.0.0;
+
+// Exact numbers grow. Harmonic numbers as rats and as floats, and a year of
+// daily interest kept exact or rounded to cents every day.
+import "io/stdout" take Stdout;
+
+object Harmonic {
+    Harmonic() {}
+
+    exact(n is int) is rat {
+        (1..=n).reduce(0.rat()) -> sum, k { sum + 1 / k; };
+    }
+
+    approximate(n is int) is float {
+        (1..=n).reduce(0.0) -> sum, k { sum + 1.0 / k.float(); };
+    }
+}
+
+object Deposit {
+    has rate is rat;
+    Deposit(:rate);
+
+    // One day of interest, kept exact.
+    grown(balance is rat) is rat {
+        balance + balance * rate / 365.rat();
+    }
+
+    // The same day, rounded half up to a cent, as a bank books it.
+    booked(balance is rat) is rat {
+        int(self.grown(balance) * 100.rat() + 1 / 2).rat() / 100.rat();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let harmonic = Harmonic();
+    out.writeln("H(10) = " + harmonic.exact(10).string());
+    for [10, 20, 40, 80, 160] -> n {
+        let exact = harmonic.exact(n);
+        let error = (exact.float() - harmonic.approximate(n)).abs();
+        out.writeln("H(" + n.string() + "): " + exact.string().length().string() + " characters, float off by "
+            + error.string());
+    }
+    let deposit = Deposit(rate: 5 / 100);
+    let exact = (1..=365).reduce(1000.rat()) -> balance, day { deposit.grown(balance); };
+    let booked = (1..=365).reduce(1000.rat()) -> balance, day { deposit.booked(balance); };
+    out.writeln("exact after a year: " + exact.string().length().string() + " characters, about "
+        + exact.float().string());
+    out.writeln("booked after a year: " + booked.string().length().string() + " characters, "
+        + booked.float().string());
+    out.writeln("difference in cents: " + ((exact - booked) * 100.rat()).float().string());
+    0;
+}
+```
+
+Output:
+
+```text
+H(10) = 7381/2520
+H(10): 9 characters, float off by 0
+H(20): 17 characters, float off by 0
+H(40): 32 characters, float off by 0
+H(80): 68 characters, float off by 0
+H(160): 136 characters, float off by 1.7763568394002505e-15
+exact after a year: 2820 characters, about 1051.2674964674625
+booked after a year: 8 characters, 1051.1
+difference in cents: 16.749646746255046
+```
+
+- **Harmonic numbers.** H(n) is 1 + 1/2 + … + 1/n, and H(10) is already
+  `7381/2520`. The denominator of H(n) divides the least common multiple of
+  1 to n, a number that grows exponentially with n, so the digits grow in
+  proportion to n: the text of the fraction roughly doubles each time n
+  doubles, from 9 characters at n = 10 to 136 at n = 160, and every further
+  addition works on longer numbers. Over the same range the `float` sum
+  never strays more than 2·10⁻¹⁵ from the exact value. For a quantity like
+  this, exactness buys nothing and costs a growing amount of work, so it
+  belongs in a `float`.
+- **Daily interest.** A deposit at 5% a year earns 1/7300 of its balance a
+  day. Kept exact, a year of daily growth multiplies the principal by
+  (1 + 1/7300)³⁶⁵, and the balance becomes a fraction of 2,820 characters,
+  about 1,410 digits above the line and as many below it. A bank does not
+  book that number. It rounds every day to a cent, by a rule written in its
+  terms, and the `booked` action states that rule in one line: half up, to a
+  hundredth (for a balance that is not negative, since `int` truncates
+  toward zero). The booked balance is still a fraction of eight characters
+  at the end of the year, and it differs from the exact one by about 17
+  cents. That difference is the bank's rounding, by design, not an error.
+
+This is the pattern Section 5.4 recommended for the bill: exact arithmetic
+between the points where the domain rounds, and a written rounding rule at
+each of them. It keeps the numbers small, and it makes the rounding
+something a reviewer can read and a test can check. What Okkama does not
+offer is the choice most languages make by default: rounding after every
+operation, in binary, by a rule nobody wrote down.
+
+## 5.12 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.5).
