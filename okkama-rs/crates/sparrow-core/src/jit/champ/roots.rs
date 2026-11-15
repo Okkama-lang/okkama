@@ -150,7 +150,8 @@ fn shape(ty: s::ProducedType) -> (u32, Vec<u32>) {
             let layout = s::layout::service_layout(kind);
             (layout.words, layout.references.to_vec())
         }
-        s::ProducedType::Value(s::Type::Bool | s::Type::Descriptor | s::Type::Never) => (1, vec![]),
+        s::ProducedType::Value(s::Type::Bool | s::Type::Descriptor | s::Type::Never | s::Type::Byte
+            | s::Type::Float | s::Type::Char) => (1, vec![]),
         s::ProducedType::Value(_) => (1, vec![0]),
     }
 }

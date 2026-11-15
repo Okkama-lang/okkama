@@ -181,12 +181,10 @@ fn s1_scalar_allowlist_and_plain_object_operations() {
     }
     append(&mut m, o::Operation::Core(C::StrConcat { left: text, right: text }), Some(o::Type::Str));
     append(&mut m, o::Operation::Core(C::RangeNew { start: a, end: b, inclusive: true }), Some(o::Type::Range));
-    for (input, from) in [(a, o::NumericType::Int), (flag, o::NumericType::Bool), (text, o::NumericType::Str)] {
-        for (ty, to) in [(o::Type::Int, o::NumericType::Int), (o::Type::Bool, o::NumericType::Bool),
-            (o::Type::Str, o::NumericType::Str)]
-        {
-            append(&mut m, o::Operation::Core(C::Convert { value: input, from, to }), Some(ty));
-        }
+    // OIR-2 cvt defines only the conversions to string among int/bool/string (#622).
+    for (input, from) in [(a, o::NumericType::Int), (flag, o::NumericType::Bool)] {
+        append(&mut m, o::Operation::Core(C::Convert { value: input, from, to: o::NumericType::Str }),
+            Some(o::Type::Str));
     }
     append(&mut m, o::Operation::Const(o::Literal::Bool(true)), Some(o::Type::Bool));
     append(&mut m, o::Operation::Const(o::Literal::Str("text".into())), Some(o::Type::Str));
@@ -588,7 +586,8 @@ fn s2_fallible_scalar_without_block_unwind_leaves_through_raise() {
         [(s::Tag::Normal, 2), (s::Tag::Unwind, 1)]);
     assert!(matches!(code[1], s::Instruction::Raise(_)));
     assert!(matches!(code[2], s::Instruction::Data { op: s::DataOp::IntAdd, .. }));
-    assert!(!code.iter().any(|instruction| matches!(instruction, s::Instruction::Data { op, .. } if op.fallible())));
+    let function = &program.functions[0];
+    assert!(!code.iter().any(|instruction| function.data_fallible(instruction)));
 }
 
 #[test]
@@ -602,4 +601,48 @@ fn s2_fallible_scalar_unwinds_into_the_block_unwind() {
     let target = function.blocks.iter().position(|block| block.pc == unwind.target_pc).unwrap();
     assert!(matches!(function.code[unwind.target_pc as usize], s::Instruction::Raise(_)));
     assert_eq!(function.blocks[target].params.len(), 1);
+}
+
+/// OIR-2 may take a successor alias twice (§8); SPB 17 forwards the first take's object instead (#622).
+#[test]
+fn s2_taken_successor_alias_forwards_its_object() {
+    let take = |input, output| s::Instruction::Data {
+        op: s::DataOp::Move, inputs: vec![input], output: Some(output), immediate: s::Immediate::None,
+    };
+    let mut function = s::Function {
+        symbol: "main".into(),
+        entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Successor(0), s::Type::Object(0), s::Type::Successor(0), s::Type::Object(0)],
+        services: vec![],
+        params: vec![s::Location::Register(0)],
+        results: vec![],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![s::Location::Register(0)] },
+            s::Block { pc: 2, params: vec![s::Location::Register(2)] },
+        ],
+        proofs: s::FunctionProofs::default(),
+        code: vec![
+            take(0, 1),
+            s::Instruction::Br(s::Edge { target_pc: 2, assignments: vec![s::Assignment {
+                destination: s::Location::Register(2),
+                source: s::Source::Location(s::Location::Register(0)),
+            }] }),
+            take(2, 3),
+            s::Instruction::Ret(vec![]),
+        ],
+    };
+    super::successors::forward_taken(&mut function).unwrap();
+    assert_eq!(function.registers[2], s::Type::Object(0));
+    let s::Instruction::Br(edge) = &function.code[1] else { panic!("branch") };
+    assert_eq!(edge.assignments[0].source, s::Source::Location(s::Location::Register(1)));
+    assert!(function.proofs.roots.iter().any(|root| root.pc == 1 && root.locations == [s::Location::Register(1)]));
+    // A permission that is still held is never retyped.
+    let mut held = function.clone();
+    held.registers[2] = s::Type::Successor(0);
+    held.code[0] = s::Instruction::Data { op: s::DataOp::Const, inputs: vec![], output: Some(1),
+        immediate: s::Immediate::None };
+    let s::Instruction::Br(edge) = &mut held.code[1] else { panic!("branch") };
+    edge.assignments[0].source = s::Source::Location(s::Location::Register(0));
+    super::successors::forward_taken(&mut held).unwrap();
+    assert_eq!(held.registers[2], s::Type::Successor(0));
 }

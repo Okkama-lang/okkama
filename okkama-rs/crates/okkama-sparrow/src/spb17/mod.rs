@@ -85,6 +85,10 @@ impl ObjectRuntimeLayout {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Object {
     pub error_cases: Vec<String>,
+    /// Number of cases of a plain (non-Error) enum; zero for every other declaration.
+    pub enum_cases: u32,
+    /// Case object descriptors of a plain (non-Error) variant, in case order; empty otherwise.
+    pub variant_cases: Vec<u32>,
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
@@ -104,11 +108,19 @@ pub enum Type {
     Array(ArrayType),
     Int,
     Bool,
+    /// Raw words, as in Tomato: a byte 0..=255, an IEEE-754 binary64 bit pattern, a Unicode scalar value.
+    Byte,
+    Float,
+    Char,
+    /// A reference to Tomato's exact rational.
+    Rat,
     Str,
     Range,
     Failure,
     Object(u32),
     Successor(u32),
+    /// A value of a plain variant declaration: a reference to one of its case objects (`Object::variant_cases`).
+    Variant(u32),
     Never,
     Descriptor,
 }
@@ -258,6 +270,10 @@ pub enum Constant {
     Bool(bool),
     Str(String),
     Descriptor(u32),
+    Byte(u32),
+    Char(u32),
+    /// The IEEE-754 binary64 bit pattern as a decimal u64.
+    Float(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -347,6 +363,41 @@ pub enum DataOp {
     StrGt,
     StrGe,
     StrLen,
+    ByteEq,
+    ByteNe,
+    ByteLt,
+    ByteLe,
+    ByteGt,
+    ByteGe,
+    CharEq,
+    CharNe,
+    CharLt,
+    CharLe,
+    CharGt,
+    CharGe,
+    FloatEq,
+    FloatNe,
+    FloatLt,
+    FloatLe,
+    FloatGt,
+    FloatGe,
+    RatEq,
+    RatNe,
+    RatLt,
+    RatLe,
+    RatGt,
+    RatGe,
+    /// Exact `int / int` and `rat(n, d)`; a zero denominator fails.
+    RatNew,
+    EnumEq,
+    EnumNe,
+    /// Deep value equality of plain objects (§16.3).
+    ValEq,
+    ValNe,
+    /// The active case number of a variant value.
+    VariantTag,
+    /// A payload field of one case (`Updates([case, storage])`); another active case fails.
+    VariantGet,
     Convert,
     RangeNew,
     RangeStart,
@@ -364,11 +415,42 @@ pub enum DataOp {
 }
 
 impl DataOp {
-    /// Operations that can fail with an application failure. Their data form has no outcome edge,
-    /// so it is admitted only where nothing needs cleanup (no service locations); elsewhere the
-    /// operation is an `evaluate` with explicit normal and unwind outcomes.
-    pub fn fallible(self) -> bool {
-        matches!(self, Self::IntMod | Self::Convert | Self::RangeNew)
+    /// Operations that can fail with an application failure, given their operand and result types.
+    /// Their data form has no outcome edge, so it is admitted only where nothing needs cleanup (no
+    /// service locations); elsewhere the operation is an `evaluate` with explicit normal and unwind
+    /// outcomes. A conversion fails only where its pair of types can trap (`conversion`).
+    pub fn fallible(self, operands: &[Type], result: Option<Type>) -> bool {
+        match self {
+            Self::IntMod | Self::RangeNew | Self::RatNew | Self::ValEq | Self::ValNe | Self::VariantGet => true,
+            Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
+            _ => false,
+        }
+    }
+}
+
+/// The conversions SPB 17 defines: `Some(true)` where the conversion can fail, `Some(false)` where it is
+/// total, `None` where it is not a conversion. The same table as OIR-2 `cvt`.
+pub fn conversion(from: Type, to: Type) -> Option<bool> {
+    match (from, to) {
+        (Type::Int, Type::Float | Type::Byte) | (Type::Float, Type::Int | Type::Byte)
+            | (Type::Rat, Type::Float | Type::Byte) => Some(true),
+        (Type::Byte, Type::Int | Type::Float | Type::Rat) | (Type::Int | Type::Float, Type::Rat)
+            | (Type::Rat, Type::Int) | (Type::Int | Type::Byte | Type::Float | Type::Rat | Type::Bool, Type::Str) => {
+            Some(false)
+        }
+        _ => None,
+    }
+}
+
+impl Function {
+    /// Whether a data instruction of this function can fail (`DataOp::fallible` on its register types).
+    pub fn data_fallible(&self, instruction: &Instruction) -> bool {
+        let Instruction::Data { op, inputs, output, .. } = instruction else { return false };
+        let operands = inputs.iter()
+            .map(|&id| self.registers.get(id as usize).copied().unwrap_or(Type::Never))
+            .collect::<Vec<_>>();
+        let result = output.and_then(|id| self.registers.get(id as usize).copied());
+        op.fallible(&operands, result)
     }
 }
 
@@ -556,3 +638,5 @@ pub struct StaticSelection {
 mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
+#[cfg(test)]
+mod scalars_tests;
