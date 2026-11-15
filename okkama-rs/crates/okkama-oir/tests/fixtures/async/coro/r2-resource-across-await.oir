@@ -2,6 +2,7 @@ oir 2 coro
 // Coro golden of tests/fixtures/async/own/r2-resource-across-await.oir (R2): the bracket of the await saves the
 // scope state that owns R, the reference to R and its deps, and the resume restores them.
 module resource_across_await
+
 object R {
     destroy @destroy
 }
@@ -10,34 +11,21 @@ scope S1 action in @make
 scope S2 action in @take
 scope S3 action in @task
 scope S4 action in @f
-summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract
-    call_contract(results=[future<void>], publication=atomic)
+summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
 summary M1 call-boundary contract call_contract(failures=[cancelled], suspends=true, publication=atomic)
-summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract
-    call_contract(results=[future<void>], publication=atomic)
-summary M3 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
-    publication=atomic)
-summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
-summary M5 call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract
-    call_contract(results=[R], failures=[program], publication=atomic)
-summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M3 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M5 call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
 summary M7 call-boundary contract call_contract(failures=[cancelled], suspends=true, publication=atomic)
-summary M8 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
-    publication=atomic)
-summary M9 call-boundary results [result_relation(provenance=unbound_result)] contract
-    call_contract(results=[future<void>], publication=atomic)
-summary M10 call-boundary results [result_relation(provenance=unbound_result)] contract
-    call_contract(results=[future<void>], publication=atomic)
+summary M8 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M9 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
+summary M10 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], publication=atomic)
 summary M11 internal contract call_contract(publication=atomic)
-summary M12 observation parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
-protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
-    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
-    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
-    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
-    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+summary M12 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
 func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(M12) {
     dependency d0: dependency = from_ssa(%3)
     dependency d1: dependency = retention(value=%0, selection=selection(%0))
@@ -47,6 +35,7 @@ func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation
     ^b1(%2: R facts(managed(deps=d0)), %3: deps) in S0:
     ret
 }
+
 func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_packet=1) summary(M5) {
     boundary B0 lexical in S1
     boundary B1 lexical in S1
@@ -78,16 +67,15 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     raise %16
     ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
     %23: pending = exit.extend %22, %18
-    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false,
-        cancel=false)
+    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false, cancel=false)
     (%26: R facts(managed(deps=d3)), %27: own, %28: deps) = exit.commit %25, destination caller, result R
     ret %26, %27
     ^b5(%29: scope<S1>, %30: failure, %31: pending) in S1:
     %32: failure = scope.unwind %29, %30, reserve %31, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %32
 }
-func @take(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> own abi explicit(input_packet=2,
-    output_packet=0) summary(M6) {
+
+func @take(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> own abi explicit(input_packet=2, output_packet=0) summary(M6) {
     dependency d0: dependency = from_ssa(%6)
     dependency d1: dependency = from_ssa(%1)
     ^b0 in S2:
@@ -99,6 +87,7 @@ func @take(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> own abi explicit
     %9: own = own.empty
     ret %9
 }
+
 func @task(%0: frame<@task>) -> void [async] summary(M7) async-creation(M9) async-body(M7) {
     frame.layout {
         slot 0: own linear
@@ -125,6 +114,7 @@ func @task(%0: frame<@task>) -> void [async] summary(M7) async-creation(M9) asyn
     fut.publish %1, failure(%13)
     ret
 }
+
 func @f(%0: frame<@f>) -> void [async] summary(M8) async-creation(M10) async-body(M8) {
     frame.layout {
         slot 0: own linear
@@ -178,17 +168,13 @@ func @f(%0: frame<@f>) -> void [async] summary(M8) async-creation(M10) async-bod
     fut.publish %1, failure(%14)
     ret
     ^b4(%15: scope<S4>, %16: own, %17: deps, %18: R facts(managed(deps=d1)), %19: deps) in S4:
-    %20: scope<S4> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%18, packet=%16),
-        state=%15, original_scope=S4)
+    %20: scope<S4> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%18, packet=%16), state=%15, original_scope=S4)
     %21: own = own.empty
     (%22: own, %23: own, %24: deps) = own.split %21, s1
     %25: own = own.join [%22, %23]
-    (%26: future<void> facts(managed(deps=d2)), %27: cache-state, %28:
-        scope<S4>) = fut.new %25, %24, %20, environment deferred(function=@task), owner S4
+    (%26: future<void> facts(managed(deps=d2)), %27: cache-state, %28: scope<S4>) = fut.new %25, %24, %20, environment deferred(function=@task), owner S4
     %29: deps = deps.of %26
-    %30: frame<@f> = frame.save %1, slots [frame_slot(slot=1, value=%18, mode=borrow), frame_slot(slot=2, value=%19,
-        mode=borrow), frame_slot(slot=3, value=%28, mode=consume), frame_slot(slot=4, value=%29, mode=borrow),
-        frame_slot(slot=5, value=%27, mode=consume)], continuation 1
+    %30: frame<@f> = frame.save %1, slots [frame_slot(slot=1, value=%18, mode=borrow), frame_slot(slot=2, value=%19, mode=borrow), frame_slot(slot=3, value=%28, mode=consume), frame_slot(slot=4, value=%29, mode=borrow), frame_slot(slot=5, value=%27, mode=consume)], continuation 1
     invoke.own await %26
         normal ^b12($deps)
         unwind ^b13($failure, $task, $receipt)
@@ -196,16 +182,14 @@ func @f(%0: frame<@f>) -> void [async] summary(M8) async-creation(M10) async-bod
     %33: failure = scope.unwind %31, %32, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%33)
     ret
-    ^b6(%34: deps, %35: R facts(managed(deps=d3)), %36: deps, %37: future<void> facts(managed(deps=d4)), %38: scope<S4>,
-        %39: deps) in S4:
+    ^b6(%34: deps, %35: R facts(managed(deps=d3)), %36: deps, %37: future<void> facts(managed(deps=d4)), %38: scope<S4>, %39: deps) in S4:
     invoke.own scope.split %38, s3
         normal ^b8($state, $selected, $external_deps, %35, %36)
         unwind ^b9($state, $failure)
     ^b7(%40: failure, %41: task-state, %42: receipt, %43: scope<S4>) in S4:
     %44: frame<@f> = frame.save %80, slots [frame_slot(slot=5, value=%85, mode=consume)], continuation 2
     [i17] (%45: scope<S4>, %46: failure) = await.unwind %43, %40, %41, %42, protocol P0
-    (%47: frame<@f>, %48: cache-state) = frame.resume %44, continuation 2, slots [saved_slot(slot=5, ty=cache-state,
-        linear=true)]
+    (%47: frame<@f>, %48: cache-state) = frame.resume %44, continuation 2, slots [saved_slot(slot=5, ty=cache-state, linear=true)]
     %49: failure = scope.unwind %45, %46, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %47, failure(%49)
     ret
@@ -230,15 +214,9 @@ func @f(%0: frame<@f>) -> void [async] summary(M8) async-creation(M10) async-bod
     fut.publish %71, failure(%69)
     ret
     ^b12(%70: deps) in S4:
-    (%71: frame<@f>, %72: R facts(managed(deps=d1)), %73: deps, %74: scope<S4>, %75: deps, %76:
-        cache-state) = frame.resume %30, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps),
-        saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=deps), saved_slot(slot=5, ty=cache-state,
-        linear=true)]
+    (%71: frame<@f>, %72: R facts(managed(deps=d1)), %73: deps, %74: scope<S4>, %75: deps, %76: cache-state) = frame.resume %30, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=deps), saved_slot(slot=5, ty=cache-state, linear=true)]
     br ^b6(%70, %72, %73, %26, %74, %75)
     ^b13(%77: failure, %78: task-state, %79: receipt) in S4:
-    (%80: frame<@f>, %81: R facts(managed(deps=d1)), %82: deps, %83: scope<S4>, %84: deps, %85:
-        cache-state) = frame.resume %30, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps),
-        saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=deps), saved_slot(slot=5, ty=cache-state,
-        linear=true)]
+    (%80: frame<@f>, %81: R facts(managed(deps=d1)), %82: deps, %83: scope<S4>, %84: deps, %85: cache-state) = frame.resume %30, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=deps), saved_slot(slot=5, ty=cache-state, linear=true)]
     br ^b7(%77, %78, %79, %83)
 }

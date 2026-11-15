@@ -203,9 +203,11 @@ impl Engine<'_, '_> {
                 && super::super::high::inside(self.module, *child, scope, self.state)) {
                 self.error(R::B41, "outer scope closes while a nested lexical scope is open");
             }
+            // #684: the duties of enclosing scopes pass through a nested close untouched.
             let available: BTreeSet<_> = before.token_values().filter(|value| {
-                before.availability[value.as_u32() as usize] == AVAILABLE
-                    && before.tokens[value.as_u32() as usize].service.is_some()
+                let token = &before.tokens[value.as_u32() as usize];
+                before.availability[value.as_u32() as usize] == AVAILABLE && token.service.is_some()
+                    && !self.enclosing_duty(token, scope)
             }).collect();
             if !available.is_empty() {
                 // A `dynamic` entry covers runtime-admitted entries, never a static token (D25.3).

@@ -26,8 +26,7 @@ func @f(%frame: frame<@f>) -> void [async] summary(Mf) {
     %q: scope<S> = scope.begin S
     %cl0: cleanup-state = cleanup.begin %q, close 0, effects scope_effects(failures=[thrown, program, panic, native],
         suspends=false, cancel=false)
-    %cl1: cleanup-state = cleanup.shield %cl0
-    %cl2: cleanup-state = cleanup.settle %cl1, %task, protocol Services
+    %cl2: cleanup-state = cleanup.settle %cl0, %task, protocol Services
     %cl3: cleanup-state = cleanup.settle %cl2, %c, protocol Services
     %cl4: cleanup-state = cleanup.settle.dynamic %cl3, protocol Services
     %cl5: cleanup-state = cleanup.plan %cl4, plan 0

@@ -59,6 +59,13 @@ impl Engine<'_, '_> {
         }
     }
 
+    /// #684, D16: a service token owned by a scope that encloses `scope` is a duty of that enclosing scope. A close
+    /// of `scope` settles only its own duties (its D16 schedule) and leaves this one untouched for the owner's close.
+    pub(super) fn enclosing_duty(&mut self, token: &Token, scope: ScopeId) -> bool {
+        token.scope.is_some_and(|owner| owner != scope
+            && super::super::high::inside(self.module, scope, owner, self.state))
+    }
+
     /// C-3: the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a service duty
     /// that a close or a settle step may take.
     pub(super) fn await_handle(&self, before: &Flow, value: ValueId) -> bool {
@@ -198,10 +205,15 @@ impl Engine<'_, '_> {
                 }
             }
             AsyncOp::CacheRehome { form: RehomeForm::State(state), target, .. } => {
+                // The pre-C-4 form over one cache-state token names the scope it moves the duty to.
+                let RehomeTarget::Scope(target) = *target else {
+                    self.error(R::B94, "the pre-C-4 cache.rehome form needs a target scope");
+                    return;
+                };
                 let mut token = before.tokens[state.as_u32() as usize].clone();
-                token.scope = Some(*target);
-                let changed = before.tokens[state.as_u32() as usize].scope != Some(*target);
-                if changed && before.scopes.get(target) != Some(&1) {
+                token.scope = Some(target);
+                let changed = before.tokens[state.as_u32() as usize].scope != Some(target);
+                if changed && before.scopes.get(&target) != Some(&1) {
                     self.error(R::B94, "cache rehome requires a live sufficient target boundary");
                 }
                 if let Some(key) = token.cache.filter(|_| changed) {
@@ -213,7 +225,7 @@ impl Engine<'_, '_> {
                             .cloned().collect();
                         for mut piece in moved {
                             holder.pieces.remove(&piece);
-                            piece.owner = Some(*target);
+                            piece.owner = Some(target);
                             token.pieces.insert(piece);
                         }
                         if let Some((keys, stale)) = &mut holder.snapshot
@@ -224,6 +236,60 @@ impl Engine<'_, '_> {
                 }
                 if let Some(slot) = slots.first_mut() {
                     slot.token = token;
+                }
+            }
+            AsyncOp::CacheRehome { form: RehomeForm::Scope { state, pending, future }, target, .. } => {
+                let key = self.identity(before, *future);
+                let mut owner = before.tokens[state.as_u32() as usize].clone();
+                let moved: Vec<_> = owner.pieces.iter().filter(|piece| piece.holder == Some(key)).cloned().collect();
+                for piece in &moved {
+                    owner.pieces.remove(piece);
+                }
+                let held = moved.iter().any(|piece| piece.origin == key);
+                let reserve = self.rehome_reserve(before, flow, *pending, owner.scope, *target, key, moved);
+                if !held {
+                    self.error(R::B94, "cache.rehome names a Future whose cache duty its scope state does not hold");
+                }
+                for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    match info.name {
+                        SlotName::State => slot.token = owner.clone(),
+                        SlotName::Pending => *slot = reserve.clone(),
+                        _ => {}
+                    }
+                }
+            }
+            AsyncOp::CacheRehome { form: RehomeForm::Token { pending, cache, task }, target, .. } => {
+                // coro/low: the duty tokens are consumed; the duty and what its cache holds leave
+                // every carrier that still holds them, the owner state included.
+                let Some(key) = before.tokens[cache.as_u32() as usize].cache else {
+                    self.error(R::B94, "cache.rehome consumes the cache-state token of a Future");
+                    return;
+                };
+                if let Some(task) = task
+                    && before.tokens[task.as_u32() as usize].cache != Some(key) {
+                    self.error(R::B94, "cache.rehome consumes the task-state of the same spawned Future");
+                }
+                let mut moved = vec![];
+                let mut source = None;
+                for (index, holder) in flow.tokens.indexed_mut() {
+                    if flow.availability[index] != AVAILABLE {
+                        continue;
+                    }
+                    let held: Vec<_> = holder.pieces.iter().filter(|piece| piece.holder == Some(key)).cloned()
+                        .collect();
+                    for piece in held {
+                        holder.pieces.remove(&piece);
+                        if piece.origin == key {
+                            source = piece.owner;
+                        }
+                        moved.push(piece);
+                    }
+                }
+                let reserve = self.rehome_reserve(before, flow, *pending, source, *target, key, moved);
+                for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    if info.name == SlotName::Pending {
+                        *slot = reserve.clone();
+                    }
                 }
             }
             AsyncOp::FutureSettle { task, .. } => {
@@ -277,6 +343,21 @@ impl Engine<'_, '_> {
                 if matches!(boundary, TakeBoundary::Temporary { .. })
                     && before.provenance.get(&key).is_none_or(|provenance| provenance & !FRESH != 0) {
                     self.error(R::B93, "temporary take cannot change a bound Future's cleanup boundary");
+                }
+                // OIR-2 §10.3: a temporary's boundary is its awaiting scope, which owns its cache. A cache
+                // owned by an outer scope is never taken into an inner consumer block.
+                if let TakeBoundary::Temporary { awaiting } = boundary {
+                    // The duty is in a live carrier, or saved in a frame slot across a suspension (coro).
+                    let live = before.token_values()
+                        .filter(|value| before.availability[value.as_u32() as usize] == AVAILABLE)
+                        .flat_map(|value| before.tokens[value.as_u32() as usize].pieces.iter());
+                    let saved = before.frames.values().flat_map(|layout| layout.values())
+                        .flat_map(|slot| slot.token.pieces.iter());
+                    let owner = live.chain(saved).find(|piece| piece.origin == key && piece.holder == Some(key))
+                        .map(|piece| piece.owner);
+                    if owner.is_some_and(|owner| owner != Some(*awaiting)) {
+                        self.error(R::B93, "temporary take must take the cache into the scope that owns it");
+                    }
                 }
                 if let TakeBoundary::Existing { owner } = boundary {
                     let key = self.identity(before, *future);
@@ -444,6 +525,46 @@ impl Engine<'_, '_> {
                 self.publish_exit(before, *frame, outcome);
             }
             _ => {}
+        }
+    }
+
+    /// C-4 step 2 and the ruling of #601 R1: the duties of the Future `key` join the pending reserve of the
+    /// exit of their owner scope `source`. The target is that exit's destination: a live scope enclosing
+    /// `source`, or the caller. The owner tag stays until `exit.commit`, which checks the destination.
+    #[allow(clippy::too_many_arguments)]
+    fn rehome_reserve(
+        &mut self, before: &Flow, flow: &mut Flow, pending: ValueId, source: Option<ScopeId>, target: RehomeTarget,
+        key: Origin, moved: Vec<Piece>,
+    ) -> Slot {
+        let index = pending.as_u32() as usize;
+        let mut reserve = before.tokens[index].clone();
+        // Without a found duty its owner is unknown; the caller reports the missing duty.
+        if let (RehomeTarget::Scope(scope), Some(source)) = (target, source) {
+            let encloses = source != scope && super::super::high::inside(self.module, source, scope, self.state);
+            if before.scopes.get(&scope) != Some(&1) || !encloses {
+                self.error(R::B94, "cache rehome requires a live sufficient target boundary");
+            }
+        }
+        if reserve.rehome.is_some_and(|earlier| earlier != target) {
+            self.error(R::B94, "the duties rehomed into one pending exit name different destinations");
+        }
+        reserve.rehome = Some(target);
+        reserve.pieces.extend(moved);
+        // Snapshots of the moved duty's stable key no longer describe its holder (B7.2).
+        for (value, holder) in flow.tokens.indexed_mut() {
+            if flow.availability[value] != AVAILABLE {
+                continue;
+            }
+            if let Some((keys, stale)) = &mut holder.snapshot
+                && keys.contains(&key) {
+                *stale = true;
+            }
+        }
+        Slot {
+            token: reserve, refs: before.refs[index].clone(), identity: before.identities[index],
+            aliases: before.aliases[index].clone(), contained: before.contained[index].clone(),
+            must_use: before.must_use[index], requirements: before.full_deps[index].clone(),
+            lifetime: before.lifetimes[index], ..Slot::default()
         }
     }
 

@@ -268,7 +268,6 @@ pub(super) const TYPE_RULES: &[&str] = &[
     "cleanup.plan",
     "destroy.direct",
     "cleanup.failure",
-    "cleanup.shield",
     "cleanup.deliver_cancel",
     "cleanup.finish",
     "cell.new",

@@ -75,7 +75,6 @@ cleanup.plan
 cleanup.settle
 cleanup.settle.dynamic
 cleanup.settle.empty
-cleanup.shield
 const
 cvt
 defer.register

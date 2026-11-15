@@ -1,5 +1,5 @@
 oir 2 low
-// expect coro-raw-frame-access instruction:0:7
+// expect coro-raw-frame-access instruction:0:6
 // #696: a D21 body of Low cancels its own frame with frame.cancel inside its close (the D21 form of
 // verify/valid/M9-service-settle-two-orders.oir with one step added). D20 forbids raw frame access in an async
 // coro/low body, and every async body of coro/low is D21, so frame.cancel has no valid place left.
@@ -53,13 +53,9 @@ func @f(%0: frame<@f>) -> void [async] summary(M0) {
         bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
         root_binding(value=%10, trace=cleanup_activation)], through_suspend=true),
         root_requirement(boundary=before_instruction(i6), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
-        root_binding(value=%6, trace=full_dependencies), root_binding(value=%9, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i5), bindings=[root_binding(value=%1,
-        trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies), root_binding(value=%9,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i5),
-        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%6, trace=full_dependencies),
-        root_binding(value=%8, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=after_instruction(i4), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
+        root_binding(value=%6, trace=full_dependencies), root_binding(value=%8, trace=cleanup_activation)],
+        through_suspend=true), root_requirement(boundary=after_instruction(i4), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)),
         root_binding(value=%6, trace=full_dependencies), root_binding(value=%8, trace=cleanup_activation)],
         through_suspend=true), root_requirement(boundary=before_instruction(i4), bindings=[root_binding(value=%1,
         trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)), root_binding(value=%6,
@@ -142,8 +138,7 @@ func @f(%0: frame<@f>) -> void [async] summary(M0) {
     [i3] %7: scope<S0> = scope.begin S0
     [i4] %8: cleanup-state = cleanup.begin %7, close 0, effects scope_effects(failures=[thrown, program, panic, native],
         suspends=true, cancel=true)
-    [i5] %9: cleanup-state = cleanup.shield %8
-    [i6] %10: cleanup-state = cleanup.settle %9, %3, protocol P0
+    [i6] %10: cleanup-state = cleanup.settle %8, %3, protocol P0
     [iraw] %raw: cleanup-state = frame.cancel %1, %10, protocol Frames
     [i7] %11: cleanup-state = cleanup.settle %raw, %4, protocol P0
     [i8] %12: cleanup-state = cleanup.plan %11, plan 0

@@ -47,6 +47,8 @@ pub(super) struct Filter {
     pub possible: BTreeSet<Origin>,
     pub labels: BTreeSet<ValueId>,
     pub stale: bool,
+    /// A check reads the whole graph of a returned Future, its cache's holdings included; it extracts
+    /// nothing. No selection sets it (C-4).
     pub whole_future: bool,
     pub state: u8,
 }
@@ -116,7 +118,6 @@ pub(super) fn provenance_bit(provenance: AdmissionProvenance) -> u8 {
 pub(super) struct CleanupFact {
     pub aborted: bool,
     pub phase: u8,
-    pub shield: bool,
     pub pending: bool,
     pub reserve: BTreeSet<Piece>,
     pub inventory: BTreeSet<Piece>,
@@ -165,6 +166,8 @@ pub(super) struct Token {
     pub pending_type: Option<TypeId>,
     pub pending_kind: Option<ExitKind>,
     pub pending_boundary: Option<BoundaryId>,
+    /// The destination named by the `cache.rehome`s into this pending exit (C-4).
+    pub rehome: Option<RehomeTarget>,
     pub failure_origin: Option<Origin>,
     pub cleanup: Option<CleanupFact>,
     pub snapshot: Option<(BTreeSet<Origin>, bool)>,

@@ -1,5 +1,5 @@
 oir 2 low
-// expect OIR2-B10.2 instruction:1:16
+// expect OIR2-B10.2 instruction:1:15
 // B10.2: the selector hands out a key and the body goes to cleanup.finish without destroying it.
 // #696: the D21 form of the same defect; its valid pair is valid/B10-runtime-serial-merge.oir.
 // #716: the root close declares cancel=true and delivers the cancellation after its drained plan (D18).
@@ -43,13 +43,9 @@ func @f(%0: frame<@f>) -> void [async] summary(M1) {
         root_requirement(boundary=after_instruction(i7), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
         root_binding(value=%8, trace=full_dependencies), root_binding(value=%11, trace=cleanup_activation)],
         through_suspend=true), root_requirement(boundary=before_instruction(i7), bindings=[root_binding(value=%1,
-        trace=value(frame<@f>)), root_binding(value=%8, trace=full_dependencies), root_binding(value=%10,
-        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i6),
-        bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%8, trace=full_dependencies),
-        root_binding(value=%10, trace=cleanup_activation)], through_suspend=true),
-        root_requirement(boundary=before_instruction(i6), bindings=[root_binding(value=%1, trace=value(frame<@f>)),
-        root_binding(value=%8, trace=full_dependencies), root_binding(value=%9, trace=cleanup_activation)],
-        through_suspend=true), root_requirement(boundary=after_instruction(i5), bindings=[root_binding(value=%1,
+        trace=value(frame<@f>)), root_binding(value=%8, trace=full_dependencies), root_binding(value=%9,
+        trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=after_instruction(i5),
+        bindings=[root_binding(value=%1,
         trace=value(frame<@f>)), root_binding(value=%8, trace=full_dependencies), root_binding(value=%9,
         trace=cleanup_activation)], through_suspend=true), root_requirement(boundary=before_instruction(i5),
         bindings=[root_binding(value=%1, trace=value(frame<@f>)), root_binding(value=%2, trace=value(type)),
@@ -189,8 +185,7 @@ func @f(%0: frame<@f>) -> void [async] summary(M1) {
     [i4] %8: deps = deps.of %7
     [i5] %9: cleanup-state = cleanup.begin %6, close 0, effects scope_effects(failures=[thrown, program, panic, native],
         suspends=true, cancel=true)
-    [i6] %10: cleanup-state = cleanup.shield %9
-    [i7] %11: cleanup-state = cleanup.settle.empty %10, schedule 0
+    [i7] %11: cleanup-state = cleanup.settle.empty %9, schedule 0
     [i8] %12: cleanup-state = cleanup.plan %11, plan 0
     br ^b1(%12)
     ^b1(%13: cleanup-state) in S1:

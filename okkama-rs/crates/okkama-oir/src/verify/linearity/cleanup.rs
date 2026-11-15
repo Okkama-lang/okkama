@@ -42,10 +42,10 @@ impl Engine<'_, '_> {
                         "abort must preserve the executed prefix and cannot duplicate an owned reserve");
                 }
                 let incoming = &before.tokens[pending.as_u32() as usize].pieces;
-                if !fact.shield || fact.awaiting_failure
+                if fact.awaiting_failure
                     || incoming.iter().any(|piece| fact.executed.contains(&piece.origin)
                         || token.pieces.iter().any(|old| old.overlaps(piece))) {
-                    self.error(R::B101, "abort requires shielded disjoint reserve and a settled executed prefix");
+                    self.error(R::B101, "abort requires a disjoint reserve and a settled executed prefix");
                 }
                 if before.active_failure == 0 && fact.failures == 0 {
                     self.error(R::B101, "exit.abort requires an actual failure or delivered cancellation");
@@ -77,15 +77,12 @@ impl Engine<'_, '_> {
                 self.error(R::B104, "cleanup.begin dropped or substituted the active primary failure/Error");
             }
             self.final_close_delivers(before, *close, failure.is_some());
+            // Plan §3.4, Champ draft 3 §5 (#690): the shield is a property of the close, not an operation.
+            // Every close of Low begins shielded, including a final close that delivers cancellation, and
+            // cancellation is delivered only by the conditional `cleanup.deliver_cancel` of that close.
             let mut fact = CleanupFact {
                 aborted: false,
-                // Plan §3.4: in a D21 async body of Low the shield is a property of the close, not an
-                // operation, so every close begins shielded, including a final close that delivers cancellation.
-                // A body without a frame layout keeps the P1 form: G1 carries D9 shielding in begin, and a
-                // suspending or cancelling close needs the explicit shield transition.
                 phase: 0,
-                shield: self.module.profile == Profile::Low && self.body.cleanup.closes.get(*close)
-                    .is_ok_and(|close| self.frame_body() || !close.effects.suspends && !close.effects.cancel),
                 pending: pending.is_some(),
                 inventory: token.pieces.union(&reserve).cloned().collect(), reserve,
                 failures, failure_origin, cancel_delivered: false, cancel_open: false, may_fail: false,
@@ -93,12 +90,19 @@ impl Engine<'_, '_> {
                 executed: BTreeSet::new(), services: BTreeSet::new(), had_services: false,
                 close: *close, plan: None,
             };
+            // #684: a close takes the service duties of the scope it closes; those of enclosing scopes pass.
+            let closing = match self.body.cleanup.closes.get(*close).map(|close| &close.source) {
+                Ok(CleanupSource::Scope(owner)) => Some(*owner),
+                _ => None,
+            };
             for (value, _) in self.body.values.iter() {
+                let held = &before.tokens[value.as_u32() as usize];
                 if before.availability[value.as_u32() as usize] == AVAILABLE
                     && matches!(super::super::later::value_type(self.module, self.body, value),
                         Some(Type::Frame(_) | Type::Service(ServiceType::TaskState | ServiceType::Pin
                             | ServiceType::Receipt | ServiceType::CacheState)))
-                    && let Some(key) = before.tokens[value.as_u32() as usize].service {
+                    && !closing.is_some_and(|scope| self.enclosing_duty(held, scope))
+                    && let Some(key) = held.service {
                     fact.services.insert(key);
                 }
             }
@@ -144,6 +148,7 @@ impl Engine<'_, '_> {
                 token.pending_type = before.tokens[pending.as_u32() as usize].pending_type;
                 token.pending_kind = before.tokens[pending.as_u32() as usize].pending_kind;
                 token.pending_boundary = before.tokens[pending.as_u32() as usize].pending_boundary;
+                token.rehome = before.tokens[pending.as_u32() as usize].rehome;
                 token.reserve = before.tokens[pending.as_u32() as usize].reserve.clone();
             }
             if let Some(slot) = slots.first_mut() {
@@ -163,8 +168,7 @@ impl Engine<'_, '_> {
             | CleanupOp::Plan { cleanup, .. }
             | CleanupOp::SettleEmpty { cleanup, .. } | CleanupOp::Destroy { cleanup, .. }
             | CleanupOp::DestroyDirect { cleanup, .. } | CleanupOp::RecordFailure { cleanup, .. }
-            | CleanupOp::Shield { cleanup } | CleanupOp::DeliverCancel { cleanup }
-            | CleanupOp::Finish { cleanup } => *cleanup,
+            | CleanupOp::DeliverCancel { cleanup } | CleanupOp::Finish { cleanup } => *cleanup,
             _ => return,
         };
         let mut token = before.tokens[cleanup.as_u32() as usize].clone();
@@ -172,9 +176,6 @@ impl Engine<'_, '_> {
             self.error(R::B102, "cleanup step has no checked begin/phase state");
             return;
         };
-        if !fact.shield && !matches!(op, CleanupOp::Shield { .. }) {
-            self.error(R::B105, "cleanup execution, settlement and cancellation require a shield");
-        }
         if fact.awaiting_failure && !matches!(op, CleanupOp::RecordFailure { .. }) {
             self.error(R::B104, "destroy failure state must be dispatched before the next cleanup step");
         }
@@ -198,7 +199,6 @@ impl Engine<'_, '_> {
                     self.error(R::B102, "defer cannot execute after service settlement");
                 }
             }
-            CleanupOp::Shield { .. } => fact.shield = true,
             CleanupOp::Settle { holder, protocol, .. } => {
                 let kind = match super::super::later::value_type(self.module, self.body, *holder) {
                     Some(Type::Service(ServiceType::TaskState)) => HolderKind::Group,
@@ -265,9 +265,6 @@ impl Engine<'_, '_> {
                 fact.phase = 1;
             }
             CleanupOp::Plan { plan, .. } => {
-                if !fact.shield {
-                    self.error(R::B105, "cleanup plan requires a shield");
-                }
                 if fact.phase != 1 || !fact.services.is_empty() {
                     self.error(R::B106, "every assigned service must settle before planning");
                 }
@@ -276,7 +273,7 @@ impl Engine<'_, '_> {
                 fact.phase = 2;
             }
             CleanupOp::Destroy { key: selected, .. } => {
-                if !fact.shield || fact.phase != 2 || fact.selected.is_none()
+                if fact.phase != 2 || fact.selected.is_none()
                     || !before.refs[selected.as_u32() as usize].iter().any(|key| Some(*key) == fact.selected) {
                     self.error(R::B102, "runtime destroy needs the checked serial selector's selected key");
                 }
@@ -293,9 +290,6 @@ impl Engine<'_, '_> {
             }
             CleanupOp::DestroyDirect { identity, .. } => {
                 let key = self.identity(before, *identity);
-                if !fact.shield {
-                    self.error(R::B105, "destroy must execute shielded");
-                }
                 if fact.phase != 2 {
                     self.error(R::B102, "destroy precedes serial planning");
                 }
@@ -382,7 +376,7 @@ impl Engine<'_, '_> {
                     self.error(R::B105, "an open cancellation delivery is decided by the selector of its plan");
                 }
                 let cancel = self.body.cleanup.closes.get(fact.close).is_ok_and(|close| close.effects.cancel);
-                if self.frame_body() && cancel && !fact.cancel_delivered {
+                if cancel && !fact.cancel_delivered {
                     self.error(R::B105, "a final close with cancel=true delivers the cancellation before finish (D18)");
                 }
                 let destroyed: Vec<_> = fact.inventory.difference(&fact.reserve).cloned().collect();
@@ -428,6 +422,7 @@ impl Engine<'_, '_> {
                             slot.token.pending_type = token.pending_type;
                             slot.token.pending_kind = token.pending_kind;
                             slot.token.pending_boundary = token.pending_boundary;
+                            slot.token.rehome = token.rehome;
                             slot.token.reserve = token.reserve.clone();
                             if let Some(scope) = token.scope {
                                 slot.token.reserve.remove(&scope);
@@ -1056,8 +1051,8 @@ impl Engine<'_, '_> {
             self.error(R::B102, "cleanup.next needs a live cleanup automaton");
             return;
         };
-        if !fact.shield || fact.phase != 2 || fact.awaiting_failure || fact.plan.is_none() {
-            self.error(R::B102, "cleanup.next requires a shielded settled plan and a dispatched failure");
+        if fact.phase != 2 || fact.awaiting_failure || fact.plan.is_none() {
+            self.error(R::B102, "cleanup.next requires a settled plan and a dispatched failure");
         }
         if fact.plan.and_then(|id| self.body.cleanup.plans.get(id).ok()).is_some_and(|plan| plan.direct.is_some()) {
             self.error(R::B102, "runtime selector cannot replace a direct plan's finite order");

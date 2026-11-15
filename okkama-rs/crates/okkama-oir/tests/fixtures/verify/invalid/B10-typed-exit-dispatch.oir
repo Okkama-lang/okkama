@@ -21,8 +21,7 @@ func @f(%schedule: type) -> own summary(Mf) {
     %pending: pending = exit.prepare return %value, %packet, deps(%deps) at B0
     %c: cleanup-state = cleanup.begin %q, pending %pending, close 0, effects scope_effects(failures=[], suspends=false,
         cancel=false)
-    %shield: cleanup-state = cleanup.shield %c
-    %settled: cleanup-state = cleanup.settle.empty %shield, schedule 0
+    %settled: cleanup-state = cleanup.settle.empty %c, schedule 0
     [i9] %planned: cleanup-state = cleanup.plan %settled, plan 0
     (%closed: closed, %fs: failure-state, %xs: exit-state) = cleanup.finish %planned
     exit.dispatch 0 %closed %fs %xs success ^done($closed, %pending)

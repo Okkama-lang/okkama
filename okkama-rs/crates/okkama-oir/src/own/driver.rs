@@ -169,8 +169,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             replacement_returns: vec![],
             constructor_inputs: flows[&function].constructor_inputs.clone(),
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
-            witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![],
+            witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
+            dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(),
         };
+        driver.temporaries = driver.temporary_futures();
         let captured: BTreeSet<_> = high.insts.iter().flat_map(|(_, instruction)| match &instruction.op {
             Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => action.bindings.clone(),
             _ => vec![],
@@ -425,7 +427,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                             _ if helpers.contains(&function) => Some(DeferReturnTag::Continue),
                             _ => None,
                         };
-                        driver.contained_futures(values)?;
+                        driver.exit_landing = None;
                         point = driver.prepare(point, values.first().copied(), None)?;
                         point = driver.close_final(point)?;
                         let committed = if point.env.cleanup.pending.is_some() {
@@ -630,6 +632,15 @@ struct Driver<'a, 'o> {
     builder_owners: BTreeMap<ValueId, ScopeId>,
     /// Cache duties in creation order: the owner scope and the Future (D12, D16).
     cache_duties: Vec<(ScopeId, ValueId)>,
+    /// The destination of the exit whose scopes are closing: the landing scope
+    /// of an edge, or the caller (`None`) for a return. A `cache.rehome` of an
+    /// escaping cache duty names it (C-4).
+    exit_landing: Option<ScopeId>,
+    /// Scopes that admit service entries at run time: their schedules end with
+    /// the dynamic step (D25.3).
+    dynamic_owners: BTreeSet<ScopeId>,
+    /// High Futures that their awaiting scope takes (OIR-2 §10.2, §10.3).
+    temporaries: BTreeSet<ValueId>,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:
@@ -769,6 +780,11 @@ impl Driver<'_, '_> {
                 return self.create_future(point, instruction, function);
             }
             Operation::Async(AsyncOp::Await { .. }) => return self.await_future(point, instruction),
+            // Elaboration §13.1, Champ draft 3 §5: a cancellation request and the two queries only observe the
+            // Future. Cancelling a cold Future never moves its inputs: they stay with its cache duty in the
+            // owner's journal until that duty settles at the owner's close.
+            Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
+                | AsyncOp::FutureCancelled { .. }) => {}
             Operation::Call(CallOp::Direct { function, .. } | CallOp::Native { function, .. }
                 | CallOp::Intrinsic { function, .. }) => return self.call(point, instruction, function),
             Operation::Call(CallOp::Closure { .. } | CallOp::Cap { .. } | CallOp::Role { .. }) => {
@@ -846,6 +862,7 @@ impl Driver<'_, '_> {
         -> Result<Landing, OwnError> {
         point = self.run_defers(point, scope)?;
         if !unwind && point.env.cleanup.pending.is_some() {
+            point = self.rehome_caches(point, scope)?;
             point = self.extend(point, scope)?;
         }
         let state = point.env.state(scope)?;
@@ -914,7 +931,7 @@ impl Driver<'_, '_> {
         } else {
             vec![]
         };
-        self.contained_futures(&escaped)?;
+        self.exit_landing = Some(original.lexical_scope);
         if !prologue && !unwind && let Some(closing) = closing {
             point = self.prepare_edge(point, &escaped, closing)?;
         }
@@ -940,6 +957,7 @@ impl Driver<'_, '_> {
                 Some(ExitDestination::Loop(boundary)) => ExitDestination::Loop(boundary),
                 _ => ExitDestination::Scope(original.lexical_scope),
             };
+            let rehomed = point.env.cleanup.rehomed;
             point = self.commit(point, destination, result)?;
             if let Some(value) = escaped.first().filter(|_| escaped.len() == 1) {
                 point.env.values.insert(*value, LatestValue {
@@ -949,6 +967,11 @@ impl Driver<'_, '_> {
             let packet = point.result(SlotName::Packet)?;
             let state = point.env.state(original.lexical_scope)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
+            // Admitted service entries join the landing scope's dynamic inventory (D25.3).
+            if rehomed {
+                self.dynamic_owners.insert(original.lexical_scope);
+            }
+            point.env.cleanup.rehomed = false;
             point.env.cleanup.wanted = None;
             point.env.cleanup.carried.clear();
         }

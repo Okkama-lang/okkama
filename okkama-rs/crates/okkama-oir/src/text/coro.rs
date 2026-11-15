@@ -207,6 +207,25 @@ impl Codec for RehomeForm {
     }
 }
 
+/// `T` or `caller`: the exit destination of a `cache.rehome` (C-4, ruling of #601 R1).
+impl Codec for RehomeTarget {
+    fn read(r: &mut Reader<'_>) -> Result<Self, Diagnostic> {
+        if r.eat("caller") {
+            return Ok(Self::Caller);
+        }
+        Ok(Self::Scope(ScopeId::read(r)?))
+    }
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), PrintError> {
+        match self {
+            Self::Scope(scope) => scope.write(w),
+            Self::Caller => {
+                w.push("caller");
+                Ok(())
+            }
+        }
+    }
+}
+
 /// `holder %f, kind cache` (async ABI D25.2).
 impl Codec for ServiceEntry {
     fn read(r: &mut Reader<'_>) -> Result<Self, Diagnostic> {

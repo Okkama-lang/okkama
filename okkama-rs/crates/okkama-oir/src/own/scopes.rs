@@ -232,6 +232,10 @@ pub(super) fn inventory(
                     // A shared await assigns no duty to its scope (elaboration §13.2);
                     // the cache duty belongs to the Future's creation scope.
                     Operation::Async(AsyncOp::Await { .. }) => {}
+                    // A cancellation request and the Future queries observe the Future; the duty stays with
+                    // the creation scope (elaboration §13.1).
+                    Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
+                        | AsyncOp::FutureCancelled { .. }) => {}
                     Operation::Async(_) | Operation::Carrier(_) => {
                         scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::ServiceDuty);
                     }

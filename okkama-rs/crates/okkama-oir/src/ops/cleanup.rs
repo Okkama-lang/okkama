@@ -67,8 +67,6 @@ operation_group! { CleanupOp {
         => ("destroy.direct", [cleanup: Consume, identity: DestroyBorrow, descriptor: Observe], Rule::Destroy { cleanup: *cleanup, identity: *identity });
     RecordFailure { cleanup: ValueId, failure: ValueId }
         => ("cleanup.failure", [cleanup: Consume, failure: Observe], Rule::CleanupFailure { cleanup: *cleanup });
-    Shield { cleanup: ValueId }
-        => ("cleanup.shield", [cleanup: Consume], Rule::CleanupStep { cleanup: *cleanup, finishing: false });
     DeliverCancel { cleanup: ValueId }
         => ("cleanup.deliver_cancel", [cleanup: Consume], Rule::CleanupStep { cleanup: *cleanup, finishing: false });
     Finish { cleanup: ValueId }

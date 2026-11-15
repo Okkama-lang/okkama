@@ -531,7 +531,7 @@ impl Lowering<'_, '_> {
             let outcome = match &data.term.kind {
                 TermKind::Ret { values } if self.fixed_root => {
                     let values = values.clone();
-                    self.root_success(block, &values)?
+                    self.root_success(block, &values, &mut continue_deps)?
                 }
                 TermKind::Ret { values } => self.success(block, values)?,
                 TermKind::Raise(failure) if data.unwind.is_none() => PublishOutcome::Failure(*failure),
@@ -603,18 +603,30 @@ impl Lowering<'_, '_> {
 
     /// Ruling 3: a fixed root returns its value without an exit transaction. Its success publishes that value
     /// with an empty packet (Champ draft 3 §3: the root's success packet must be empty) and the value's deps.
-    fn root_success(&mut self, block: BlockId, values: &[ValueId]) -> Result<PublishOutcome, CoroError> {
-        let [value] = values else {
-            return Err(self.unsupported("a fixed root without a value has no deps to publish (async tests, F1)"));
+    /// A void fixed root (an async test, `async main` without a value) publishes the empty deps of a scalar
+    /// taken at the entry, as the Continue of an async defer does (async ABI C-2 ruling of #691, C-6).
+    fn root_success(&mut self, block: BlockId, values: &[ValueId], continue_deps: &mut Option<ValueId>)
+        -> Result<PublishOutcome, CoroError> {
+        let (value, deps) = match values {
+            [] => {
+                let deps = match continue_deps {
+                    Some(deps) => *deps,
+                    None => *continue_deps.insert(self.continue_deps()?),
+                };
+                (None, deps)
+            }
+            [value] => {
+                if matches!(self.module.types.get(self.ty(*value)?)?, Type::Service(_)) {
+                    return Err(self.invalid("a fixed root returns no service value"));
+                }
+                (Some(*value), self.root_deps(block, *value)?)
+            }
+            _ => return Err(self.invalid("a fixed root returns at most one language value")),
         };
-        if matches!(self.module.types.get(self.ty(*value)?)?, Type::Service(_)) {
-            return Err(self.invalid("a fixed root returns no service value"));
-        }
-        let deps = self.root_deps(block, *value)?;
         let own = self.intern(Type::Service(ServiceType::Own))?;
         let end = self.body.blocks.get(block)?.insts.len();
         let packet = self.emit(block, end, own, Operation::Ownership(OwnershipOp::Empty {}))?;
-        Ok(PublishOutcome::Success { value: Some(*value), packet, deps })
+        Ok(PublishOutcome::Success { value, packet, deps })
     }
 
     /// `deps.of` the value of a fixed root, taken while its scope is still open: only exit forms run after

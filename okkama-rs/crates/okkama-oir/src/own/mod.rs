@@ -447,9 +447,6 @@ fn async_phase(op: &AsyncOp) -> &'static str {
         AsyncOp::WorkerBind { .. } | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. } => {
             "process workers arrive with X1"
         }
-        AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => {
-            "Future observation and cancellation requests arrive with the High contract of V5 and K1"
-        }
         AsyncOp::Pin { .. } | AsyncOp::PinTransfer { .. } | AsyncOp::Unpin { .. } => "pins arrive with D23 (Q2)",
         AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } | AsyncOp::CacheRehome { .. } => {
             "unique take and rehome are own decisions of R1, never High input (C1)"

@@ -417,3 +417,143 @@ fn every_declared_continuation_has_a_suspension_site() {
         "    continuation 2 at #9 saves [1] operands [0, 3, 4, 5]\n    continuation 3 at ^ok saves [1]\n");
     assert_eq!(structural(&unused), [RuleId::CoroContinuationMismatch]);
 }
+
+const NEVER: &str = include_str!("../../tests/fixtures/async/coro/async-never-awaited.oir");
+
+/// A coro owner whose cold Future leaves the inner scope S2 for S1: the token form of `cache.rehome` (C-4)
+/// consumes the duty token into the pending reserve of S2's exit.
+fn token_rehome(target: &str) -> String {
+    let start = NEVER.find("func @main").unwrap();
+    let main = format!("func @main() -> int [entry] abi observation summary(M6) {{
+    service.schedule Schedule0 owner S2, protocol P0, duties [%8]
+    service.schedule Schedule1 owner S1, protocol P0, duties [dynamic]
+    boundary B0 lexical in S1
+    boundary B1 lexical in S2
+    key k0: key = service_of(value=%7, kind=cache)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%10)
+    selection s0: selection = union([])
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    %1: scope<S2> = scope.begin S2
+    br ^b1(%0, %1)
+    ^b1(%20: scope<S1>, %21: scope<S2>) in S2:
+    %2: own = own.empty
+    (%3: own, %4: own, %5: deps) = own.split %2, s0
+    %6: own = own.join [%3, %4]
+    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S2>) = fut.new %6, %5, %21, \
+environment deferred(function=@explode), result int, owner S2
+    %10: deps = deps.of %7
+    %11: own = own.empty
+    %12: pending = exit.prepare fallthrough %7, %11, deps(%10) at B1
+    %13: pending = cache.rehome %12, %8, target {target}, protocol P0
+    (%14: closed, %15: pending) = scope.end %9, reserve %13, effects scope_effects(failures=[], suspends=false, \
+cancel=false)
+    br ^b2(%20, %15)
+    ^b2(%22: scope<S1>, %23: pending) in S1:
+    (%16: future<int> facts(managed(deps=d1)), %17: own, %18: deps) = exit.commit %23, destination scope(S1), \
+result future<int>
+    %19: scope<S1> = own.admit %22, %17
+    %26: bool = fut.done %16
+    %24: int = const 0
+    %25: closed = scope.end %19, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %24
+}}
+");
+    let scopes = "scope S1 action in @main\nscope S2 block in @main parent S1\n";
+    let module = NEVER[..start].replace("scope S1 action in @main\n", scopes);
+    format!("{module}{main}")
+}
+
+/// C-4: the token form moves the duty and what its cache holds from every carrier into the reserve, targeted at
+/// the exit's destination. The full verifier still refuses the form until the coro pass produces it (R2), so the
+/// ownership rules are read from their own diagnostics.
+#[test]
+fn a_token_rehome_moves_the_duty_into_the_reserve_of_its_exit() {
+    let valid = full(&token_rehome("S1"));
+    // The token form stays outside the full verifier until the coro pass produces it (R2).
+    assert_eq!(valid, [RuleId::AsyncUnmodeledOp]);
+    // The destination of S2's exit is S1, not the caller.
+    assert!(full(&token_rehome("caller")).contains(&RuleId::B94));
+    // The token was consumed by the first rehome: a second one has no cache-state of a live Future.
+    let twice = edited(&token_rehome("S1"), "    (%14: closed, %15: pending) = scope.end %9, reserve %13",
+        "    %30: pending = cache.rehome %13, %8, target S1, protocol P0\n    \
+(%14: closed, %15: pending) = scope.end %9, reserve %30");
+    let module = text::parse(&twice).unwrap();
+    let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
+    let report = verify_with(&module, &options, VerifyContext::default()).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B94
+        && diagnostic.message == "cache.rehome consumes the cache-state token of a Future"), "{report:?}");
+}
+
+/// The token rehome of a cold Future from S3 to S2, then the own form from S2 to S1 (both forms are valid in
+/// coro, C-4): the second rehome needs the duty that the first one handed to S2.
+fn token_then_scope_rehome() -> String {
+    let start = NEVER.find("func @main").unwrap();
+    let main = "func @main() -> int [entry] abi observation summary(M6) {
+    service.schedule Schedule0 owner S3, protocol P0, duties [%8]
+    service.schedule Schedule1 owner S2, protocol P0, duties [dynamic]
+    service.schedule Schedule2 owner S1, protocol P0, duties [dynamic]
+    boundary B1 lexical in S3
+    boundary B2 lexical in S2
+    key k0: key = service_of(value=%7, kind=cache)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%10)
+    dependency d2: dependency = from_ssa(%18)
+    selection s0: selection = union([])
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    %1: scope<S2> = scope.begin S2
+    %2: scope<S3> = scope.begin S3
+    br ^b1(%0, %1, %2)
+    ^b1(%20: scope<S1>, %21: scope<S2>, %22: scope<S3>) in S3:
+    %3: own = own.empty
+    (%4: own, %5: own, %6: deps) = own.split %3, s0
+    %26: own = own.join [%4, %5]
+    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S3>) = fut.new %26, %6, %22, \
+environment deferred(function=@explode), result int, owner S3
+    %10: deps = deps.of %7
+    %11: own = own.empty
+    %12: pending = exit.prepare fallthrough %7, %11, deps(%10) at B1
+    %13: pending = cache.rehome %12, %8, target S2, protocol P0
+    (%14: closed, %15: pending) = scope.end %9, reserve %13, effects scope_effects(failures=[], suspends=false, \
+cancel=false)
+    br ^b2(%20, %21, %15)
+    ^b2(%23: scope<S1>, %24: scope<S2>, %25: pending) in S2:
+    (%16: future<int> facts(managed(deps=d1)), %17: own, %18: deps) = exit.commit %25, destination scope(S2), \
+result future<int>
+    %19: scope<S2> = own.admit %24, %17
+    %30: own = own.empty
+    %31: pending = exit.prepare fallthrough %16, %30, deps(%18) at B2
+    (%32: scope<S2>, %33: pending) = cache.rehome %19, %31, future %16, target S1, protocol P0
+    (%34: closed, %35: pending) = scope.end %32, reserve %33, effects scope_effects(failures=[], suspends=false, \
+cancel=false)
+    br ^b3(%23, %35)
+    ^b3(%36: scope<S1>, %37: pending) in S1:
+    (%38: future<int> facts(managed(deps=d2)), %39: own, %40: deps) = exit.commit %37, destination scope(S1), \
+result future<int>
+    %41: scope<S1> = own.admit %36, %39
+    %42: bool = fut.done %38
+    %43: int = const 0
+    %44: closed = scope.end %41, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %43
+}
+";
+    let scopes = "scope S1 action in @main\nscope S2 block in @main parent S1\nscope S3 block in @main parent S2\n";
+    let module = NEVER[..start].replace("scope S1 action in @main\n", scopes);
+    format!("{module}{main}")
+}
+
+/// C-4: the token form hands the duty and its cache's holdings to the reserve, so the destination scope holds
+/// the duty after the commit, and a later rehome from there finds it.
+#[test]
+fn a_token_rehome_hands_the_duty_to_its_destination() {
+    let module = text::parse(&token_then_scope_rehome()).unwrap();
+    let options = VerifyOptions { execution: ExecutionMode::Tests, ..VerifyOptions::default() };
+    let rules: Vec<_> = match verify_with(&module, &options, VerifyContext::default()) {
+        Ok(_) => vec![],
+        Err(report) => report.diagnostics.into_iter().map(|diagnostic| (diagnostic.rule, diagnostic.message)).collect(),
+    };
+    // The token form stays outside the full verifier until the coro pass produces it (R2).
+    assert!(rules.iter().all(|(rule, _)| *rule == RuleId::AsyncUnmodeledOp), "{rules:?}");
+}
