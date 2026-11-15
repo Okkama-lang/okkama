@@ -5,6 +5,6 @@ requires core
 scope S action in @f
 func @f(%future: future<int>) -> void {
 ^entry in S:
-    %b0: bool = fut.done %future
+    %frame: frame<@f> = frame.alloc @f
     ret
 }

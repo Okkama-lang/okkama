@@ -943,3 +943,29 @@ fn structural_type_errors_do_not_emit_ownership_rules() {
     let full = fixture_result(&module, ErrorPolicy::All).unwrap_err();
     assert!(full.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B11));
 }
+
+/// #688, plan P2.5 §3.1: `fut.done`, `fut.cancel` and `fut.cancelled` belong to High.
+#[test]
+fn high_admits_future_queries_and_cancel() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let module = fixture_module(&root, "verify/valid/H6-future-query-in-high.oir");
+    assert_eq!(module.profile, okkama_oir::Profile::High);
+    fixture_result(&module, ErrorPolicy::All).unwrap_or_else(|report| panic!("{report:?}"));
+    // The spec module of §10.1 is an illustration (its `@make` has no body form), so it is not a
+    // complete certificate; its `fut.cancel` and `fut.cancelled` must still satisfy H6 in High.
+    let spec = fixture_module(&root, "spec/10-never-started-cancel.oir");
+    assert_eq!(spec.profile, okkama_oir::Profile::High);
+    let diagnostics = fixture_result(&spec, ErrorPolicy::All).err().map(|report| report.diagnostics);
+    let h6: Vec<_> = diagnostics.iter().flatten().filter(|d| d.rule.as_str() == "OIR2-H6").collect();
+    assert!(h6.is_empty(), "{h6:?}");
+}
+
+/// #688 keeps H6 for the async operations that only own or later profiles may hold.
+#[test]
+fn high_still_rejects_future_state_operations() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let module = fixture_module(&root, "verify/invalid/H6-future-state-in-high.oir");
+    let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+    assert_eq!(report.failure, VerifyFailure::Rejected);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == "OIR2-H6"), "{report:?}");
+}

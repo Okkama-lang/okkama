@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The OIR-2 High verifier admits `fut.done`, `fut.cancel` and `fut.cancelled`
+  (#688).** Rule H6 rejected them although plan P2.5 §3.1 lowers
+  `f.done()`, `f.cancel()` and `f.cancelled()` to these operations in High
+  (spec §10.1); a program using them stopped in `verify_high`. H6 still
+  rejects every other Future ownership or state operation in High.
 - **The SPB 17 loader tracks a successor's must-use permission through calls
   and the exit protocol (#680).** A successor result of a call that cannot
   fail (`invoke.observe` with a plain next flow) could be dropped, and taking
