@@ -47,6 +47,8 @@ pub(super) struct Filter {
     pub possible: BTreeSet<Origin>,
     pub labels: BTreeSet<ValueId>,
     pub stale: bool,
+    /// A check reads the whole graph of a returned Future, its cache's holdings included; it extracts
+    /// nothing. No selection sets it (C-4).
     pub whole_future: bool,
     pub state: u8,
 }

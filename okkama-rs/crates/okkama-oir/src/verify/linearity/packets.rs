@@ -4,26 +4,13 @@ impl Engine<'_, '_> {
     pub(super) fn partition(&mut self, flow: &Flow, token: &Token, selection: SelectionId) -> (Token, Token) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("packets::partition");
-        let mut pending = vec![selection];
-        let mut whole_future = false;
-        let mut seen = BTreeSet::new();
-        while let Some(selection) = pending.pop() {
-            if !self.state.step(1) { break; }
-            if !seen.insert(selection) { continue; }
-            match self.body.selections.get(selection) {
-                Ok(SelectionExpr::Value(value) | SelectionExpr::OwnerGraph(value)) => {
-                    whole_future |= matches!(super::super::later::value_type(self.module, self.body, *value),
-                        Some(Type::Future(_)));
-                }
-                Ok(SelectionExpr::Union(items)) => pending.extend(items),
-                _ => {}
-            }
-        }
+        // A selection never extracts a cache duty or what its cache holds, even when it names the whole
+        // Future: the duty leaves its owner only through cache.rehome (C-4, ruling of #601 R1).
         let mut rest = token.clone();
         let mut selected = Token::default();
         for (keys, fresh, labels) in self.selection_terms(flow, selection) {
             let possible = self.possible(flow, &keys);
-            let filter = Filter { keys, fresh, possible, labels, stale: false, whole_future, state: 0 };
+            let filter = Filter { keys, fresh, possible, labels, stale: false, whole_future: false, state: 0 };
             let (next, part) = self.partition_filter(&rest, filter);
             rest = next;
             selected = self.union([selected, part], true);

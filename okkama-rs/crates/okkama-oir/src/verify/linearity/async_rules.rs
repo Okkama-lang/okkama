@@ -337,6 +337,17 @@ impl Engine<'_, '_> {
                     && before.provenance.get(&key).is_none_or(|provenance| provenance & !FRESH != 0) {
                     self.error(R::B93, "temporary take cannot change a bound Future's cleanup boundary");
                 }
+                // OIR-2 §10.3: a temporary's boundary is its awaiting scope, which owns its cache. A cache
+                // owned by an outer scope is never taken into an inner consumer block.
+                if let TakeBoundary::Temporary { awaiting } = boundary {
+                    let owner = before.token_values()
+                        .filter(|value| before.availability[value.as_u32() as usize] == AVAILABLE)
+                        .flat_map(|value| before.tokens[value.as_u32() as usize].pieces.iter())
+                        .find(|piece| piece.origin == key && piece.holder == Some(key)).and_then(|piece| piece.owner);
+                    if owner != Some(*awaiting) {
+                        self.error(R::B93, "temporary take must take the cache into the scope that owns it");
+                    }
+                }
                 if let TakeBoundary::Existing { owner } = boundary {
                     let key = self.identity(before, *future);
                     let actual = before.tokens.iter().flat_map(|token| &token.pieces)
