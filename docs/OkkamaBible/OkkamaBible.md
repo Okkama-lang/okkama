@@ -199,9 +199,10 @@
   - [16.3 `match`](#163-match)
   - [16.4 Compact choices](#164-compact-choices)
   - [16.5 Closed or open: enums and roles](#165-closed-or-open-enums-and-roles)
-  - [16.6 Enums elsewhere](#166-enums-elsewhere)
-  - [16.7 Limits](#167-limits)
-  - [16.8 What this design costs](#168-what-this-design-costs)
+  - [16.6 A worked example: a protocol and a state machine](#166-a-worked-example-a-protocol-and-a-state-machine)
+  - [16.7 Enums elsewhere](#167-enums-elsewhere)
+  - [16.8 Limits](#168-limits)
+  - [16.9 What this design costs](#169-what-this-design-costs)
 - [Chapter 17. Generics](#chapter-17-generics)
   - [17.1 Parameters on objects, roles and enums](#171-parameters-on-objects-roles-and-enums)
   - [17.2 One `T`, one type](#172-one-t-one-type)
@@ -9583,7 +9584,120 @@ its own methods, which a `switch` can also take apart [[Bierman 2021](#ref-jep40
 Okkama has no single construct for this, but the effect is reachable: a
 variant enum whose payloads are objects.
 
-## 16.6 Enums elsewhere
+## 16.6 A worked example: a protocol and a state machine
+
+Enums with payloads are the natural shape of a protocol. A vending machine
+receives commands, has a state, and answers with replies; each of the three
+is a closed set of cases, and each case carries exactly the data it needs.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// What a customer can do, what the machine can be, and what it answers.
+enum Command = (insert(cents is int), choose(item is string, price is int), refund);
+enum State = (idle, credit(cents is int));
+enum Reply = (accepted(total is int), vended(item is string, change is int), refunded(cents is int),
+    refused(why is string));
+
+// One transition: the next state and the reply. Every pair is handled; a new case breaks the build here.
+object Machine {
+    has state is State;
+    Machine(:state);
+
+    step(command is Command) is Machine { Machine(state: self.next(command)); }
+
+    next(command is Command) is State {
+        match command {
+            case Command.insert(cents) { State.credit(self.balance() + cents); }
+            case Command.choose(item, price) { if self.balance() >= price { State.idle; } else { state; } }
+            case Command.refund { State.idle; }
+        }
+    }
+
+    reply(command is Command) is Reply {
+        match command {
+            case Command.insert(cents) { Reply.accepted(self.balance() + cents); }
+            case Command.choose(item, price) {
+                if self.balance() >= price {
+                    Reply.vended(item, self.balance() - price);
+                } else {
+                    Reply.refused("insert " + (price - self.balance()).string() + " more");
+                }
+            }
+            case Command.refund {
+                if self.balance() > 0 { Reply.refunded(self.balance()); } else { Reply.refused("nothing to refund"); }
+            }
+        }
+    }
+
+    balance() is int {
+        match state {
+            case State.idle { 0; }
+            case State.credit(cents) { cents; }
+        }
+    }
+}
+
+object Show {
+    Show();
+    of(reply is Reply) is string {
+        match reply {
+            case Reply.accepted(total) { "credit " + total.string(); }
+            case Reply.vended(item, change) { item + ", change " + change.string(); }
+            case Reply.refunded(cents) { "refund " + cents.string(); }
+            case Reply.refused(why) { "refused: " + why; }
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let show = Show();
+    let commands = [Command.insert(50), Command.choose("tea", 120), Command.insert(100), Command.choose("tea", 120),
+        Command.refund];
+    let final = commands.reduce(Machine(state: State.idle)) -> machine, command {
+        out.writeln(show.of(machine.reply(command)));
+        machine.step(command);
+    };
+    out.writeln("ends with " + final.balance().string() + " cents");
+    0;
+}
+```
+
+Output:
+
+```text
+credit 50
+refused: insert 70 more
+credit 150
+tea, change 30
+refused: nothing to refund
+ends with 0 cents
+```
+
+- **Messages are variants.** `Command.choose(item, price)` carries what a
+  choice needs and nothing else; `Command.refund` carries nothing. There is
+  no "command type" string to dispatch on and no optional fields that only
+  some commands fill.
+- **The state is a variant too.** `State.idle` and `State.credit(cents)` make
+  an impossible state unrepresentable: there is no credit field to forget to
+  reset when the machine goes idle.
+- **Transitions are a `match` over the command.** `next` and `reply` each
+  handle every case, and the compiler checks it: adding a case
+  `Command.service` stops the build with "Non-exhaustive match: missing
+  service" at every `match` that must learn about it.
+- **The machine is a value.** `step` returns a new machine; the run is a
+  `reduce` over the commands, so the whole history is a fold and any
+  intermediate machine could be kept and replayed.
+
+This is the shape that object-oriented designs reach with the State pattern
+and that functional languages write as algebraic data types. The trade-off
+of §16.5 applies: a new kind of message touches every `match`, which is
+exactly the list of places that must decide what the message means.
+
+## 16.7 Enums elsewhere
 
 | | Okkama | C | Pascal | Java | Rust | Haskell | Go |
 |---|---|---|---|---|---|---|---|
@@ -9600,7 +9714,7 @@ out what those languages build on top of it: nested patterns, recursion,
 derived orderings and methods. The first two are missing for now. The last
 two are left out on purpose, for the reasons in §16.1.
 
-## 16.7 Limits
+## 16.8 Limits
 
 - **No recursive variants.** A case cannot carry its own enum, directly or
   indirectly:
@@ -9629,7 +9743,7 @@ The compiler answers:
 - **Redundant cases pass silently.** A repeated payload-free case, a repeated
   literal, or an `else` that can never run is accepted (issue #286).
 
-## 16.8 What this design costs
+## 16.9 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
   priority takes a `match` or a `?? !!`. A language with `toString` and

@@ -288,7 +288,35 @@ its own methods, which a `switch` can also take apart [@jep409; @jep441].
 Okkama has no single construct for this, but the effect is reachable: a
 variant enum whose payloads are objects.
 
-## 16.6 Enums elsewhere
+## 16.6 A worked example: a protocol and a state machine
+
+Enums with payloads are the natural shape of a protocol. A vending machine
+receives commands, has a state, and answers with replies; each of the three
+is a closed set of cases, and each case carries exactly the data it needs.
+
+{{example:16-machine}}
+
+- **Messages are variants.** `Command.choose(item, price)` carries what a
+  choice needs and nothing else; `Command.refund` carries nothing. There is
+  no "command type" string to dispatch on and no optional fields that only
+  some commands fill.
+- **The state is a variant too.** `State.idle` and `State.credit(cents)` make
+  an impossible state unrepresentable: there is no credit field to forget to
+  reset when the machine goes idle.
+- **Transitions are a `match` over the command.** `next` and `reply` each
+  handle every case, and the compiler checks it: adding a case
+  `Command.service` stops the build with "Non-exhaustive match: missing
+  service" at every `match` that must learn about it.
+- **The machine is a value.** `step` returns a new machine; the run is a
+  `reduce` over the commands, so the whole history is a fold and any
+  intermediate machine could be kept and replayed.
+
+This is the shape that object-oriented designs reach with the State pattern
+and that functional languages write as algebraic data types. The trade-off
+of §16.5 applies: a new kind of message touches every `match`, which is
+exactly the list of places that must decide what the message means.
+
+## 16.7 Enums elsewhere
 
 | | Okkama | C | Pascal | Java | Rust | Haskell | Go |
 |---|---|---|---|---|---|---|---|
@@ -305,7 +333,7 @@ out what those languages build on top of it: nested patterns, recursion,
 derived orderings and methods. The first two are missing for now. The last
 two are left out on purpose, for the reasons in §16.1.
 
-## 16.7 Limits
+## 16.8 Limits
 
 - **No recursive variants.** A case cannot carry its own enum, directly or
   indirectly:
@@ -322,7 +350,7 @@ two are left out on purpose, for the reasons in §16.1.
 - **Redundant cases pass silently.** A repeated payload-free case, a repeated
   literal, or an `else` that can never run is accepted (issue #286).
 
-## 16.8 What this design costs
+## 16.9 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
   priority takes a `match` or a `?? !!`. A language with `toString` and

@@ -1,0 +1,73 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// What a customer can do, what the machine can be, and what it answers.
+enum Command = (insert(cents is int), choose(item is string, price is int), refund);
+enum State = (idle, credit(cents is int));
+enum Reply = (accepted(total is int), vended(item is string, change is int), refunded(cents is int),
+    refused(why is string));
+
+// One transition: the next state and the reply. Every pair is handled; a new case breaks the build here.
+object Machine {
+    has state is State;
+    Machine(:state);
+
+    step(command is Command) is Machine { Machine(state: self.next(command)); }
+
+    next(command is Command) is State {
+        match command {
+            case Command.insert(cents) { State.credit(self.balance() + cents); }
+            case Command.choose(item, price) { if self.balance() >= price { State.idle; } else { state; } }
+            case Command.refund { State.idle; }
+        }
+    }
+
+    reply(command is Command) is Reply {
+        match command {
+            case Command.insert(cents) { Reply.accepted(self.balance() + cents); }
+            case Command.choose(item, price) {
+                if self.balance() >= price {
+                    Reply.vended(item, self.balance() - price);
+                } else {
+                    Reply.refused("insert " + (price - self.balance()).string() + " more");
+                }
+            }
+            case Command.refund {
+                if self.balance() > 0 { Reply.refunded(self.balance()); } else { Reply.refused("nothing to refund"); }
+            }
+        }
+    }
+
+    balance() is int {
+        match state {
+            case State.idle { 0; }
+            case State.credit(cents) { cents; }
+        }
+    }
+}
+
+object Show {
+    Show();
+    of(reply is Reply) is string {
+        match reply {
+            case Reply.accepted(total) { "credit " + total.string(); }
+            case Reply.vended(item, change) { item + ", change " + change.string(); }
+            case Reply.refunded(cents) { "refund " + cents.string(); }
+            case Reply.refused(why) { "refused: " + why; }
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let show = Show();
+    let commands = [Command.insert(50), Command.choose("tea", 120), Command.insert(100), Command.choose("tea", 120),
+        Command.refund];
+    let final = commands.reduce(Machine(state: State.idle)) -> machine, command {
+        out.writeln(show.of(machine.reply(command)));
+        machine.step(command);
+    };
+    out.writeln("ends with " + final.balance().string() + " cents");
+    0;
+}

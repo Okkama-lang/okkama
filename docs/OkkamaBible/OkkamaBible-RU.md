@@ -199,9 +199,10 @@
   - [16.3 `match`](#163-match)
   - [16.4 Компактный выбор](#164-компактный-выбор)
   - [16.5 Закрытое или открытое: перечисления и роли](#165-закрытое-или-открытое-перечисления-и-роли)
-  - [16.6 Перечисления в других языках](#166-перечисления-в-других-языках)
-  - [16.7 Ограничения](#167-ограничения)
-  - [16.8 Чего стоит такой замысел](#168-чего-стоит-такой-замысел)
+  - [16.6 Разобранный пример: протокол и машина состояний](#166-разобранный-пример-протокол-и-машина-состояний)
+  - [16.7 Перечисления в других языках](#167-перечисления-в-других-языках)
+  - [16.8 Ограничения](#168-ограничения)
+  - [16.9 Чего стоит такой замысел](#169-чего-стоит-такой-замысел)
 - [Глава 17. Обобщённые типы](#глава-17-обобщённые-типы)
   - [17.1 Параметры у объектов, ролей и перечислений](#171-параметры-у-объектов-ролей-и-перечислений)
   - [17.2 Один `T` — один тип](#172-один-t--один-тип)
@@ -9701,7 +9702,120 @@ let label = reading ?? .single(value): value.string() !! _: "no single value";
 [[Bierman 2021](#ref-jep409); [Bierman 2023](#ref-jep441)]. Отдельной конструкции для этого в Okkama нет, но тот же
 эффект достижим: перечисление с вариантами, данные которого — объекты.
 
-## 16.6 Перечисления в других языках
+## 16.6 Разобранный пример: протокол и машина состояний
+
+Перечисления с данными — естественная форма протокола. Торговый автомат
+получает команды, имеет состояние и отвечает ответами; каждое из трёх —
+замкнутое множество случаев, и каждый случай несёт ровно нужные ему данные.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// What a customer can do, what the machine can be, and what it answers.
+enum Command = (insert(cents is int), choose(item is string, price is int), refund);
+enum State = (idle, credit(cents is int));
+enum Reply = (accepted(total is int), vended(item is string, change is int), refunded(cents is int),
+    refused(why is string));
+
+// One transition: the next state and the reply. Every pair is handled; a new case breaks the build here.
+object Machine {
+    has state is State;
+    Machine(:state);
+
+    step(command is Command) is Machine { Machine(state: self.next(command)); }
+
+    next(command is Command) is State {
+        match command {
+            case Command.insert(cents) { State.credit(self.balance() + cents); }
+            case Command.choose(item, price) { if self.balance() >= price { State.idle; } else { state; } }
+            case Command.refund { State.idle; }
+        }
+    }
+
+    reply(command is Command) is Reply {
+        match command {
+            case Command.insert(cents) { Reply.accepted(self.balance() + cents); }
+            case Command.choose(item, price) {
+                if self.balance() >= price {
+                    Reply.vended(item, self.balance() - price);
+                } else {
+                    Reply.refused("insert " + (price - self.balance()).string() + " more");
+                }
+            }
+            case Command.refund {
+                if self.balance() > 0 { Reply.refunded(self.balance()); } else { Reply.refused("nothing to refund"); }
+            }
+        }
+    }
+
+    balance() is int {
+        match state {
+            case State.idle { 0; }
+            case State.credit(cents) { cents; }
+        }
+    }
+}
+
+object Show {
+    Show();
+    of(reply is Reply) is string {
+        match reply {
+            case Reply.accepted(total) { "credit " + total.string(); }
+            case Reply.vended(item, change) { item + ", change " + change.string(); }
+            case Reply.refunded(cents) { "refund " + cents.string(); }
+            case Reply.refused(why) { "refused: " + why; }
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let show = Show();
+    let commands = [Command.insert(50), Command.choose("tea", 120), Command.insert(100), Command.choose("tea", 120),
+        Command.refund];
+    let final = commands.reduce(Machine(state: State.idle)) -> machine, command {
+        out.writeln(show.of(machine.reply(command)));
+        machine.step(command);
+    };
+    out.writeln("ends with " + final.balance().string() + " cents");
+    0;
+}
+```
+
+Вывод:
+
+```text
+credit 50
+refused: insert 70 more
+credit 150
+tea, change 30
+refused: nothing to refund
+ends with 0 cents
+```
+
+- **Сообщения — варианты.** `Command.choose(item, price)` несёт то, что нужно
+  выбору, и ничего больше; `Command.refund` не несёт ничего. Нет строки
+  «тип команды», по которой нужно диспетчеризовать, и нет необязательных
+  полей, которые заполняют лишь некоторые команды.
+- **Состояние — тоже вариант.** `State.idle` и `State.credit(cents)` делают
+  невозможное состояние невыразимым: нет поля кредита, которое можно забыть
+  обнулить, когда автомат переходит в ожидание.
+- **Переходы — `match` по команде.** `next` и `reply` обрабатывают каждый
+  случай, и компилятор это проверяет: добавление случая `Command.service`
+  останавливает сборку с сообщением «Non-exhaustive match: missing service»
+  в каждом `match`, которому нужно о нём узнать.
+- **Автомат — значение.** `step` возвращает новый автомат; прогон — это
+  `reduce` по командам, так что вся история — свёртка, и любой промежуточный
+  автомат можно сохранить и проиграть заново.
+
+К такой форме объектно-ориентированные проекты приходят через шаблон State, а
+функциональные языки записывают её как алгебраические типы данных. Обмен из
+§16.5 в силе: новый вид сообщения затрагивает каждый `match`, и это ровно
+список мест, которые должны решить, что сообщение значит.
+
+## 16.7 Перечисления в других языках
 
 | | Okkama | C | Pascal | Java | Rust | Haskell | Go |
 |---|---|---|---|---|---|---|---|
@@ -9718,7 +9832,7 @@ let label = reading ?? .single(value): value.string() !! _: "no single value";
 выведенного порядка и методов. Первых двух пока нет. Последние два отброшены
 намеренно, по причинам из §16.1.
 
-## 16.7 Ограничения
+## 16.8 Ограничения
 
 - **Нет рекурсивных вариантов.** Вариант не может нести своё же
   перечисление, ни прямо, ни косвенно:
@@ -9749,7 +9863,7 @@ main() is int { 0; }
   повтор литерала или `else`, который никогда не выполнится, принимаются
   (issue #286).
 
-## 16.8 Чего стоит такой замысел
+## 16.9 Чего стоит такой замысел
 
 - **Текст и порядок выписываются явно.** Чтобы напечатать вариант или
   отсортировать по приоритету, нужен `match` или `?? !!`. Язык с `toString` и
