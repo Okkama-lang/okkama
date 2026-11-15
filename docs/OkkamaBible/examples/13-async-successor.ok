@@ -1,0 +1,43 @@
+module bible/asyncsuccessor v1.0.0;
+
+// A successor may be async: it waits before it builds the new state, and the
+// caller awaits the new object. The receiver stays what it was.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (unapproved(amount is int));
+
+object Ledger {
+    Ledger() {}
+    async approved(amount is int) is bool { amount <= 500; }
+}
+
+object Account {
+    has balance is int;
+    has ledger is Ledger;
+    Account(:balance, :ledger);
+
+    async deposited(amount is int) is ^Account {
+        let ok = await ledger.approved(amount);
+        confirm ok else throw Refused.unapproved(amount);
+        ^balance = balance + amount;
+    }
+
+    balance() is int { balance; }
+}
+
+async main() is int {
+    let out = Stdout();
+    let opened = Account(balance: 100, ledger: Ledger());
+    let first = await opened.deposited(200);
+    let second = await first.deposited(50);
+    out.writeln(opened.balance().string() + " " + first.balance().string() + " " + second.balance().string());
+    let refused = try {
+        (await second.deposited(900)).balance().string();
+    }
+    catch e is Refused {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    out.writeln("still " + second.balance().string());
+    0;
+}

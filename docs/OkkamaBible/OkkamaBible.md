@@ -187,9 +187,10 @@
   - [13.11 When a value must change: `Cell`](#1311-when-a-value-must-change-cell)
   - [13.12 What a successor costs](#1312-what-a-successor-costs)
   - [13.13 A value computed once: `once let`](#1313-a-value-computed-once-once-let)
-  - [13.14 A worked example: an order's life](#1314-a-worked-example-an-orders-life)
-  - [13.15 Immutability elsewhere](#1315-immutability-elsewhere)
-  - [13.16 What this design costs](#1316-what-this-design-costs)
+  - [13.14 Async successors](#1314-async-successors)
+  - [13.15 A worked example: an order's life](#1315-a-worked-example-an-orders-life)
+  - [13.16 Immutability elsewhere](#1316-immutability-elsewhere)
+  - [13.17 What this design costs](#1317-what-this-design-costs)
 - [Chapter 14. Roles: nominal contracts and composition](#chapter-14-roles-nominal-contracts-and-composition)
   - [14.1 Declaring a role](#141-declaring-a-role)
   - [14.2 Nominal, not structural](#142-nominal-not-structural)
@@ -9218,7 +9219,78 @@ The remembered result does not participate in `==`, map keys or `Dumper`. A succ
 work: an object binds its input when it is made, and computes from it on
 the first question.
 
-## 13.14 A worked example: an order's life
+## 13.14 Async successors
+
+A successor that has to wait before it can build the new state is declared
+`async`, and its caller awaits the new object.
+
+```okkama
+module bible/asyncsuccessor v1.0.0;
+
+// A successor may be async: it waits before it builds the new state, and the
+// caller awaits the new object. The receiver stays what it was.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (unapproved(amount is int));
+
+object Ledger {
+    Ledger() {}
+    async approved(amount is int) is bool { amount <= 500; }
+}
+
+object Account {
+    has balance is int;
+    has ledger is Ledger;
+    Account(:balance, :ledger);
+
+    async deposited(amount is int) is ^Account {
+        let ok = await ledger.approved(amount);
+        confirm ok else throw Refused.unapproved(amount);
+        ^balance = balance + amount;
+    }
+
+    balance() is int { balance; }
+}
+
+async main() is int {
+    let out = Stdout();
+    let opened = Account(balance: 100, ledger: Ledger());
+    let first = await opened.deposited(200);
+    let second = await first.deposited(50);
+    out.writeln(opened.balance().string() + " " + first.balance().string() + " " + second.balance().string());
+    let refused = try {
+        (await second.deposited(900)).balance().string();
+    }
+    catch e is Refused {
+        "refused: " + e.text();
+    };
+    out.writeln(refused);
+    out.writeln("still " + second.balance().string());
+    0;
+}
+```
+
+Output:
+
+```text
+100 300 350
+refused: Refused.unapproved(900)
+still 350
+```
+
+- **It is still a successor.** The awaits yield `first` and `second`, and
+  the receiver `opened` still has its 100. Waiting changes when the new
+  object exists, not what happens to the old one.
+- **A failure produces nothing.** The refused deposit throws inside the
+  successor, so no new account is made and `second` stays at 350, as for a
+  synchronous successor (Section 13.8).
+- **The obligation follows the Future.** `await opened.deposited(200);`
+  with its result thrown away is rejected, exactly like the synchronous
+  call. Until it is awaited, the obligation belongs to the Future, which
+  must be awaited or handed on. The compiler does not yet reject a successor
+  Future that is bound to a name and then dropped (#754).
+
+## 13.15 A worked example: an order's life
 
 Successors are how an object goes through stages without a mutable field.
 An order is drafted, paid, shipped and delivered; each transition is a
@@ -9304,7 +9376,7 @@ The same life could be an enum of stages with a `match` per transition
 the transitions are actions of one object; variants fit when each stage
 carries different data.
 
-## 13.15 Immutability elsewhere
+## 13.16 Immutability elsewhere
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -9321,7 +9393,7 @@ a discarded result; Rust warns, but only for functions and types marked
 reachable from any caller [[Kotlin documentation](#ref-kotlindata); [Klabnik 2023](#ref-klabnik2023)]. A successor makes
 reachable only what its author named.
 
-## 13.16 What this design costs
+## 13.17 What this design costs
 
 - **More allocation.** Every state change is an object. Most are small
   and short-lived, but a design that ignores the cost of wide objects
@@ -21092,7 +21164,7 @@ language is, argued where they appear:
   operand (Section 14.11);
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
-  (Sections 12.13, 13.16);
+  (Sections 12.13, 13.17);
 - ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);

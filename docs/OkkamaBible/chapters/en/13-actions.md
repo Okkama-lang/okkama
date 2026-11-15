@@ -416,7 +416,26 @@ The remembered result does not participate in `==`, map keys or `Dumper`. A succ
 work: an object binds its input when it is made, and computes from it on
 the first question.
 
-## 13.14 A worked example: an order's life
+## 13.14 Async successors
+
+A successor that has to wait before it can build the new state is declared
+`async`, and its caller awaits the new object.
+
+{{example:13-async-successor}}
+
+- **It is still a successor.** The awaits yield `first` and `second`, and
+  the receiver `opened` still has its 100. Waiting changes when the new
+  object exists, not what happens to the old one.
+- **A failure produces nothing.** The refused deposit throws inside the
+  successor, so no new account is made and `second` stays at 350, as for a
+  synchronous successor (Section 13.8).
+- **The obligation follows the Future.** `await opened.deposited(200);`
+  with its result thrown away is rejected, exactly like the synchronous
+  call. Until it is awaited, the obligation belongs to the Future, which
+  must be awaited or handed on. The compiler does not yet reject a successor
+  Future that is bound to a name and then dropped (#754).
+
+## 13.15 A worked example: an order's life
 
 Successors are how an object goes through stages without a mutable field.
 An order is drafted, paid, shipped and delivered; each transition is a
@@ -445,7 +464,7 @@ The same life could be an enum of stages with a `match` per transition
 the transitions are actions of one object; variants fit when each stage
 carries different data.
 
-## 13.15 Immutability elsewhere
+## 13.16 Immutability elsewhere
 
 | | Okkama | Java | Kotlin | Rust | Clojure |
 |---|---|---|---|---|---|
@@ -462,7 +481,7 @@ a discarded result; Rust warns, but only for functions and types marked
 reachable from any caller [@kotlindata; @klabnik2023]. A successor makes
 reachable only what its author named.
 
-## 13.16 What this design costs
+## 13.17 What this design costs
 
 - **More allocation.** Every state change is an object. Most are small
   and short-lived, but a design that ignores the cost of wide objects
