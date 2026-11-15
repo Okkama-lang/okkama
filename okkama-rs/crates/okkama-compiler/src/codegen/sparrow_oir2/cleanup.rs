@@ -741,6 +741,23 @@ impl Emitter<'_> {
                 });
             }
         }
+        // A total scalar family invocation computes into a register, then branches; neither step touches
+        // a service, and the branch roots what the operation did plus its result.
+        for (&block_id, &pc) in terms {
+            let o::TermKind::InvokeOwn { op, .. } = &self.body.blocks.get(block_id)?.term.kind else { continue };
+            if !super::total_family_operation(op) {
+                continue;
+            }
+            let before = states.get(&pc).cloned().unwrap_or_default();
+            states.insert(pc + 1, before.clone());
+            let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+            roots.extend(before);
+            if let s::Instruction::Data { output: Some(value), .. } = self.result.code[pc as usize] {
+                roots.insert(L::Register(value));
+            }
+            self.result.proofs.roots.push(s::RootRequirement { pc: pc + 1, locations: roots.into_iter().collect() });
+        }
         for (pc, instruction) in self.result.code.iter().enumerate() {
             if let s::Instruction::Champ { op: O::OwnSplit | O::ExitReplace, arguments, .. } = instruction {
                 let selection = arguments.iter().find_map(|arg| match arg {

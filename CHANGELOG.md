@@ -92,6 +92,27 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
 
+- **Champ: int, byte, float, rat and str operations in SPB 17 (#675).**
+  SPB 17 now has five operation families, one wire code each with a
+  sub-code: `int.ext` (14), `byte.ext` (15), `float.ext` (16), `rat.ext`
+  (17) and `str.ext` (18). They cover the bit operations, shifts and
+  rotations, the bit actions, `abs`/`sign`, float arithmetic, `pow` and
+  `sqrt`, exact rat arithmetic with numerator/denominator, and slice, split,
+  replace, trim, chomp, case, repeat, find, starts/ends and utf8. Ints stay
+  exact beyond 64 bits, constants included, and rat constants have their own
+  form. The operations that can fail (shift and rotation counts, ints outside
+  signed 64 bits in bit operations, non-finite floats, zero divisors, slice
+  bounds, a negative repeat count) go through S2 with explicit outcomes and
+  the program-failure mask. The new loader rules are `SCALAR_OP_TYPE` and
+  `CONST_RAT`. Champ runs the operations with Tomato's semantics, which are
+  now shared functions in `sparrow-core::ops`, through one JIT helper,
+  `champ_machine_scalar`; float neg/abs and byte and/or/xor/not are inline.
+  The producer lowers `byte >>> int` as `byte.shr`, which takes the int count,
+  and lowers an `any` coercion to `any.box`. Of the 47 cases blocked on these
+  operations, 38 now pass on Champ (`champ_cases_scalars`). Four pass own and
+  low and then stop on collection operations. Five wait on char conversions
+  in OIR-2 (#679).
+
 - **OIR-2 core (#563).** A new crate, `okkama-oir` (std only, re-exported by
   the compiler as `oir2`), holds the 0.6.0 intermediate representation with
   ownership in SSA:

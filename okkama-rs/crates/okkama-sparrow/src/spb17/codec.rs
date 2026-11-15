@@ -446,7 +446,9 @@ tagged! { Location { 0 => Register(id: u32), 1 => Service(id: u32) } }
 tagged! { Source { 0 => Location(loc: Location), 1 => ProducedSlot(slot: u32) } }
 tagged! { Flow { 0 => Next(locations: Vec<Location>), 1 => Outcomes(outcomes: Vec<Outcome>) } }
 tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(value: String),
-    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String) } }
+    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String),
+    7 => Rat(value: RatValue) } }
+record! { RatValue { numerator, denominator } }
 tagged! { Immediate {
     0 => None, 1 => Constant(value: Constant), 2 => Inclusive(flag: bool),
     3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>),
@@ -511,6 +513,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         12 => Some("int.mul"),
         13 => Some("int.mod"),
         20 => Some("int.neg"),
+        14..=18 => SCALAR_FAMILIES.iter().find(|(family, _, _)| *family == code).map(|(_, name, _)| *name),
         24 => Some("int.cmp"),
         40 => Some("bool.not"),
         41 => Some("bool.cmp"),
@@ -621,11 +624,22 @@ impl DataOp {
             Self::EnumCase => (94, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
+            op => {
+                let (code, sub) = op.family().expect("every other operation belongs to a scalar family");
+                (code, Some(sub))
+            }
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53) { Some(r.number()?) } else { None };
+        let sub = if matches!(code, 14..=18 | 24 | 41 | 71 | 85 | 47..=50 | 52 | 53) {
+            Some(r.number()?)
+        } else {
+            None
+        };
+        if let (14..=18, Some(sub)) = (code, sub) {
+            return Self::of_family(code, sub).ok_or_else(|| r.fail(format!("unknown scalar opcode {code}/{sub}")));
+        }
         match (code, sub) {
             (1, None) => Ok(Self::Const),
             (2, None) => Ok(Self::Move),

@@ -646,3 +646,114 @@ fn s2_taken_successor_alias_forwards_its_object() {
     super::successors::forward_taken(&mut held).unwrap();
     assert_eq!(held.registers[2], s::Type::Successor(0));
 }
+
+/// Every int, byte, float, rat and str family operation of OIR-2 on parameters of its operand types.
+fn family_module() -> (o::Module, Vec<(o::CoreOp, o::Type)>) {
+    let m = parse("oir 2 low\nmodule all\nscope S action in @f\n\
+        func @f(%i: int, %j: int, %b: byte, %c: byte, %x: float, %y: float, %r: rat, %q: rat, %s: str, %t: str, \
+        %u: str) -> void abi observation {\n^entry in S:\nret\n}\n");
+    let value = o::ValueId::from_u32;
+    let (i, j, b, c, x, y) = (value(0), value(1), value(2), value(3), value(4), value(5));
+    let (r, q, s, t, u) = (value(6), value(7), value(8), value(9), value(10));
+    use o::CoreOp as C;
+    use o::Type as T;
+    let str_array = m.types.iter().find_map(|(id, ty)| (*ty == T::Str).then_some(id));
+    let str_array = T::Array(str_array.expect("str type of the fixture"));
+    let byte_array = m.types.iter().find_map(|(id, ty)| (*ty == T::Byte).then_some(id));
+    let byte_array = T::Array(byte_array.expect("byte type of the fixture"));
+    let ops = vec![
+        (C::IntAnd { left: i, right: j }, T::Int), (C::IntOr { left: i, right: j }, T::Int),
+        (C::IntXor { left: i, right: j }, T::Int), (C::IntShl { left: i, right: j }, T::Int),
+        (C::IntShr { left: i, right: j }, T::Int), (C::IntUshr { left: i, right: j }, T::Int),
+        (C::IntNot { value: i }, T::Int), (C::IntAbs { value: i }, T::Int), (C::IntSign { value: i }, T::Int),
+        (C::IntBitCount { value: i }, T::Int), (C::IntLeadingZeros { value: i }, T::Int),
+        (C::IntTrailingZeros { value: i }, T::Int), (C::IntReverseBits { value: i }, T::Int),
+        (C::IntSwapBytes { value: i }, T::Int), (C::IntRotateLeft { value: i, count: j }, T::Int),
+        (C::IntRotateRight { value: i, count: j }, T::Int),
+        (C::ByteAnd { left: b, right: c }, T::Byte), (C::ByteOr { left: b, right: c }, T::Byte),
+        (C::ByteXor { left: b, right: c }, T::Byte), (C::ByteShl { left: b, right: i }, T::Byte),
+        (C::ByteShr { left: b, right: i }, T::Byte), (C::ByteUshr { left: b, right: c }, T::Byte),
+        (C::ByteNot { value: b }, T::Byte), (C::ByteBitCount { value: b }, T::Int),
+        (C::ByteLeadingZeros { value: b }, T::Int), (C::ByteTrailingZeros { value: b }, T::Int),
+        (C::ByteReverseBits { value: b }, T::Byte), (C::ByteSwapBytes { value: b }, T::Byte),
+        (C::ByteRotateLeft { value: b, count: i }, T::Byte), (C::ByteRotateRight { value: b, count: i }, T::Byte),
+        (C::FloatAdd { left: x, right: y }, T::Float), (C::FloatSub { left: x, right: y }, T::Float),
+        (C::FloatMul { left: x, right: y }, T::Float), (C::FloatDiv { left: x, right: y }, T::Float),
+        (C::FloatMod { left: x, right: y }, T::Float), (C::FloatPow { left: x, right: y }, T::Float),
+        (C::FloatNeg { value: x }, T::Float), (C::FloatAbs { value: x }, T::Float),
+        (C::FloatSign { value: x }, T::Int), (C::FloatSqrt { value: x }, T::Float),
+        (C::RatAdd { left: r, right: q }, T::Rat), (C::RatSub { left: r, right: q }, T::Rat),
+        (C::RatMul { left: r, right: q }, T::Rat), (C::RatDiv { left: r, right: q }, T::Rat),
+        (C::RatMod { left: r, right: q }, T::Rat), (C::RatNeg { value: r }, T::Rat), (C::RatAbs { value: r }, T::Rat),
+        (C::RatSign { value: r }, T::Int), (C::RatNumerator { value: r }, T::Str),
+        (C::RatDenominator { value: r }, T::Str),
+        (C::StrSlice { value: s, start: i, end: j }, T::Str), (C::StrSplit { value: s, separator: t }, str_array),
+        (C::StrReplace { value: s, target: t, replacement: u }, T::Str),
+        (C::StrReplaceFirst { value: s, target: t, replacement: u }, T::Str),
+        (C::StrRepeat { value: s, count: i }, T::Str), (C::StrTrim { value: s }, T::Str),
+        (C::StrChomp { value: s }, T::Str), (C::StrTrimStart { value: s }, T::Str),
+        (C::StrTrimEnd { value: s }, T::Str), (C::StrLower { value: s }, T::Str), (C::StrUpper { value: s }, T::Str),
+        (C::StrFind { value: s, part: t }, T::Int), (C::StrFindLast { value: s, part: t }, T::Int),
+        (C::StrStartsWith { value: s, part: t }, T::Bool), (C::StrEndsWith { value: s, part: t }, T::Bool),
+        (C::StrUtf8 { value: s }, byte_array),
+    ];
+    (m, ops)
+}
+
+#[test]
+fn s1_scalar_families_translate_every_operation_with_its_signature() {
+    let (mut m, ops) = family_module();
+    let count = ops.len();
+    for (op, ty) in &ops {
+        let (data, inputs) = family_operation(op).unwrap_or_else(|| panic!("{op:?} has no SPB 17 operation"));
+        let (operands, result) = data.scalar_signature().unwrap();
+        assert_eq!(inputs.len(), operands.len(), "{op:?}");
+        let id = m.types.intern(ty.clone()).unwrap();
+        assert_eq!(translate_type(&m, id).unwrap(), result, "{op:?}: OIR-2 result {ty:?}");
+        let value = append(&mut m, o::Operation::Core(op.clone()), Some(ty.clone())).unwrap();
+        if matches!(result, s::Type::Array(_)) {
+            // Own certifies a plain array result; the generator requires the certificate.
+            let body = m.functions.get_mut(o::FuncId::from_u32(0)).unwrap().body.as_mut().unwrap();
+            body.values.get_mut(value).unwrap().facts = o::ValueFacts::Plain {
+                certificate: o::PlainCertificate::ClosedGraph { ty: id },
+            };
+        }
+    }
+    append(&mut m, o::Operation::Const(o::Literal::Rat { numerator: "-3".into(), denominator: "4".into() }),
+        Some(o::Type::Rat));
+    append(&mut m, o::Operation::Const(o::Literal::Int("1267650600228229401496703205376".into())),
+        Some(o::Type::Int));
+    let p = generate(&m, &layouts()).unwrap();
+    assert_eq!(s::decode(&s::encode(&p).unwrap()).unwrap(), p);
+    assert_eq!(s::assemble(&s::disassemble(&p).unwrap()).unwrap(), p);
+    let code = &p.functions[0].code;
+    for ((op, _), instruction) in ops.iter().zip(code) {
+        let s::Instruction::Data { op: data, .. } = instruction else { panic!("{op:?}: {instruction:?}") };
+        assert_eq!(Some(*data), family_operation(op).map(|(data, _)| data));
+    }
+    assert!(matches!(&code[count], s::Instruction::Data { immediate: s::Immediate::Constant(s::Constant::Rat(
+        s::RatValue { numerator, denominator })), .. } if numerator == "-3" && denominator == "4"));
+    assert!(matches!(&code[count + 1], s::Instruction::Data { immediate: s::Immediate::Constant(s::Constant::Int(
+        value)), .. } if value == "1267650600228229401496703205376"));
+}
+
+#[test]
+fn scalar_family_failures_match_their_spb_operations() {
+    let (_, ops) = family_module();
+    for (op, _) in ops {
+        let operation = o::Operation::Core(op.clone());
+        let (data, _) = family_operation(&op).unwrap();
+        assert_eq!(calls::fallible_scalar(&operation), data.fallible(&[], None), "{op:?}");
+        assert_eq!(total_family_operation(&operation), !data.fallible(&[], None), "{op:?}");
+    }
+    let value = o::ValueId::from_u32(0);
+    let add = o::Operation::Core(o::CoreOp::IntAdd { left: value, right: value });
+    assert!(!total_family_operation(&add) && family_operation(&o::CoreOp::IntAdd { left: value, right: value })
+        .is_none());
+    // Operations that OIR-2 lets trap but that never fail in Tomato are total in SPB 17.
+    for op in [o::CoreOp::ByteAnd { left: value, right: value }, o::CoreOp::FloatNeg { value },
+        o::CoreOp::FloatAbs { value }, o::CoreOp::FloatSign { value }]
+    {
+        assert!(total_family_operation(&o::Operation::Core(op)));
+    }
+}

@@ -33,7 +33,12 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
 
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
 /// where its pair of types can trap; a total one (int to string) stays plain data.
-fn fallible_scalar(op: &o::Operation) -> bool {
+pub(super) fn fallible_scalar(op: &o::Operation) -> bool {
+    if let o::Operation::Core(core) = op
+        && let Some((data, _)) = family_operation(core)
+    {
+        return data.fallible(&[], None);
+    }
     match op {
         o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
             | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
@@ -365,9 +370,46 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// A scalar family operation as an invocation: a fallible one is an `evaluate` whose outcomes are the
+    /// invocation's; a total one (which OIR-2 lets trap) computes into a fresh register and takes the
+    /// normal edge, its result in place of the produced slot.
+    fn family_invocation(&mut self, op: s::DataOp, inputs: &[o::ValueId], normal: &o::InvokeEdge,
+        unwind: &o::InvokeEdge) -> Result<s::Instruction, GenerateError>
+    {
+        let (_, result) = op.scalar_signature().ok_or_else(|| error("scalar family operation without signature"))?;
+        if op.fallible(&[], None) {
+            let context = s::ResultContext { value: Some(result), may_fail: true, ..s::ResultContext::default() };
+            let mut arguments = vec![A::Evaluation(s::Evaluation { op, result, immediate: s::Immediate::None })];
+            for &input in inputs {
+                arguments.push(A::Location(self.loc(input)?));
+            }
+            let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                let schema = O::Evaluate.results(tag, &context)?;
+                Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+            }).collect::<Result<_, GenerateError>>()?;
+            return Ok(s::Instruction::Champ { op: O::Evaluate, arguments, flow: s::Flow::Outcomes(outcomes) });
+        }
+        let registers = inputs.iter().map(|&input| self.reg(input)).collect::<Result<Vec<_>, _>>()?;
+        let value = fresh(&mut self.result, result)?;
+        self.result.code.push(data(op, registers, value, s::Immediate::None));
+        let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &[P::Value(result)])?;
+        for assignment in &mut edge.assignments {
+            if assignment.source == s::Source::ProducedSlot(0) {
+                assignment.source = s::Source::Location(L::Register(value));
+            }
+        }
+        Ok(s::Instruction::Br(edge))
+    }
+
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
+                if let o::Operation::Core(core) = op.as_ref()
+                    && let Some((data, inputs)) = family_operation(core)
+                {
+                    return self.family_invocation(data, &inputs, normal, unwind);
+                }
                 if let o::Operation::Core(core) = op.as_ref() {
                     let scalar = match core {
                         o::CoreOp::RangeNew { start, end, inclusive } => Some((s::DataOp::RangeNew,
@@ -600,7 +642,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 return Err(error("duplicate instruction"));
             }
             let inst = body.insts.get(inst_id)?;
-            if block.unwind.is_some() && !fallible_scalar(&inst.op) && o::ContractRegistry::new(module)
+            if block.unwind.is_some() && !fallible_scalar(&inst.op) && !total_family_operation(&inst.op)
+                && o::ContractRegistry::new(module)
                 .lookup(&inst.op).map_err(|failure| error(failure.to_string()))?.unwind.is_some()
             {
                 return Err(later(&format!("{}: implicit instruction unwind {}", function.symbol, inst.op.opcode())));
@@ -628,6 +671,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::VariantNew { packet: None, ty, .. })
                     if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 3,
+            // A total scalar family operation computes into a register and branches with it.
+            o::TermKind::InvokeOwn { op, .. } if total_family_operation(op) => 2,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,

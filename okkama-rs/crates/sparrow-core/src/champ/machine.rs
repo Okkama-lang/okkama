@@ -514,6 +514,155 @@ pub extern "C" fn rt_machine_convert(ctx: *mut Ctx, from: Word, to: Word, value:
     }
 }
 
+/// An SPB 17 int, byte, float, rat or str family operation (`DataOp::scalar_code`) on Tomato's
+/// representations and with Tomato's semantics (`crate::ops`); unused operands are zero. A failure is a
+/// program failure with Tomato's message; a result larger than the memory budget stops.
+pub extern "C" fn rt_machine_scalar(ctx: *mut Ctx, op: Word, first: Word, second: Word, third: Word) -> Word {
+    let frame = runtime::frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let Some((op, result)) = s::DataOp::from_scalar_code(op)
+        .and_then(|op| op.scalar_signature().map(|(_, result)| (op, result)))
+    else {
+        return stop(ctx, error("invalid verified scalar operation"));
+    };
+    if runtime.limits.memory.is_some() {
+        let bytes = scalar_result_bytes(runtime, op, first, second, third);
+        if runtime.would_exceed(bytes) {
+            return runtime.exhaust(unsafe { &mut *ctx }, crate::budget::Exhausted::Memory);
+        }
+    }
+    match scalar(runtime, op, first, second, third) {
+        Ok(word) => {
+            runtime.safepoint(frame, unsafe { &*ctx }, &[(word, repr(result))]);
+            word
+        }
+        Err(message) => {
+            super::helpers::fail(ctx, error(&message));
+            0
+        }
+    }
+}
+
+/// The size of a result that can be much larger than its operands, before it is built (#72).
+fn scalar_result_bytes(runtime: &Runtime, op: s::DataOp, first: Word, second: Word, third: Word) -> u64 {
+    use s::DataOp as D;
+    match op {
+        D::StrReplace => {
+            let text = |word| runtime.heap.text(word);
+            crate::ops::replace_bytes(text(first), text(second), text(third))
+        }
+        D::StrRepeat => {
+            let count = runtime.small_or_big(second).and_then(|count| u64::try_from(count).ok()).unwrap_or(0);
+            (runtime.heap.text(first).len() as u64).saturating_mul(count)
+        }
+        _ => 0,
+    }
+}
+
+/// The value of a scalar family operation, as Tomato's instruction of the same name computes it.
+pub(crate) fn scalar(runtime: &mut Runtime, op: s::DataOp, first: Word, second: Word, third: Word)
+    -> Result<Word, String>
+{
+    use crate::ops::{self, Bitwise as B, RatArith as R};
+    use crate::program::Kind;
+    use okkama_sparrow::{BitOp, StrFn};
+    use s::DataOp as D;
+    let bits = |op| match op {
+        D::IntAnd | D::ByteAnd => B::And,
+        D::IntOr | D::ByteOr => B::Or,
+        D::IntXor | D::ByteXor => B::Xor,
+        D::IntShl | D::ByteShl => B::Shl,
+        D::IntShr | D::ByteShr => B::Shr,
+        _ => B::Ushr,
+    };
+    let action = |op| match op {
+        D::IntBitCount | D::ByteBitCount => BitOp::BitCount,
+        D::IntLeadingZeros | D::ByteLeadingZeros => BitOp::LeadingZeros,
+        D::IntTrailingZeros | D::ByteTrailingZeros => BitOp::TrailingZeros,
+        D::IntReverseBits | D::ByteReverseBits => BitOp::ReverseBits,
+        D::IntSwapBytes | D::ByteSwapBytes => BitOp::SwapBytes,
+        D::IntRotl | D::ByteRotl => BitOp::RotateLeft,
+        _ => BitOp::RotateRight,
+    };
+    let float = |code, left: Word, right: Word| {
+        crate::scalar::float_binary(code, f64::from_bits(left), f64::from_bits(right))
+            .map(f64::to_bits)
+            .map_err(String::from)
+    };
+    match op {
+        D::IntAnd | D::IntOr | D::IntXor | D::IntShl | D::IntShr | D::IntUshr => {
+            ops::int_bitwise(runtime, bits(op), first, second)
+        }
+        D::IntNot => ops::int_not(runtime, first),
+        D::IntAbs => ops::int_abs(runtime, first),
+        D::IntSign => ops::sign(runtime, Kind::Int, first),
+        D::IntBitCount | D::IntLeadingZeros | D::IntTrailingZeros | D::IntReverseBits | D::IntSwapBytes => {
+            ops::bit_action(runtime, action(op), false, first, None)
+        }
+        D::IntRotl | D::IntRotr => ops::bit_action(runtime, action(op), false, first, Some(second)),
+        D::ByteAnd | D::ByteOr | D::ByteXor | D::ByteShl | D::ByteShr => {
+            ops::byte_bitwise(runtime, bits(op), first, second)
+        }
+        // OIR-2's byte.ushr counts in byte; Tomato's count is an int word.
+        D::ByteUshr => {
+            let count = runtime.heap.int(i64::from(second as u8));
+            ops::byte_bitwise(runtime, B::Ushr, first, count)
+        }
+        D::ByteNot => Ok(Word::from(!(first as u8))),
+        D::ByteBitCount | D::ByteLeadingZeros | D::ByteTrailingZeros | D::ByteReverseBits | D::ByteSwapBytes => {
+            ops::bit_action(runtime, action(op), true, first, None)
+        }
+        D::ByteRotl | D::ByteRotr => ops::bit_action(runtime, action(op), true, first, Some(second)),
+        D::FloatAdd => float(crate::scalar::FLOAT_ADD, first, second),
+        D::FloatSub => float(crate::scalar::FLOAT_SUB, first, second),
+        D::FloatMul => float(crate::scalar::FLOAT_MUL, first, second),
+        D::FloatDiv => float(crate::scalar::FLOAT_DIV, first, second),
+        D::FloatMod => float(crate::scalar::FLOAT_MOD, first, second),
+        D::FloatPow => float(crate::scalar::FLOAT_POW, first, second),
+        D::FloatNeg => Ok((-f64::from_bits(first)).to_bits()),
+        D::FloatAbs => Ok(f64::from_bits(first).abs().to_bits()),
+        D::FloatSign => ops::sign(runtime, Kind::Float, first),
+        D::FloatSqrt => ops::float_sqrt(first),
+        D::RatAdd => ops::rat_arith(runtime, R::Add, first, second),
+        D::RatSub => ops::rat_arith(runtime, R::Sub, first, second),
+        D::RatMul => ops::rat_arith(runtime, R::Mul, first, second),
+        D::RatDiv => ops::rat_arith(runtime, R::Div, first, second),
+        D::RatMod => ops::rat_arith(runtime, R::Mod, first, second),
+        D::RatNeg | D::RatAbs => ops::rat_unary(runtime, op == D::RatNeg, first),
+        D::RatSign => ops::sign(runtime, Kind::Ref, first),
+        D::RatNumerator | D::RatDenominator => Ok(ops::rat_part(runtime, first, op == D::RatDenominator)),
+        D::StrSlice => ops::str_slice(runtime, first, second, third),
+        D::StrSplit => Ok(ops::str_split(runtime, first, second)),
+        D::StrReplace | D::StrReplaceFirst => ops::str_replace(runtime, first, second, third, op == D::StrReplaceFirst),
+        D::StrTrim => Ok(ops::str_trim(runtime, first)),
+        D::StrChomp => Ok(ops::str_chomp(runtime, first)),
+        D::StrUtf8 => {
+            let bytes = runtime.heap.text(first).as_bytes().to_vec();
+            Ok(runtime.heap.allocate_bytes(&bytes))
+        }
+        D::StrTrimStart | D::StrTrimEnd | D::StrLower | D::StrUpper => {
+            let op = match op {
+                D::StrTrimStart => StrFn::TrimStart,
+                D::StrTrimEnd => StrFn::TrimEnd,
+                D::StrLower => StrFn::Lower,
+                _ => StrFn::Upper,
+            };
+            ops::str_fn(runtime, op, vec![first])
+        }
+        D::StrRepeat | D::StrFind | D::StrFindLast | D::StrStartsWith | D::StrEndsWith => {
+            let op = match op {
+                D::StrRepeat => StrFn::Repeat,
+                D::StrFind => StrFn::Find,
+                D::StrFindLast => StrFn::FindLast,
+                D::StrStartsWith => StrFn::StartsWith,
+                _ => StrFn::EndsWith,
+            };
+            ops::str_fn(runtime, op, vec![first, second])
+        }
+        _ => Err("invalid verified scalar operation".into()),
+    }
+}
+
 /// A payload field of a variant value whose active case must be the object `case`.
 pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Word, value: Word) -> Word {
     let runtime = unsafe { &*(*ctx).runtime };
