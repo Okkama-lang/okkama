@@ -8,6 +8,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Tomato delivers a cancellation to a nested frame resumed by the scheduler
+  (#670).** A task awaiting its own async call, whose frame's awaited future
+  had settled and queued it, ignored a cancellation requested before that
+  frame ran: the request stayed on the task, the frame's next `await`
+  suspended, a second `cancel()` did nothing, and the task hung (or the run
+  stopped with "no task can make progress"). The frame's next `await` now
+  raises `Cancelled`, once, and it unwinds through the frame and the task.
+  New case `L08.cancel.nested-frame-next-await`.
+
 - **Tomato keeps an await's outcome when the cancellation comes after it
   (#663).** A task whose awaited future had settled, and which was only
   waiting for its turn, raised `Cancelled` at that finished `await` when it was

@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cancel.nested-frame-next-await",
+  "title": "a task cancelled while a nested frame it awaits is queued after a settled await is cancelled at that frame's next await",
+  "purpose": "Accept the construct and observe its result.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.STRUCTURED-AWAIT",
+      "aspects": [
+        "boundary"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "main observed 42\ncancel requested\ninner observed 42\ninner cleanup\nworker cleanup\n-1\ncancelled true\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for OCS 0.6.0; issue #670 (semantics of #546, #663)",
+    "expected_basis": "The worker task awaits its own async method inner(), a nested frame of the same task. main and inner await the child, main first; the child's settlement queues main, then inner. main cancels the worker while inner is queued and the worker's own frame still waits for inner. Cancellation is cooperative and structured: inner's await already has its outcome, so it continues with 42; the Cancelled is delivered once, at inner's next await, unwinds through inner's defer, then through the worker's await of inner and its defer, and the worker settles cancelled."
+  },
+  "status": "mandatory"
+}

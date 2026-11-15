@@ -183,3 +183,92 @@ tests { test "a task cancelled before its await settled raises there" f10 }
 fn cancel_before_settle_raises_at_the_reentered_await() {
     assert!(passes(&cancel_before_settle()));
 }
+
+/// #670: CANCEL_AFTER_SETTLE with the worker's body moved into `inner`, an
+/// async call the worker awaits: a nested frame of the worker's task, not a
+/// task of its own. The child's settlement queues main, then `inner`; main
+/// cancels the worker while `inner` is queued. `inner` keeps the child's
+/// outcome, and the cancellation is delivered at its next await.
+fn nested_cancel_after_settle() -> String {
+    let (head, rest) = CANCEL_AFTER_SETTLE.split_once("function f9 \"worker\" async {").unwrap();
+    let (inner_body, rest) = rest.split_once("function f10 ").unwrap();
+    let (main, tests) = rest.split_once("tests {").unwrap();
+    let worker = r#"function f9 "worker" async {
+    registers [t2, t2, t2, t3, t4, t2, t3, t0]
+    params [r0, r1, r2, r3, r4, r5]
+    result t0
+    0: call r6, f11, [r0, r1, r2, r3, r4, r5]
+    1: await r7, r6
+    2: ret r7
+}
+"#;
+    let inner = format!("function f11 \"inner\" async {{{inner_body}");
+    let main = main.replace("cancel after await settled", "nested cancel after await settled");
+    format!("{head}{worker}function f10 {main}{inner}tests {{{tests}")
+}
+
+#[test]
+fn nested_frame_cancel_after_settle_is_delivered_at_its_next_await() {
+    assert!(passes(&nested_cancel_after_settle()));
+}
+
+/// #670 with a structured child: only `inner` awaits the spawned child. main
+/// awaits `sib`, which waits on the same event as the child and registered
+/// first, so its settlement queues main before the child's queues `inner`.
+fn structured_cancel_after_settle(take: bool) -> String {
+    let nested = nested_cancel_after_settle();
+    let (head, rest) = nested.split_once("function f10 ").unwrap();
+    let (_, rest) = rest.split_once("function f11 ").unwrap();
+    let main = r#"function f10 "structured child settled before cancel" async {
+    registers [t1, t2, t2, t2, t2, t0, t4, t3, t3, t0, t5, t2, t1, t0, t3]
+    params []
+    result void
+    0: const r0, bool false
+    1: call r1, f0, [r0]
+    2: call r2, f0, [r0]
+    3: call r3, f0, [r0]
+    4: call r4, f0, [r0]
+    5: const r5, int 0
+    6: call r6, f3, [r5]
+    7: call r14, f8, [r2]
+    8: fut.spawn r14, r14
+    9: call r7, f8, [r2]
+    10: fut.spawn r7, r7
+    11: call r8, f9, [r1, r2, r3, r7, r6, r4]
+    12: fut.spawn r8, r8
+    13: call _, f1, [r1]
+    14: await r9, r14
+    15: const r5, int 42
+    16: call _, f6, [r9, r5]
+    17: fut cancel, _, r8
+    18: call r10, f2, [r4]
+    19: await r11, r10
+    20: call r13, f4, [r6]
+    21: call _, f6, [r13, r5]
+    22: fut cancelled, r12, r8
+    23: const r0, bool true
+    24: call _, f7, [r12, r0]
+    25: ret _
+}
+"#;
+    let source = format!("{head}{main}function f11 {rest}");
+    if !take {
+        return source;
+    }
+    // The worker's await of `inner` and `inner`'s await of the child take
+    // their outcomes (`rt_await_take`).
+    let source = source.replace("    1: await r7, r6\n    2: ret r7\n", "    1: await.take r7, r6\n    2: ret r7\n");
+    source.replace("    3: await r8, r3\n", "    3: await.take r8, r3\n")
+}
+
+#[test]
+fn structured_child_settled_before_cancel_is_delivered_at_the_next_await() {
+    assert!(passes(&structured_cancel_after_settle(false)));
+}
+
+#[test]
+fn await_take_in_a_nested_frame_delivers_a_later_cancellation_at_the_next_await() {
+    let source = structured_cancel_after_settle(true);
+    assert_eq!(source.matches("await.take").count(), 2);
+    assert!(passes(&source));
+}
