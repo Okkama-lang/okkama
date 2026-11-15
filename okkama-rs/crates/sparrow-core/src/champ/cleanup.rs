@@ -759,7 +759,6 @@ fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word) -> Result<
 }
 
 pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
-    let frame = frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let io = unsafe { &mut *io };
     let Some(entry) = runtime.champ_entry_contract(io.entry_abi) else {
@@ -768,16 +767,34 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     if entry.replacements >= OUTCOME_STOP - 1 {
         return stop(ctx, error("invalid owning outcome count"));
     }
+    match reject_inputs(ctx, &mut io.input) {
+        Ok(failure) => {
+            unsafe {
+                (*ctx).failure = failure;
+                (*ctx).status = FAILED;
+                io.output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
+            }
+            entry.replacements + 1
+        }
+        Err(outcome) => outcome,
+    }
+}
+
+/// Close `input` with a stack overflow as the primary failure, in the reserved headroom: the combined
+/// failure, or the terminal outcome when the close stopped.
+fn reject_inputs(ctx: *mut Ctx, input: &mut PacketSlot) -> Result<Word, Outcome> {
+    let frame = frame_pointer!();
+    let runtime = unsafe { &mut *(*ctx).runtime };
     // Validate before constructing or consuming anything, including a repeated rejection.
-    if let Err(error) = packet(runtime, io.input.record).and_then(|packet| validate(runtime, &packet)) {
-        return stop(ctx, error);
+    if let Err(error) = packet(runtime, input.record).and_then(|packet| validate(runtime, &packet)) {
+        return Err(stop(ctx, error));
     }
     let roots = runtime.roots.len();
-    runtime.roots.push((io.input.record, Repr::Ref));
+    runtime.roots.push((input.record, Repr::Ref));
     runtime::rt_stack_overflow(ctx);
     if unsafe { (*ctx).status } != FAILED {
         unsafe { &mut *(*ctx).runtime }.roots.truncate(roots);
-        return OUTCOME_STOP;
+        return Err(OUTCOME_STOP);
     }
     let primary = unsafe { (*ctx).failure };
     unsafe { &mut *(*ctx).runtime }.roots.push((primary, Repr::Ref));
@@ -794,28 +811,44 @@ pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
     let usable_limit = hard_limit.saturating_add(crate::jit::MAX_FRAME);
     unsafe { (*ctx).stack_limit = old_limit.min(usable_limit) };
     unsafe { &mut *(*ctx).runtime }.safepoint(frame, unsafe { &*ctx }, &[]);
-    let result = close_packet(ctx, &mut io.input, primary);
+    let result = close_packet(ctx, input, primary);
     unsafe { (*ctx).stack_limit = old_limit };
     let runtime = unsafe { &mut *(*ctx).runtime };
     runtime.champ.rejection_floor = previous_floor;
     runtime.roots.truncate(roots);
-    match result {
-        Ok(failure) => {
-            unsafe {
-                (*ctx).failure = failure;
-                (*ctx).status = FAILED;
-                io.output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
-            }
-            entry.replacements + 1
+    result.map_err(|error| {
+        if matches!(unsafe { (*ctx).status }, FATAL | EXHAUSTED) {
+            OUTCOME_STOP
+        } else {
+            stop(ctx, error)
         }
-        Err(error) => {
-            if matches!(unsafe { (*ctx).status }, FATAL | EXHAUSTED) {
-                OUTCOME_STOP
-            } else {
-                stop(ctx, error)
-            }
-        }
+    })
+}
+
+/// A Champ async body that cannot start for want of stack (draft 3 §3), class X. Its inputs in continuation 0
+/// close with the overflow as the primary failure, as `rt_entry_reject` closes an owning entry's, and the Future
+/// publishes the combined failure. A resumed body holds state that only its own code can close: running out of
+/// stack there stops the engine.
+pub extern "C" fn rt_body_reject(ctx: *mut Ctx, frame: Word) -> Outcome {
+    use crate::tasks::{get, set, RESUME};
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let Some(map) = runtime.champ_frame_map(runtime.function_of(frame)) else {
+        return stop(ctx, error("body rejection of a frame without a map"));
+    };
+    if get(frame, RESUME) != 0 {
+        return stop(ctx, error("stack exhausted while resuming an async body"));
     }
+    let start = map.start.iter().map(|&slot| map.slots[slot as usize].offset).collect::<Vec<_>>();
+    let mut input = PacketSlot { record: get(frame, map.packet()) };
+    for offset in start {
+        set(frame, offset, 0);
+    }
+    let failure = match reject_inputs(ctx, &mut input) {
+        Ok(failure) => failure,
+        Err(outcome) => return outcome,
+    };
+    let published = PublishIn { tag: 1, value: 0, packet: std::ptr::null_mut(), failure };
+    super::rt_future_publish(ctx, frame, &published)
 }
 
 fn invoke_owned(ctx: *mut Ctx, entry_id: EntryId, arguments: (*const Word, u64),

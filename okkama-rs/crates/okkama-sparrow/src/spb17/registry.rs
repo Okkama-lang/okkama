@@ -298,8 +298,8 @@ pub enum HelperClass { L, G, X, S }
 
 impl Opcode {
     /// The class of an async operation (Champ draft 3 §14.4), including the nonempty form of
-    /// `cleanup.settle`, which is L in 0.6.0 because no settle waits. Synchronous operations take their
-    /// effects from `HELPER_TABLE`; the async helpers enter that table with the runtime (#601 V8).
+    /// `cleanup.settle`, which is L in 0.6.0 because no settle waits. The shared effects of each async helper in
+    /// `HELPER_TABLE` give the same class.
     pub const fn helper_class(self) -> Option<HelperClass> {
         use HelperClass::*;
         Some(match self {
@@ -463,6 +463,14 @@ impl Opcode {
                 Self::ScopeSplit => "champ_scope_split",
                 Self::ScopeTransfer => "champ_scope_transfer",
                 Self::OwnCreateCommit => "champ_own_create_commit",
+                // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline.
+                Self::FutureNew => "champ_future_new",
+                Self::Await => "champ_await_view",
+                Self::AwaitUnwind => "champ_await_unwind",
+                Self::FuturePublish => "champ_future_publish",
+                Self::FutureCancel => "champ_future_cancel",
+                Self::FutureCancelled => "champ_future_cancelled",
+                Self::CleanupDeliverCancel => "champ_cleanup_deliver_cancel",
                 // These forms lower to CFG, return transport, or parallel slot moves.
                 _ => return None,
             }
@@ -561,6 +569,7 @@ helper_registry! {
         "champ_cleanup_deliver_cancel" => &[C, W, P, P], L, Some(O::CleanupDeliverCancel);
         "champ_cleanup_settle" => &[C, W, P, W, W, W, P], L, Some(O::CleanupSettle);
         "champ_machine_future_destination" => &[C, W, P], HELPER_STOPS, None;
+        "champ_body_reject" => &[C, W], X, None;
 }
 
 pub const fn helper(name: &str) -> Option<Helper> {

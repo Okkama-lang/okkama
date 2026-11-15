@@ -125,8 +125,8 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     let helpers: Vec<_> = crate::jit::HELPERS.iter().filter(|(name, _)| name.starts_with("champ_")).collect();
     // #622 adds champ_machine_collection, champ_machine_builder and champ_machine_lookup; #675 adds
     // champ_machine_scalar; #676 adds champ_machine_role_narrow; #601 V8 adds the eight async helpers of
-    // Champ draft 3 §14.4 and champ_machine_future_destination.
-    assert_eq!(helpers.len(), 70);
+    // Champ draft 3 §14.4 and champ_machine_future_destination; #601 V9 adds champ_body_reject.
+    assert_eq!(helpers.len(), 71);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;

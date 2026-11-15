@@ -800,10 +800,32 @@ fn async_classes_and_suspension_sites_follow_draft3() {
         assert_eq!(op.helper_class(), Some(class), "{}", op.name());
         assert_eq!(op.suspends(), class == S, "{}", op.name());
     }
-    // The runtime registers their helpers with V8; until then no async operation has a shared helper.
-    for (op, _) in classes.iter().filter(|(op, _)| *op != O::CleanupSettle) {
-        assert!(op.helper().is_none(), "{}", op.name());
+    // Draft 3 §14.4: the helper of each async operation, whose shared effects give the operation's class.
+    // `fut.done`, `frame.save` and `frame.resume` are inline; the nonempty settle has its own helper.
+    let helpers = [(O::FutureNew, Some("champ_future_new")), (O::Await, Some("champ_await_view")),
+        (O::FuturePublish, Some("champ_future_publish")), (O::FutureCancel, Some("champ_future_cancel")),
+        (O::FutureDone, None), (O::FutureCancelled, Some("champ_future_cancelled")), (O::FrameSave, None),
+        (O::FrameResume, None), (O::AwaitUnwind, Some("champ_await_unwind")),
+        (O::CleanupDeliverCancel, Some("champ_cleanup_deliver_cancel"))];
+    let class_of = |helper: Helper| if helper.effects & HELPER_SUSPENDS != 0 {
+        S
+    } else if helper.effects & HELPER_REENTERS != 0 {
+        X
+    } else if helper.effects & (HELPER_COLLECTS | HELPER_UNWINDS) != 0 {
+        G
+    } else {
+        L
+    };
+    for (op, name) in helpers {
+        let found = op.helper();
+        assert_eq!(found.map(|helper| helper.name), name, "{}", op.name());
+        if let Some(found) = found {
+            assert_eq!(found.opcode, Some(op), "{}", op.name());
+            assert_eq!(Some(class_of(found)), op.helper_class(), "{}", op.name());
+        }
     }
+    let settle = helper("champ_cleanup_settle").unwrap();
+    assert_eq!((settle.opcode, Some(class_of(settle))), (Some(O::CleanupSettle), O::CleanupSettle.helper_class()));
     assert_eq!(O::InvokeCallOwn.helper_class(), None);
     let frame_bound = [O::Await, O::AwaitUnwind, O::FuturePublish, O::FrameSave, O::FrameResume,
         O::CleanupDeliverCancel];

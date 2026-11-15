@@ -462,6 +462,9 @@ helpers! {
         duty: Word,
         post: *mut crate::champ::CleanupSlot) -> u64; [Allocates, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_body_reject = crate::champ::cleanup::rt_body_reject as (ctx, frame: Word) -> u64;
+        [Allocates, Collects, Reenters, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_future_destination = crate::champ::rt_machine_future_destination as (ctx,
         frame: Word,
         post: *mut crate::champ::ExitDestination) -> u64; [Stops];
