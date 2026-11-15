@@ -72,8 +72,8 @@ summary.
     allows. Before every Codex launch check its usage; above ~85% give it
     only short single-item tasks.
   - **Fable.** The principal expert for independent audits.
-- **Subagent effort.** Medium by default. High only for soundness-critical
-  work: verifier and loader rules, runtime ownership, the JIT.
+- **Subagent effort.** High by default (owner, 2026-11-15: better code
+  costs less review later). Only purely mechanical chores may go lower.
 - **Fable costs money.** Audit only changes to verifier or loader rules: one
   audit per wave, covering all of that wave's rule changes. Claude reviews
   everything else.
