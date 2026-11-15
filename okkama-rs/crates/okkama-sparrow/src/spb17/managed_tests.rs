@@ -147,7 +147,7 @@ fn selected_identities_never_lose_unproved_elements() {
 /// A native handle declaration (no fields, no resources), appended as object 6.
 fn handle_object() -> Object {
     Object {
-        name: "Native".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true,
+        name: "Native".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true, role: None, implements: vec![],
         fields: vec![],
         layout: ObjectRuntimeLayout {
             allocation_words: 2, storage_fields: vec![], identity_offset: None, has_destroy: false,

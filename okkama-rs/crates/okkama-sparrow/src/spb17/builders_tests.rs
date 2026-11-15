@@ -136,7 +136,7 @@ fn a_builder_cannot_cross_an_entry() {
 fn object_storage_cannot_hold_a_builder() {
     let mut p = push_and_abandon();
     p.objects.push(Object {
-        name: "Holder".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
+        name: "Holder".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None, implements: vec![],
         fields: vec![Field { name: "items".into(), storage: 0, once: false }],
         layout: ObjectRuntimeLayout {
             allocation_words: 2, storage_fields: vec![Type::Builder(0)], identity_offset: None,
