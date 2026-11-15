@@ -84,6 +84,39 @@ fn edges(instruction: &s::Instruction) -> Vec<&s::Edge> {
     }
 }
 
+/// Successor registers whose must-use permission an instruction takes or moves away (a Data `move`, the
+/// returned values of ret.own/ret.defer, the value of exit.prepare/exit.replace, which moves into the
+/// pending exit), and the successor registers it creates a permission in (Data and `Flow::Next` outputs).
+/// Mirrors the SPB 17 loader's `check_successors`.
+pub(super) fn permission_effects(function: &s::Function, instruction: &s::Instruction)
+    -> (Vec<s::Location>, Vec<s::Location>)
+{
+    let successor = |location: s::Location| matches!(location, s::Location::Register(id)
+        if matches!(function.registers[id as usize], s::Type::Successor(_)));
+    match instruction {
+        s::Instruction::Data { op, inputs, output, .. } => {
+            let taken = inputs.first().copied().map(s::Location::Register)
+                .filter(|&location| *op == s::DataOp::Move && successor(location));
+            let created = output.map(s::Location::Register).filter(|&location| successor(location));
+            (taken.into_iter().collect(), created.into_iter().collect())
+        }
+        s::Instruction::Champ { op, arguments, flow } => {
+            let moves = matches!(op, s::Opcode::RetOwn | s::Opcode::RetDefer | s::Opcode::ExitPrepare
+                | s::Opcode::ExitReplace);
+            let taken = arguments.iter().filter_map(|argument| match argument {
+                s::Argument::Location(location) if moves && successor(*location) => Some(*location),
+                _ => None,
+            }).collect();
+            let created = match flow {
+                s::Flow::Next(outputs) => outputs.iter().copied().filter(|&location| successor(location)).collect(),
+                s::Flow::Outcomes(_) => vec![],
+            };
+            (taken, created)
+        }
+        _ => (vec![], vec![]),
+    }
+}
+
 /// Unwind abandons unused successor results. Discharge their must-use permission explicitly;
 /// cleanup still owns the same identity packet. No destroy or ownership operation is introduced.
 pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(), GenerateError> {
@@ -112,14 +145,11 @@ pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(),
         let end = function.blocks.get(index + 1).map_or(function.code.len(), |block| block.pc as usize);
         for pc in block.pc as usize..end {
             let instruction = &function.code[pc];
-            if let s::Instruction::Data { op, inputs, output, .. } = instruction {
-                if *op == s::DataOp::Move && inputs.first().is_some_and(|&id| successor(s::Location::Register(id))) {
-                    active.remove(&s::Location::Register(inputs[0]));
-                }
-                if let Some(output) = output && successor(s::Location::Register(*output)) {
-                    active.insert(s::Location::Register(*output));
-                }
+            let (taken, created) = permission_effects(function, instruction);
+            for location in taken {
+                active.remove(&location);
             }
+            active.extend(created);
             for (ordinal, edge) in edges(instruction).into_iter().enumerate() {
                 let mut next = active.clone();
                 let mut destinations = BTreeSet::new();
@@ -297,19 +327,16 @@ fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>
         let end = function.blocks.get(index + 1).map_or(function.code.len(), |block| block.pc as usize);
         for pc in block.pc as usize..end {
             let instruction = &function.code[pc];
-            if let s::Instruction::Data { op, inputs, output, .. } = instruction {
-                if *op == s::DataOp::Move
-                    && let Some(&input) = inputs.first()
-                    && successor(s::Location::Register(input))
-                    && state.active.remove(&s::Location::Register(input))
-                    && let Some(output) = output
+            let (taken, created) = permission_effects(function, instruction);
+            for location in taken {
+                // Only succ.take (a Data move) leaves an object reference to forward in place of the alias.
+                if state.active.remove(&location)
+                    && let s::Instruction::Data { output: Some(output), .. } = instruction
                 {
-                    state.taken.insert(s::Location::Register(input), s::Location::Register(*output));
-                }
-                if let Some(output) = output && successor(s::Location::Register(*output)) {
-                    state.active.insert(s::Location::Register(*output));
+                    state.taken.insert(location, s::Location::Register(*output));
                 }
             }
+            state.active.extend(created);
             for (ordinal, edge) in edges(instruction).into_iter().enumerate() {
                 let mut next = state.clone();
                 for (position, assignment) in edge.assignments.iter().enumerate() {

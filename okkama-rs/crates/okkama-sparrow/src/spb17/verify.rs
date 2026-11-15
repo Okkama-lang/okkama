@@ -1585,9 +1585,62 @@ fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Chec
     Ok(())
 }
 
+/// A permission is used after it was taken, returned or moved into a pending exit.
+const SUCCESSOR_TAKEN: &str = "SUCCESSOR_TAKEN";
+/// A live permission is lost on a normal path: overwritten, left at a return, or dropped with its exit.
+const SUCCESSOR_DROPPED: &str = "SUCCESSOR_DROPPED";
+/// A permission appears from nothing or is duplicated.
+const SUCCESSOR_FORGED: &str = "SUCCESSOR_FORGED";
+/// Paths that join disagree on the live permissions.
+const SUCCESSOR_JOIN: &str = "SUCCESSOR_JOIN";
+
+/// What happens to the successor permission held by an exit service that `op` consumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Carry {
+    /// The produced result slot of this outcome continues the same exit and holds the permission.
+    Slot(usize),
+    /// The exit ends on a failure path: must-use is a normal-path promise, so the permission may lapse.
+    Lapses,
+    /// exit.commit hands the permission to its successor-typed value result.
+    Commit,
+    /// Nothing continues the exit on this outcome: the permission would be lost on a normal path.
+    Lost,
+}
+
+/// The exit protocol threads one pending exit through its cleanup: exit.prepare/extend/replace produce the
+/// pending service, cleanup.begin turns it into the cleanup state, which every cleanup step consumes and
+/// produces again, cleanup.finish leaves it in the exit state, and exit.dispatch returns it as the pending
+/// service that exit.commit completes.
+pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
+    use Opcode::*;
+    match (op, tag) {
+        (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
+            | CleanupDestroy, Tag::Normal) => Carry::Slot(0),
+        (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
+        (CleanupFinish, Tag::Normal) => Carry::Slot(2),
+        (ExitDispatch, Tag::Pending) => Carry::Slot(1),
+        (ExitDispatch, Tag::Failure) | (ExitAbort, Tag::Normal) => Carry::Lapses,
+        (ExitCommit, Tag::Normal) => Carry::Commit,
+        // exit.replace replaces the pending value: a permission the exit held would be lost with it.
+        _ => Carry::Lost,
+    }
+}
+
+/// Register operands of `op` whose successor permission moves away from the register: returned values of
+/// ret.own/ret.defer, the value of exit.prepare and the replacement value of exit.replace (into the exit).
+fn successor_operands(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<Location> {
+    let moves = matches!(op, Opcode::RetOwn | Opcode::RetDefer | Opcode::ExitPrepare | Opcode::ExitReplace);
+    arguments.iter().filter_map(|argument| match argument {
+        Argument::Location(location @ Location::Register(_)) if moves => Some(*location),
+        _ => None,
+    }).filter(|&location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Successor(_))))).collect()
+}
+
 /// Successor references are copyable, but the independent must-use permission
-/// must be taken or returned exactly once on every reachable path. Edge renames
+/// must be taken or returned exactly once on every reachable normal path. Edge renames
 /// consume all sources before creating destinations, including cyclic moves.
+/// The active set holds successor registers and the exit services that hold a permission moved into
+/// an exit: it travels with the exit's linear service until exit.commit hands it to the returned value.
 fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Check {
     let successor = |location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Successor(_))));
     let mut incoming: Vec<Option<BTreeSet<Location>>> = vec![None; f.blocks.len()];
@@ -1602,13 +1655,15 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
             let inst = &f.code[pc];
             if let Instruction::Data { op, inputs, output, .. } = inst {
                 if *op == DataOp::Move && inputs.first().is_some_and(|&id| successor(Location::Register(id))) {
-                    require(active.remove(&Location::Register(inputs[0])), "successor permission already taken")?;
+                    enforce(active.remove(&Location::Register(inputs[0])), SUCCESSOR_TAKEN,
+                        "successor permission already taken")?;
                 }
                 if let Some(dst) = output {
                     let location = Location::Register(*dst);
                     if successor(location) {
-                        require(matches!(op, DataOp::ObjNext | DataOp::Move), "invalid successor producer")?;
-                        require(active.insert(location), "successor permission overwritten")?;
+                        enforce(matches!(op, DataOp::ObjNext | DataOp::Move), SUCCESSOR_FORGED,
+                            "invalid successor producer")?;
+                        enforce(active.insert(location), SUCCESSOR_DROPPED, "successor permission overwritten")?;
                     }
                 }
             }
@@ -1616,25 +1671,99 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                 for &value in values {
                     let location = Location::Register(value);
                     if successor(location) {
-                        require(active.remove(&location), "successor returned twice or after take")?;
+                        enforce(active.remove(&location), SUCCESSOR_TAKEN, "successor returned twice or after take")?;
                     }
                 }
-                require(active.is_empty(), "return loses successor must-use permission")?;
+                enforce(active.is_empty(), SUCCESSOR_DROPPED, "return loses successor must-use permission")?;
             }
             if matches!(inst, Instruction::Unreachable) {
-                require(active.is_empty(), "unreachable loses successor must-use permission")?;
+                enforce(active.is_empty(), SUCCESSOR_DROPPED, "unreachable loses successor must-use permission")?;
             }
-            for (edge, _) in checked_edges(p, f, inst)? {
+            // Whether this instruction consumes an exit service that holds a permission.
+            let mut carried = false;
+            if let Instruction::Champ { op, arguments, flow } = inst {
+                let moved = successor_operands(f, *op, arguments);
+                for &location in &moved {
+                    enforce(active.remove(&location), SUCCESSOR_TAKEN,
+                        &format!("{} uses a taken successor permission", op.name()))?;
+                }
+                for location in load::consumed(f, *op, arguments) {
+                    if matches!(location, Location::Service(_)) && active.remove(&location) {
+                        // One continuation cannot hold two permissions.
+                        enforce(!carried, SUCCESSOR_DROPPED, "one operation consumes two successor-holding exits")?;
+                        carried = true;
+                    }
+                }
+                // The operand shapes give exit.prepare/exit.replace at most one value register.
+                let entering = !moved.is_empty() && matches!(op, Opcode::ExitPrepare | Opcode::ExitReplace);
+                if matches!(op, Opcode::RetOwn | Opcode::RetDefer) {
+                    enforce(active.is_empty(), SUCCESSOR_DROPPED,
+                        &format!("{} loses successor must-use permission", op.name()))?;
+                }
+                if let Flow::Next(outputs) = flow {
+                    // Without a held permission there is nothing to carry: Lapses is a no-op.
+                    let carry = if carried { exit_carry(*op, Tag::Normal) } else { Carry::Lapses };
+                    let committed = match carry {
+                        Carry::Commit => outputs.first().copied().filter(|&location| successor(location)),
+                        _ => None,
+                    };
+                    enforce(carry != Carry::Commit || committed.is_some(), SUCCESSOR_DROPPED,
+                        "exit.commit stores a successor-holding exit value in a non-successor register")?;
+                    enforce(carry != Carry::Lost, SUCCESSOR_DROPPED,
+                        &format!("{} drops the successor held by its exit", op.name()))?;
+                    for (slot, &location) in outputs.iter().enumerate() {
+                        // The pending service (slot 0) of exit.prepare/exit.replace receives the value's permission.
+                        let holds = entering && slot == 0 || matches!(carry, Carry::Slot(held) if held == slot);
+                        if successor(location) {
+                            enforce(*op != Opcode::ExitCommit || committed == Some(location), SUCCESSOR_FORGED,
+                                "exit.commit produces a successor from an exit that holds none")?;
+                        } else if !holds {
+                            continue;
+                        }
+                        enforce(active.insert(location), SUCCESSOR_DROPPED, "successor permission overwritten")?;
+                    }
+                }
+            }
+            let tags = match inst {
+                Instruction::Champ { flow: Flow::Outcomes(outcomes), .. } => {
+                    outcomes.iter().map(|outcome| Some(outcome.tag)).collect()
+                }
+                _ => vec![],
+            };
+            for (ordinal, (edge, produced)) in checked_edges(p, f, inst)?.into_iter().enumerate() {
+                let carry = match (inst, tags.get(ordinal).copied().flatten()) {
+                    (Instruction::Champ { op, .. }, Some(tag)) if carried => exit_carry(*op, tag),
+                    _ => Carry::Lapses,
+                };
+                enforce(!matches!(carry, Carry::Lost | Carry::Commit), SUCCESSOR_DROPPED,
+                    "an outcome drops the successor held by its exit")?;
+                for (slot, ty) in produced.iter().enumerate() {
+                    let holds = matches!(ty, ProducedType::Value(Type::Successor(_)))
+                        || matches!(carry, Carry::Slot(held) if held == slot);
+                    if !holds {
+                        continue;
+                    }
+                    let uses = edge.assignments.iter()
+                        .filter(|assignment| assignment.source == Source::ProducedSlot(slot as u32)).count();
+                    enforce(uses != 0, SUCCESSOR_DROPPED, "an outcome drops a produced successor permission")?;
+                    enforce(uses == 1, SUCCESSOR_FORGED, "an outcome duplicates a produced successor permission")?;
+                }
                 let mut next = active.clone();
                 let mut consumed = BTreeSet::new();
                 let mut destinations = Vec::new();
                 for assignment in &edge.assignments {
-                    if !successor(assignment.destination) {
+                    let tracked = match assignment.source {
+                        Source::Location(source @ Location::Service(_)) => active.contains(&source),
+                        Source::Location(Location::Register(_)) => successor(assignment.destination),
+                        Source::ProducedSlot(slot) => successor(assignment.destination)
+                            || matches!(carry, Carry::Slot(held) if held == slot as usize),
+                    };
+                    if !tracked {
                         continue;
                     }
                     if let Source::Location(source) = assignment.source {
-                        require(active.contains(&source), "edge forwards a taken successor")?;
-                        require(consumed.insert(source), "edge duplicates successor permission")?;
+                        enforce(active.contains(&source), SUCCESSOR_TAKEN, "edge forwards a taken successor")?;
+                        enforce(consumed.insert(source), SUCCESSOR_FORGED, "edge duplicates successor permission")?;
                     }
                     destinations.push(assignment.destination);
                 }
@@ -1642,11 +1771,11 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                     next.remove(&source);
                 }
                 for destination in destinations {
-                    require(next.insert(destination), "edge overwrites live successor permission")?;
+                    enforce(next.insert(destination), SUCCESSOR_DROPPED, "edge overwrites live successor permission")?;
                 }
                 let target = pcs[&edge.target_pc];
                 if let Some(expected) = &incoming[target] {
-                    require(*expected == next, "inconsistent successor permissions at CFG join")?;
+                    enforce(*expected == next, SUCCESSOR_JOIN, "inconsistent successor permissions at CFG join")?;
                 } else {
                     stored = stored.saturating_add(next.len());
                     enforce(stored <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET",

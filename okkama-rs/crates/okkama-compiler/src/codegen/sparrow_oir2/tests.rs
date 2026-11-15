@@ -647,6 +647,78 @@ fn s2_taken_successor_alias_forwards_its_object() {
     assert_eq!(held.registers[2], s::Type::Successor(0));
 }
 
+/// main(r0: ^Plain) prepares r0 as the exit value (pc 0) and then fails (pc 1) into an unwind block (pc 2)
+/// that raises: the pending exit, not r0, holds r0's must-use permission on the unwind edge (#680).
+fn prepared_successor() -> s::Function {
+    let location = |argument| s::Argument::Location(argument);
+    s::Function {
+        symbol: "main".into(),
+        entry_abi: s::EntryAbi::Owned,
+        registers: vec![s::Type::Successor(0), s::Type::Failure, s::Type::Failure],
+        services: vec![s::ServiceKind::Packet, s::ServiceKind::Pending, s::ServiceKind::Pending],
+        params: vec![s::Location::Register(0), s::Location::Register(1), s::Location::Service(0)],
+        results: vec![s::Type::Successor(0)],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![s::Location::Register(0), s::Location::Register(1),
+                s::Location::Service(0)] },
+            s::Block { pc: 2, params: vec![s::Location::Register(2), s::Location::Service(2)] },
+        ],
+        proofs: s::FunctionProofs {
+            selections: vec![s::Selection { locations: vec![s::Location::Register(0)] }],
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Champ { op: s::Opcode::ExitPrepare, arguments: vec![s::Argument::Kind(s::ExitKind::Return),
+                s::Argument::Boundary(0), location(s::Location::Register(0)), location(s::Location::Service(0)),
+                s::Argument::Selection(0)], flow: s::Flow::Next(vec![s::Location::Service(1)]) },
+            s::Instruction::Champ { op: s::Opcode::Fail, arguments: vec![s::Argument::Label(0),
+                location(s::Location::Register(1))], flow: s::Flow::Outcomes(vec![s::Outcome { tag: s::Tag::Unwind,
+                edge: s::Edge { target_pc: 2, assignments: vec![
+                    s::Assignment { destination: s::Location::Register(2), source: s::Source::ProducedSlot(0) },
+                    s::Assignment { destination: s::Location::Service(2),
+                        source: s::Source::Location(s::Location::Service(1)) },
+                ] } }]) },
+            s::Instruction::Raise(2),
+        ],
+    }
+}
+
+#[test]
+fn s2_permission_effects_follow_the_loader() {
+    let function = prepared_successor();
+    let effects = |instruction: &s::Instruction| super::successors::permission_effects(&function, instruction);
+    assert_eq!(effects(&function.code[0]), (vec![s::Location::Register(0)], vec![]));
+    assert_eq!(effects(&function.code[1]), (vec![], vec![]));
+    let ret = s::Instruction::Champ { op: s::Opcode::RetOwn, arguments: vec![
+        s::Argument::Location(s::Location::Register(0)), s::Argument::Location(s::Location::Service(0))],
+        flow: s::Flow::Next(vec![]) };
+    assert_eq!(effects(&ret), (vec![s::Location::Register(0)], vec![]));
+    let observe = s::Instruction::Champ { op: s::Opcode::InvokeObserve, arguments: vec![s::Argument::Entry(0),
+        s::Argument::Summary(0), s::Argument::Location(s::Location::Register(1))],
+        flow: s::Flow::Next(vec![s::Location::Register(0)]) };
+    assert_eq!(effects(&observe), (vec![], vec![s::Location::Register(0)]));
+    let take = s::Instruction::Data { op: s::DataOp::Move, inputs: vec![0], output: Some(1),
+        immediate: s::Immediate::None };
+    assert_eq!(effects(&take), (vec![s::Location::Register(0)], vec![]));
+}
+
+#[test]
+fn s2_unwind_does_not_discharge_a_successor_moved_into_its_exit() {
+    let mut function = prepared_successor();
+    let before = function.clone();
+    super::successors::close_unwind_permissions(&mut function).unwrap();
+    assert_eq!(function, before);
+    // Without exit.prepare the parameter keeps the permission, and the unwind edge discharges it with a take.
+    // (Only proof-position services remain, so the raise leaves no linear service live.)
+    let mut held = prepared_successor();
+    held.services = vec![s::ServiceKind::Deps; 3];
+    held.code[0] = s::Instruction::Champ { op: s::Opcode::DepsEmpty, arguments: vec![],
+        flow: s::Flow::Next(vec![s::Location::Service(1)]) };
+    super::successors::close_unwind_permissions(&mut held).unwrap();
+    assert!(held.code.iter().any(|instruction| matches!(instruction,
+        s::Instruction::Data { op: s::DataOp::Move, inputs, .. } if inputs == &[0])), "{:?}", held.code);
+}
+
 /// Every int, byte, float, rat and str family operation of OIR-2 on parameters of its operand types.
 fn family_module() -> (o::Module, Vec<(o::CoreOp, o::Type)>) {
     let m = parse("oir 2 low\nmodule all\nscope S action in @f\n\
