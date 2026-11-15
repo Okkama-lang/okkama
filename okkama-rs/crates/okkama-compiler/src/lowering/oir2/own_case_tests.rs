@@ -295,9 +295,6 @@ fn oir2_own_conformance_lanes_reach_low_under_the_build_gate() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Stopped item: `core.StringSource` is a builtin service object with no
-/// registered summary in the producer's P1 catalog (`native_summaries.rs`).
-
 /// Opt-in triage: `OKKAMA_OWN_CASES=<file with one id per line>` prints the stage each
 /// case stops at (`OKKAMA_OWN_CASES_STRUCTURAL` selects the build gate);
 /// `OKKAMA_OWN_SOURCE=<file>` does the same for one source.
