@@ -6,6 +6,37 @@ use crate::lowering::{ModuleLoader, RootFile, modules};
 use crate::oir2 as o;
 use okkama_sparrow::spb17 as s;
 use std::collections::BTreeMap;
+use std::time::Instant;
+
+/// Per-stage wall times on stderr under `OKKAMA_PROFILE_PIPELINE=1` (#701): one
+/// `pipeline <stage> <ms>` line per stage. Diagnostics only; keep it out of timed samples.
+struct Stages {
+    last: Option<Instant>,
+}
+
+impl Stages {
+    fn start() -> Self {
+        Self::enabled(std::env::var("OKKAMA_PROFILE_PIPELINE").is_ok_and(|value| !value.is_empty() && value != "0"))
+    }
+
+    fn enabled(on: bool) -> Self {
+        Self { last: on.then(Instant::now) }
+    }
+
+    fn mark(&mut self, stage: &str) {
+        if let Some(line) = self.line(stage) {
+            eprintln!("{line}");
+        }
+    }
+
+    /// The report line of the stage that ends now, measured from the previous mark; none when disabled.
+    fn line(&mut self, stage: &str) -> Option<String> {
+        let last = self.last?;
+        let now = Instant::now();
+        self.last = Some(now);
+        Some(format!("pipeline {stage} {:.1}", (now - last).as_secs_f64() * 1000.0))
+    }
+}
 
 #[derive(Debug)]
 pub enum PipelineError {
@@ -55,6 +86,7 @@ fn lower_linked_mode(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, test
     if roots.is_empty() {
         return Err(phase("analysis", "no source files"));
     }
+    let mut stages = Stages::start();
     let roots: Vec<_> = roots.iter().map(|root| {
         (root.program, root.source.name(), Some(root.source))
     }).collect();
@@ -65,9 +97,11 @@ fn lower_linked_mode(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, test
         (program, *name, *source)
     }).collect();
     let graph = modules::load_graph(&roots, loader).map_err(|error| phase("imports", error))?;
+    stages.mark("imports");
     let sources = modules::source_modules(&graph, &roots);
     let analysis = analysis::analyze_mode(sources, roots.len(), test_mode)
         .map_err(|error| phase("analysis", error))?;
+    stages.mark("analysis");
     // Async execution is #570: an async test stops the whole test profile before lowering, by name.
     let asynchronous = analysis.registry.tests.iter().filter(|test| test.is_async).collect::<Vec<_>>();
     if let Some(first) = asynchronous.first() {
@@ -75,7 +109,9 @@ fn lower_linked_mode(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, test
         let message = format!("async test {names} (#570)");
         return Err(PipelineError::Lower(super::LowerError::unsupported(first.span, message)));
     }
-    lower_to_oir2(&analysis).map_err(PipelineError::Lower)
+    let high = lower_to_oir2(&analysis).map_err(PipelineError::Lower);
+    stages.mark("high");
+    high
 }
 
 pub fn compile_linked(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
@@ -108,28 +144,36 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
         o::verify::ExecutionMode::Production
     };
     let verify = o::VerifyOptions { mode, execution, ..o::VerifyOptions::default() };
+    let mut stages = Stages::start();
     let catalog = P1NativeSummaries::for_module(&high).map_err(|error| phase("contracts", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
     o::verify_high_with(&high, &verify, context())
         .map_err(|error| phase("verify_high", error))?;
+    stages.mark("verify_high");
     let options = o::own::OwnOptions { verify, ..o::own::OwnOptions::default() };
     let inferred = o::own::elaborate_ownership(high, &catalog, &options)
         .map_err(|error| phase("own_elaborate", error))?;
     let own = o::own::rewrite_subset(inferred, &options)
         .map_err(|error| phase("own_rewrite", error))?;
+    stages.mark("own");
     let catalog = P1NativeSummaries::for_module(&own.module).map_err(|error| phase("contracts_own", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
     o::verify_own_with(&own.module, &options.verify, context()).map_err(|error| phase("verify_own", error))?;
+    stages.mark("verify_own");
     let low = o::low::lower_cleanup(own.module, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
+    stages.mark("low");
     o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
+    stages.mark("verify_low");
     let layouts = sparrow_oir2::with_composites(&low, || layouts(&low))?;
     let objects = sparrow_oir2::with_composites(&low, || sparrow_oir2::objects(&low, &layouts))
         .map_err(|error| phase("layout", error))?;
     let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("spb_contracts", error))?;
     let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
         .map_err(|error| phase("compile_low", error))?;
+    stages.mark("codegen");
     s::verify_load(&output.program, &contracts).map_err(|error| phase("verify_load", error))?;
+    stages.mark("verify_load");
     s::encode(&output.program).map_err(|error| phase("encode", error))
 }
 
@@ -257,4 +301,28 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
     }
     Ok(layouts)
+}
+
+#[cfg(test)]
+mod stage_tests {
+    use super::Stages;
+
+    #[test]
+    fn disabled_stages_report_nothing() {
+        let mut stages = Stages::enabled(false);
+        assert_eq!(stages.line("own"), None);
+    }
+
+    #[test]
+    fn enabled_stages_report_each_stage_once_in_milliseconds() {
+        let mut stages = Stages::enabled(true);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let line = stages.line("own").unwrap();
+        let fields = line.split(' ').collect::<Vec<_>>();
+        assert_eq!(fields[..2], ["pipeline", "own"]);
+        assert!(fields[2].parse::<f64>().unwrap() >= 5.0, "{line}");
+        let next = stages.line("low").unwrap();
+        assert!(next.starts_with("pipeline low "));
+        assert!(next.split(' ').nth(2).unwrap().parse::<f64>().is_ok(), "{next}");
+    }
 }
