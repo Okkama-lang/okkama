@@ -105,7 +105,7 @@ fn s1_truncation_and_malformed_inputs_never_panic() {
     let bytes = encode(&p).unwrap();
     assert_eq!(&bytes[bytes.len() - 3..], &[142, 0, 0]);
     let prefix = &bytes[..bytes.len() - 3];
-    for id in [0, 19, 25, 34, 35, 36, 42, 127, 128, u32::MAX] {
+    for id in [0, 19, 25, 34, 35, 36, 47, 127, 128, u32::MAX] {
         let mut malformed = prefix.to_vec();
         malformed.push(255);
         let mut number = id;
@@ -167,8 +167,8 @@ fn s1_edges_reject_bad_arity_schema_and_cross_outcome_slots() {
 #[test]
 fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
-    assert_eq!(Opcode::ALL.len(), 36);
-    for id in 0..42 {
+    assert_eq!(Opcode::ALL.len(), 41);
+    for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
     for &op in Opcode::ALL {

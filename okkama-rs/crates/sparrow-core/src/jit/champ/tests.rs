@@ -1098,3 +1098,70 @@ fn champ_p1_observation_outcomes_and_gc() {
     assert!(matches!(runtime.failure(ctx.failure).unwrap().kind, FailureKind::Thrown(_)));
     assert_eq!(runtime.failure(ctx.failure).unwrap().trace.len(), 1);
 }
+
+#[test]
+fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
+    let array = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Str, depth: 1 });
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "array".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Str, s::Type::Int, array, array, s::Type::Str, s::Type::Failure],
+        services: vec![], params: vec![reg(0), reg(1)], results: vec![s::Type::Str],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0), reg(1)] },
+            s::Block { pc: 3, params: vec![reg(4)] },
+            s::Block { pc: 4, params: vec![reg(5)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::ArrayNew, inputs: vec![0], output: Some(2),
+                immediate: s::Immediate::None },
+            s::Instruction::Data { op: s::DataOp::ArrayNew, inputs: vec![], output: Some(3),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: O::ArrayGet,
+                arguments: vec![A::Location(reg(2)), A::Location(reg(1))],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 3, assignments: vec![s::Assignment {
+                            destination: reg(4), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 4, assignments: vec![s::Assignment {
+                            destination: reg(5), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]) },
+            s::Instruction::Ret(vec![4]),
+            s::Instruction::Raise(5),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    runtime.heap.set_stress(true);
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    for index in ["0", "-1", "1", "999999999999999999999999999999999999999999"] {
+        ctx.status = OK;
+        ctx.failure = 0;
+        let text = runtime.heap.allocate_text("живой элемент");
+        let index_word = runtime.heap.big(index.parse().unwrap());
+        let value = unsafe { invoke(code, &mut ctx, &[text, index_word]) };
+        if index == "0" {
+            assert_eq!(ctx.status, OK);
+            assert_eq!(runtime.heap.text(value), "живой элемент");
+        } else {
+            assert_eq!(ctx.status, FAILED);
+            let failure = runtime.failure(ctx.failure).unwrap();
+            assert!(matches!(&failure.kind, FailureKind::Program(message) if message == "Array index out of bounds"));
+            assert_eq!(failure.trace.len(), 1);
+        }
+    }
+    assert!(runtime.heap.stats().collections > 0);
+}

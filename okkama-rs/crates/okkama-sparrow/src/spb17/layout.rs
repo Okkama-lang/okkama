@@ -204,7 +204,7 @@ fn repr(ty: s::Type) -> Repr {
 // SPB 17 lists reference fields; the GC additionally traces tagged Int words.
 fn reference_slots(types: &[s::Type]) -> Vec<u32> {
     types.iter().enumerate().filter_map(|(index, ty)| {
-        matches!(ty, s::Type::Error | s::Type::Bytes | s::Type::Str | s::Type::Object(_)
+        matches!(ty, s::Type::Error | s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_)
             | s::Type::Successor(_) | s::Type::Failure)
             .then_some(index as u32)
     }).collect()

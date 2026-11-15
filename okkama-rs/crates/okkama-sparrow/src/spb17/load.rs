@@ -35,7 +35,8 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     let between = arguments.first() == Some(&Argument::Flag(true));
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
-            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | InvokeObserve => false,
+            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve
+                | ArrayGet | Fail | Evaluate | Catch => false,
             OwnMove | OwnJoin | OwnAdmit | OwnAccept | CleanupBegin | ExitAbort | ExitDispatch => true,
             OwnBind | OwnRebind => index == 0 || index == 2,
             OwnStage => index < 1 + usize::from(between) || index + 1 == locations.len(),
@@ -61,6 +62,7 @@ pub fn service_states(f: &Function) -> Result<Vec<StateRecord>, Error> {
     }
     let mut incoming: Vec<Option<Active>> = vec![None; f.code.len()];
     incoming[0] = Some(f.params.iter().copied().filter(|&loc| linear(f, loc)).collect());
+    let mut stored = incoming[0].as_ref().map_or(0, Active::len);
     let mut work = vec![0];
     while let Some(pc) = work.pop() {
         let mut active = incoming[pc].as_ref().ok_or_else(|| error("service worklist"))?.clone();
@@ -118,6 +120,9 @@ pub fn service_states(f: &Function) -> Result<Vec<StateRecord>, Error> {
             if let Some(previous) = previous {
                 require(*previous == next, "inconsistent live services at CFG join")?;
             } else {
+                stored = stored.saturating_add(next.len());
+                enforce(stored <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET",
+                    "service-state storage exceeds verification work budget")?;
                 *previous = Some(next);
                 work.push(target);
             }
@@ -132,8 +137,11 @@ pub fn service_states(f: &Function) -> Result<Vec<StateRecord>, Error> {
 pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
     for function in &p.functions {
         enforce(function.code.len() <= 65_536
-            && function.code.len().saturating_mul(function.registers.len() + function.services.len())
-                <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET", "function exceeds verification work budget")?;
+            && function.registers.len().saturating_add(function.services.len()) <= 8 * 1024 * 1024
+            && function.blocks.len().saturating_mul(function.blocks.len().div_ceil(64)) <= 8 * 1024 * 1024
+            && function.proofs.roots.iter().chain(&function.proofs.post_roots)
+                .map(|root| root.locations.len()).sum::<usize>() <= 8 * 1024 * 1024,
+            "LOAD_WORK_BUDGET", "function exceeds verification work budget")?;
     }
     verify(p)?;
     for (id, object) in p.objects.iter().enumerate() {
@@ -250,8 +258,63 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
         .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
     evidence.check_budget()?;
     if empty_source && empty_reserve { return Ok(0); }
+    // A scope can only acquire input obligations or packets produced by this activation's calls.
+    // Reconstruct their descriptor closure; unrelated module destroys cannot enter this inventory.
+    let mut functions = vec![f];
+    let mut seen = BTreeSet::new();
+    let mut descriptors = BTreeSet::new();
+    let mut types = Vec::new();
+    let mut work = 0usize;
+    while let Some(function) = functions.pop() {
+        if !seen.insert(std::ptr::from_ref(function)) { continue; }
+        work = work.saturating_add(function.code.len() + function.params.len());
+        enforce(work <= 1_000_000, "LOAD_WORK_BUDGET", "destroy descriptor closure exceeds work budget")?;
+        if function.entry_abi != EntryAbi::Observation {
+            types.extend(function.params.iter().filter_map(|&location| match verify::loc_type(function, location) {
+                Ok(ProducedType::Value(ty)) => Some(ty), _ => None,
+            }));
+        }
+        for instruction in &function.code {
+            let Instruction::Champ { op, arguments, .. } = instruction else { continue };
+            if *op == Opcode::OwnCreateCommit {
+                types.extend(arguments.iter().filter_map(|arg| match arg {
+                    Argument::Object(id) => Some(Type::Object(*id)), _ => None,
+                }));
+            }
+            if matches!(op, Opcode::InvokeCallOwn | Opcode::InvokeDefer) {
+                for callee in arguments.iter().filter_map(|arg| match arg {
+                    Argument::Entry(id) => Some(&p.functions[*id as usize]), _ => None,
+                }) {
+                    if !plain_results(p, callee) || *op == Opcode::InvokeDefer {
+                        if callee.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
+                            return Ok(p.functions.iter().filter_map(|f| f.proofs.entry.as_ref())
+                                .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures));
+                        }
+                        functions.push(callee);
+                    }
+                }
+            }
+        }
+    }
+    let mut errors = false;
+    while let Some(ty) = types.pop() {
+        work = work.saturating_add(1);
+        enforce(work <= 1_000_000, "LOAD_WORK_BUDGET", "destroy type closure exceeds work budget")?;
+        if ty == Type::Error && !errors {
+            errors = true;
+            types.extend(p.objects.iter().enumerate().filter_map(|(id, object)| {
+                (!object.error_cases.is_empty()).then_some(Type::Object(id as u32))
+            }));
+        }
+        if let Type::Object(id) | Type::Successor(id) = ty
+            && descriptors.insert(id)
+        {
+            types.extend(&p.objects[id as usize].layout.storage_fields);
+        }
+    }
     Ok(p.functions.iter().filter_map(|function| function.proofs.entry.as_ref())
-        .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures))
+        .filter(|entry| entry.destroy.is_some_and(|id| descriptors.contains(&id)))
+        .fold(0, |mask, entry| mask | entry.failures))
 }
 
 fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence<'_>, destroy_masks: &[u32])
@@ -289,7 +352,9 @@ fn check_plans(p: &Program, f: &Function, reconstructed: &mut evidence::Evidence
                 && f.proofs.order_witnesses[plan.order_witness as usize].creation_pcs.is_empty()
                 && !evidence.reserve_empty, "MERGE_EVIDENCE", "merge carries direct evidence")?;
             let failures = destroy_masks[evidence.close as usize];
-            enforce(failures & !envelope.failures == 0, "D18_EXECUTOR", "merge envelope omits destroy failures")?;
+            enforce(failures & !envelope.failures == 0, "D18_EXECUTOR",
+                &format!("{} close {}: merge envelope {} omits destroy failures {}",
+                    f.symbol, evidence.close, envelope.failures, failures))?;
             continue;
         }
         require(evidence.reserve_empty == reserve_empty, "forged empty-reserve proof (B2)")?;
@@ -392,7 +457,19 @@ fn check_service_results(p: &Program, f: &Function) -> Check {
 }
 
 fn check_call_contracts(p: &Program, f: &Function) -> Check {
+    let mut reconstructed = evidence::Evidence::new(p, f);
     for instruction in &f.code {
+        if let Instruction::Champ { op: Opcode::RetOwn, arguments, .. } = instruction
+            && plain_results(p, f)
+        {
+            let packet = arguments.iter().find_map(|arg| match arg {
+                Argument::Location(location) if verify::loc_type(f, *location)
+                    == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+                _ => None,
+            }).ok_or_else(|| violation("RETURN_PLAIN_PACKET", "plain return omits packet"))?;
+            enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
+                "RETURN_PLAIN_PACKET", "plain return cannot carry resource obligations")?;
+        }
         let Instruction::Champ {
             op: Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, arguments, ..
         } = instruction
@@ -404,7 +481,20 @@ fn check_call_contracts(p: &Program, f: &Function) -> Check {
             .ok_or_else(|| error("callee has no verified entry contract"))?;
         require(summary.may_fail == (contract.failures != 0) && summary.retained_params == contract.retained_params,
             "call summary disagrees with verified entry contract")?;
+        if p.functions[summary.entry as usize].entry_abi != EntryAbi::Observation
+            && plain_inputs(p, &p.functions[summary.entry as usize])
+        {
+            let packet = arguments.iter().find_map(|arg| match arg {
+                Argument::Location(location) if verify::loc_type(f, *location)
+                    == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+                _ => None,
+            }).ok_or_else(|| violation("CALL_PLAIN_PACKET", "plain call omits packet"))?;
+            enforce(reconstructed.inventory(packet).is_some_and(|keys| keys.is_empty()),
+                "CALL_PLAIN_PACKET", &format!("{} -> {}: plain arguments cannot carry resource obligations",
+                    f.symbol, p.functions[summary.entry as usize].symbol))?;
+        }
     }
+    reconstructed.check_budget()?;
     Ok(())
 }
 
@@ -435,13 +525,14 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
             masks.insert(param, 15);
         }
     }
-    let destroy_mask = p.functions.iter().filter_map(|f| f.proofs.entry.as_ref())
-        .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures);
+    // D18 is checked against reconstructed inventories below. Cleanup failure states are bounded
+    // by this function's verified close envelopes, including when unrelated module destroys fail.
+    let destroy_mask = f.proofs.envelopes.iter().fold(0, |mask, envelope| mask | envelope.failures);
     loop {
         let mut changed = false;
         for &pc in &reachable {
             let inst = &f.code[pc];
-            if let Instruction::Data { op: DataOp::Move | DataOp::FailSecondary, inputs,
+            if let Instruction::Data { op: DataOp::Move | DataOp::FailSecondary | DataOp::FailCaused, inputs,
                 output: Some(output), .. } = inst
             {
                 let mask = inputs.iter().fold(0, |mask, &id| mask | masks.get(&Location::Register(id)).copied()
@@ -453,6 +544,9 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
             for (ordinal, edge) in allocation::outgoing(inst).iter().enumerate() {
                 let produced = if let Instruction::Champ { op, arguments, flow: Flow::Outcomes(outcomes) } = inst {
                     match (op, outcomes[ordinal].tag) {
+                        (Opcode::Fail, Tag::Unwind) => arguments.iter().find_map(|arg| match arg {
+                            Argument::Label(kind) => Some(1 << kind), _ => None,
+                        }).unwrap_or(15),
                         (Opcode::InvokeCallOwn | Opcode::InvokeObserve | Opcode::InvokeDefer, Tag::Unwind) => {
                             arguments.iter()
                             .find_map(|arg| match arg {
@@ -492,6 +586,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
             _ => {}
         }
     }
-    enforce(computed & !f.proofs.entry.as_ref().map_or(0, |entry| entry.failures) == 0,
-        "ENTRY_FAILURE_MASK", "body failures exceed declared entry mask")
+    let declared = f.proofs.entry.as_ref().map_or(0, |entry| entry.failures);
+    enforce(computed & !declared == 0, "ENTRY_FAILURE_MASK",
+        &format!("{}: body failure mask {computed} exceeds declared mask {declared}", f.symbol))
 }

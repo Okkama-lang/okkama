@@ -957,6 +957,11 @@ impl Runtime {
         for &failure in &order {
             if let Some(FailureKind::Thrown(object)) = self.failure(failure).map(|f| &f.kind) {
                 let object = *object;
+                #[cfg(feature = "champ-abi")]
+                if let Some(text) = crate::champ::machine::error_text(self, object) {
+                    messages.insert(failure, text);
+                    continue;
+                }
                 if let Some(function) = self.error_text_method(object)
                     && let Ok(code) = crate::jit::compile(self, function) {
                         // SAFETY: Error.text takes its receiver and returns a string.
@@ -990,8 +995,7 @@ impl Runtime {
             FailureKind::Thrown(object) => {
                 let header = self.heap.header_of(*object);
                 let name = if heap::kind(header) == heap::OBJECT {
-                    let full = &self.loaded.program.objects[heap::payload(header) as usize].name;
-                    full.rsplit("::").next().unwrap_or(full).to_owned()
+                    self.reported_error_name(*object)
                 } else {
                     "value".into()
                 };
@@ -1012,6 +1016,13 @@ impl Runtime {
         let witness = program.objects[heap::payload(header) as usize].does.iter().find(|w| w.role.0 as usize == role)?;
         let slot = declaration.methods.iter().position(|m| m.name == "text")?;
         Some(witness.slots[slot].0 as usize)
+    }
+
+    fn reported_error_name(&self, object: Word) -> String {
+        #[cfg(feature = "champ-abi")]
+        if let Some(name) = crate::champ::machine::error_name(self, object) { return name; }
+        let full = &self.loaded.program.objects[heap::payload(self.heap.header_of(object)) as usize].name;
+        full.rsplit("::").next().unwrap_or(full).to_owned()
     }
 
     fn report(&self, root: Word, messages: &HashMap<Word, String>, uncaught: &mut Option<crate::Uncaught>) -> String {
@@ -1069,8 +1080,7 @@ impl Runtime {
                     let header = self.heap.header_of(*object);
                     // The type's own name, as the other engines print it.
                     let name = if heap::kind(header) == heap::OBJECT {
-                        let full = &self.loaded.program.objects[heap::payload(header) as usize].name;
-                        full.rsplit("::").next().unwrap_or(full).to_owned()
+                        self.reported_error_name(*object)
                     } else {
                         "value".into()
                     };

@@ -306,6 +306,52 @@ impl Emitter<'_> {
     fn invocation(&mut self, term: &o::TermKind) -> Result<s::Instruction, GenerateError> {
         let (opcode, arguments, context, edges) = match term {
             o::TermKind::InvokeOwn { op, normal, unwind } => {
+                if let o::Operation::Core(core) = op.as_ref() {
+                    let scalar = match core {
+                        o::CoreOp::RangeNew { start, end, inclusive } => Some((s::DataOp::RangeNew,
+                            s::Type::Range, s::Immediate::Inclusive(*inclusive), vec![*start, *end])),
+                        o::CoreOp::RangeEnd { value } => Some((s::DataOp::RangeEnd,
+                            s::Type::Int, s::Immediate::None, vec![*value])),
+                        o::CoreOp::RangeLen { value } => Some((s::DataOp::RangeLen,
+                            s::Type::Int, s::Immediate::None, vec![*value])),
+                        o::CoreOp::IntMod { left, right } => Some((s::DataOp::IntMod,
+                            s::Type::Int, s::Immediate::None, vec![*left, *right])),
+                        _ => None,
+                    };
+                    if let Some((op, result, immediate, inputs)) = scalar {
+                        let context = s::ResultContext {
+                            value: Some(result), may_fail: true, ..s::ResultContext::default()
+                        };
+                        let mut arguments = vec![A::Evaluation(s::Evaluation { op, result, immediate })];
+                        arguments.extend(inputs.iter().map(|&value| self.loc(value).map(A::Location))
+                            .collect::<Result<Vec<_>, _>>()?);
+                        let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                            (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                            let schema = O::Evaluate.results(tag, &context)?;
+                            Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+                        }).collect::<Result<_, GenerateError>>()?;
+                        return Ok(s::Instruction::Champ { op: O::Evaluate, arguments,
+                            flow: s::Flow::Outcomes(outcomes) });
+                    }
+                }
+                if let o::Operation::Collection(o::CollectionOp::ArrayGet { array, index }) = op.as_ref() {
+                    let s::Type::Array(shape) = translate_type(self.module, self.body.values.get(*array)?.ty)? else {
+                        return Err(error("array.get requires a certified plain array"));
+                    };
+                    let context = s::ResultContext {
+                        value: shape.element(), may_fail: true, ..s::ResultContext::default()
+                    };
+                    let outcomes = [(s::Tag::Normal, o::Outcome::Normal, normal),
+                        (s::Tag::Unwind, o::Outcome::Unwind, unwind)].into_iter().map(|(tag, outcome, edge)| {
+                        let schema = O::ArrayGet.results(tag, &context)?;
+                        Ok(s::Outcome { tag, edge: self.edge(edge.block, &edge.args, outcome, &schema)? })
+                    }).collect::<Result<_, GenerateError>>()?;
+                    return Ok(s::Instruction::Champ {
+                        op: O::ArrayGet,
+                        arguments: vec![A::Location(self.loc(*array)?), A::Location(self.loc(*index)?)],
+                        flow: s::Flow::Outcomes(outcomes),
+                    });
+                }
                 let o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }
                     | o::CallOp::Intrinsic { function, call }) = op.as_ref() else {
                     return Err(later(op.opcode()));
@@ -375,11 +421,14 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     }
     if !function.type_params.is_empty() || function.async_creation_summary.is_some()
         || function.async_body_summary.is_some()
-        || function.attrs.iter().any(|attr| !matches!(attr,
-            o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup
-            | o::FunctionAttr::DeferEntry { .. } | o::FunctionAttr::Ctor(_) | o::FunctionAttr::Destroy(_)))
     {
-        return Err(later("generic/async/native entry"));
+        return Err(later(&format!("{}: generic/async entry", function.symbol)));
+    }
+    if let Some(attr) = function.attrs.iter().find(|attr| !declaration_attr(attr) && !matches!(attr,
+        o::FunctionAttr::Entry | o::FunctionAttr::Hidden | o::FunctionAttr::Cleanup
+        | o::FunctionAttr::DeferEntry { .. } | o::FunctionAttr::Ctor(_) | o::FunctionAttr::Destroy(_)))
+    {
+        return Err(later(&format!("{}: entry attribute {attr:?}", function.symbol)));
     }
     let body = function.body.as_ref().ok_or_else(|| later("entry without body"))?;
     if !body.high_results.is_empty() || !body.high_effects.is_empty() || !body.descriptor_bindings.is_empty()
@@ -456,9 +505,6 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         if module.scopes.get(block.lexical_scope)?.function != id {
             return Err(error("block scope belongs to another function"));
         }
-        if block.unwind.is_some() {
-            return Err(later("implicit block unwind; use explicit outcomes"));
-        }
         pcs.insert(block_id, pc);
         for (index, &value) in block.params.iter().enumerate() {
             let expected = o::Definition::BlockParam { block: block_id, index: index as u32 };
@@ -471,6 +517,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 return Err(error("duplicate instruction"));
             }
             let inst = body.insts.get(inst_id)?;
+            if block.unwind.is_some() && o::ContractRegistry::new(module).lookup(&inst.op)
+                .map_err(|failure| error(failure.to_string()))?.unwind.is_some()
+            {
+                return Err(later(&format!("{}: implicit instruction unwind {}", function.symbol, inst.op.opcode())));
+            }
             inst_pcs.insert(inst_id, pc);
             let size = match &inst.op {
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
@@ -489,7 +540,12 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         term_pcs.insert(block_id, pc);
         let size = match &block.term.kind {
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
-                o::Operation::Core(o::CoreOp::ObjNew { .. })) => 4,
+                o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
+                    | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
+            o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
+                o::Operation::Core(o::CoreOp::ObjNew { .. } | o::CoreOp::ObjNext { .. }
+                    | o::CoreOp::VariantNew { .. })) => 4,
+            o::TermKind::Trap { .. } => 2,
             o::TermKind::Switch { cases, .. } => cases.len() * 3 + 1,
             _ => 1,
         };
@@ -531,7 +587,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 });
             }
             o::cfg::UseSite::Declaration(_) => {}
-            o::cfg::UseSite::BlockUnwind(_) => return Err(later("implicit unwind metadata")),
+            o::cfg::UseSite::BlockUnwind(block) => {
+                emitter.result.proofs.roots.push(s::RootRequirement {
+                    pc: term_pcs[&block], locations: vec![location],
+                });
+            }
         }
     }
     emitter.cleanup_metadata(&inst_pcs, &term_pcs)?;
@@ -548,6 +608,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 o::Operation::Ownership(op) => {
                     let (op, arguments) = match op {
                         o::OwnershipOp::Dependencies { value } => {
+                            let unbound = matches!(body.values.get(*value)?.def,
+                                o::Definition::InstResult { inst, .. }
+                                    if matches!(body.insts.get(inst)?.op, o::Operation::Core(o::CoreOp::Undef { .. })));
+                            if unbound {
+                                let flow = s::Flow::Next(inst.results.iter().map(|&value| emitter.loc(value))
+                                    .collect::<Result<_, _>>()?);
+                                emitter.result.code.push(s::Instruction::Champ {
+                                    op: O::DepsEmpty, arguments: vec![], flow,
+                                });
+                                continue;
+                            }
                             let anchor = emitter.loc(*value)?;
                             let [result] = inst.results.as_slice() else {
                                 return Err(error("deps.of requires one result"));
@@ -654,8 +725,24 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             emitter.result.code.push(translated);
         }
         let term = match &block.term.kind {
+            o::TermKind::Catch { failure, ty, handler, next } => {
+                let ty = translate_type(module, *ty)?;
+                let target = match ty {
+                    s::Type::Object(id) => A::Object(id),
+                    s::Type::Error => A::Flag(true),
+                    _ => return Err(error("catch requires a plain Error")),
+                };
+                s::Instruction::Champ { op: O::Catch,
+                    arguments: vec![A::Location(emitter.loc(*failure)?), target],
+                    flow: s::Flow::Outcomes(vec![
+                        s::Outcome { tag: s::Tag::Some,
+                            edge: emitter.edge(handler.block, &handler.args, o::Outcome::Normal, &[P::Value(ty)])? },
+                        s::Outcome { tag: s::Tag::None, edge: emitter.branch(next)? },
+                    ]) }
+            }
             o::TermKind::InvokeOwn { op, normal, .. }
-                if matches!(op.as_ref(), o::Operation::Core(o::CoreOp::ObjNew { .. })) => {
+                if matches!(op.as_ref(), o::Operation::Core(o::CoreOp::ObjNew { .. } | o::CoreOp::ObjNext { .. }
+                    | o::CoreOp::VariantNew { .. })) => {
                 emitter.construction(op, normal)?
             }
             o::TermKind::InvokeOwn { op, normal, unwind }
@@ -664,6 +751,27 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             }
             o::TermKind::CleanupNext { .. } | o::TermKind::ExitDispatch { .. }
                 | o::TermKind::FailureDispatch { .. } => emitter.cleanup_term(&block.term.kind)?,
+            o::TermKind::Throw(_) | o::TermKind::Panic(_) | o::TermKind::Trap { .. } => {
+                let (kind, payload) = match &block.term.kind {
+                    o::TermKind::Throw(value) => (0, emitter.reg(*value)?),
+                    o::TermKind::Panic(value) => (2, emitter.reg(*value)?),
+                    o::TermKind::Trap { message, .. } => {
+                        let payload = fresh(&mut emitter.result, s::Type::Str)?;
+                        emitter.result.code.push(data(s::DataOp::Const, vec![], payload,
+                            s::Immediate::Constant(s::Constant::Str(message.clone()))));
+                        (1, payload)
+                    }
+                    _ => unreachable!(),
+                };
+                let target = &block.unwind.as_ref().ok_or_else(|| error("failure requires unwind continuation"))?
+                    .target;
+                let mut args = target.args.iter().copied().map(o::EdgeArg::Value).collect::<Vec<_>>();
+                args.push(o::EdgeArg::Produced(o::EdgeResult { outcome: o::Outcome::Unwind, slot: 0 }));
+                let edge = emitter.edge(target.block, &args, o::Outcome::Unwind, &[P::Value(s::Type::Failure)])?;
+                s::Instruction::Champ { op: O::Fail,
+                    arguments: vec![A::Label(kind), A::Location(L::Register(payload))],
+                    flow: s::Flow::Outcomes(vec![s::Outcome { tag: s::Tag::Unwind, edge }]) }
+            }
             o::TermKind::Raise(failure) => s::Instruction::Raise(emitter.reg(*failure)?),
             o::TermKind::InvokeOwn { .. } | o::TermKind::InvokeDefer { .. } => emitter.invocation(&block.term.kind)?,
             o::TermKind::Br(target) => s::Instruction::Br(emitter.branch(target)?),

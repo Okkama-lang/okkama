@@ -136,8 +136,14 @@ impl Emitter<'_> {
                     _ => O::ScopeSplit,
                 };
                 let packet = location(*packet)?;
+                let admissible = matches!(self.body.selections.get(*selection)?, o::SelectionExpr::Admissible(_));
+                if admissible && op != O::ScopeSplit {
+                    return Err(error("admissible packet selection requires provenance transport"));
+                }
                 let selection = self.selection(*selection)?;
-                (op, vec![packet, A::Selection(selection)])
+                let mut arguments = vec![packet, A::Selection(selection)];
+                if admissible { arguments.push(A::Flag(true)); }
+                (op, arguments)
             }
             Stage { stage } => {
                 let mut args = vec![A::Flag(matches!(stage.states, o::TransferStates::Between { .. }))];
@@ -355,10 +361,14 @@ impl Emitter<'_> {
                     o::ExitDestination::Scope(scope) => s::ExitDestination::Scope(scope.as_u32()),
                 };
                 let expected = result.map(|ty| translate_type(self.module, ty)).transpose()?;
-                if expected != self.result.results.first().copied() {
+                if boundary == s::ExitDestination::Caller && expected != self.result.results.first().copied() {
                     return Err(error("commit result differs from entry result"));
                 }
-                (O::ExitCommit, vec![pending, A::Destination(boundary)])
+                let mut arguments = vec![pending, A::Destination(boundary)];
+                if boundary != s::ExitDestination::Caller {
+                    arguments.push(A::Result(expected));
+                }
+                (O::ExitCommit, arguments)
             }
         };
         Ok(s::Instruction::Champ { op, arguments, flow: s::Flow::Next(results.iter()
@@ -420,12 +430,61 @@ impl Emitter<'_> {
     pub(super) fn construction(&mut self, op: &o::Operation, normal: &o::InvokeEdge)
         -> Result<s::Instruction, GenerateError>
     {
-        let o::Operation::Core(o::CoreOp::ObjNew {
-            declaration, fields, packet: Some(packet), construction, ..
-        }) = op else {
-            return Err(error("expected completed object construction with explicit packet"));
+        let (declaration, inputs, packet, construction, op, immediate, ty) = match op {
+            o::Operation::Core(o::CoreOp::VariantNew { ty, case: 0, fields, packet }) => {
+                let s::Type::Object(id) = translate_type(self.module, *ty)? else {
+                    return Err(error("variant construction requires a single plain Error case"));
+                };
+                (o::DeclId::from_u32(id),
+                    fields.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?,
+                    *packet, o::ConstructionStatus::Complete, s::DataOp::ObjNew, s::Immediate::Object(id),
+                    s::Type::Object(id))
+            }
+            o::Operation::Core(o::CoreOp::ObjNew {
+                declaration, fields, packet, construction, type_args,
+            }) if type_args.is_empty() => (*declaration,
+                fields.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?,
+                *packet, *construction, s::DataOp::ObjNew, s::Immediate::Object(declaration.as_u32()),
+                s::Type::Object(declaration.as_u32())),
+            o::Operation::Core(o::CoreOp::ObjNext { object, updates, packet }) => {
+                let o::Type::Object { decl, args } = self.module.types.get(self.body.values.get(*object)?.ty)? else {
+                    return Err(error("successor base must be an object"));
+                };
+                if !args.is_empty() {
+                    return Err(error("successor must be monomorphized"));
+                }
+                let fields = &self.objects[decl.as_u32() as usize].fields;
+                let indices = updates.iter().map(|update| {
+                    if update.field.declaration != *decl {
+                        return Err(error("successor field declaration mismatch"));
+                    }
+                    fields.get(update.field.index as usize).map(|field| field.storage)
+                        .ok_or_else(|| error("invalid successor field"))
+                }).collect::<Result<_, _>>()?;
+                let mut inputs = vec![self.reg(*object)?];
+                inputs.extend(updates.iter().map(|update| self.reg(update.value)).collect::<Result<Vec<_>, _>>()?);
+                (*decl, inputs, *packet, o::ConstructionStatus::Complete, s::DataOp::ObjNext,
+                    s::Immediate::Updates(indices), s::Type::Successor(decl.as_u32()))
+            }
+            _ => return Err(error("expected monomorphized object construction")),
         };
-        let object = fresh(&mut self.result, s::Type::Object(declaration.as_u32()))?;
+        let object = fresh(&mut self.result, ty)?;
+        if packet.is_none() {
+            let layout = &self.objects[declaration.as_u32() as usize].layout;
+            if layout.has_destroy || layout.may_reach_resource {
+                return Err(error("resource construction requires an explicit packet"));
+            }
+            self.result.code.push(s::Instruction::Data { op, inputs, output: Some(object), immediate });
+            let schema = [P::Value(ty)];
+            let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &schema)?;
+            for assignment in &mut edge.assignments {
+                if assignment.source == s::Source::ProducedSlot(0) {
+                    assignment.source = s::Source::Location(L::Register(object));
+                }
+            }
+            return Ok(s::Instruction::Br(edge));
+        }
+        let packet = packet.unwrap();
         let mut service = || {
             let location = L::Service(self.result.services.len() as u32);
             self.result.services.push(K::Packet);
@@ -433,20 +492,18 @@ impl Emitter<'_> {
         };
         let committed = service();
         let joined = service();
-        self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjNew,
-            inputs: fields.iter().map(|&value| self.reg(value)).collect::<Result<_, _>>()?,
-            output: Some(object), immediate: s::Immediate::Object(declaration.as_u32()) });
-        if *construction == o::ConstructionStatus::Complete {
+        self.result.code.push(s::Instruction::Data { op, inputs, output: Some(object), immediate });
+        if construction == o::ConstructionStatus::Complete {
             self.result.code.push(s::Instruction::Champ { op: O::OwnCreateCommit,
                 arguments: vec![A::Location(L::Register(object)), A::Object(declaration.as_u32()),
                     A::Boundary(self.scope.as_u32())], flow: s::Flow::Next(vec![committed]) });
             self.result.code.push(s::Instruction::Champ { op: O::OwnJoin,
-                arguments: vec![A::Location(self.loc(*packet)?), A::Location(committed)],
+                arguments: vec![A::Location(self.loc(packet)?), A::Location(committed)],
                 flow: s::Flow::Next(vec![joined]) });
         } else {
             // Allocation is not a successful identity completion. Only the supplied fields' packet moves.
             self.result.code.push(s::Instruction::Champ { op: O::OwnMove,
-                arguments: vec![A::Location(self.loc(*packet)?)], flow: s::Flow::Next(vec![committed]) });
+                arguments: vec![A::Location(self.loc(packet)?)], flow: s::Flow::Next(vec![committed]) });
             self.result.code.push(s::Instruction::Champ { op: O::OwnMove,
                 arguments: vec![A::Location(committed)], flow: s::Flow::Next(vec![joined]) });
         }
@@ -552,7 +609,7 @@ impl Emitter<'_> {
         // One Low construction expands to allocate/commit/join/branch. The two temporary packets
         // have no Low SSA name, so their states are recorded at the expansion's own boundaries.
         for pc in 0..self.result.code.len().saturating_sub(3) {
-            if matches!(self.result.code[pc], s::Instruction::Data { op: s::DataOp::ObjNew, .. })
+            if matches!(self.result.code[pc], s::Instruction::Data { op: s::DataOp::ObjNew | s::DataOp::ObjNext, .. })
                 && let s::Instruction::Champ { flow: s::Flow::Next(committed), .. } = &self.result.code[pc + 1]
                 && let s::Instruction::Champ { op: O::OwnJoin, flow: s::Flow::Next(joined), .. }
                     = &self.result.code[pc + 2]
@@ -591,6 +648,35 @@ impl Emitter<'_> {
                 values.extend(after);
                 self.result.proofs.post_roots.push(s::RootRequirement {
                     pc: pc as u32 + 2, locations: values.into_iter().collect(),
+                });
+            }
+        }
+        for pc in 0..self.result.code.len().saturating_sub(1) {
+            if let s::Instruction::Data { op: s::DataOp::ObjNew | s::DataOp::ObjNext, output: Some(object), .. }
+                = self.result.code[pc]
+                && matches!(self.result.code[pc + 1], s::Instruction::Br(_))
+            {
+                let before = states.get(&(pc as u32)).cloned().unwrap_or_default();
+                states.insert(pc as u32 + 1, before.clone());
+                let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc as u32)
+                    .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+                roots.extend(before);
+                roots.insert(L::Register(object));
+                self.result.proofs.roots.push(s::RootRequirement {
+                    pc: pc as u32 + 1, locations: roots.into_iter().collect(),
+                });
+            }
+        }
+        for (&block_id, &pc) in terms {
+            if matches!(self.body.blocks.get(block_id)?.term.kind, o::TermKind::Trap { .. }) {
+                states.insert(pc + 1, states.get(&pc).cloned().unwrap_or_default());
+                let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
+                    .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+                if let s::Instruction::Data { output: Some(payload), .. } = self.result.code[pc as usize] {
+                    roots.insert(L::Register(payload));
+                }
+                self.result.proofs.roots.push(s::RootRequirement {
+                    pc: pc + 1, locations: roots.into_iter().collect(),
                 });
             }
         }

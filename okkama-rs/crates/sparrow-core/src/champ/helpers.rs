@@ -692,21 +692,37 @@ fn scope_partition(runtime: &Runtime, scope: &mut Scope, selected: &HashSet<Word
 pub extern "C" fn rt_scope_split(ctx: *mut Ctx, input: *mut ScopeSlot,
     selection: *const Selection, post: *mut ScopeSplitPost) -> Outcome
 {
+    scope_split(ctx, input, selection, post, false)
+}
+pub extern "C" fn rt_scope_split_admissible(ctx: *mut Ctx, input: *mut ScopeSlot,
+    selection: *const Selection, post: *mut ScopeSplitPost) -> Outcome
+{
+    scope_split(ctx, input, selection, post, true)
+}
+fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection,
+    post: *mut ScopeSplitPost, admissible: bool) -> Outcome
+{
     if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("checked helper entered with active bridge failure"));
     }
     let runtime = unsafe { &mut *(*ctx).runtime };
     let original = unsafe { (*input).record };
     let result = (|| {
-        if let Some(object) = checked_endpoint(runtime, original, unsafe { &*selection }, true)? {
+        if !admissible
+            && let Some(object) = checked_endpoint(runtime, original, unsafe { &*selection }, true)?
+        {
             let selected = extract_endpoint(runtime, original, object)?;
             return Ok((original, selected));
         }
         let mut scope = scope(runtime, original)?;
         let all = scope.all();
-        let selected = // Borrowed external dependencies have no obligation in this boundary. The SPB proof
+        let mut selected = // Borrowed external dependencies have no obligation in this boundary. The SPB proof
         // retains them; the runtime packet contains only this scope's selected identities.
         selection_walk(runtime, &all, unsafe { &*selection }, false)?;
+        if admissible {
+            let eligible = scope.admission.words().collect::<HashSet<_>>();
+            selected.retain(|object| eligible.contains(object));
+        }
         let (_, output) = split(runtime, &all, &selected)?;
         scope_partition(runtime, &mut scope, &selected);
         let output = store(runtime, Data::Packet(output));
@@ -847,7 +863,11 @@ leaf_helper!(rt_exit_commit(ctx, input: *mut PendingSlot, destination: *const Ex
     let pending = pending(runtime, (*input).record)?;
     let destination = &*destination;
     preflight(runtime, &pending.reserve, destination.holder, destination.owner)?;
-    let packet = transition(runtime, pending.reserve, destination.holder, destination.owner);
+    let mut packet = transition(runtime, pending.reserve, destination.holder, destination.owner);
+    // An ordinary escape commits a new unbound-result admission in the destination.
+    // Borrowed old identities are absent from this actual reserve, never rediscovered by traversal.
+    let runs = packet.journals.iter_mut().flat_map(std::mem::take).collect();
+    packet.journals = [runs, Default::default(), Default::default()];
     let record = store(runtime, Data::Packet(packet));
     consume(runtime, (*input).record);
     (*input).record = 0;

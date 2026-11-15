@@ -5,6 +5,65 @@ use std::collections::{BTreeMap, BTreeSet};
 
 type Inventory = BTreeSet<(u32, Option<u32>)>;
 
+/// A call packet contains only obligations of its actual language arguments.
+/// The loader checks every call, and the machine entry checks the host boundary.
+pub fn plain_inputs(p: &Program, f: &Function) -> bool {
+    f.params.iter().all(|&location| match verify::loc_type(f, location) {
+        Ok(ProducedType::Value(Type::Object(id) | Type::Successor(id))) => {
+            !p.objects[id as usize].layout.may_reach_resource
+        }
+        Ok(ProducedType::Value(Type::Error)) => p.objects.iter().filter(|object| !object.error_cases.is_empty())
+            .all(|object| !object.layout.may_reach_resource),
+        Ok(_) => true,
+        Err(_) => false,
+    })
+}
+
+pub fn plain_results(p: &Program, f: &Function) -> bool {
+    f.results.iter().all(|ty| match ty {
+        Type::Object(id) | Type::Successor(id) => !p.objects[*id as usize].layout.may_reach_resource,
+        Type::Error => p.objects.iter().filter(|object| !object.error_cases.is_empty())
+            .all(|object| !object.layout.may_reach_resource),
+        _ => true,
+    })
+}
+
+/// Closed empty-inventory proof, including CFG cycles: no input or producer can introduce a key.
+/// Calls may create and destroy their own locals; only their outgoing packets enter this function.
+fn resource_free(p: &Program, f: &Function) -> bool {
+    plain_inputs(p, f) && f.code.iter().all(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::OwnCreateCommit, arguments, .. } => arguments.iter().any(|arg| {
+            matches!(arg, Argument::Object(id) if !p.objects[*id as usize].layout.has_destroy)
+        }),
+        Instruction::Champ { op: Opcode::InvokeCallOwn, arguments, .. } => arguments.iter().any(|arg| {
+            matches!(arg, Argument::Entry(id) if plain_results(p, &p.functions[*id as usize]))
+        }),
+        Instruction::Champ { op: Opcode::InvokeDefer, .. } => false,
+        _ => true,
+    })
+}
+
+/// PCs where independently reconstructed selected inventories prove the admission filter redundant.
+pub fn redundant_admission_filters(p: &Program, f: &Function) -> Result<Vec<usize>, Error> {
+    let mut evidence = Evidence::new(p, f);
+    let mut result = Vec::new();
+    for (pc, instruction) in f.code.iter().enumerate() {
+        if let Instruction::Champ { op: Opcode::ScopeSplit, arguments, .. } = instruction
+            && arguments.contains(&Argument::Flag(true))
+        {
+            let mut unfiltered = arguments.clone();
+            unfiltered.retain(|argument| !matches!(argument, Argument::Flag(_)));
+            if let (Some(filtered), Some(all)) = (
+                evidence.partition(arguments, true), evidence.partition(&unfiltered, true),
+            ) && filtered == all {
+                result.push(pc);
+            }
+        }
+    }
+    evidence.check_budget()?;
+    Ok(result)
+}
+
 #[derive(Clone, Copy)]
 enum Definition {
     Instruction(usize, usize),
@@ -59,10 +118,11 @@ pub(super) struct Evidence<'a> {
     steps: usize,
     exhausted: bool,
     definitions: BTreeMap<Location, Vec<Definition>>,
-    cache: BTreeMap<(Location, bool), Option<Inventory>>,
+    cache: BTreeMap<(Location, u8), Option<Inventory>>,
     commits: BTreeMap<Location, u32>,
     evaluating: bool,
-    requested: Vec<(Location, bool)>,
+    requested: Vec<(Location, u8)>,
+    resource_free: bool,
 }
 impl<'a> Evidence<'a> {
     pub fn new(program: &'a Program, function: &'a Function) -> Self {
@@ -73,7 +133,8 @@ impl<'a> Evidence<'a> {
             _ => None,
         }).collect();
         Self { program, function, steps: 0, exhausted: false, definitions: definitions(function),
-            cache: BTreeMap::new(), commits, evaluating: false, requested: vec![] }
+            cache: BTreeMap::new(), commits, evaluating: false, requested: vec![],
+            resource_free: resource_free(program, function) }
     }
 
     pub fn check_budget(&self) -> Result<(), Error> {
@@ -90,7 +151,11 @@ impl<'a> Evidence<'a> {
     }
 
     fn resolve(&mut self, location: Location, identity: bool) -> Option<Inventory> {
-        let query = (location, identity);
+        self.query(location, u8::from(identity))
+    }
+
+    fn query(&mut self, location: Location, mode: u8) -> Option<Inventory> {
+        let query = (location, mode);
         if let Some(result) = self.cache.get(&query) { return result.clone(); }
         if self.evaluating {
             self.requested.push(query);
@@ -99,7 +164,7 @@ impl<'a> Evidence<'a> {
         // Explicit DFS frames and memoization: a hostile move/phi chain never uses the process stack.
         let mut stack = vec![query];
         let mut active = BTreeSet::from([query]);
-        while let Some(&(location, identity)) = stack.last() {
+        while let Some(&(location, mode)) = stack.last() {
             self.steps += 1;
             if self.steps > 1_000_000 || stack.len() > 65_536 {
                 self.exhausted = true;
@@ -108,7 +173,7 @@ impl<'a> Evidence<'a> {
             }
             self.evaluating = true;
             self.requested.clear();
-            let result = self.resolve_inner(location, identity);
+            let result = self.resolve_inner(location, mode);
             self.evaluating = false;
             if let Some(child) = self.requested.first().copied() {
                 if active.insert(child) {
@@ -117,21 +182,34 @@ impl<'a> Evidence<'a> {
                     self.cache.insert(child, None);
                 }
             } else {
-                self.cache.insert((location, identity), result);
+                self.cache.insert((location, mode), result);
                 stack.pop();
-                active.remove(&(location, identity));
+                active.remove(&(location, mode));
             }
         }
         self.cache.get(&query).cloned().flatten()
     }
 
-    fn resolve_inner(&mut self, location: Location, identity: bool) -> Option<Inventory> {
+    fn resolve_inner(&mut self, location: Location, mode: u8) -> Option<Inventory> {
+        let identity = mode == 1;
+        if !identity && matches!(verify::loc_type(self.function, location),
+            Ok(ProducedType::Service(ServiceKind::Packet | ServiceKind::ScopeState | ServiceKind::Pending)))
+            && self.resource_free
+        {
+            return Some(BTreeSet::new());
+        }
+        if mode == 2 {
+            return self.admission(location);
+        }
         let definitions = self.definitions.get(&location).cloned().unwrap_or_default();
         if definitions.is_empty() {
             if !identity && self.function.params.contains(&location)
                 && let Location::Service(id) = location
                 && self.function.services[id as usize] == ServiceKind::Packet
             {
+                if plain_inputs(self.program, self.function) {
+                    return Some(BTreeSet::new());
+                }
                 // Opaque input runs stay in the inventory. They can never certify a direct slot.
                 return Some(BTreeSet::from([(u32::MAX, Some(id))]));
             }
@@ -160,7 +238,7 @@ impl<'a> Evidence<'a> {
     fn instruction(&mut self, pc: usize, slot: usize, location: Location, identity: bool) -> Option<Inventory> {
         let instruction = &self.function.code[pc];
         if identity {
-            if matches!(instruction, Instruction::Data { op: DataOp::ObjNew, .. }) {
+            if matches!(instruction, Instruction::Data { op: DataOp::ObjNew | DataOp::ObjNext, .. }) {
                 let commit = *self.commits.get(&location)?;
                 return Some(BTreeSet::from([(commit, None)]));
             }
@@ -175,8 +253,19 @@ impl<'a> Evidence<'a> {
         let locations = arguments(instruction);
         use Opcode::*;
         match op {
+            InvokeCallOwn if !identity => {
+                let entry = args.iter().find_map(|arg| match arg {
+                    Argument::Entry(id) => self.program.functions.get(*id as usize), _ => None,
+                })?;
+                if plain_results(self.program, entry) { Some(BTreeSet::new()) } else { None }
+            }
             OwnEmpty | ScopeBegin => Some(BTreeSet::new()),
-            OwnCreateCommit => Some(BTreeSet::from([(pc as u32, None)])),
+            OwnCreateCommit => {
+                let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })?;
+                Some(if self.program.objects[object as usize].layout.has_destroy {
+                    BTreeSet::from([(pc as u32, None)])
+                } else { BTreeSet::new() })
+            }
             OwnMove | OwnJoin | OwnAdmit | OwnAccept | OwnBind | OwnRebind | ExitExtend if !identity => {
                 let operands = match op {
                     OwnBind | OwnRebind => vec![locations[0], *locations.last()?],
@@ -192,12 +281,103 @@ impl<'a> Evidence<'a> {
                 }
                 Some(result)
             }
+            OwnStage if !identity && args.first() == Some(&Argument::Flag(false)) => {
+                let mut result = self.resolve(locations[0], false)?;
+                let packet = self.resolve(*locations.last()?, false)?;
+                if !result.is_disjoint(&packet) { return None; }
+                result.extend(packet);
+                Some(result)
+            }
             OwnSplit => self.partition(args, slot == 1),
             ExitPrepare => self.resolve(if identity { *locations.first()? } else { *locations.last()? }, identity),
+            ExitReplace if !identity => {
+                let selected = self.partition(args, true)?;
+                let mut replacement = self.resolve(*locations.last()?, false)?;
+                if slot == 0 {
+                    replacement.extend(selected);
+                    Some(replacement)
+                } else {
+                    self.partition(args, false)
+                }
+            }
             ExitExtend if identity => self.resolve(locations[0], true),
             ExitCommit => self.resolve(locations[0], identity),
             _ => None,
         }
+    }
+
+    fn admission(&mut self, location: Location) -> Option<Inventory> {
+        let definitions = self.definitions.get(&location).cloned().unwrap_or_default();
+        if definitions.is_empty() {
+            // Call-entry consumes fresh admission; accepted inputs are bound before parameter binding.
+            return self.function.params.contains(&location).then(Inventory::new);
+        }
+        let mut result = None;
+        for definition in definitions {
+            let value = match definition {
+                Definition::Incoming(_, _, Source::Location(source)) => self.query(source, 2)?,
+                Definition::Incoming(pc, ordinal, Source::ProducedSlot(slot)) => {
+                    let Instruction::Champ { op, arguments: args, flow: Flow::Outcomes(outcomes) }
+                        = &self.function.code[pc] else { return None };
+                    let locations = arguments(&self.function.code[pc]);
+                    match (op, outcomes[ordinal].tag) {
+                        (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Normal) => {
+                            let admission = self.query(locations[0], 2)?;
+                            let picked = self.partition(args, true)?;
+                            if slot == 1 { admission.intersection(&picked).copied().collect() }
+                            else { admission.difference(&picked).copied().collect() }
+                        }
+                        (Opcode::ScopeSplit | Opcode::OwnSplitChecked, Tag::Unwind) if slot == 0 => {
+                            self.query(locations[0], 2)?
+                        }
+                        (Opcode::InvokeCallOwn, Tag::Normal) => self.produced(pc, ordinal, slot as usize, false)?,
+                        (Opcode::ExitDispatch, Tag::Pending) => self.produced(pc, ordinal, slot as usize, false)?,
+                        _ => return None,
+                    }
+                }
+                Definition::Instruction(pc, slot) => {
+                    let Instruction::Champ { op, arguments: args, .. } = &self.function.code[pc] else {
+                        return None;
+                    };
+                    let locations = arguments(&self.function.code[pc]);
+                    match op {
+                        Opcode::OwnEmpty | Opcode::ScopeBegin => Inventory::new(),
+                        Opcode::OwnCreateCommit | Opcode::InvokeCallOwn => {
+                            self.instruction(pc, slot, location, false)?
+                        }
+                        Opcode::OwnMove | Opcode::OwnJoin | Opcode::OwnAdmit | Opcode::ExitExtend => {
+                            let mut joined = Inventory::new();
+                            for input in locations { joined.extend(self.query(input, 2)?); }
+                            joined
+                        }
+                        Opcode::OwnAccept => self.query(locations[0], 2)?,
+                        Opcode::OwnBind | Opcode::OwnRebind | Opcode::OwnStage
+                            if *op != Opcode::OwnStage || args.first() == Some(&Argument::Flag(false)) => {
+                            let mut admission = self.query(locations[0], 2)?;
+                            if let ProducedType::Value(Type::Object(id) | Type::Successor(id))
+                                = verify::loc_type(self.function, locations[1]).ok()?
+                                && self.program.objects[id as usize].layout.may_reach_resource
+                            {
+                                admission.remove(&self.identity(locations[1])?);
+                            }
+                            admission
+                        }
+                        Opcode::OwnSplit => {
+                            let admission = self.query(locations[0], 2)?;
+                            let picked = self.partition(args, true)?;
+                            if slot == 1 { admission.intersection(&picked).copied().collect() }
+                            else { admission.difference(&picked).copied().collect() }
+                        }
+                        Opcode::ExitPrepare => self.query(*locations.last()?, 2)?,
+                        Opcode::ExitCommit => self.resolve(locations[0], false)?,
+                        _ => return None,
+                    }
+                }
+            };
+            if result.as_ref().is_some_and(|previous| previous != &value) { return None; }
+            result = Some(value);
+        }
+        result
     }
 
     fn partition(&mut self, args: &[Argument], selected: bool) -> Option<Inventory> {
@@ -207,11 +387,32 @@ impl<'a> Evidence<'a> {
         let selection = args.iter().find_map(|arg| match *arg {
             Argument::Selection(id) => self.function.proofs.selections.get(id as usize), _ => None,
         })?;
-        let input = self.resolve(input, false)?;
+        // Selecting through an external borrow cannot introduce obligations into an empty holder.
+        if self.resolve(input, false).is_some_and(|keys| keys.is_empty()) {
+            return Some(BTreeSet::new());
+        }
         let mut keys = Inventory::new();
         for &location in &selection.locations {
+            let plain = match verify::loc_type(self.function, location).ok()? {
+                ProducedType::Value(Type::Object(id) | Type::Successor(id)) => {
+                    !self.program.objects[id as usize].layout.may_reach_resource
+                }
+                ProducedType::Value(Type::Int | Type::Bool | Type::Str | Type::Bytes | Type::Array(_)
+                    | Type::Range | Type::Descriptor) => true,
+                _ => false,
+            };
+            if plain { continue; }
             keys.insert(self.identity(location)?);
         }
+        if selected && keys.is_empty() {
+            return Some(keys);
+        }
+        let all = self.resolve(input, false)?;
+        let eligible = if args.contains(&Argument::Flag(true)) { self.query(input, 2)? } else { all.clone() };
+        if args.contains(&Argument::Flag(true)) {
+            keys = keys.intersection(&eligible).copied().collect();
+        }
+        let input = all;
         if !keys.is_subset(&input) {
             return None;
         }
@@ -255,6 +456,12 @@ impl<'a> Evidence<'a> {
             else { return None };
         let tag = outcomes.get(ordinal)?.tag;
         if *op == Opcode::InvokeCallOwn && tag == Tag::Normal {
+            let entry = args.iter().find_map(|arg| match arg {
+                Argument::Entry(id) => self.program.functions.get(*id as usize), _ => None,
+            })?;
+            if !identity && plain_results(self.program, entry) {
+                return Some(BTreeSet::new());
+            }
             let callee = callee(self.program, &self.function.code[pc])?;
             return Some(BTreeSet::from([(pc as u32, Some(callee))]));
         }
@@ -325,6 +532,10 @@ pub(super) fn static_selections_with(p: &Program, f: &Function, evidence: &mut E
         let selection = args.iter().find_map(|arg| match *arg {
             Argument::Selection(id) => Some(id), _ => None,
         }).ok_or_else(|| error("missing static selection"))?;
+        if evidence.inventory(locations[0]).is_some_and(|keys| keys.is_empty()) {
+            result.push(StaticSelection { pc: pc as u32, selection, input: locations[0], indices: vec![] });
+            continue;
+        }
         let mut keys = Inventory::new();
         for &location in &f.proofs.selections[selection as usize].locations {
             if let Ok(ProducedType::Value(Type::Object(id))) = verify::loc_type(f, location) {

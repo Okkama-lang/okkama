@@ -8,7 +8,7 @@ pub mod p1;
 mod verify;
 mod load;
 mod evidence;
-pub use evidence::static_selections;
+pub use evidence::{static_selections, plain_inputs, plain_results, redundant_admission_filters};
 mod automaton;
 pub use automaton::infer_plan_reserves;
 
@@ -101,6 +101,7 @@ pub struct Field {
 pub enum Type {
     Error,
     Bytes,
+    Array(ArrayType),
     Int,
     Bool,
     Str,
@@ -110,6 +111,40 @@ pub enum Type {
     Successor(u32),
     Never,
     Descriptor,
+}
+
+/// A finite array shape, including nested plain arrays. No resource/service leaf is representable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ArrayType {
+    pub leaf: ArrayLeaf,
+    pub depth: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArrayLeaf {
+    Int,
+    Bool,
+    Str,
+    Range,
+    Bytes,
+    Object(u32),
+}
+
+impl ArrayType {
+    pub fn element(self) -> Option<Type> {
+        match self.depth {
+            0 => None,
+            1 => Some(match self.leaf {
+                ArrayLeaf::Int => Type::Int,
+                ArrayLeaf::Bool => Type::Bool,
+                ArrayLeaf::Str => Type::Str,
+                ArrayLeaf::Range => Type::Range,
+                ArrayLeaf::Bytes => Type::Bytes,
+                ArrayLeaf::Object(id) => Type::Object(id),
+            }),
+            depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -238,6 +273,8 @@ pub enum Immediate {
 /// Operands are typed references, not an untyped helper argument buffer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Argument {
+    Evaluation(Evaluation),
+    Result(Option<Type>),
     Location(Location),
     Scope(u32),
     Boundary(u32),
@@ -255,6 +292,13 @@ pub enum Argument {
     Kind(ExitKind),
     Registration(u32),
     Destination(ExitDestination),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Evaluation {
+    pub op: DataOp,
+    pub result: Type,
+    pub immediate: Immediate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -307,11 +351,16 @@ pub enum DataOp {
     RangeNew,
     RangeStart,
     RangeEnd,
+    RangeLen,
     ObjNew,
     ObjInit,
     ObjGet,
     ObjNext,
+    EnumCase,
+    ArrayNew,
+    ArrayLen,
     FailSecondary,
+    FailCaused,
 }
 
 /// Shared declarations. Function-local proof references never index these
@@ -496,3 +545,5 @@ pub struct StaticSelection {
 
 #[cfg(test)]
 mod load_tests;
+#[cfg(test)]
+mod arrays_tests;

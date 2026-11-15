@@ -7,6 +7,7 @@ use okkama_oir as o;
 use okkama_sparrow::spb17 as s;
 
 mod calls;
+mod successors;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerateError(pub String);
@@ -78,6 +79,17 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         p.tables.boundaries.push(s::Boundary { scope: id.as_u32() });
     }
     for (id, function) in module.functions.iter() {
+        if let Some(body) = &function.body {
+            for (_, value) in body.values.iter() {
+                if matches!(translate_type(module, value.ty), Ok(s::Type::Array(_)))
+                    && value.facts != (o::ValueFacts::Plain {
+                        certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
+                    })
+                {
+                    return Err(GenerateError("plain array requires own ClosedGraph certificate".into()));
+                }
+            }
+        }
         let translated = if calls::needs_s2(module, function)? {
             calls::translate(module, id, function, &p.objects, &mut p.tables.summaries)?
         } else {
@@ -85,11 +97,21 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         };
         p.functions.push(translated);
     }
-    s::verify(&p)?;
     for function in &mut p.functions {
+        successors::prune_dead_aliases(function);
+        successors::close_unwind_permissions(function)?;
         complete_codegen_roots(function)?;
     }
     s::verify(&p)?;
+    let redundant = p.functions.iter().map(|function| s::redundant_admission_filters(&p, function))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (function, pcs) in p.functions.iter_mut().zip(redundant) {
+        for pc in pcs {
+            if let s::Instruction::Champ { arguments, .. } = &mut function.code[pc] {
+                arguments.retain(|argument| !matches!(argument, s::Argument::Flag(_)));
+            }
+        }
+    }
     let mut allocations = Vec::new();
     for function in &p.functions {
         let allocation = s::allocate(function)?;
@@ -158,10 +180,34 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
     Ok(match module.types.get(id)? {
         o::Type::Int => s::Type::Int,
         o::Type::Array(element) if module.types.get(*element)? == &o::Type::Byte => s::Type::Bytes,
+        o::Type::Array(element) => {
+            let leaf = match translate_type(module, *element)? {
+                s::Type::Int => s::ArrayLeaf::Int,
+                s::Type::Bool => s::ArrayLeaf::Bool,
+                s::Type::Str => s::ArrayLeaf::Str,
+                s::Type::Range => s::ArrayLeaf::Range,
+                s::Type::Bytes => s::ArrayLeaf::Bytes,
+                s::Type::Object(id) => s::ArrayLeaf::Object(id),
+                s::Type::Array(shape) => {
+                    let depth = shape.depth.checked_add(1)
+                        .ok_or_else(|| GenerateError("array nesting overflow".into()))?;
+                    return Ok(s::Type::Array(s::ArrayType { depth, ..shape }));
+                }
+                _ => return Err(unsupported("array element type")),
+            };
+            s::Type::Array(s::ArrayType { leaf, depth: 1 })
+        }
         o::Type::Role { decl, args } if args.is_empty() && module.declarations.get(*decl)?.name == "Error" => {
             s::Type::Error
         }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
+        o::Type::Variant(decl) => {
+            let o::DeclarationKind::Variant { cases, is_error: true } = &module.declarations.get(*decl)?.kind else {
+                return Err(unsupported("non-Error variant type"));
+            };
+            let [case] = cases.as_slice() else { return Err(unsupported("multi-case Error variant type")); };
+            s::Type::Object(case.layout.as_u32())
+        }
         o::Type::Descriptor => s::Type::Descriptor,
         o::Type::Bool => s::Type::Bool,
         o::Type::Str => s::Type::Str,
@@ -191,14 +237,24 @@ fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError
     })
 }
 
+/// Attributes that only say which declaration a function implements: an action, a successor or a
+/// field default. They carry no ABI of their own; the signature and the ownership ABI do.
+pub(super) fn declaration_attr(attr: &o::FunctionAttr) -> bool {
+    matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. })
+}
+
 fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object])
     -> Result<s::Function, GenerateError>
 {
     if !function.type_params.is_empty() || function.summary.is_some() || function.async_creation_summary.is_some()
         || function.async_body_summary.is_some() || function.signature.ownership_abi != o::OwnershipAbi::Observation
-        || function.attrs.iter().any(|attr| !matches!(attr, o::FunctionAttr::Entry | o::FunctionAttr::Hidden))
+        || function.attrs.iter().any(|attr| {
+            !declaration_attr(attr) && !matches!(attr, o::FunctionAttr::Entry | o::FunctionAttr::Hidden)
+        })
     {
-        return Err(unsupported("non-observation entry ABI, async/generic/native or ownership entry"));
+        return Err(unsupported(&format!(
+            "{}: non-observation entry ABI, async/generic/native or ownership entry", function.symbol,
+        )));
     }
     let body = function.body.as_ref().ok_or_else(|| unsupported("declaration without body"))?;
     if !body.bindings.is_empty() || !body.boundaries.is_empty() || !body.deps.is_empty()
@@ -404,8 +460,20 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             immediate = s::Immediate::Constant(translate_constant(value)?);
             (D::Const, vec![])
         }
+        o::Operation::Collection(collection) => match collection {
+            o::CollectionOp::ArrayNew { values, packet: None, .. } => {
+                (D::ArrayNew, values.iter().map(|value| reg(*value)).collect())
+            }
+            o::CollectionOp::ArrayLen { array } => (D::ArrayLen, vec![reg(*array)]),
+            _ => return Err(unsupported(inst.op.opcode())),
+        },
         o::Operation::Core(core) => match core {
+            C::EnumCase { declaration, case } => {
+                immediate = s::Immediate::Updates(vec![declaration.as_u32(), *case]);
+                (D::EnumCase, vec![])
+            }
             C::FailSecondary { primary, cleanup } => (D::FailSecondary, vec![reg(*primary), reg(*cleanup)]),
+            C::FailCaused { new, handled } => (D::FailCaused, vec![reg(*new), reg(*handled)]),
             C::IntAdd { left, right } => (D::IntAdd, vec![reg(*left), reg(*right)]),
             C::IntSub { left, right } => (D::IntSub, vec![reg(*left), reg(*right)]),
             C::IntMul { left, right } => (D::IntMul, vec![reg(*left), reg(*right)]),
@@ -515,6 +583,9 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
                 }
                 (D::Move, vec![reg(*value)])
             }
+            C::RoleWrap { value, ty } if translate_type(module, *ty)? == s::Type::Error => {
+                (D::Move, vec![reg(*value)])
+            }
             C::Undef { ty } => {
                 let Some(&result) = inst.results.first() else {
                     return Err(GenerateError("missing undef result".into()));
@@ -585,6 +656,18 @@ pub fn compile_low_with(
 /// Relocated Low roots remain authoritative for services. Scalar register liveness fills the gaps
 /// introduced by machine expansion (range.len, switch, construction); it never synthesizes Low proofs.
 fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateError> {
+    // Undef placeholders contain a safe zero, never a live reference. Preserve their restriction to
+    // construction operands; do not turn them into ordinary reads through relocated root metadata.
+    let unbound = function.code.iter().filter_map(|instruction| match instruction {
+        s::Instruction::Data { op: s::DataOp::Undef, output: Some(id), .. } => Some(s::Location::Register(*id)),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    for root in function.proofs.roots.iter_mut().chain(&mut function.proofs.post_roots) {
+        root.locations.retain(|location| !unbound.contains(location));
+    }
+    for dependency in &mut function.proofs.dependencies {
+        dependency.obligations.retain(|location| !unbound.contains(location));
+    }
     let mut roots = BTreeMap::<u32, BTreeSet<s::Location>>::new();
     for root in &function.proofs.roots {
         roots.entry(root.pc).or_default().extend(&root.locations);

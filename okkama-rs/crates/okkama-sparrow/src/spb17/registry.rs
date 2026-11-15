@@ -94,6 +94,11 @@ registry! {
     39 => FailureDispatch, "failure.dispatch";
     40 => DepsOf, "deps.of";
     41 => InvokeObserve, "invoke.observe";
+    42 => ArrayGet, "array.get";
+    43 => Fail, "fail";
+    44 => Evaluate, "evaluate";
+    45 => Catch, "catch";
+    46 => DepsEmpty, "deps.empty";
 }
 
 impl Opcode {
@@ -114,7 +119,7 @@ impl Opcode {
             (ScopeBegin | OwnAdmit | OwnAccept | OwnBind | OwnRebind | DeferRegister, Tag::Normal) => {
                 vec![S(ScopeState)]
             }
-            (DepsOf, Tag::Normal) => vec![S(Deps)],
+            (DepsOf | DepsEmpty, Tag::Normal) => vec![S(Deps)],
             (OwnEmpty | OwnMove | OwnJoin | OwnCreateCommit, Tag::Normal) => vec![S(Packet)],
             (OwnStage, Tag::Normal) => {
                 if context.between { vec![S(ScopeState), S(ScopeState)] } else { vec![S(ScopeState)] }
@@ -143,6 +148,13 @@ impl Opcode {
             (CleanupFinish, Tag::Normal) => vec![S(Closed), S(FailureState), S(ExitState)],
             (InvokeObserve, Tag::Normal) => context.value.into_iter().map(Value).collect(),
             (InvokeObserve, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
+            (ArrayGet, Tag::Normal) => context.value.into_iter().map(Value).collect(),
+            (ArrayGet, Tag::Unwind) => vec![Value(Type::Failure)],
+            (Fail, Tag::Unwind) => vec![Value(Type::Failure)],
+            (Evaluate, Tag::Normal) => context.value.into_iter().map(Value).collect(),
+            (Evaluate, Tag::Unwind) => vec![Value(Type::Failure)],
+            (Catch, Tag::Some) => context.value.into_iter().map(Value).collect(),
+            (Catch, Tag::None) => vec![],
             (InvokeCallOwn, Tag::Normal) => valued(),
             (InvokeCallOwn | InvokeDefer, Tag::Unwind) if context.may_fail => vec![Value(Type::Failure)],
             (InvokeDefer, Tag::Continue) => vec![],
@@ -172,7 +184,9 @@ impl Opcode {
     pub fn tags(self, context: &ResultContext) -> Vec<Tag> {
         use Opcode::*;
         match self {
-            OwnSplitChecked | ScopeSplit | ScopeTransfer => vec![Tag::Normal, Tag::Unwind],
+            Catch => vec![Tag::Some, Tag::None],
+            Fail => vec![Tag::Unwind],
+            OwnSplitChecked | ScopeSplit | ScopeTransfer | ArrayGet | Evaluate => vec![Tag::Normal, Tag::Unwind],
             InvokeObserve if context.may_fail => vec![Tag::Normal, Tag::Unwind],
             InvokeCallOwn => {
                 if context.may_fail { vec![Tag::Normal, Tag::Unwind] } else { vec![Tag::Normal] }
@@ -204,7 +218,8 @@ impl Opcode {
     pub fn is_terminator(self) -> bool {
         matches!(self, Self::OwnSplitChecked | Self::ScopeSplit | Self::ScopeTransfer |
             Self::InvokeCallOwn | Self::InvokeObserve | Self::InvokeDefer | Self::CleanupNext | Self::ExitDispatch |
-            Self::FailureDispatch | Self::RetOwn | Self::RetDefer)
+            Self::FailureDispatch | Self::RetOwn | Self::RetDefer | Self::ArrayGet | Self::Fail | Self::Evaluate
+            | Self::Catch)
     }
 }
 
@@ -378,6 +393,7 @@ helper_registry! {
         "champ_own_split_static" => &[C, P, W, P], L, Some(O::OwnSplit);
         "champ_own_split_checked" => &[C, P, P, P], G, Some(O::OwnSplitChecked);
         "champ_scope_split" => &[C, P, P, P], G, Some(O::ScopeSplit);
+        "champ_scope_split_admissible" => &[C, P, P, P], G, Some(O::ScopeSplit);
         "champ_scope_transfer" => &[C, P, P, P], G, Some(O::ScopeTransfer);
         "champ_exit_prepare" => &[C, P, P], L, Some(O::ExitPrepare);
         "champ_exit_extend" => &[C, P, P, P], L, Some(O::ExitExtend);
@@ -401,6 +417,13 @@ helper_registry! {
         "champ_destroy_finish" => &[C, P, P], HELPER_STOPS, None;
         "champ_failure_capture" => &[C, P], HELPER_STOPS, None;
         "champ_machine_secondary" => &[C, W, W], L, None;
+        "champ_machine_caused" => &[C, W, W], L, None;
+        "champ_machine_fail" => &[C, W, W], L, None;
+        "champ_machine_range" => &[C, W, W, W, W], G | HELPER_COLLECTS, None;
+        "champ_machine_catch" => &[C, W, W], 0, None;
+        "champ_machine_plain_packet" => &[C, P], HELPER_STOPS, None;
+        "champ_machine_text_order" => &[C, W, W], 0, None;
+        "champ_machine_text_len" => &[C, W], 0, None;
         "champ_machine_external" => &[C, W, P, P, W], X | HELPER_UNWINDS, None;
         "champ_machine_scope" => &[C, W, W, W, P], L, None;
         "champ_machine_invalid" => &[C], HELPER_STOPS, None;

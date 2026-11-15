@@ -92,7 +92,7 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     }
 }
 
-fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {
+pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -> String {
     let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
     if descriptor == runtime.champ.machine.as_ref().unwrap().native_failure as usize {
         return runtime.heap.text(runtime.heap.field(object, 3)).to_string();

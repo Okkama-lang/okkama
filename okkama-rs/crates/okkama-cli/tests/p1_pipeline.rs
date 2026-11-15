@@ -58,6 +58,8 @@ fn check(id: &str) {
         Ok(code) => (code, String::new()),
         Err(error) => (1, format!("{}\n", error.0)),
     };
+    println!("RUN {id}: exit={code}; stderr={stderr:?}; stdout={:?}; trace={:?}",
+        String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.destroy_trace));
     assert_eq!(code, entry["failure"]["code"].as_i64().unwrap(), "{id}: exit");
     assert_eq!(stderr, entry["failure"]["stderr"].as_str().unwrap(), "{id}: stderr");
     let stdout = String::from_utf8(run.stdout).unwrap();

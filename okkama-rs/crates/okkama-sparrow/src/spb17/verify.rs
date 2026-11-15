@@ -18,6 +18,32 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Object(id) | Type::Successor(id) = ty {
         at(&p.objects, id)?;
     }
+    if let Type::Array(shape) = ty {
+        enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
+        if let ArrayLeaf::Object(id) = shape.leaf {
+            let mut pending = vec![Type::Object(id)];
+            let mut seen = BTreeSet::new();
+            while let Some(ty) = pending.pop() {
+                match ty {
+                    Type::Object(id) if seen.insert(id) => {
+                        let object = p.objects.get(id as usize)
+                            .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
+                        enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
+                            && !object.layout.may_async_destroy, "ARRAY_PLAIN", "array element reaches resources")?;
+                        pending.extend(&object.layout.storage_fields);
+                    }
+                    Type::Array(inner) => {
+                        enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
+                        if let ArrayLeaf::Object(id) = inner.leaf {
+                            pending.push(Type::Object(id));
+                        }
+                    }
+                    Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_) => {}
+                    _ => return Err(violation("ARRAY_PLAIN", "array element graph is not closed plain data")),
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -73,7 +99,7 @@ pub fn verify(p: &Program) -> Check {
                 require(layout.may_reach_resource || !p.objects[id as usize].layout.may_reach_resource,
                     "understated object retention metadata")?;
             }
-            let traced = matches!(ty, Type::Error | Type::Bytes | Type::Str | Type::Object(_)
+            let traced = matches!(ty, Type::Error | Type::Bytes | Type::Array(_) | Type::Str | Type::Object(_)
                 | Type::Successor(_) | Type::Failure);
             require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
         }
@@ -207,6 +233,10 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     let mut flags = Vec::new();
     for arg in args {
         match *arg {
+            Argument::Evaluation(ref evaluation) => { ty_valid(evaluation.result, p)?; }
+            Argument::Result(result) => {
+                if let Some(ty) = result { ty_valid(ty, p)?; }
+            }
             Argument::Location(location) => { loc_type(f, location)?; }
             Argument::Scope(id) => { at(&p.tables.scopes, id)?; }
             Argument::Boundary(id) => { at(&p.tables.boundaries, id)?; }
@@ -255,6 +285,11 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     if op == Opcode::ExitCommit {
         // The load gate checks this schema against the typed pending, including through closes/edges.
         ctx.value = f.results.first().copied();
+        if let Some(result) = args.iter().find_map(|arg| match arg {
+            Argument::Result(result) => Some(*result), _ => None,
+        }) {
+            ctx.value = result;
+        }
     }
     check_arguments(op, args)?;
     let locations = args.iter().filter_map(|arg| match arg {
@@ -272,6 +307,51 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             "OPERAND_VALUE", "value operand cannot contain a service")
     };
     match op {
+        Catch => {
+            enforce(loc_type(f, locations[0])? == ProducedType::Value(Type::Failure),
+                "CATCH_FAILURE", "catch operand must be a failure")?;
+            ctx.value = Some(match args.get(1) {
+                Some(Argument::Object(id)) if !p.objects[*id as usize].error_cases.is_empty() => Type::Object(*id),
+                Some(Argument::Flag(true)) => Type::Error,
+                _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
+            });
+        }
+        Evaluate => {
+            let Some(Argument::Evaluation(evaluation)) = args.first() else {
+                return Err(violation("EVALUATE_OPERATION", "missing evaluation operation"));
+            };
+            enforce(matches!(evaluation.op, DataOp::RangeNew | DataOp::RangeEnd | DataOp::RangeLen
+                | DataOp::IntMod), "EVALUATE_OPERATION", "operation is outside scalar outcomes")?;
+            let types = locations.iter().map(|&location| match loc_type(f, location)? {
+                ProducedType::Value(ty) => Ok(ty),
+                _ => Err(violation("EVALUATE_OPERAND", "evaluation cannot consume services")),
+            }).collect::<Result<Vec<_>, _>>()?;
+            check_data_types(p, evaluation.op, &types, Some(evaluation.result), &evaluation.immediate)?;
+            ctx.value = Some(evaluation.result);
+            ctx.may_fail = true;
+        }
+        Fail => {
+            let kind = args.iter().find_map(|arg| match arg { Argument::Label(id) => Some(*id), _ => None });
+            enforce(matches!(kind, Some(0..=2)), "FAIL_KIND", "unknown failure kind")?;
+            let ty = loc_type(f, locations[0])?;
+            let valid = if kind == Some(0) {
+                matches!(ty, ProducedType::Value(Type::Object(id)) if !p.objects[id as usize].error_cases.is_empty())
+                    || ty == ProducedType::Value(Type::Error)
+            } else {
+                ty == ProducedType::Value(Type::Str)
+            };
+            enforce(valid, "FAIL_OPERAND", "failure payload differs from its kind")?;
+        }
+        ArrayGet => {
+            enforce(locations.len() == 2, "ARRAY_GET_OPERANDS", "array.get needs array and index")?;
+            let ProducedType::Value(Type::Array(shape)) = loc_type(f, locations[0])? else {
+                return Err(violation("ARRAY_GET_OPERANDS", "array.get receiver must be a plain array"));
+            };
+            enforce(loc_type(f, locations[1])? == ProducedType::Value(Type::Int),
+                "ARRAY_GET_OPERANDS", "array.get index must be int")?;
+            ctx.value = shape.element();
+            ctx.may_fail = true;
+        }
         DepsOf => value(0)?,
         OwnMove | OwnJoin => {
             for index in 0..locations.len() {
@@ -334,7 +414,8 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         OwnCreateCommit => {
             let object = args.iter().find_map(|arg| match arg { Argument::Object(id) => Some(*id), _ => None })
                 .ok_or_else(|| error("create_commit requires descriptor"))?;
-            require(loc_type(f, locations[0])? == ProducedType::Value(Type::Object(object)),
+            require(matches!(loc_type(f, locations[0])?,
+                ProducedType::Value(Type::Object(id) | Type::Successor(id)) if id == object),
                 "create_commit identity/descriptor mismatch")?;
         }
         CleanupBegin => {
@@ -460,7 +541,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
     // and binding/defer contracts are verified by the later ownership gate.
     let kind = |arg: &Argument| -> char {
         match arg {
-            Location(_) => 'l', Scope(_) => 's', Boundary(_) => 'b', Summary(_) => 'u',
+            Evaluation(_) => 'z', Result(_) => 'r', Location(_) => 'l', Scope(_) => 's', Boundary(_) => 'b',
+            Summary(_) => 'u',
             Selection(_) => 'e', Plan(_) => 'p', Schedule(_) => 'd', Envelope(_) => 'v',
             Entry(_) => 'f', Object(_) => 'o', Binding(_) => 'i', Field(_) => 't',
             Label(_) => 'a', Flag(_) => '?', Kind(_) => 'k', Registration(_) => 'm', Destination(_) => 'x',
@@ -468,21 +550,27 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
     };
     let shape: String = args.iter().map(kind).collect();
     let valid = match op {
+        Catch => shape == "lo" || shape == "l?",
+        Evaluate => shape.starts_with('z') && shape[1..].chars().all(|ch| ch == 'l'),
+        Fail => shape == "al",
+        ArrayGet => shape == "ll",
         ScopeBegin => shape == "sb",
-        OwnEmpty => shape.is_empty(),
+        OwnEmpty | DepsEmpty => shape.is_empty(),
         OwnMove | DepsOf => shape == "l",
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
         OwnBind | OwnRebind => shape == "lisll",
         OwnStage => shape == "?lotll" || shape == "?llotll",
         OwnSplit => shape == "le",
-        OwnSplitChecked | ScopeSplit => shape.starts_with("le") && shape[2..].chars().all(|ch| ch == 'l'),
+        OwnSplitChecked => shape.starts_with("le") && shape[2..].chars().all(|ch| ch == 'l'),
+        ScopeSplit => shape.starts_with("le") && shape[2..].chars().all(|ch| ch == 'l' || ch == '?')
+            && args.iter().filter(|arg| matches!(arg, Flag(_))).count() <= 1,
         ScopeTransfer => shape == "?le" || shape == "?lle",
         DeferRegister => shape.starts_with("lm") && shape[2..].chars().all(|ch| ch == 'l' || ch == 'i'),
         ExitPrepare => shape == "kble" || shape == "kblle",
         ExitExtend | ExitAbort | CleanupFailure | CleanupDestroy => shape == "ll",
         ExitReplace => shape == "lkble" || shape == "lkblle",
-        ExitCommit => shape == "lx" || shape == "lb",
+        ExitCommit => matches!(shape.as_str(), "lx" | "lb" | "lxr"),
         CleanupBegin => matches!(shape.as_str(), "lbv" | "llbv" | "lllbv"),
         CleanupSettle => shape == "ld",
         CleanupPlan => shape == "lp",
@@ -499,17 +587,43 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
 }
 
 fn check_data(p: &Program, f: &Function, op: DataOp, inputs: &[u32], output: Option<u32>, imm: &Immediate) -> Check {
-    use DataOp::*;
     let types = inputs.iter().map(|&id| at(&f.registers, id).copied()).collect::<Result<Vec<_>, _>>()?;
     let out = output.map(|id| at(&f.registers, id).copied()).transpose()?;
+    check_data_types(p, op, &types, out, imm)
+}
+
+fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, imm: &Immediate) -> Check {
+    use DataOp::*;
     let expect = |args: &[Type], result: Option<Type>| -> Check {
         require(types == args && out == result, "scalar operand/result type or arity mismatch")
     };
-    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext);
+    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase);
     if immediate_none {
         require(*imm == Immediate::None, "unexpected scalar immediate")?;
     }
     match op {
+        EnumCase => {
+            let Immediate::Updates(indices) = imm else {
+                return Err(violation("ENUM_CASE", "enum.case requires descriptor and case"));
+            };
+            let [id, case] = indices.as_slice() else {
+                return Err(violation("ENUM_CASE", "enum.case requires descriptor and case"));
+            };
+            let object = at(&p.objects, *id)?;
+            enforce(object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
+                && !object.layout.may_reach_resource && (*case as usize) < object.error_cases.len(),
+                "ENUM_CASE", "invalid plain enum case")?;
+            expect(&[], Some(Type::Object(*id)))
+        }
+        ArrayNew => {
+            let Some(Type::Array(shape)) = out else {
+                return Err(violation("ARRAY_NEW_TYPE", "array.new must produce a plain array"));
+            };
+            enforce(shape.element().is_some_and(|element| types.iter().all(|ty| *ty == element)),
+                "ARRAY_NEW_TYPE", "array.new element types differ from the result element")
+        }
+        ArrayLen => enforce(matches!(types, [Type::Array(_) | Type::Bytes]) && out == Some(Type::Int),
+            "ARRAY_LEN_TYPE", "array.len needs a plain array and an int result"),
         Const => {
             let Immediate::Constant(value) = imm else { return Err(error("missing constant")); };
             if let Constant::Descriptor(id) = value {
@@ -517,7 +631,7 @@ fn check_data(p: &Program, f: &Function, op: DataOp, inputs: &[u32], output: Opt
             }
             expect(&[], Some(constant_type(value)?))
         }
-        FailSecondary => expect(&[Type::Failure, Type::Failure], Some(Type::Failure)),
+        FailSecondary | FailCaused => expect(&[Type::Failure, Type::Failure], Some(Type::Failure)),
         IntAdd | IntSub | IntMul | IntMod => expect(&[Type::Int, Type::Int], Some(Type::Int)),
         IntNeg => expect(&[Type::Int], Some(Type::Int)),
         IntEq | IntNe | IntLt | IntLe | IntGt | IntGe => expect(&[Type::Int, Type::Int], Some(Type::Bool)),
@@ -531,7 +645,9 @@ fn check_data(p: &Program, f: &Function, op: DataOp, inputs: &[u32], output: Opt
         Move => {
             require(types.len() == 1, "move requires one source")?;
             let valid = out == Some(types[0]) || matches!((types[0], out),
-                (Type::Successor(a), Some(Type::Object(b))) if a == b);
+                (Type::Successor(a), Some(Type::Object(b))) if a == b)
+                || matches!((types[0], out), (Type::Object(id), Some(Type::Error))
+                    if !p.objects[id as usize].error_cases.is_empty());
             require(valid, "invalid move/succ.take type")
         }
         Undef => require(types.is_empty() && out.is_some(), "invalid undef"),
@@ -539,7 +655,7 @@ fn check_data(p: &Program, f: &Function, op: DataOp, inputs: &[u32], output: Opt
             require(matches!(imm, Immediate::Inclusive(_)), "range.new requires inclusive flag")?;
             expect(&[Type::Int, Type::Int], Some(Type::Range))
         }
-        RangeStart | RangeEnd => expect(&[Type::Range], Some(Type::Int)),
+        RangeStart | RangeEnd | RangeLen => expect(&[Type::Range], Some(Type::Int)),
         ObjNew => {
             let Immediate::Object(id) = *imm else { return Err(error("missing object descriptor")); };
             let object = at(&p.objects, id)?;
@@ -602,6 +718,11 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
     if let Instruction::Champ { op, arguments, flow } = inst {
         let ctx = result_context(p, f, *op, arguments)?;
         let tags = op.tags(&ctx);
+        if *op == Opcode::ArrayGet {
+            enforce(matches!(flow, Flow::Outcomes(outcomes)
+                if outcomes.iter().map(|outcome| outcome.tag).collect::<Vec<_>>() == tags),
+                "ARRAY_GET_OUTCOMES", "array.get requires ordered normal and unwind outcomes")?;
+        }
         match flow {
             Flow::Next(destinations) => {
                 require(!op.is_terminator() || matches!(op, Opcode::RetOwn | Opcode::RetDefer)
@@ -810,7 +931,7 @@ fn verify_function(p: &Program, f: &Function) -> Check {
                         }
                         _ => false,
                     };
-                    require(allowed, &format!("undef r{reg} outside construction fields"))?;
+                    require(allowed, &format!("undef r{reg} outside construction fields at {pc}: {:?}", f.code[pc]))?;
                 }
             }
         }
@@ -826,6 +947,7 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
     let successor = |location| matches!(loc_type(f, location), Ok(ProducedType::Value(Type::Successor(_))));
     let mut incoming: Vec<Option<BTreeSet<Location>>> = vec![None; f.blocks.len()];
     incoming[0] = Some(f.params.iter().copied().filter(|&param| successor(param)).collect());
+    let mut stored = incoming[0].as_ref().map_or(0, BTreeSet::len);
     let mut work = vec![0];
     while let Some(index) = work.pop() {
         let mut active = incoming[index].as_ref().expect("queued block").clone();
@@ -881,6 +1003,9 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
                 if let Some(expected) = &incoming[target] {
                     require(*expected == next, "inconsistent successor permissions at CFG join")?;
                 } else {
+                    stored = stored.saturating_add(next.len());
+                    enforce(stored <= 8 * 1024 * 1024, "LOAD_WORK_BUDGET",
+                        "successor permission storage exceeds verification work budget")?;
                     incoming[target] = Some(next);
                     work.push(target);
                 }
