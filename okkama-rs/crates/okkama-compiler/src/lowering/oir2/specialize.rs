@@ -347,8 +347,10 @@ impl Specializer<'_, '_> {
         let ordinary = matches!((module, source.name.as_str()),
             ("io/stdout", "Stdout") | ("encoding/utf", "Utf8Encoded"));
         let imported = source.module < self.registry.root_start;
-        if imported && (source.decl.is_none()
-            || generic && !matches!(args, [ty::Ty::Int] | [ty::Ty::Str])) {
+        // Registered Atomic/Cell specializations (P2.4 §4.8): plain scalars and arrays of them only. A
+        // managed value needs the storage protocol of the registered service and stays unsupported.
+        let plain_value = matches!(args, [value] if atomic_suffix(value).is_some());
+        if imported && (source.decl.is_none() || generic && !plain_value) {
             return Err(LowerError::unsupported(span, format!("std object {module}.{}<{args:?}>", source.name)));
         }
         if module == "async/atomic" {
@@ -361,9 +363,10 @@ impl Specializer<'_, '_> {
         let specialized = !source.params.is_empty();
         let instance = if specialized { ty::ObjectId(self.registry.objects.len()) } else { object };
         let type_names = args.iter().map(|ty| self.encode(ty)).collect::<Result<Vec<_>>>()?;
-        let name = if imported && (generic || ordinary) {
-            let suffix = if args == [ty::Ty::Int] { "_int" } else if args == [ty::Ty::Str] { "_string" } else { "" };
-            format!("{}{suffix}", source.name)
+        let name = if imported && generic && let [value] = args && let Some(suffix) = atomic_suffix(value) {
+            format!("{}_{suffix}", source.name)
+        } else if imported && ordinary {
+            source.name.clone()
         } else if specialized {
             format!("{}<{}>", source.name, type_names.join(","))
         } else {
@@ -912,6 +915,23 @@ impl Specializer<'_, '_> {
 }
 
 /// Structural spelling shared by concrete signatures and specialization arguments.
+/// The name suffix of a registered plain Atomic/Cell value (P2.4 §4.8): `int`, `string`, `bool`, `byte`,
+/// `char`, `float`, `rat`, or `array_` and the suffix of a plain element. Other values have none.
+pub(super) fn atomic_suffix(value: &ty::Ty) -> Option<String> {
+    use ty::Ty as T;
+    Some(match value {
+        T::Int => "int".into(),
+        T::Str => "string".into(),
+        T::Bool => "bool".into(),
+        T::Byte => "byte".into(),
+        T::Char => "char".into(),
+        T::Float => "float".into(),
+        T::Rat => "rat".into(),
+        T::Array(item) => format!("array_{}", atomic_suffix(item)?),
+        _ => return None,
+    })
+}
+
 pub(super) fn type_name(registry: &Registry<'_>, value: &ty::Ty) -> Result<String> {
     use ty::Ty as T;
     let nominal = |kind: &str, module: usize, name: &str, args: &[T]| -> Result<String> {

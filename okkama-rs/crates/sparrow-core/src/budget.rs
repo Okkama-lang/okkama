@@ -380,6 +380,22 @@ mod tests {
         assert!(unclassified.is_empty(), "natives in no group and not pure: {unclassified:?}");
     }
 
+    /// The compiler's companion catalogue (#569 C7) and the host permission groups agree on what
+    /// reaches the host: a group exactly for a host effect, pure for computation and the standard streams.
+    #[test]
+    fn the_companion_catalogue_agrees_with_the_groups() {
+        use okkama_runtime_abi::catalogue::{classify, Effect};
+        for &native in Native::ALL {
+            let effect = classify(native).expect("classified").effect;
+            let agrees = match Reach::of(native) {
+                Reach::Group(_) => effect == Effect::Host,
+                Reach::Pure => matches!(effect, Effect::Pure | Effect::Stdio),
+                Reach::Unclassified => false,
+            };
+            assert!(agrees, "{}: {:?} vs {effect:?}", native.symbol(), Reach::of(native));
+        }
+    }
+
     #[test]
     fn the_preferred_languages_need_env() {
         let native = *Native::ALL.iter().find(|native| native.symbol().starts_with("runtime/locale@")).unwrap();

@@ -16,7 +16,11 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
 
 fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Object(id) | Type::Successor(id) = ty {
-        at(&p.objects, id)?;
+        enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
+    }
+    if let Type::Handle(id) = ty {
+        enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
+            "HANDLE_TYPE", "a handle type names no native handle declaration")?;
     }
     if let Type::Variant(id) = ty {
         enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
@@ -25,6 +29,8 @@ fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Array(shape) = ty {
         enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
         if let ArrayLeaf::Object(id) = shape.leaf {
+            let handle = p.objects.get(id as usize).is_some_and(|object| object.handle);
+            enforce(!handle, "HANDLE_TYPE", "an array element names a native handle declaration")?;
             let mut pending = vec![Type::Object(id)];
             let mut seen = BTreeSet::new();
             while let Some(ty) = pending.pop() {
@@ -108,6 +114,12 @@ pub fn verify(p: &Program) -> Check {
             }
             Ok(())
         };
+        if object.handle {
+            let plain = object.fields.is_empty() && object.error_cases.is_empty() && object.enum_cases == 0
+                && object.variant_cases.is_empty() && layout.storage_fields.is_empty() && !layout.has_destroy
+                && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
+            enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
+        }
         if !object.variant_cases.is_empty() {
             let mut seen = BTreeSet::new();
             let plain = object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.may_reach_resource
@@ -126,7 +138,7 @@ pub fn verify(p: &Program) -> Check {
                     "understated object retention metadata")?;
             }
             let traced = matches!(ty, Type::Error | Type::Bytes | Type::Array(_) | Type::Str | Type::Object(_)
-                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_));
+                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_) | Type::Handle(_));
             require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
         }
     }

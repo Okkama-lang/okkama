@@ -98,13 +98,12 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             o::DeclarationKind::Object { fields, destroy, builtin, .. } => (fields.as_slice(), *destroy, *builtin),
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], None, false),
             o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => (&[][..], None, false),
+            o::DeclarationKind::Handle => (&[][..], None, false),
             _ => return Err(phase("layout", format!("unsupported declaration {}", declaration.name))),
         };
-        let atomic = match declaration.name.as_str() {
-            "async.atomic.Atomic_int" if builtin && fields.is_empty() && destroy.is_none() => Some(s::Type::Int),
-            "async.atomic.Atomic_string" if builtin && fields.is_empty() && destroy.is_none() => Some(s::Type::Str),
-            _ => None,
-        };
+        let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
+            .filter(|_| builtin && fields.is_empty() && destroy.is_none())
+            .and_then(s::p1::atomic_value);
         if (builtin && atomic.is_none()) || fields.iter().any(|field| field.once) {
             return Err(phase("layout", format!("missing final runtime override for {}", declaration.name)));
         }
@@ -117,7 +116,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
         let trace_layout = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
             matches!(ty, s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_) | s::Type::Successor(_)
-                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_)).then_some(index as u32)
+                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_) | s::Type::Handle(_)).then_some(index as u32)
         }).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.
         layouts.insert(id.as_u32(), sparrow_oir2::ObjectLayout {

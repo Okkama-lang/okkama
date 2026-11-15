@@ -1233,6 +1233,11 @@ fn oir2_std_closed_specializations_and_error_cases() {
         concat!("module app; import \"cell\" take Cell; ",
             "main() is int { let a = Cell(1); let b = Cell(\"a\"); ",
             "a.replace(a.value() + 1); b.replace(b.value() + \"b\"); a.value(); }"),
+        // #569 C7: closed and compare_and_replace are registered for every plain specialization.
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(1); let b = Atomic(true); let c = Atomic([\"x\"]); ",
+            "let swapped = b.compare_and_replace(true, false); ",
+            "if a.compare_and_replace(1, 2) && !a.closed() && !swapped { c.value().size(); } else { 0; } }"),
         concat!("module app; import \"io/stdout\" take Stdout; enum E is Error = (empty, text(s is string)); ",
             "main() is int { try { throw E.empty; } catch e is E { Stdout().writeln(e.text(), \"!\"); } 0; }"),
         concat!("module app; import \"io/stdout\" take Stdout; enum E is Error = (bad); ",
@@ -1251,8 +1256,6 @@ fn oir2_std_closed_specializations_and_error_cases() {
 #[test]
 fn oir2_std_rejects_other_intrinsics_resources_and_async() {
     for body in [
-        "let a = Atomic(1); a.closed(); 0;",
-        "let a = Atomic(1); a.compare_and_replace(1, 2); 0;",
         "let a = Atomic(R()); 0;",
         "let a = Cell(R()); 0;",
     ] {

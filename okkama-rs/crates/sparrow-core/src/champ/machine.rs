@@ -58,6 +58,16 @@ impl s::ExternalContracts for Catalog<'_> {
             entry.proofs.entry.as_ref().and_then(|contract| contract.external.as_deref()) == Some(name)
         }))
     }
+
+    /// Host implementations bind by name first; only an unbound canonical symbol uses the adapter.
+    fn adapter(&self, declared: &s::Function) -> Option<s::Function> {
+        self.1.adapter(declared)
+    }
+}
+
+/// A native symbol (`module@major::name/arity`), as opposed to a runtime intrinsic name.
+pub(super) fn native_symbol(name: &str) -> bool {
+    okkama_sparrow::abi::catalogue::Symbol::parse(name).is_some()
 }
 
 pub(crate) fn repr(ty: s::Type) -> Repr {
@@ -126,6 +136,7 @@ impl Runtime {
             ..okkama_sparrow::Program::default()
         };
         legacy.types.push(okkama_sparrow::Type::Byte);
+        legacy.handles = source.objects.iter().map(|object| object.name.clone()).collect();
         // This declaration view serves existing descriptors, diagnostics and heap layout consumers only.
         // No old bytecode is generated or executed.
         for object in &source.objects {
@@ -154,8 +165,9 @@ impl Runtime {
             }).collect();
             legacy.functions.push(okkama_sparrow::Function {
                 symbol: function.symbol.clone(), is_async: false,
+                // Tomato resolves the provider by symbol; an unresolved adapter finds none and fails at the call.
                 native: function.proofs.entry.as_ref().and_then(|entry| entry.external.clone())
-                    .filter(|name| name.starts_with("runtime/")),
+                    .filter(|name| native_symbol(name)),
                 intrinsic: None,
                 registers, params, result: None, code: vec![], handlers: vec![],
             });
@@ -221,9 +233,12 @@ impl Runtime {
                     entry.declaration.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) == Some(name)
                 })).cloned());
         }
-        let p1 = source.functions.iter().map(|function| {
+        // Trusted P1/native entries run through the finite adapters of `p1`, as do checked
+        // unresolved-provider adapters that no embedder implementation binds by name.
+        let p1 = source.functions.iter().zip(&implementations).map(|(function, implementation)| {
             function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
-                .is_some_and(|name| s::ExternalContracts::entry(&catalog.1, name).is_some())
+                .is_some_and(|name| s::ExternalContracts::entry(&catalog.1, name).is_some()
+                    || (implementation.is_none() && catalog.1.adapter(function).is_some()))
         }).collect();
         runtime.champ.machine = Some(Program {
             source: Arc::new(source), plans, selections, entries, shielded_entries,
@@ -245,6 +260,8 @@ fn legacy_type(ty: s::Type) -> okkama_sparrow::Type {
             T::Object(okkama_sparrow::ObjectRef(id))
         }
         s::Type::Range => T::Range,
+        // Handle indices name SPB objects; the declaration view lists every object name as a handle name.
+        s::Type::Handle(id) => T::Handle(id),
         s::Type::Failure => T::Failure,
         s::Type::Byte => T::Byte,
         s::Type::Float => T::Float,
@@ -551,7 +568,7 @@ pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Wor
     }
 }
 
-fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
+pub(super) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word, ty: s::Type)
     -> Result<bool, String>
 {
     let mut pending = vec![(left, right, ty)];
@@ -565,6 +582,7 @@ fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, right: Word,
             _ if a == 0 || b == 0 => return Err("cannot compare unbound object fields".into()),
             s::Type::Str => runtime.heap.text(a) == runtime.heap.text(b),
             s::Type::Rat => runtime.rational(a) == runtime.rational(b),
+            s::Type::Handle(_) => return Err("cannot compare native handles".into()),
             s::Type::Bytes => runtime.heap.bytes(a) == runtime.heap.bytes(b),
             s::Type::Range => {
                 let x = runtime.heap.payload::<crate::ops::RangeValue>(a).expect("verified range");

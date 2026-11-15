@@ -90,9 +90,11 @@ fn array_loader_checks_transitive_element_graph_independently() {
         trace_layout: vec![], selection_layout: vec![],
     };
     p.objects = vec![
-        Object { name: "plain_lie".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], fields: vec![],
+        Object { name: "plain_lie".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
+            handle: false, fields: vec![],
             layout: layout(vec![Type::Object(1)], false) },
-        Object { name: "resource".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], fields: vec![],
+        Object { name: "resource".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
+            handle: false, fields: vec![],
             layout: layout(vec![], true) },
     ];
     p.functions[0].registers[1] = Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 });
@@ -139,7 +141,7 @@ fn scalar_outcome_extensions_reject_wrong_kinds_and_service_operands() {
 fn enum_case_checks_its_closed_catalog() {
     let mut p = fixture();
     p.objects.push(Object { name: "E".into(), fields: vec![], error_cases: vec!["E.one".into()], enum_cases: 0,
-        variant_cases: vec![],
+        variant_cases: vec![], handle: false,
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int], allocation_words: 2, identity_offset: None,
             has_destroy: false, may_reach_resource: false, may_async_destroy: false,

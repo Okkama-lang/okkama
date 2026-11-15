@@ -89,6 +89,8 @@ pub struct Object {
     pub enum_cases: u32,
     /// Case object descriptors of a plain (non-Error) variant, in case order; empty otherwise.
     pub variant_cases: Vec<u32>,
+    /// A native handle declaration: no fields, no storage and never constructed by a program.
+    pub handle: bool,
     pub name: String,
     pub fields: Vec<Field>,
     pub layout: ObjectRuntimeLayout,
@@ -121,6 +123,9 @@ pub enum Type {
     Successor(u32),
     /// A value of a plain variant declaration: a reference to one of its case objects (`Object::variant_cases`).
     Variant(u32),
+    /// A native handle (`native object`): a reference to the native registry's state, declared by
+    /// the handle object `Object::handle` with this index. It owns no Okkama obligation (P2.4 §4.7).
+    Handle(u32),
     Never,
     Descriptor,
 }
@@ -638,5 +643,7 @@ pub struct StaticSelection {
 mod load_tests;
 #[cfg(test)]
 mod arrays_tests;
+#[cfg(test)]
+mod natives_tests;
 #[cfg(test)]
 mod scalars_tests;

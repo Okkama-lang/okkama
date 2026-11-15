@@ -330,7 +330,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases; enum_cases, variant_cases,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle,
 } }
 
 record! { Assignment {
@@ -431,7 +431,7 @@ tagged! { Type {
     0 => Int, 1 => Bool, 2 => Byte, 3 => Float, 4 => Rat, 5 => Char,
     6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
-    23 => Array(shape: ArrayType), 24 => Variant(id: u32),
+    23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
 } }
 record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
