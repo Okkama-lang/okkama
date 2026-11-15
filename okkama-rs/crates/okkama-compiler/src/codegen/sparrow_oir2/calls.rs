@@ -96,9 +96,10 @@ struct Emitter<'a> {
     result: s::Function,
     synthetic: &'a roles::Synthetic,
     /// Finite action-value origins of this body, computed at its first `fn.call`.
-    origins: Option<BTreeMap<o::ValueId, Option<BTreeSet<o::FuncId>>>>,
-    /// `fn.closure`/`fn.bind` expansions: the pc of their allocation and the closure object register.
-    closures: Vec<(u32, u32)>,
+    origins: Option<BTreeMap<o::ValueId, Option<BTreeSet<usize>>>>,
+    /// Plain two-instruction expansions (`fn.closure`/`fn.bind`/`fn.bind.role` without a packet, `cap.make`
+    /// with one): the pc of the first instruction and the register it defines for the second.
+    expansions: Vec<(u32, u32)>,
 }
 
 impl Emitter<'_> {
@@ -378,13 +379,11 @@ impl Emitter<'_> {
             },
             _ => {
                 if self.origins.is_none() {
-                    self.origins = Some(roles::callable_origins(self.module, self.body)?);
+                    self.origins = Some(roles::callable_origins(self.module, self.body, self.synthetic)?);
                 }
                 match self.origins.as_ref().and_then(|origins| origins.get(&receiver.value)).cloned().flatten() {
-                    Some(functions) if !functions.is_empty() => functions.iter().map(|&function| {
-                        self.synthetic.closure_object(self.module, function)
-                            .ok_or_else(|| error("action value origin without closure layout"))
-                    }).collect::<Result<Vec<_>, _>>()?,
+                    Some(layouts) if !layouts.is_empty() => layouts.iter()
+                        .map(|&index| self.synthetic.closure_object(self.module, index)).collect(),
                     _ => implementations,
                 }
             }
@@ -442,19 +441,39 @@ impl Emitter<'_> {
         }
     }
 
-    /// `fn.closure`/`fn.bind`: allocate the closure layout with its captures, then view it as the `fn` role.
-    fn closure(&mut self, function: o::FuncId, captures: &[o::ValueId], result: o::ValueId)
-        -> Result<(), GenerateError>
-    {
-        let layout = self.synthetic.closure_object(self.module, function)
-            .ok_or_else(|| error("action value without closure layout"))?;
-        let inputs = captures.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+    /// `fn.closure`/`fn.bind`/`fn.bind.role`: allocate the closure layout with its captures, then view it as
+    /// the `fn` role. Own gives a closure no packet: a capture's obligation stays with its owner (P2.4 §4.1),
+    /// so the closure may reach only plain data. A resource-reaching closure object would need the commit
+    /// SPB 17 requires of every resource-reaching object (CREATION_UNCOMMITTED), and nothing owns its packet.
+    fn closure(&mut self, site: roles::ClosureSite, results: &[o::ValueId]) -> Result<(), GenerateError> {
+        if site.packet.is_some() {
+            return Err(unsupported("action value with a packet"));
+        }
+        let index = self.synthetic.closure_index(&site.layout).ok_or_else(|| error("action value without layout"))?;
+        let layout = self.synthetic.closure_object(self.module, index);
+        if self.objects[layout as usize].layout.may_reach_resource {
+            return Err(unsupported("action value referencing a resource without its packet"));
+        }
+        let inputs = site.values.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
         let object = fresh(&mut self.result, s::Type::Object(layout))?;
-        let value = self.reg(result)?;
-        self.closures.push((self.result.code.len() as u32, object));
+        let value = self.reg(*results.first().ok_or_else(|| error("action value without result"))?)?;
+        self.expansions.push((self.result.code.len() as u32, object));
         self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(object),
             immediate: s::Immediate::Object(layout) });
         self.result.code.push(data(s::DataOp::Move, vec![object], value, s::Immediate::None));
+        Ok(())
+    }
+
+    /// `cap.make` with a packet: the cap is its owner's reference and carries the owner's packet.
+    fn cap_with_packet(&mut self, owner: o::ValueId, packet: o::ValueId, results: &[o::ValueId])
+        -> Result<(), GenerateError>
+    {
+        let [value, moved] = results else { return Err(error("cap.make with a packet has two results")) };
+        let value = self.reg(*value)?;
+        self.expansions.push((self.result.code.len() as u32, value));
+        self.result.code.push(data(s::DataOp::Move, vec![self.reg(owner)?], value, s::Immediate::None));
+        self.result.code.push(s::Instruction::Champ { op: O::OwnMove, arguments: vec![A::Location(self.loc(packet)?)],
+            flow: s::Flow::Next(vec![self.loc(*moved)?]) });
         Ok(())
     }
 
@@ -646,6 +665,16 @@ impl Emitter<'_> {
     }
 }
 
+/// The SPB 17 instructions an OIR instruction expands to, when more than one: an action value (allocation and
+/// move) and a cap with a packet (move and packet move).
+pub(super) fn expansion(op: &o::Operation) -> u32 {
+    match op {
+        o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. } | o::CoreOp::FnBindRole { .. })
+            | o::Operation::Core(o::CoreOp::CapMake { packet: Some(_), .. }) => 2,
+        _ => 1,
+    }
+}
+
 /// The summary parameters (receiver first) whose graphs a call may retain: in result dependencies, result
 /// aliases or parameter retention. SPB keeps the conservative parameter inventory.
 fn retained_parameters(summary: &o::Summary) -> Result<BTreeSet<u32>, GenerateError> {
@@ -780,8 +809,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 o::Operation::Core(o::CoreOp::RangeLen { .. }) => 3,
                 // D8 registration is static CFG metadata, not a second runtime defer runner.
                 o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => 0,
-                // allocate the closure layout, then move it into the `fn` role.
-                o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }) => 2,
+                // allocate the closure layout, then move it into the `fn` role; move a cap and its packet.
+                op if expansion(op) > 1 => expansion(op),
                 // evaluate, then the function failure exit unless the block unwind receives the failure.
                 op if fallible_scalar(op) && block.unwind.is_none() => 2,
                 _ => 1,
@@ -818,7 +847,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     }
     let mut emitter = Emitter {
         module, function, body, objects, locations, pcs, summaries, scope: entry.lexical_scope, result,
-        synthetic, origins: None, closures: vec![],
+        synthetic, origins: None, expansions: vec![],
     };
     emitter.result.proofs.entry = Some(cleanup::entry_contract(module, function)?);
     emitter.result.params = entry.params.iter().map(|&value| emitter.loc(value)).collect::<Result<_, _>>()?;
@@ -937,12 +966,14 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                         flow: s::Flow::Next(inst.results.iter().map(|&v| emitter.loc(v))
                             .collect::<Result<_, _>>()?) }
                 }
-                o::Operation::Core(o::CoreOp::FnClosure { function, captures, packet: None, .. }) => {
-                    emitter.closure(*function, captures, inst.results[0])?;
+                o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }
+                    | o::CoreOp::FnBindRole { .. }) => {
+                    let site = roles::closure_site(body, &inst.op)?.expect("action value site");
+                    emitter.closure(site, &inst.results)?;
                     continue;
                 }
-                o::Operation::Core(o::CoreOp::FnBind { receiver, function, packet: None, .. }) => {
-                    emitter.closure(*function, &[*receiver], inst.results[0])?;
+                o::Operation::Core(o::CoreOp::CapMake { owner, packet: Some(packet), .. }) => {
+                    emitter.cap_with_packet(*owner, *packet, &inst.results)?;
                     continue;
                 }
                 o::Operation::Call(o::CallOp::Direct { function, call } | o::CallOp::Native { function, call }

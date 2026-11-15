@@ -266,10 +266,8 @@ impl Emitter<'_> {
                     match &self.body.insts.get(id)?.op {
                         o::Operation::Core(o::CoreOp::RangeLen { .. }) => (instructions[&id] + 2, true),
                         o::Operation::Lexical(o::LexicalOp::DeferRegister { .. }) => (instructions[&id], false),
-                        // The closure value exists after its allocation and move.
-                        o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }) => {
-                            (instructions[&id] + 1, true)
-                        }
+                        // An expanded value (an action value, a cap with a packet) exists after its last step.
+                        op if super::expansion(op) > 1 => (instructions[&id] + super::expansion(op) - 1, true),
                         // An evaluate has no post state: its result exists where the normal outcome lands.
                         op if super::fallible_scalar(op) => {
                             let raise = self.body.blocks.iter().any(|(_, block)| {
@@ -576,6 +574,7 @@ impl Emitter<'_> {
                 let instruction = self.body.insts.get(id)?;
                 let pc = instructions[&id];
                 states.insert(pc, active.clone());
+                let before = active.clone();
                 let uses = o::cfg::operation_uses(&instruction.op, self.body)
                     .map_err(|e| error(e.to_string()))?;
                 for operand in uses {
@@ -592,11 +591,9 @@ impl Emitter<'_> {
                     states.insert(pc + 1, active.clone());
                     states.insert(pc + 2, active.clone());
                 }
-                if matches!(instruction.op,
-                    o::Operation::Core(o::CoreOp::FnClosure { .. } | o::CoreOp::FnBind { .. }))
-                {
-                    // The allocation and the move consume no service.
-                    states.insert(pc + 1, active.clone());
+                if super::expansion(&instruction.op) == 2 {
+                    // Its first step consumes no service: the second sees the instruction's input state.
+                    states.insert(pc + 1, before);
                 }
                 if super::fallible_scalar(&instruction.op) {
                     // The evaluate consumes no service: its raise block and normal landing see the same state.
@@ -738,8 +735,8 @@ impl Emitter<'_> {
                 }
             }
         }
-        // A closure creation expands to allocate/move; the closure object is live between them.
-        for &(pc, object) in &self.closures {
+        // A two-step expansion defines a register its second step reads.
+        for &(pc, object) in &self.expansions {
             let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc)
                 .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
             roots.extend(states.get(&pc).cloned().unwrap_or_default());

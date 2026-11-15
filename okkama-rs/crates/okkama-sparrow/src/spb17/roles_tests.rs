@@ -478,6 +478,19 @@ fn a_role_successor_keeps_its_must_use_permission() {
 }
 
 #[test]
+fn an_object_successor_permission_is_spent_once_in_spb() {
+    // The duplicate take stays a loader error: codegen maps a second OIR succ.take to the first one's object.
+    let next = Instruction::Data { op: DataOp::ObjNext, inputs: vec![0], output: Some(1),
+        immediate: Immediate::Updates(vec![]) };
+    let takes = |count: u32| plain_main(vec![Type::Object(1), Type::Successor(1), Type::Object(1), Type::Object(1)],
+        [new(1, 0), next.clone()].into_iter().chain((0..count).map(|index| data(DataOp::Move, 1, 2 + index)))
+            .collect(), 0);
+    accept(&takes(1));
+    let failure = verify_load(&takes(2), &NoExternalContracts).unwrap_err();
+    assert!(failure.message.contains("successor permission already taken"), "{failure}");
+}
+
+#[test]
 fn role_values_compare_within_one_role() {
     let compare = |right| plain_main(vec![Type::Object(1), Type::Role(0), right, Type::Bool], vec![
         new(1, 0), data(DataOp::Move, 0, 1), data(DataOp::Move, 0, 2),

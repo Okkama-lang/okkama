@@ -298,8 +298,41 @@ fn s1_rejects_cleanup_defer_and_lost_or_duplicate_successor_permissions() {
     assert!(generate(&m, &layouts()).unwrap_err().0.contains("must-use"));
     append(&mut m, o::Operation::Core(o::CoreOp::SuccTake { value: successor, ty }), Some(object_type.clone()));
     assert!(generate(&m, &layouts()).is_ok());
+    // OIR-2 §8: a successor is used at least once and its value may be read again, so a second succ.take is
+    // legal OIR (ruling of 2026-11-15, #676). Codegen reads the first take's object instead of spending the
+    // permission twice; the loader still rejects a duplicate take inside SPB 17 (spb17::roles_tests).
     append(&mut m, o::Operation::Core(o::CoreOp::SuccTake { value: successor, ty }), Some(object_type));
-    assert!(generate(&m, &layouts()).unwrap_err().0.contains("already taken"));
+    assert!(generate(&m, &layouts()).is_ok());
+}
+
+/// The OIR of `read` with a successor of its receiver taken twice on one path.
+fn taken_twice() -> o::Module {
+    let mut m = parse(OBJECT);
+    let decl = o::DeclId::from_u32(0);
+    let object_type = o::Type::Object { decl, args: vec![] };
+    let ty = m_type(&m, object_type.clone());
+    let successor = append(&mut m, o::Operation::Core(o::CoreOp::ObjNext {
+        object: o::ValueId::from_u32(0), updates: vec![], packet: None,
+    }), Some(o::Type::Successor(ty))).unwrap();
+    for _ in 0..2 {
+        append(&mut m, o::Operation::Core(o::CoreOp::SuccTake { value: successor, ty }), Some(object_type.clone()));
+    }
+    m
+}
+
+#[test]
+fn a_successor_taken_twice_spends_one_permission_and_loads() {
+    let p = generate(&taken_twice(), &layouts()).unwrap();
+    let f = &p.functions[0];
+    let moves = f.code.iter().filter_map(|instruction| match instruction {
+        s::Instruction::Data { op: s::DataOp::Move, inputs, output: Some(output), .. } => Some((inputs[0], *output)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    let [(first, object), (second, _)] = moves.as_slice() else { panic!("two takes: {moves:?}") };
+    assert!(matches!(f.registers[*first as usize], s::Type::Successor(0)));
+    // The second take reads the object the first produced: one permission is spent.
+    assert_eq!(second, object);
+    s::verify_load(&p, &s::NoExternalContracts).unwrap();
 }
 
 #[test]

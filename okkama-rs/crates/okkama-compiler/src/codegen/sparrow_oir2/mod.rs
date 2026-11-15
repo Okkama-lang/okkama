@@ -107,8 +107,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     let mut trampolines = vec![];
     let mut summaries = std::mem::take(&mut p.tables.summaries);
     for (index, closure) in synthetic.closures.iter().enumerate() {
-        let layout = synthetic.closure_object(module, closure.function)
-            .ok_or_else(|| GenerateError("closure layout without descriptor".into()))?;
+        let layout = synthetic.closure_object(module, index);
         trampolines.push(roles::trampoline(&p, closure, layout, &mut summaries)?);
         debug_assert_eq!(roles::Synthetic::trampoline(module, index) as usize, p.functions.len() + index);
     }

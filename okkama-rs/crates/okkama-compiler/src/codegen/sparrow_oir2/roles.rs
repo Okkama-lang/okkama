@@ -10,12 +10,46 @@
 use super::*;
 use s::{Argument as A, Location as L};
 
-/// The object a `fn.closure` or `fn.bind` of `function` builds.
+/// What a closure layout's trampoline calls: a function with the captures first (`fn.closure`, `fn.bind`),
+/// or a role slot on the one captured receiver (`fn.bind.role`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClosureTarget {
+    Function(o::FuncId),
+    RoleSlot { role: o::DeclId, slot: u32 },
+}
+
+/// The object an action value of `target` is: its captures, viewed as the role of its `fn` type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClosureLayout {
-    pub function: o::FuncId,
+    pub target: ClosureTarget,
     pub callable: o::TypeId,
     pub captures: Vec<o::TypeId>,
+}
+
+/// An instruction that builds an action value: its layout, its capture values and its packet.
+pub(crate) struct ClosureSite {
+    pub layout: ClosureLayout,
+    pub values: Vec<o::ValueId>,
+    pub packet: Option<o::ValueId>,
+}
+
+/// The action value `op` builds, if it builds one.
+pub(crate) fn closure_site(body: &o::Body, op: &o::Operation) -> Result<Option<ClosureSite>, GenerateError> {
+    let (target, values, callable, packet) = match op {
+        o::Operation::Core(o::CoreOp::FnClosure { function, captures, ty, packet }) => {
+            (ClosureTarget::Function(*function), captures.clone(), *ty, *packet)
+        }
+        o::Operation::Core(o::CoreOp::FnBind { receiver, function, ty, packet }) => {
+            (ClosureTarget::Function(*function), vec![*receiver], *ty, *packet)
+        }
+        o::Operation::Core(o::CoreOp::FnBindRole { receiver, role, slot, ty, packet }) => {
+            (ClosureTarget::RoleSlot { role: *role, slot: *slot }, vec![*receiver], *ty, *packet)
+        }
+        _ => return Ok(None),
+    };
+    let captures = values.iter().map(|&value| Ok(body.values.get(value)?.ty))
+        .collect::<Result<Vec<_>, GenerateError>>()?;
+    Ok(Some(ClosureSite { layout: ClosureLayout { target, callable, captures }, values, packet }))
 }
 
 /// Descriptors and functions the backend adds after the module's own: the `fn` roles (in type order), the
@@ -53,41 +87,35 @@ pub(crate) fn callable_role(module: &o::Module, ty: o::TypeId) -> Result<u32, Ge
 impl Synthetic {
     pub fn of(module: &o::Module) -> Result<Self, GenerateError> {
         let callables = module.types.iter().filter(|(_, ty)| sync_fn(ty)).map(|(id, _)| id).collect();
-        let mut closures: Vec<ClosureLayout> = vec![];
+        let mut synthetic = Self { callables, closures: vec![] };
         for (_, function) in module.functions.iter() {
             let Some(body) = &function.body else { continue };
             for (_, instruction) in body.insts.iter() {
-                let (target, captures, callable) = match &instruction.op {
-                    o::Operation::Core(o::CoreOp::FnClosure { function, captures, ty, .. }) => {
-                        (*function, captures.clone(), *ty)
-                    }
-                    o::Operation::Core(o::CoreOp::FnBind { receiver, function, ty, .. }) => {
-                        (*function, vec![*receiver], *ty)
-                    }
-                    o::Operation::Core(o::CoreOp::FnBindRole { .. }) => {
-                        return Err(unsupported("bound role slot as an action value"));
-                    }
-                    _ => continue,
-                };
-                let captures = captures.iter().map(|&value| Ok(body.values.get(value)?.ty))
-                    .collect::<Result<Vec<_>, GenerateError>>()?;
-                let layout = ClosureLayout { function: target, callable, captures };
-                match closures.iter().find(|closure| closure.function == target) {
-                    Some(existing) if *existing != layout => {
+                let Some(site) = closure_site(body, &instruction.op)? else { continue };
+                // A target function has one capture layout; a bound role slot has one per receiver type.
+                let same = synthetic.closures.iter().find(|closure| closure.target == site.layout.target
+                    && (matches!(closure.target, ClosureTarget::Function(_))
+                        || closure.captures == site.layout.captures));
+                match same {
+                    Some(existing) if *existing != site.layout => {
                         return Err(GenerateError("action value target with two capture layouts".into()));
                     }
                     Some(_) => {}
-                    None => closures.push(layout),
+                    None => synthetic.closures.push(site.layout),
                 }
             }
         }
-        Ok(Self { callables, closures })
+        Ok(synthetic)
     }
 
-    /// The descriptor of the closure layout of `function`.
-    pub fn closure_object(&self, module: &o::Module, function: o::FuncId) -> Option<u32> {
-        let index = self.closures.iter().position(|closure| closure.function == function)?;
-        u32::try_from(module.declarations.len() + self.callables.len() + index).ok()
+    /// The index of `layout` among the closure layouts.
+    pub fn closure_index(&self, layout: &ClosureLayout) -> Option<usize> {
+        self.closures.iter().position(|closure| closure == layout)
+    }
+
+    /// The descriptor of closure layout `index`.
+    pub fn closure_object(&self, module: &o::Module, index: usize) -> u32 {
+        (module.declarations.len() + self.callables.len() + index) as u32
     }
 
     /// The trampoline of closure layout `index`, after the module's functions.
@@ -191,11 +219,18 @@ pub(crate) fn synthetic_objects(module: &o::Module, objects: &mut Vec<s::Object>
     for (index, closure) in synthetic.closures.iter().enumerate() {
         let storage_fields = closure.captures.iter().map(|&ty| translate_type(module, ty))
             .collect::<Result<Vec<_>, _>>()?;
-        if storage_fields.iter().any(|&ty| reaches(objects, ty)) {
-            return Err(unsupported("action value capturing a resource"));
-        }
-        let symbol = &module.functions.get(closure.function)?.symbol;
-        let mut object = placeholder(format!("{symbol}.closure"), None, vec![s::RoleImpl {
+        let name = match closure.target {
+            ClosureTarget::Function(function) => format!("{}.closure", module.functions.get(function)?.symbol),
+            ClosureTarget::RoleSlot { role, slot } => {
+                let declaration = module.declarations.get(role)?;
+                let o::DeclarationKind::Role { methods, .. } = &declaration.kind else {
+                    return Err(GenerateError("bound role slot of a non-role".into()));
+                };
+                let method = methods.get(slot as usize).ok_or_else(|| GenerateError("bound missing slot".into()))?;
+                format!("{}.{}#{index}.closure", declaration.name, method.name)
+            }
+        };
+        let mut object = placeholder(name, None, vec![s::RoleImpl {
             role: callable_role(module, closure.callable)?,
             slots: vec![Synthetic::trampoline(module, index)],
         }]);
@@ -205,10 +240,30 @@ pub(crate) fn synthetic_objects(module: &o::Module, objects: &mut Vec<s::Object>
         object.layout.allocation_words = (1 + storage_fields.len() as u32).max(2);
         object.layout.trace_layout = storage_fields.iter().enumerate()
             .filter_map(|(index, &ty)| traced(ty).then_some(index as u32)).collect();
+        // A captured resource is selected like a managed field: the closure reaches what it references.
+        object.layout.selection_layout = storage_fields.iter().enumerate()
+            .filter_map(|(index, &ty)| reaches(objects, ty).then_some(index as u32)).collect();
+        object.layout.may_reach_resource = !object.layout.selection_layout.is_empty();
         object.layout.storage_fields = storage_fields;
         objects.push(object);
     }
-    Ok(())
+    // A closure capturing an action value reaches what that value's closures reach, wherever they are listed.
+    let first = objects.len() - synthetic.closures.len();
+    loop {
+        let mut changed = false;
+        for index in first..objects.len() {
+            let selection = objects[index].layout.storage_fields.iter().enumerate()
+                .filter_map(|(field, &ty)| reaches(objects, ty).then_some(field as u32)).collect::<Vec<_>>();
+            if selection != objects[index].layout.selection_layout {
+                objects[index].layout.may_reach_resource = !selection.is_empty();
+                objects[index].layout.selection_layout = selection;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+    }
 }
 
 fn fresh_location(function: &mut s::Function, ty: s::ProducedType) -> L {
@@ -224,13 +279,23 @@ fn fresh_location(function: &mut s::Function, ty: s::ProducedType) -> L {
     }
 }
 
-/// The trampoline of a closure layout: reads the captures, calls the target with the captures first and
-/// the arguments after them, and returns its outcome. Its contract is the target's, with every capture
-/// position mapped to the environment (position 0) and the arguments shifted after it.
-pub(crate) fn trampoline(program: &s::Program, closure: &ClosureLayout, layout: u32,
-    summaries: &mut Vec<s::Summary>) -> Result<s::Function, GenerateError>
+/// The call a trampoline makes after reading its captures: its operation, its leading arguments (before
+/// the captures and arguments), its result types, its failures and its retained parameters in the
+/// trampoline's language positions (environment first).
+struct TrampolineCall {
+    op: s::Opcode,
+    leading: Vec<A>,
+    results: Vec<s::Type>,
+    failures: u32,
+    retained: Vec<u32>,
+}
+
+/// A `fn.closure`/`fn.bind` target: the captures are the target's leading parameters. Its contract is the
+/// target's, with every capture position mapped to the environment and the arguments shifted after it.
+fn function_call(program: &s::Program, function: o::FuncId, captures: usize, summaries: &mut Vec<s::Summary>)
+    -> Result<(TrampolineCall, Vec<s::Type>), GenerateError>
 {
-    let target = closure.function.as_u32();
+    let target = function.as_u32();
     let callee = program.functions.get(target as usize)
         .ok_or_else(|| GenerateError("closure target outside the program".into()))?;
     let contract = callee.proofs.entry.clone().ok_or_else(|| GenerateError("closure target without contract".into()))?;
@@ -241,20 +306,96 @@ pub(crate) fn trampoline(program: &s::Program, closure: &ClosureLayout, layout: 
         L::Register(id) => Some((index as u32, callee.registers[id as usize])),
         L::Service(_) => None,
     }).collect::<Vec<_>>();
-    let captures = closure.captures.len();
+    if language.len() < captures {
+        return Err(GenerateError("closure captures exceed the target's parameters".into()));
+    }
+    let retained = contract.retained_params.iter().map(|&param| {
+        let position = language.iter().position(|(index, _)| *index == param)
+            .ok_or_else(|| GenerateError("closure target retains a service".into()))?;
+        Ok(if position < captures { 0 } else { (position - captures + 1) as u32 })
+    }).collect::<Result<BTreeSet<_>, GenerateError>>()?.into_iter().collect();
+    let summary = summaries.len() as u32;
+    summaries.push(s::Summary { entry: target, may_fail: contract.failures != 0,
+        retained_params: contract.retained_params.clone() });
+    let call = TrampolineCall {
+        op: s::Opcode::InvokeCallOwn, leading: vec![A::Entry(target), A::Summary(summary), A::Flag(false)],
+        results: callee.results.clone(), failures: contract.failures, retained,
+    };
+    Ok((call, language.iter().map(|(_, ty)| *ty).collect()))
+}
+
+/// A `fn.bind.role` target: a dispatch of the slot on the captured receiver, over every implementation (the
+/// one object of a concrete receiver). Its contract joins theirs; the slot's positions are the trampoline's.
+fn role_call(program: &s::Program, role: o::DeclId, slot: u32, receiver: s::Type)
+    -> Result<(TrampolineCall, Vec<s::Type>), GenerateError>
+{
+    let role = role.as_u32();
+    let signature = program.objects.get(role as usize).and_then(|object| object.role.as_ref())
+        .and_then(|declaration| declaration.slots.get(slot as usize))
+        .ok_or_else(|| GenerateError("bound role slot outside the program".into()))?;
+    if signature.entry_abi != s::EntryAbi::Owned {
+        return Err(unsupported("bound plain role slot as an action value"));
+    }
+    let targets = match receiver {
+        s::Type::Object(object) => vec![object],
+        _ => program.objects.iter().enumerate()
+            .filter(|(_, object)| object.implements.iter().any(|table| table.role == role))
+            .map(|(id, _)| id as u32).collect(),
+    };
+    let mut failures = 0;
+    let mut retained = BTreeSet::new();
+    for &target in &targets {
+        let function = s::implementation(program, target, role, slot)
+            .and_then(|id| program.functions.get(id as usize))
+            .ok_or_else(|| GenerateError("bound role slot without implementation".into()))?;
+        let contract = function.proofs.entry.as_ref()
+            .ok_or_else(|| GenerateError("role implementation without contract".into()))?;
+        failures |= contract.failures;
+        let language = function.params.iter().enumerate()
+            .filter(|(_, location)| matches!(location, L::Register(_))).map(|(index, _)| index as u32)
+            .collect::<Vec<_>>();
+        for param in &contract.retained_params {
+            let position = language.iter().position(|index| index == param)
+                .ok_or_else(|| GenerateError("role implementation retains a service".into()))?;
+            retained.insert(position as u32);
+        }
+    }
+    let retained = retained.into_iter().collect::<Vec<_>>();
+    let dispatch = s::Dispatch { role, slot, failures, retained_params: retained.clone(), targets };
+    let call = TrampolineCall {
+        op: s::Opcode::InvokeDispatchOwn, leading: vec![A::Dispatch(dispatch), A::Flag(false)],
+        results: signature.results.clone(), failures, retained,
+    };
+    let mut language = vec![receiver];
+    language.extend(&signature.params);
+    Ok((call, language))
+}
+
+/// The trampoline of a closure layout: reads the captures, makes its target's call with the captures first
+/// and the arguments after them, and returns the outcome as it is.
+pub(crate) fn trampoline(program: &s::Program, closure: &ClosureLayout, layout: u32,
+    summaries: &mut Vec<s::Summary>) -> Result<s::Function, GenerateError>
+{
     let object = &program.objects[layout as usize];
-    if language.len() < captures || language[..captures].iter().map(|(_, ty)| *ty).ne(
-        object.layout.storage_fields.iter().copied())
-    {
+    let captures = object.layout.storage_fields.len();
+    let (call, language) = match closure.target {
+        ClosureTarget::Function(function) => function_call(program, function, captures, summaries)?,
+        ClosureTarget::RoleSlot { role, slot } => {
+            role_call(program, role, slot, *object.layout.storage_fields.first().ok_or_else(|| {
+                GenerateError("bound role slot without receiver".into())
+            })?)?
+        }
+    };
+    if language[..captures] != object.layout.storage_fields[..] {
         return Err(GenerateError("closure captures differ from the target's leading parameters".into()));
     }
     let mut f = s::Function {
         symbol: format!("{}.call", object.name), entry_abi: s::EntryAbi::Owned, registers: vec![], services: vec![],
-        params: vec![], results: callee.results.clone(), blocks: vec![], proofs: s::FunctionProofs::default(),
+        params: vec![], results: call.results.clone(), blocks: vec![], proofs: s::FunctionProofs::default(),
         code: vec![],
     };
     let environment = fresh_location(&mut f, s::ProducedType::Value(s::Type::Object(layout)));
-    let arguments = language[captures..].iter().map(|&(_, ty)| fresh_location(&mut f, s::ProducedType::Value(ty)))
+    let arguments = language[captures..].iter().map(|&ty| fresh_location(&mut f, s::ProducedType::Value(ty)))
         .collect::<Vec<_>>();
     let packet = fresh_location(&mut f, s::ProducedType::Service(s::ServiceKind::Packet));
     f.params = std::iter::once(environment).chain(arguments.iter().copied()).chain([packet]).collect();
@@ -268,12 +409,8 @@ pub(crate) fn trampoline(program: &s::Program, closure: &ClosureLayout, layout: 
         values.push(capture);
     }
     values.extend(&arguments);
-    let summary = summaries.len() as u32;
-    summaries.push(s::Summary { entry: target, may_fail: contract.failures != 0,
-        retained_params: contract.retained_params.clone() });
-    let call = f.code.len() as u32;
-    let normal = call + 1;
-    let unwind = call + 2;
+    let normal = f.code.len() as u32 + 1;
+    let unwind = normal + 1;
     let mut normal_params = vec![];
     let mut normal_assignments = vec![];
     for (slot, ty) in f.results.clone().into_iter().map(s::ProducedType::Value)
@@ -286,18 +423,17 @@ pub(crate) fn trampoline(program: &s::Program, closure: &ClosureLayout, layout: 
     let mut outcomes = vec![s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
         target_pc: normal, assignments: normal_assignments,
     } }];
-    let failure = (contract.failures != 0).then(|| fresh_location(&mut f, s::ProducedType::Value(s::Type::Failure)));
+    let failure = (call.failures != 0).then(|| fresh_location(&mut f, s::ProducedType::Value(s::Type::Failure)));
     if let Some(failure) = failure {
         outcomes.push(s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
             target_pc: unwind, assignments: vec![s::Assignment { destination: failure,
                 source: s::Source::ProducedSlot(0) }],
         } });
     }
-    let mut call_arguments = vec![A::Entry(target), A::Summary(summary), A::Flag(false)];
+    let mut call_arguments = call.leading;
     call_arguments.extend(values.iter().map(|&location| A::Location(location)));
     call_arguments.push(A::Location(packet));
-    f.code.push(s::Instruction::Champ { op: s::Opcode::InvokeCallOwn, arguments: call_arguments,
-        flow: s::Flow::Outcomes(outcomes) });
+    f.code.push(s::Instruction::Champ { op: call.op, arguments: call_arguments, flow: s::Flow::Outcomes(outcomes) });
     f.blocks.push(s::Block { pc: normal, params: normal_params.clone() });
     f.code.push(s::Instruction::Champ { op: s::Opcode::RetOwn,
         arguments: normal_params.into_iter().map(A::Location).collect(), flow: s::Flow::Next(vec![]) });
@@ -306,23 +442,19 @@ pub(crate) fn trampoline(program: &s::Program, closure: &ClosureLayout, layout: 
         f.blocks.push(s::Block { pc: unwind, params: vec![failure] });
         f.code.push(s::Instruction::Raise(id));
     }
-    let retained_params = contract.retained_params.iter().map(|&param| {
-        let position = language.iter().position(|(index, _)| *index == param)
-            .ok_or_else(|| GenerateError("closure target retains a service".into()))?;
-        Ok(if position < captures { 0 } else { (position - captures + 1) as u32 })
-    }).collect::<Result<BTreeSet<_>, GenerateError>>()?.into_iter().collect();
     f.proofs.entry = Some(s::EntryContract {
-        external: None, retained_params, fresh_singleton: false, failures: contract.failures, destroy: None,
+        external: None, retained_params: call.retained, fresh_singleton: false, failures: call.failures,
+        destroy: None,
     });
     f.proofs.states = s::service_states(&f)?;
     Ok(f)
 }
 
-/// Finite origins of an action value: the closure targets it can hold, or `None` when it is open.
+/// Finite origins of an action value: the closure layouts it can hold, or `None` when it is open.
 /// Mirrors own's origins: closures and bound actions, through retags and block parameters. Entry
 /// parameters, produced edge results and every other definition are open.
-pub(crate) fn callable_origins(module: &o::Module, body: &o::Body)
-    -> Result<BTreeMap<o::ValueId, Option<BTreeSet<o::FuncId>>>, GenerateError>
+pub(crate) fn callable_origins(module: &o::Module, body: &o::Body, synthetic: &Synthetic)
+    -> Result<BTreeMap<o::ValueId, Option<BTreeSet<usize>>>, GenerateError>
 {
     let mut origins = BTreeMap::new();
     for (value, data) in body.values.iter() {
@@ -332,13 +464,14 @@ pub(crate) fn callable_origins(module: &o::Module, body: &o::Body)
         let origin = match data.def {
             o::Definition::BlockParam { block, .. } if block == body.entry => None,
             o::Definition::BlockParam { .. } => Some(BTreeSet::new()),
-            o::Definition::InstResult { inst, .. } => match &body.insts.get(inst)?.op {
-                o::Operation::Core(o::CoreOp::FnClosure { function, .. } | o::CoreOp::FnBind { function, .. }) => {
-                    Some(BTreeSet::from([*function]))
+            o::Definition::InstResult { inst, .. } => {
+                let op = &body.insts.get(inst)?.op;
+                match closure_site(body, op)? {
+                    Some(site) => synthetic.closure_index(&site.layout).map(|index| BTreeSet::from([index])),
+                    None if matches!(op, o::Operation::Core(o::CoreOp::Retag { .. })) => Some(BTreeSet::new()),
+                    None => None,
                 }
-                o::Operation::Core(o::CoreOp::Retag { .. }) => Some(BTreeSet::new()),
-                _ => None,
-            },
+            }
         };
         origins.insert(value, origin);
     }

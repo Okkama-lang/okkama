@@ -300,3 +300,87 @@ main() is int {
     // checked one permission per path.
     assert!(takes >= 1);
 }
+
+#[test]
+fn a_successor_used_twice_in_source_takes_its_permission_once() {
+    let p = compile("module app v1.0.0;
+object Cell {
+    has v is int;
+    Cell(:v);
+    bumped() is ^Cell { ^v = v + 1; }
+    value() is int { v; }
+}
+main() is int {
+    let c = Cell(v: 1).bumped();
+    c.value() + c.value() - 4;
+}");
+    let main = &p.functions[function(&p, "main")];
+    let takes = main.code.iter().filter(|instruction| matches!(instruction,
+        s::Instruction::Data { op: s::DataOp::Move, inputs, .. }
+            if matches!(main.registers[inputs[0] as usize], s::Type::Successor(_)))).count();
+    assert_eq!(takes, 1);
+}
+
+const BOUND_AND_CAPS: &str = "module app v1.0.0;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { }
+}
+object Meter {
+    has res is Res;
+    Meter(:res);
+    cap Reading {
+        value is int { res.label().length(); }
+    }
+}
+role Named {
+    name() is int;
+}
+object A does Named {
+    has n is int;
+    A(:n);
+    name() is int { n; }
+}
+object B does Named {
+    B();
+    name() is int { 5; }
+}
+main() is int {
+    let a is Named = A(n: 2);
+    let g is () is int = a.name;
+    let m = Meter(res: Res(name: \"xy\"));
+    let view = m::Reading;
+    g() + view::value - 4;
+}";
+
+#[test]
+fn a_bound_role_action_dispatches_from_its_closure() {
+    let p = compile(BOUND_AND_CAPS);
+    let (named, a, b) = (object(&p, "app.Named"), object(&p, "app.A"), object(&p, "app.B"));
+    let (layout, closure) = p.objects.iter().enumerate()
+        .find(|(_, object)| object.name.starts_with("app.Named.name#")).unwrap();
+    assert_eq!(closure.layout.storage_fields, vec![s::Type::Role(named)]);
+    let trampoline = &p.functions[closure.implements[0].slots[0] as usize];
+    assert!(matches!(trampoline.code[0], s::Instruction::Data { op: s::DataOp::ObjGet, .. }));
+    let calls = dispatches(trampoline);
+    assert_eq!(calls.len(), 1);
+    assert_eq!((calls[0].1.role, calls[0].1.slot, calls[0].1.targets.clone()), (named, 0, vec![a, b]));
+    // The action call itself lists the one layout it can hold.
+    let main = dispatches(&p.functions[function(&p, "main")]);
+    assert!(main.iter().any(|(_, dispatch)| dispatch.targets == [layout as u32]));
+}
+
+#[test]
+fn a_cap_of_a_fresh_owner_carries_its_packet() {
+    let p = compile(BOUND_AND_CAPS);
+    let meter = object(&p, "app.Meter");
+    let main = &p.functions[function(&p, "main")];
+    let moved = main.code.windows(2).any(|pair| matches!(pair,
+        [s::Instruction::Data { op: s::DataOp::Move, inputs, output: Some(output), .. },
+            s::Instruction::Champ { op: s::Opcode::OwnMove, .. }]
+            if main.registers[inputs[0] as usize] == s::Type::Object(meter)
+                && main.registers[*output as usize] == s::Type::Object(meter)));
+    assert!(moved);
+}

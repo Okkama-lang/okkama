@@ -158,6 +158,17 @@ fn check_through_low(id: &str) {
     }
 }
 
+/// A single-file program of this test, run in Champ: its exit status and stdout.
+fn run_source(text: &str) -> Observed {
+    let source = SourceFile::new("app.ok", text).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [RootFile { source: &source, program: &program }];
+    let stdlib = std::fs::canonicalize(root().join("std")).unwrap();
+    let bytes = oir2::compile_linked_with(&roots, &mut CaseLoader { stdlib },
+        okkama_compiler::oir2::VerifyMode::Structural).unwrap_or_else(|error| panic!("build: {error}"));
+    run("app.ok", bytes)
+}
+
 macro_rules! case {
     ($name:ident, $id:literal) => {
         #[test]
@@ -205,6 +216,8 @@ case!(caps_recompute_every_read, "L04.caps.recompute-every-read");
 case!(caps_file_identity_path_aliases, "L06.file-identity.path-aliases");
 // Hidden state views behind roles.
 case!(roles_hidden_state_views, "L06.hidden.state-views");
+// Role successors, and a successor taken twice on one path (OIR-2 §8: used at least once, read again).
+case!(successors_generic_successor_specialization, "L12.generic-successor-specialization");
 
 // Streams and sources: core.StringSource and io.stream.ByteSource stop on `str.utf8` (S1), builders,
 // `array.concat` or multi-case Error variants.
@@ -240,6 +253,59 @@ through_low!(once_collections_frequencies, "L09.collections.frequencies");
 through_low!(once_collections_heap_and_deque, "L09.collections.heap-and-deque");
 // Construction completion state.
 through_low!(construction_escaped_self_role_call, "L04.invariant.escaped-self-role-call");
-// A successor (`concrete`, an object successor) taken twice on one path: §8 allows repeated succ.take, the
-// backend still rejects the second take as a spent permission.
-through_low!(successors_generic_successor_specialization, "L12.generic-successor-specialization");
+
+/// A bound role action is a closure over its receiver: each call dispatches the slot on that receiver.
+#[test]
+fn bound_role_action_calls_the_receivers_implementation() {
+    let observed = run_source("module app v1.0.0;
+import \"io/stdout\" take Stdout;
+role Named {
+    name() is string;
+}
+object A does Named {
+    A();
+    name() is string { \"a\"; }
+}
+object B does Named {
+    B();
+    name() is string { \"b\"; }
+}
+main() is int {
+    let out = Stdout();
+    let first is Named = A();
+    let second is Named = B();
+    let left is () is string = first.name;
+    let right is () is string = second.name;
+    out.writeln(left() + right() + left());
+    0;
+}");
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "aba\n".into() });
+}
+
+/// A cap of a fresh owner carries the owner's packet; every read still recomputes the field.
+#[test]
+fn cap_of_a_fresh_resource_owner_reads_it() {
+    let observed = run_source("module app v1.0.0;
+import \"io/stdout\" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln(\"destroy \" + name); }
+}
+object Meter {
+    has res is Res;
+    Meter(:res);
+    cap Reading {
+        value is string { res.label() + \"!\"; }
+    }
+}
+main() is int {
+    let out = Stdout();
+    let view = Meter(res: Res(name: \"r\"))::Reading;
+    out.writeln(view::value);
+    out.writeln(view::value);
+    0;
+}");
+    assert_eq!(observed, Observed { exit: Some(0), stdout: "r!\nr!\ndestroy r\n".into() });
+}
