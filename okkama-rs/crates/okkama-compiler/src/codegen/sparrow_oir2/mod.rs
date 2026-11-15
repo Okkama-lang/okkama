@@ -411,6 +411,91 @@ pub(crate) fn numeric_type(ty: o::NumericType) -> Option<s::Type> {
     }
 }
 
+/// The SPB 17 operation of an OIR-2 int, byte, float, rat or str operation of the scalar families
+/// (wire codes 14..=18) and its operands in order. Both IRs give these operations the same operand and
+/// result types; `int.div` and `rat.new` stay `RatNew`.
+pub(crate) fn family_operation(core: &o::CoreOp) -> Option<(s::DataOp, Vec<o::ValueId>)> {
+    use o::CoreOp as C;
+    use s::DataOp as D;
+    Some(match *core {
+        C::IntAnd { left, right } => (D::IntAnd, vec![left, right]),
+        C::IntOr { left, right } => (D::IntOr, vec![left, right]),
+        C::IntXor { left, right } => (D::IntXor, vec![left, right]),
+        C::IntShl { left, right } => (D::IntShl, vec![left, right]),
+        C::IntShr { left, right } => (D::IntShr, vec![left, right]),
+        C::IntUshr { left, right } => (D::IntUshr, vec![left, right]),
+        C::IntNot { value } => (D::IntNot, vec![value]),
+        C::IntAbs { value } => (D::IntAbs, vec![value]),
+        C::IntSign { value } => (D::IntSign, vec![value]),
+        C::IntBitCount { value } => (D::IntBitCount, vec![value]),
+        C::IntLeadingZeros { value } => (D::IntLeadingZeros, vec![value]),
+        C::IntTrailingZeros { value } => (D::IntTrailingZeros, vec![value]),
+        C::IntReverseBits { value } => (D::IntReverseBits, vec![value]),
+        C::IntSwapBytes { value } => (D::IntSwapBytes, vec![value]),
+        C::IntRotateLeft { value, count } => (D::IntRotl, vec![value, count]),
+        C::IntRotateRight { value, count } => (D::IntRotr, vec![value, count]),
+        C::ByteAnd { left, right } => (D::ByteAnd, vec![left, right]),
+        C::ByteOr { left, right } => (D::ByteOr, vec![left, right]),
+        C::ByteXor { left, right } => (D::ByteXor, vec![left, right]),
+        C::ByteShl { left, right } => (D::ByteShl, vec![left, right]),
+        C::ByteShr { left, right } => (D::ByteShr, vec![left, right]),
+        C::ByteUshr { left, right } => (D::ByteUshr, vec![left, right]),
+        C::ByteNot { value } => (D::ByteNot, vec![value]),
+        C::ByteBitCount { value } => (D::ByteBitCount, vec![value]),
+        C::ByteLeadingZeros { value } => (D::ByteLeadingZeros, vec![value]),
+        C::ByteTrailingZeros { value } => (D::ByteTrailingZeros, vec![value]),
+        C::ByteReverseBits { value } => (D::ByteReverseBits, vec![value]),
+        C::ByteSwapBytes { value } => (D::ByteSwapBytes, vec![value]),
+        C::ByteRotateLeft { value, count } => (D::ByteRotl, vec![value, count]),
+        C::ByteRotateRight { value, count } => (D::ByteRotr, vec![value, count]),
+        C::FloatAdd { left, right } => (D::FloatAdd, vec![left, right]),
+        C::FloatSub { left, right } => (D::FloatSub, vec![left, right]),
+        C::FloatMul { left, right } => (D::FloatMul, vec![left, right]),
+        C::FloatDiv { left, right } => (D::FloatDiv, vec![left, right]),
+        C::FloatMod { left, right } => (D::FloatMod, vec![left, right]),
+        C::FloatPow { left, right } => (D::FloatPow, vec![left, right]),
+        C::FloatNeg { value } => (D::FloatNeg, vec![value]),
+        C::FloatAbs { value } => (D::FloatAbs, vec![value]),
+        C::FloatSign { value } => (D::FloatSign, vec![value]),
+        C::FloatSqrt { value } => (D::FloatSqrt, vec![value]),
+        C::RatAdd { left, right } => (D::RatAdd, vec![left, right]),
+        C::RatSub { left, right } => (D::RatSub, vec![left, right]),
+        C::RatMul { left, right } => (D::RatMul, vec![left, right]),
+        C::RatDiv { left, right } => (D::RatDiv, vec![left, right]),
+        C::RatMod { left, right } => (D::RatMod, vec![left, right]),
+        C::RatNeg { value } => (D::RatNeg, vec![value]),
+        C::RatAbs { value } => (D::RatAbs, vec![value]),
+        C::RatSign { value } => (D::RatSign, vec![value]),
+        C::RatNumerator { value } => (D::RatNumerator, vec![value]),
+        C::RatDenominator { value } => (D::RatDenominator, vec![value]),
+        C::StrSlice { value, start, end } => (D::StrSlice, vec![value, start, end]),
+        C::StrSplit { value, separator } => (D::StrSplit, vec![value, separator]),
+        C::StrReplace { value, target, replacement } => (D::StrReplace, vec![value, target, replacement]),
+        C::StrReplaceFirst { value, target, replacement } => {
+            (D::StrReplaceFirst, vec![value, target, replacement])
+        }
+        C::StrRepeat { value, count } => (D::StrRepeat, vec![value, count]),
+        C::StrTrim { value } => (D::StrTrim, vec![value]),
+        C::StrChomp { value } => (D::StrChomp, vec![value]),
+        C::StrTrimStart { value } => (D::StrTrimStart, vec![value]),
+        C::StrTrimEnd { value } => (D::StrTrimEnd, vec![value]),
+        C::StrLower { value } => (D::StrLower, vec![value]),
+        C::StrUpper { value } => (D::StrUpper, vec![value]),
+        C::StrFind { value, part } => (D::StrFind, vec![value, part]),
+        C::StrFindLast { value, part } => (D::StrFindLast, vec![value, part]),
+        C::StrStartsWith { value, part } => (D::StrStartsWith, vec![value, part]),
+        C::StrEndsWith { value, part } => (D::StrEndsWith, vec![value, part]),
+        C::StrUtf8 { value } => (D::StrUtf8, vec![value]),
+        _ => return None,
+    })
+}
+
+/// A scalar family operation that OIR-2 lets trap but that cannot fail in SPB 17 or in Tomato
+/// (`byte.and`, `float.neg`, …): it has no failure to deliver to an unwind continuation.
+pub(crate) fn total_family_operation(op: &o::Operation) -> bool {
+    matches!(op, o::Operation::Core(core) if family_operation(core).is_some_and(|(op, _)| !op.fallible(&[], None)))
+}
+
 fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError> {
     Ok(match literal {
         o::Literal::Int(value) => s::Constant::Int(value.clone()),
@@ -419,7 +504,11 @@ fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError
         o::Literal::Byte(value) => s::Constant::Byte(u32::from(*value)),
         o::Literal::Char(value) => s::Constant::Char(u32::from(*value)),
         o::Literal::Float(bits) => s::Constant::Float(bits.to_string()),
-        _ => return Err(unsupported("constant outside int/bool/byte/char/float/string")),
+        // OIR-2 keeps a rat literal in lowest terms with a positive denominator, as CONST_RAT requires.
+        o::Literal::Rat { numerator, denominator } => s::Constant::Rat(s::RatValue {
+            numerator: numerator.clone(), denominator: denominator.clone(),
+        }),
+        _ => return Err(unsupported("constant outside int/bool/byte/char/float/rat/string")),
     })
 }
 
@@ -642,7 +731,15 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             .ok_or_else(|| GenerateError("invalid source field index".into()))
     };
     let mut immediate = s::Immediate::None;
+    let family = match &inst.op {
+        o::Operation::Core(core) => family_operation(core),
+        _ => None,
+    };
     let (op, inputs): (D, Vec<u32>) = match &inst.op {
+        _ if family.is_some() => {
+            let (op, inputs) = family.expect("scalar family operation");
+            (op, inputs.into_iter().map(reg).collect())
+        }
         o::Operation::Const(value) => {
             immediate = s::Immediate::Constant(translate_constant(value)?);
             (D::Const, vec![])

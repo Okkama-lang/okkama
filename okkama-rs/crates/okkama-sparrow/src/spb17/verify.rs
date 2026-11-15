@@ -192,14 +192,95 @@ pub(crate) fn loc_type(f: &Function, location: Location) -> Result<ProducedType,
     }
 }
 
+/// A decimal integer without a plus sign, leading zeros or a negative zero.
+fn canonical_integer(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0')) && text != "-0"
+}
+
+/// Work bound of the coprimality check of one rational constant, in digit steps.
+const RAT_GCD_STEPS: usize = 1 << 22;
+
+/// Whether two canonical non-negative decimals are coprime, by binary GCD on their digits.
+/// `None` when the check would exceed `RAT_GCD_STEPS`.
+fn coprime_decimals(left: &str, right: &str) -> Option<bool> {
+    let mut steps = 0usize;
+    let mut step = |cost: usize| {
+        steps = steps.saturating_add(cost.max(1));
+        steps <= RAT_GCD_STEPS
+    };
+    let mut left: Vec<u8> = left.bytes().map(|digit| digit - b'0').collect();
+    let mut right: Vec<u8> = right.bytes().map(|digit| digit - b'0').collect();
+    let even = |number: &Vec<u8>| number.last().is_some_and(|digit| digit % 2 == 0);
+    if left == [0] || right == [0] {
+        return Some(left == [1] || right == [1]);
+    }
+    if even(&left) && even(&right) {
+        return Some(false);
+    }
+    loop {
+        for number in [&mut left, &mut right] {
+            while even(number) {
+                if !step(number.len()) {
+                    return None;
+                }
+                let mut carry = 0;
+                for digit in number.iter_mut() {
+                    let next = carry * 10 + *digit;
+                    *digit = next / 2;
+                    carry = next % 2;
+                }
+                trim_decimal(number);
+            }
+        }
+        if !step(left.len() + right.len()) {
+            return None;
+        }
+        let order = left.len().cmp(&right.len()).then_with(|| left.cmp(&right));
+        if order == std::cmp::Ordering::Equal {
+            return Some(left == [1]);
+        }
+        let (larger, smaller) = if order == std::cmp::Ordering::Greater {
+            (&mut left, &right)
+        } else {
+            (&mut right, &left)
+        };
+        let mut borrow = 0i16;
+        for (index, digit) in larger.iter_mut().rev().enumerate() {
+            let other = smaller.len().checked_sub(index + 1).map_or(0, |index| smaller[index]);
+            let next = i16::from(*digit) - i16::from(other) - borrow;
+            borrow = i16::from(next < 0);
+            *digit = (next + borrow * 10) as u8;
+        }
+        trim_decimal(larger);
+    }
+}
+
+fn trim_decimal(number: &mut Vec<u8>) {
+    match number.iter().position(|&digit| digit != 0) {
+        Some(first) => {
+            number.drain(..first);
+        }
+        None => *number = vec![0],
+    }
+}
+
 fn constant_type(value: &Constant) -> Result<Type, Error> {
     match value {
         Constant::Int(text) => {
-            let digits = text.strip_prefix('-').unwrap_or(text);
-            require(!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()), "invalid integer")?;
-            require(digits == "0" || !digits.starts_with('0'), "non-canonical integer")?;
-            require(text != "-0", "non-canonical integer")?;
+            require(canonical_integer(text), "non-canonical integer")?;
             Ok(Type::Int)
+        }
+        Constant::Rat(RatValue { numerator, denominator }) => {
+            let terms = canonical_integer(numerator) && canonical_integer(denominator)
+                && !denominator.starts_with('-') && denominator != "0";
+            enforce(terms, "CONST_RAT", "rat constant needs canonical integers and a positive denominator")?;
+            let magnitude = numerator.strip_prefix('-').unwrap_or(numerator);
+            let lowest = coprime_decimals(magnitude, denominator)
+                .ok_or_else(|| violation("LOAD_WORK_BUDGET", "rat constant exceeds the load work budget"))?;
+            enforce(lowest, "CONST_RAT", "rat constant is not in lowest terms")?;
+            Ok(Type::Rat)
         }
         Constant::Bool(_) => Ok(Type::Bool),
         Constant::Descriptor(_) => Ok(Type::Descriptor),
@@ -864,6 +945,10 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
     if immediate_none {
         require(*imm == Immediate::None, "unexpected scalar immediate")?;
     }
+    if let Some((operands, result)) = op.scalar_signature() {
+        return enforce(types == operands && out == Some(result), "SCALAR_OP_TYPE",
+            "operand or result types differ from the scalar operation's signature");
+    }
     match op {
         EnumCase => {
             let Immediate::Updates(indices) = imm else {
@@ -1031,6 +1116,7 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
                 }
             }
         }
+        _ => unreachable!("scalar family operations are checked by their signature"),
     }
 }
 

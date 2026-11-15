@@ -121,19 +121,32 @@ fn oir2_scalar_builtins_golden() {
 
 #[test]
 fn oir2_unsupported_source_constructs_are_diagnostics() {
-    for (body, expected) in [
-        ("let c = char(65); 0;", "char conversion"),
-        ("byte(8) >>> 1; 0;", "byte >>>"),
-    ] {
-        let source = format!("module app; main() is int {{ {body} }}");
-        let error = print_oir2(&source).expect_err("unsupported program must stop");
-        let LowerError::Unsupported { message, span } = error else {
-            panic!("wrong diagnostic: {error}");
-        };
-        assert!(message.contains("unsupported in OIR-2 lowering"), "{message}");
-        assert!(message.contains(expected), "{message}");
-        assert!(!span.is_empty());
-    }
+    // A construct OIR-2 cannot express yet (char conversions, #679) stops with a located diagnostic.
+    let source = "module app; main() is int { let c = char(65); 0; }";
+    let error = print_oir2(source).expect_err("unsupported program must stop");
+    let LowerError::Unsupported { message, span } = error else {
+        panic!("wrong diagnostic: {error}");
+    };
+    assert!(message.contains("unsupported in OIR-2 lowering"), "{message}");
+    assert!(message.contains("char conversion"), "{message}");
+    assert!(!span.is_empty());
+}
+
+/// A value coerced to `any` is boxed with its static type (`any.box`); High verifies it.
+#[test]
+fn oir2_any_coercion_boxes_the_value() {
+    let text = print_oir2("module app; main() is int { let i is any = 8; 0; }").unwrap();
+    assert!(text.contains("= any.box %0"), "{text}");
+    assert!(text.contains(": any = any.box"), "{text}");
+}
+
+/// `byte >>> int` counts in int, as Tomato does: it is byte.shr, never a narrowed byte.ushr count.
+#[test]
+fn oir2_byte_unsigned_shift_counts_in_int() {
+    let text = print_oir2("module app; main() is int { let b = byte(200) >>> 3; b.int(); }").unwrap();
+    assert!(text.contains("byte.shr %1, %2"), "{text}");
+    assert!(!text.contains("byte.ushr"), "{text}");
+    assert_eq!(text.matches("to byte").count(), 1, "only the operand is narrowed: {text}");
 }
 
 #[test]

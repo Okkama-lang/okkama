@@ -654,6 +654,7 @@ impl Declarations {
             T::Float => ir::Type::Float,
             T::Rat => ir::Type::Rat,
             T::Char => ir::Type::Char,
+            T::Any => ir::Type::Any,
             T::Array(element) | T::Varargs(element) => {
                 self.collection_type(element, span)?;
                 ir::Type::Array(self.ty(element, span)?)

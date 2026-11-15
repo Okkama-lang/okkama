@@ -181,6 +181,9 @@ helpers! {
     champ_machine_convert = crate::champ::machine::rt_machine_convert as (ctx,
         from: Word, to: Word, value: Word) -> u64; [Allocates, Collects, Fails, Stops];
     #[cfg(feature = "champ-abi")]
+    champ_machine_scalar = crate::champ::machine::rt_machine_scalar as (ctx,
+        op: Word, first: Word, second: Word, third: Word) -> u64; [Allocates, Collects, Fails, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_machine_rat_order = crate::champ::machine::rt_machine_rat_order as (ctx,
         left: Word, right: Word) -> i64; [];
     #[cfg(feature = "champ-abi")]

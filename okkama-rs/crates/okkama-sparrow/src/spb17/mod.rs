@@ -378,6 +378,14 @@ pub enum Constant {
     Char(u32),
     /// The IEEE-754 binary64 bit pattern as a decimal u64.
     Float(String),
+    /// An exact rational in lowest terms with a positive denominator.
+    Rat(RatValue),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RatValue {
+    pub numerator: String,
+    pub denominator: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -551,6 +559,155 @@ pub enum DataOp {
     TestIs,
     TestIsnt,
     TestFail,
+    // int.ext (wire 14): exact int operations beyond add/sub/mul/mod/neg. Bit operations and shifts take
+    // a signed 64-bit operand and fail outside it; shift and rotation counts fail outside 0..63.
+    IntAnd,
+    IntOr,
+    IntXor,
+    IntShl,
+    IntShr,
+    IntUshr,
+    IntNot,
+    IntAbs,
+    IntSign,
+    IntBitCount,
+    IntLeadingZeros,
+    IntTrailingZeros,
+    IntReverseBits,
+    IntSwapBytes,
+    IntRotl,
+    IntRotr,
+    // byte.ext (wire 15). Shift and rotation counts fail outside 0..7; byte.ushr counts in byte.
+    ByteAnd,
+    ByteOr,
+    ByteXor,
+    ByteShl,
+    ByteShr,
+    ByteUshr,
+    ByteNot,
+    ByteBitCount,
+    ByteLeadingZeros,
+    ByteTrailingZeros,
+    ByteReverseBits,
+    ByteSwapBytes,
+    ByteRotl,
+    ByteRotr,
+    // float.ext (wire 16). A result that is not finite fails, as do a zero divisor and a negative sqrt.
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatMod,
+    FloatPow,
+    FloatNeg,
+    FloatAbs,
+    FloatSign,
+    FloatSqrt,
+    // rat.ext (wire 17): exact rationals; a zero divisor fails. Numerator and denominator are decimal text.
+    RatAdd,
+    RatSub,
+    RatMul,
+    RatDiv,
+    RatMod,
+    RatNeg,
+    RatAbs,
+    RatSign,
+    RatNumerator,
+    RatDenominator,
+    // str.ext (wire 18). Slice bounds and a negative repeat count fail.
+    StrSlice,
+    StrSplit,
+    StrReplace,
+    StrReplaceFirst,
+    StrRepeat,
+    StrTrim,
+    StrChomp,
+    StrTrimStart,
+    StrTrimEnd,
+    StrLower,
+    StrUpper,
+    StrFind,
+    StrFindLast,
+    StrStartsWith,
+    StrEndsWith,
+    StrUtf8,
+}
+
+/// The int, byte, float, rat and str families of wire codes 14..=18, in sub-code order. A family's
+/// position in its list is its sub-code; the list never reorders and only grows at its end.
+pub(crate) const SCALAR_FAMILIES: [(u8, &str, &[DataOp]); 5] = {
+    use DataOp::*;
+    [
+        (14, "int.ext", &[IntAnd, IntOr, IntXor, IntShl, IntShr, IntUshr, IntNot, IntAbs, IntSign, IntBitCount,
+            IntLeadingZeros, IntTrailingZeros, IntReverseBits, IntSwapBytes, IntRotl, IntRotr]),
+        (15, "byte.ext", &[ByteAnd, ByteOr, ByteXor, ByteShl, ByteShr, ByteUshr, ByteNot, ByteBitCount,
+            ByteLeadingZeros, ByteTrailingZeros, ByteReverseBits, ByteSwapBytes, ByteRotl, ByteRotr]),
+        (16, "float.ext", &[FloatAdd, FloatSub, FloatMul, FloatDiv, FloatMod, FloatPow, FloatNeg, FloatAbs,
+            FloatSign, FloatSqrt]),
+        (17, "rat.ext", &[RatAdd, RatSub, RatMul, RatDiv, RatMod, RatNeg, RatAbs, RatSign, RatNumerator,
+            RatDenominator]),
+        (18, "str.ext", &[StrSlice, StrSplit, StrReplace, StrReplaceFirst, StrRepeat, StrTrim, StrChomp,
+            StrTrimStart, StrTrimEnd, StrLower, StrUpper, StrFind, StrFindLast, StrStartsWith, StrEndsWith,
+            StrUtf8]),
+    ]
+};
+
+impl DataOp {
+    /// The wire code and sub-code of an operation of the scalar families (wire codes 14..=18).
+    pub(crate) fn family(self) -> Option<(u8, u32)> {
+        SCALAR_FAMILIES.iter().find_map(|(code, _, ops)| {
+            ops.iter().position(|op| *op == self).map(|sub| (*code, sub as u32))
+        })
+    }
+
+    /// The operation of a scalar family code and sub-code.
+    pub(crate) fn of_family(code: u8, sub: u32) -> Option<Self> {
+        let (_, _, ops) = SCALAR_FAMILIES.iter().find(|(family, _, _)| *family == code)?;
+        ops.get(sub as usize).copied()
+    }
+
+    /// A stable number for a scalar family operation (wire code × 256 + sub-code), which a runtime helper
+    /// receives instead of the operation; `from_scalar_code` inverts it.
+    pub fn scalar_code(self) -> Option<u64> {
+        self.family().map(|(code, sub)| u64::from(code) * 256 + u64::from(sub))
+    }
+
+    pub fn from_scalar_code(code: u64) -> Option<Self> {
+        let family = u8::try_from(code / 256).ok()?;
+        Self::of_family(family, (code % 256) as u32)
+    }
+
+    /// Operand and result types of a scalar family operation (wire codes 14..=18).
+    pub fn scalar_signature(self) -> Option<(&'static [Type], Type)> {
+        use DataOp::*;
+        use Type::{Bool, Byte, Bytes, Float, Int, Rat, Str};
+        const STR_ARRAY: Type = Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 1 });
+        Some(match self {
+            IntAnd | IntOr | IntXor | IntShl | IntShr | IntUshr | IntRotl | IntRotr => (&[Int, Int], Int),
+            IntNot | IntAbs | IntSign | IntBitCount | IntLeadingZeros | IntTrailingZeros | IntReverseBits
+                | IntSwapBytes => (&[Int], Int),
+            ByteAnd | ByteOr | ByteXor | ByteUshr => (&[Byte, Byte], Byte),
+            ByteShl | ByteShr | ByteRotl | ByteRotr => (&[Byte, Int], Byte),
+            ByteNot | ByteReverseBits | ByteSwapBytes => (&[Byte], Byte),
+            ByteBitCount | ByteLeadingZeros | ByteTrailingZeros => (&[Byte], Int),
+            FloatAdd | FloatSub | FloatMul | FloatDiv | FloatMod | FloatPow => (&[Float, Float], Float),
+            FloatNeg | FloatAbs | FloatSqrt => (&[Float], Float),
+            FloatSign => (&[Float], Int),
+            RatAdd | RatSub | RatMul | RatDiv | RatMod => (&[Rat, Rat], Rat),
+            RatNeg | RatAbs => (&[Rat], Rat),
+            RatSign => (&[Rat], Int),
+            RatNumerator | RatDenominator => (&[Rat], Str),
+            StrSlice => (&[Str, Int, Int], Str),
+            StrSplit => (&[Str, Str], STR_ARRAY),
+            StrReplace | StrReplaceFirst => (&[Str, Str, Str], Str),
+            StrRepeat => (&[Str, Int], Str),
+            StrTrim | StrChomp | StrTrimStart | StrTrimEnd | StrLower | StrUpper => (&[Str], Str),
+            StrFind | StrFindLast => (&[Str, Str], Int),
+            StrStartsWith | StrEndsWith => (&[Str, Str], Bool),
+            StrUtf8 => (&[Str], Bytes),
+            _ => return None,
+        })
+    }
 }
 
 impl DataOp {
@@ -564,6 +721,16 @@ impl DataOp {
                 | Self::MapGet | Self::MapKeyAt | Self::MapValueAt | Self::MapDifference | Self::ArraySlice
                 | Self::ArrayRemove | Self::ArrayReplace | Self::ArrayDifference => true,
             Self::TestOk | Self::TestIs | Self::TestIsnt | Self::TestFail => true,
+            // Tomato's failures: an int outside signed 64 bits in a bit operation, a shift or rotation
+            // count out of range, a float result that is not finite, a zero rat divisor, slice bounds and
+            // a negative repeat count. Every other scalar family operation is total.
+            Self::IntAnd | Self::IntOr | Self::IntXor | Self::IntShl | Self::IntShr | Self::IntUshr | Self::IntNot
+                | Self::IntBitCount | Self::IntLeadingZeros | Self::IntTrailingZeros | Self::IntReverseBits
+                | Self::IntSwapBytes | Self::IntRotl | Self::IntRotr => true,
+            Self::ByteShl | Self::ByteShr | Self::ByteUshr | Self::ByteRotl | Self::ByteRotr => true,
+            Self::FloatAdd | Self::FloatSub | Self::FloatMul | Self::FloatDiv | Self::FloatMod | Self::FloatPow
+                | Self::FloatSqrt => true,
+            Self::RatDiv | Self::RatMod | Self::StrSlice | Self::StrRepeat => true,
             Self::Convert => matches!((operands, result), ([from], Some(to)) if conversion(*from, to) == Some(true)),
             _ => false,
         }

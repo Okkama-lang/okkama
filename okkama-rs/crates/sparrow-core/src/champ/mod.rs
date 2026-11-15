@@ -279,3 +279,6 @@ mod runtime_tests;
 
 #[cfg(test)]
 mod executor_tests;
+
+#[cfg(test)]
+mod scalar_tests;

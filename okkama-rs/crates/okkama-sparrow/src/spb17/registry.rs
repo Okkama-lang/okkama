@@ -446,6 +446,7 @@ helper_registry! {
         "champ_machine_fail" => &[C, W, W], L, None;
         "champ_machine_range" => &[C, W, W, W, W], G | HELPER_COLLECTS, None;
         "champ_machine_convert" => &[C, W, W, W], G | HELPER_COLLECTS, None;
+        "champ_machine_scalar" => &[C, W, W, W, W], G | HELPER_COLLECTS, None;
         "champ_machine_rat_order" => &[C, W, W], 0, None;
         "champ_machine_value_eq" => &[C, W, W, W], G, None;
         "champ_machine_variant_get" => &[C, W, W, W], G, None;

@@ -689,6 +689,14 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             E::Coerce { coercion: thir::Coercion::RoleWrap, value } => {
                 self.error_wrap(expr, value)
             }
+            // A value as `any`: boxed with its static type; own elaboration gives the box its packet.
+            E::Coerce { coercion: thir::Coercion::Box, value } => {
+                let ty = self.ty(expr.ty.as_ref().expect("typed any coercion"), expr.span)?;
+                let Some(value) = self.value(value)? else {
+                    return Ok(None);
+                };
+                self.core(ir::CoreOp::AnyBox { value, ty, packet: None }).map(Some)
+            }
             E::Coerce { coercion: thir::Coercion::RoleNarrow { .. }, value } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed narrowing"), expr.span)?;
                 let Some(value) = self.value(value)? else {

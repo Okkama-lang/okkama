@@ -1069,10 +1069,18 @@ impl Emit<'_, '_> {
         let value = match op {
             D::Const => {
                 let word = match immediate {
+                    // Exact beyond 64 bits, as Tomato represents int: inline when it fits, a BigInt otherwise.
                     s::Immediate::Constant(s::Constant::Int(value)) => {
                         let value = value.parse::<num_bigint::BigInt>()
                             .map_err(|_| Error("invalid integer constant".into()))?;
                         self.heap.big(value)
+                    }
+                    s::Immediate::Constant(s::Constant::Rat(value)) => {
+                        let part = |text: &str| okkama_runtime_core::IntValue::parse(text)
+                            .ok_or_else(|| Error("invalid rat constant".into()));
+                        let rat = okkama_runtime_core::rat::Rat::new(&part(&value.numerator)?,
+                            &part(&value.denominator)?).map_err(|_| Error("invalid rat constant".into()))?;
+                        self.heap.allocate_payload(Box::new(crate::ops::Rational(rat)))
                     }
                     s::Immediate::Constant(s::Constant::Bool(value)) => u64::from(*value),
                     s::Immediate::Constant(s::Constant::Descriptor(value)) => *value as u64,
@@ -1310,11 +1318,35 @@ impl Emit<'_, '_> {
                 let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
                 self.call("champ_machine_test", &[self.ctx, kind, function, register, words[0], right]).unwrap()
             }
+            D::FloatNeg | D::FloatAbs => {
+                let value = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), words[0]);
+                let result = if op == D::FloatNeg {
+                    self.builder.ins().fneg(value)
+                } else {
+                    self.builder.ins().fabs(value)
+                };
+                self.builder.ins().bitcast(types::I64, MemFlagsData::new(), result)
+            }
+            D::ByteAnd => self.builder.ins().band(words[0], words[1]),
+            D::ByteOr => self.builder.ins().bor(words[0], words[1]),
+            D::ByteXor => self.builder.ins().bxor(words[0], words[1]),
+            D::ByteNot => self.builder.ins().bxor_imm_u(words[0], 0xff),
             D::BoolNot => self.builder.ins().bxor_imm_s(words[0], 1),
             D::BoolEq | D::BoolNe => {
                 let condition = if op == D::BoolEq { IntCC::Equal } else { IntCC::NotEqual };
                 let result = self.builder.ins().icmp(condition, words[0], words[1]);
                 self.builder.ins().uextend(types::I64, result)
+            }
+            _ => {
+                // Every other scalar family operation runs Tomato's semantics in one helper; it writes its
+                // result word last, after every root it may collect around.
+                let code = op.scalar_code()
+                    .ok_or_else(|| Error("Champ data operation without a translation".into()))?;
+                let code = self.iconst(code);
+                let zero = self.iconst(0);
+                let operand = |index: usize| words.get(index).copied().unwrap_or(zero);
+                let arguments = [self.ctx, code, operand(0), operand(1), operand(2)];
+                self.call("champ_machine_scalar", &arguments).unwrap()
             }
         };
         Ok(value)
@@ -1330,6 +1362,13 @@ fn sets_status(op: s::DataOp) -> bool {
         | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
         | D::ArrayRemove | D::ArrayReplace | D::ArrayDifference | D::BuilderNew | D::ArrayNew | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
+        || op.scalar_code().is_some() && !inline_scalar(op)
+}
+
+/// Scalar family operations that machine code computes without a helper.
+fn inline_scalar(op: s::DataOp) -> bool {
+    use s::DataOp as D;
+    matches!(op, D::FloatNeg | D::FloatAbs | D::ByteAnd | D::ByteOr | D::ByteXor | D::ByteNot)
 }
 
 #[cfg(test)]
