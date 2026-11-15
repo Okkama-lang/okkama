@@ -64,6 +64,9 @@ pub trait ExternalContracts {
     fn intrinsic_summary(&self, _: &str) -> Option<&Summary> { None }
     /// Runtime entries authorized to destroy a descriptor's complete owner graph.
     fn descriptor_cleanup(&self, _: &str) -> Option<&Summary> { None }
+    /// The registered conservative contract of an open sync call of this `fn`
+    /// type (#569 O1). Without a registration, an open invocation is rejected.
+    fn open_callable(&self, _: TypeId) -> Option<Summary> { None }
 }
 #[derive(Debug)]
 pub struct NoExternalContracts;

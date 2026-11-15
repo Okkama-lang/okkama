@@ -1,0 +1,12 @@
+module app;
+object Box<T> {
+    has value is T;
+    Box(:value);
+    read() is T { value; }
+}
+main() is int {
+    let text is () is string = Box(value: "a").read;
+    text();
+    let number is () is int = Box(value: 7).read;
+    number();
+}

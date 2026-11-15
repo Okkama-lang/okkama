@@ -203,7 +203,8 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
 
 fn traced(f: &Function, location: Location) -> bool {
     match location {
-        Location::Register(id) => !matches!(f.registers[id as usize], Type::Bool | Type::Never | Type::Descriptor),
+        Location::Register(id) => !matches!(f.registers[id as usize],
+            Type::Bool | Type::Never | Type::Descriptor | Type::Byte | Type::Float | Type::Char),
         Location::Service(id) => !matches!(f.services[id as usize], ServiceKind::Deps | ServiceKind::Closed),
     }
 }
@@ -555,9 +556,7 @@ fn check_fallible_data(f: &Function) -> Check {
     if f.services.is_empty() {
         return Ok(());
     }
-    let fallible = f.code.iter().any(|instruction| {
-        matches!(instruction, Instruction::Data { op, .. } if op.fallible())
-    });
+    let fallible = f.code.iter().any(|instruction| f.data_fallible(instruction));
     enforce(!fallible, "FALLIBLE_DATA_OUTCOMES",
         "a fallible data operation in a function with service locations needs explicit outcomes")
 }
@@ -629,7 +628,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
     for pc in reachable {
         match &f.code[pc] {
             Instruction::Raise(id) => computed |= masks.get(&Location::Register(*id)).copied().unwrap_or(15),
-            Instruction::Data { op, .. } if op.fallible() => computed |= 2,
+            instruction if f.data_fallible(instruction) => computed |= 2,
             _ => {}
         }
     }

@@ -185,22 +185,68 @@ impl BodyLowerer<'_, '_> {
         }
     }
 
+    /// A case pattern (`catch E.a, E.b(_)`): the caught value continues only on one of the
+    /// listed cases; any other case goes on to the next alternative with the same failure.
+    fn catch_cases(&mut self, value: ir::ValueId, cases: &[usize], failure: ir::ValueId, missed: ir::BlockId,
+        locals: &[usize], span: crate::source::Span) -> Result<()> {
+        let ty = self.b.body().values.get(value)?.ty;
+        let scope = self.scope();
+        let pass = self.new_block(scope, &[])?;
+        // The tests may split blocks under an outer failure frame; the matched entry dominates `pass`.
+        let matched_env = self.env.clone();
+        let tag = match *self.b.module().types.get(ty)? {
+            ir::Type::Enum(_) => None,
+            ir::Type::Variant(_) => Some(self.core(ir::CoreOp::VariantTag { value })?),
+            _ => return Err(LowerError::invalid(span, "catch case pattern outside an error enum")),
+        };
+        for &case in cases {
+            let condition = match tag {
+                Some(tag) => {
+                    let case = self.constant(ir::Literal::Int(case.to_string()))?;
+                    self.core(ir::CoreOp::IntEq { left: tag, right: case })?
+                }
+                None => {
+                    let ir::Type::Enum(declaration) = *self.b.module().types.get(ty)? else {
+                        unreachable!("plain error enum");
+                    };
+                    let case = self.core(ir::CoreOp::EnumCase { declaration, case: case as u32 })?;
+                    self.core(ir::CoreOp::EnumEq { left: value, right: case })?
+                }
+            };
+            let next = self.new_block(scope, &[])?;
+            self.terminate(ir::TermKind::Cond {
+                condition,
+                yes: ir::Target { block: pass, args: vec![] },
+                no: ir::Target { block: next, args: vec![] },
+            })?;
+            self.switch(next)?;
+        }
+        // Dispatch is entered only by unwinding (high.rs): another case re-raises the same
+        // failure from a guard Try scope whose unwind is the next alternative's dispatch.
+        let guard = self.b.declare_scope(scope, ir::ScopeKind::Try)?;
+        let types = self.local_types(locals);
+        let reraise = self.new_block(guard, &types)?;
+        let args = self.args(locals);
+        self.terminate(ir::TermKind::Br(ir::Target { block: reraise, args }))?;
+        self.failure_frames.push(FailureFrame { target: missed, locals: locals.to_vec(), handled: None });
+        self.enter(reraise, locals, 0)?;
+        self.terminate(ir::TermKind::Raise(failure))?;
+        self.failure_frames.pop();
+        self.env = matched_env;
+        self.switch(pass)
+    }
+
     pub fn try_expr(
         &mut self,
         found: &thir::Try,
         result: Option<&Ty>,
         want: bool,
     ) -> Result<Option<ir::ValueId>> {
-        if found.catches.iter().any(|catch| self.source.locals[catch.local.0].name == "$try") {
-            return Err(LowerError::unsupported(found.body.span, "try?/try!"));
-        }
+        // `try?`/`try!` arrive desugared: a catch of the Error role with a `none` or panic body.
         for catch in &found.catches {
             self.catch_type(&catch.ty, catch.span)?;
             for alternative in &catch.alternatives {
                 self.catch_type(&alternative.ty, catch.span)?;
-                if alternative.cases.is_some() {
-                    return Err(LowerError::unsupported(catch.span, "catch case/payload pattern"));
-                }
             }
         }
         let parent = self.scope();
@@ -219,6 +265,16 @@ impl BodyLowerer<'_, '_> {
         self.failure_frames.push(FailureFrame { target: dispatch, locals: locals.clone(), handled: None });
         self.enter(entry, &locals, 0)?;
         let value = self.block(&found.body, want)?;
+        // A literal condition can select a diverging branch (#307): the frontend then types the
+        // body without its other branch (`try? (if true { throw E.x; } else { 2; })` is no `some`).
+        // That fallthrough is dead by the frontend's flow, so it does not reach the join.
+        let dead = found.body.stmts.last().is_some_and(|stmt| match &stmt.kind {
+            thir::StmtKind::Expr(expr) => expr.diverges,
+            _ => false,
+        });
+        if self.current.is_some() && dead {
+            self.terminate(ir::TermKind::Unreachable)?;
+        }
         let mut reaches = self.current.is_some();
         if reaches {
             self.branch_join(&join, value, ir::ExitKind::Fallthrough)?;
@@ -237,7 +293,8 @@ impl BodyLowerer<'_, '_> {
                 let missed = self.new_block(parent, &dispatch_types)?;
                 let mut matched_types = dispatch_types.clone();
                 matched_types.push(alt_ty);
-                let matched = if alt_ty == ty { handler } else { self.new_block(parent, &matched_types)? };
+                let direct = alt_ty == ty && alternative.cases.is_none();
+                let matched = if direct { handler } else { self.new_block(parent, &matched_types)? };
                 let mut args = self.args(&locals);
                 args.push(failure);
                 let mut matched_args: Vec<_> = args.iter().copied().map(ir::EdgeArg::Value).collect();
@@ -246,12 +303,16 @@ impl BodyLowerer<'_, '_> {
                     failure, ty: alt_ty, handler: ir::InvokeEdge { block: matched, args: matched_args },
                     next: ir::Target { block: missed, args },
                 })?;
-                if alt_ty != ty {
+                if !direct {
                     self.enter(matched, &locals, 0)?;
                     let params = self.b.block_params(matched)?.to_vec();
-                    let caught = self.core(ir::CoreOp::RoleWrap { value: params[locals.len() + 1], ty })?;
+                    let (caught, value) = (params[locals.len()], params[locals.len() + 1]);
+                    if let Some(cases) = &alternative.cases {
+                        self.catch_cases(value, cases, caught, missed, &locals, catch.span)?;
+                    }
+                    let value = if alt_ty == ty { value } else { self.core(ir::CoreOp::RoleWrap { value, ty })? };
                     let mut args = self.args(&locals);
-                    args.extend([params[locals.len()], caught]);
+                    args.extend([caught, value]);
                     self.terminate(ir::TermKind::Br(ir::Target { block: handler, args }))?;
                 }
                 self.enter(missed, &locals, 0)?;

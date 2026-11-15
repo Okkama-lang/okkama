@@ -52,7 +52,12 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
                         body.values.get(*value).ok().and_then(|data| module.types.get(data.ty).ok())
                             .is_some_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
                     });
-                    !constructor && !language_input
+                    // The verifier bounds a non-internal (or defer-entry) call packet by
+                    // its argument retention graph: with no language input it is empty.
+                    let bounded = function.summary.and_then(|summary| module.summaries.get(summary).ok())
+                        .is_some_and(|summary| summary.entry_kind != EntryKind::Internal
+                            || function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })));
+                    !constructor && !language_input && !bounded
                 }
                 _ => false,
             };

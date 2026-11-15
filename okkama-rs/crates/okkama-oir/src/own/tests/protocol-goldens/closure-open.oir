@@ -8,33 +8,32 @@ scope S0 action in @destroy
 scope S1 action in @make
 scope S2 action in @f
 scope S3 action in @read
-summary M0 call-boundary parameters [parameter_effect(convention=take,
-        destination=none)] contract call_contract(publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=take, destination=none)] contract
+        call_contract(publication=atomic)
 summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none),
-        parameter_effect(convention=take, retention=some(parameter(1)), deps=[1],
-        destination=result)] results [result_relation(aliases=[parameter(1)], external_deps=[1],
+        parameter_effect(convention=take, retention=some(owner_graph(1)), deps=[0, 1], destination=result)] results
+        [result_relation(fresh=[0], aliases=[owner_graph(0), owner_graph(1)], external_deps=[0, 1], opaque=true,
         provenance=unbound_result)] contract call_contract(results=[R], failures=[thrown, program, panic, native],
         publication=atomic, protocol=some(P0))
-summary M2 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] contract call_contract(publication=atomic)
-summary M3 call-boundary results [result_relation(fresh=[0],
-        provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
-summary M4 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M5 call-boundary parameters [parameter_effect(convention=take,
-        destination=none)] contract call_contract(publication=atomic)
-summary M6 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(fresh=[22],
-        provenance=unbound_result)] contract call_contract(results=[R], failures=[thrown, program, panic, native],
-        publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
+        call_contract(publication=atomic)
+summary M3 call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract
+        call_contract(results=[R], failures=[program], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results
+        [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=take, destination=none)] contract
+        call_contract(publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=take, retention=some(owner_graph(0)), deps=[0],
+        destination=result)] results [result_relation(fresh=[22, 44], aliases=[owner_graph(0)], external_deps=[0],
+        opaque=true, provenance=unbound_result)] contract call_contract(results=[R], failures=[thrown, program, panic,
+        native], publication=atomic)
 summary M7 call-boundary parameters [parameter_effect(convention=borrow, destination=none),
-        parameter_effect(convention=take, retention=some(parameter(1)), deps=[1],
-        destination=result)] results [result_relation(aliases=[parameter(1)], external_deps=[1],
+        parameter_effect(convention=take, retention=some(owner_graph(1)), deps=[0, 1], destination=result)] results
+        [result_relation(fresh=[0], aliases=[owner_graph(0), owner_graph(1)], external_deps=[0, 1], opaque=true,
         provenance=unbound_result)] contract call_contract(results=[R], failures=[thrown, program, panic, native],
         publication=atomic, protocol=some(P0))
-summary M8 observation parameters [parameter_effect(convention=borrow,
-        destination=none)] contract call_contract(publication=atomic)
+summary M8 observation parameters [parameter_effect(convention=borrow, destination=none)] contract
+        call_contract(publication=atomic)
 protocol P0 kind closure holders [scope, packet] rules [protocol_rule(transition=publish, from=packet, to=scope,
         checks=[owner, live_dependencies, snapshot, transferable], normal=protocol_poststate(holder=scope, state=open),
         unwind=some(protocol_poststate(holder=scope, state=settled))), protocol_rule(transition=dynamic, from=packet,
@@ -107,8 +106,8 @@ func @read(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [meth
     ret %8, %10
 }
 
-func @drop_fn(%arg0: fn(R) -> R; %arg1: deps; %arg2: own) -> own [intrinsic
-        "oir.sync_closure.cleanup"] abi explicit(input_packet=2, output_packet=0) summary(M5);
+func @drop_fn(%arg0: fn(R) -> R; %arg1: deps; %arg2: own) -> own [intrinsic "oir.sync_closure.cleanup"] abi
+        explicit(input_packet=2, output_packet=0) summary(M5);
 
 func @f(%0: fn(R) -> R facts(managed(deps=d1)); %1: deps, %2: own) -> (R, own) abi explicit(input_packet=2,
         output_packet=1) summary(M6) {

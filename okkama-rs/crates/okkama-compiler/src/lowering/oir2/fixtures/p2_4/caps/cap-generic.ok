@@ -1,0 +1,14 @@
+module app;
+object Owner<T> {
+    has value is T;
+    Owner(:value);
+    cap View {
+        item is T { value; }
+    }
+}
+main() is int {
+    let number = Owner(value: 4)::View;
+    let text = Owner(value: "four")::View;
+    text::item;
+    number::item;
+}

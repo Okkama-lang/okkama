@@ -1,0 +1,2 @@
+module app;
+main() is int { 7; }

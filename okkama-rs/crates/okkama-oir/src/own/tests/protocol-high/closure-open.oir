@@ -41,9 +41,12 @@ protocol P kind closure holders [scope, packet] rules [protocol_rule(transition=
         unwind=some(protocol_poststate(holder=packet, state=unaccepted)))] roots [operands]
 summary Md call-boundary parameters [parameter_effect(convention=take, destination=none)]
     contract call_contract(publication=atomic)
+// The registered conservative open contract (#569 O1): the borrowed environment is
+// parameter 0; the result is fresh or aliases the environment or the argument.
 summary Mopen call-boundary parameters [parameter_effect(convention=borrow, destination=none),
-    parameter_effect(convention=take, retention=some(parameter(1)), deps=[1], destination=result)]
-    results [result_relation(aliases=[parameter(1)], external_deps=[1], provenance=unbound_result)]
+    parameter_effect(convention=take, retention=some(owner_graph(1)), deps=[0, 1], destination=result)]
+    results [result_relation(fresh=[0], aliases=[owner_graph(0), owner_graph(1)], external_deps=[0, 1],
+        opaque=true, provenance=unbound_result)]
     contract call_contract(results=[R], failures=[thrown, program, panic, native],
         publication=atomic, protocol=some(P))
 func @drop_fn(%value: fn(R) -> R) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Md);

@@ -1,7 +1,7 @@
 //! S1 instruction allowlist. Unsupported THIR variants have no OIR-1 fallback.
 use super::body::BodyLowerer;
 use super::{LowerError, Result};
-use crate::analysis::thir::{self, ArithOp, BinaryOp, CastTarget, CompareKind, CompareOp, NumericKind, UnaryOp};
+use crate::analysis::thir::{self, CastTarget, CompareKind, CompareOp};
 use crate::oir2 as ir;
 use crate::source::Span;
 
@@ -43,32 +43,20 @@ impl BodyLowerer<'_, '_> {
         use thir::ExprKind as E;
         let result = match &expr.kind {
             E::Constant(constant) => self.constant(literal(constant))?,
-            E::Global(_) => return Err(LowerError::unsupported(expr.span, "module constant reference")),
+            E::Global(index) => {
+                let declaration = self.context.globals.get(index).copied()
+                    .ok_or_else(|| LowerError::invalid(expr.span, "undeclared module constant"))?;
+                let ty = self.ty(expr.ty.as_ref().expect("typed constant"), expr.span)?;
+                self.core(ir::CoreOp::Global { declaration, ty })?
+            }
             E::Unary { op, operand } => {
                 let value = value!(self, operand);
-                let op = match op {
-                    UnaryOp::Not => ir::CoreOp::BoolNot { value },
-                    UnaryOp::Negate(NumericKind::Int) => ir::CoreOp::IntNeg { value },
-                    UnaryOp::Negate(NumericKind::Float) => ir::CoreOp::FloatNeg { value },
-                    UnaryOp::Negate(NumericKind::Rat) => ir::CoreOp::RatNeg { value },
-                    _ => return Err(LowerError::unsupported(expr.span, format!("unary {op:?}"))),
-                };
-                self.core(op)?
+                self.unary(*op, value)?
             }
             E::Binary { op, left, right } => {
                 let left = value!(self, left);
                 let right = value!(self, right);
-                let operation = match op {
-                    BinaryOp::Arith(NumericKind::Int, ArithOp::Add) => ir::CoreOp::IntAdd { left, right },
-                    BinaryOp::Arith(NumericKind::Int, ArithOp::Sub) => ir::CoreOp::IntSub { left, right },
-                    BinaryOp::Arith(NumericKind::Int, ArithOp::Mul) => ir::CoreOp::IntMul { left, right },
-                    BinaryOp::Arith(NumericKind::Int, ArithOp::Div) => ir::CoreOp::IntDiv { left, right },
-                    BinaryOp::Arith(NumericKind::Int, ArithOp::Mod) => ir::CoreOp::IntMod { left, right },
-                    BinaryOp::Concat => ir::CoreOp::StrConcat { left, right },
-                    BinaryOp::Compare(kind, op) => compare(*kind, *op, left, right, expr.span)?,
-                    _ => return Err(LowerError::unsupported(expr.span, format!("binary {op:?}"))),
-                };
-                self.core(operation)?
+                self.binary(*op, left, right, expr.span)?
             }
             E::Cast { target, value, .. } => {
                 let value = value!(self, value);
@@ -97,7 +85,36 @@ impl BodyLowerer<'_, '_> {
                         let right = value!(self, other);
                         self.core(compare(CompareKind::Str, *op, value, right, expr.span)?)?
                     }
-                    _ => return Err(LowerError::unsupported(expr.span, format!("builtin {op:?}"))),
+                    (thir::Builtin::ArrayCursor, []) => {
+                        // `xs.cursor()`: the builtin array cursor at 0, as the Cursor role.
+                        let input = self.b.body().values.get(value)?.ty;
+                        let ty = self.ty(expr.ty.as_ref().expect("typed cursor"), expr.span)?;
+                        let constructor = self.context.builtin_adapters.get(&(input, ty)).copied()
+                            .ok_or_else(|| LowerError::invalid(expr.span, "array cursor without its adapter"))?;
+                        let zero = self.constant(ir::Literal::Int("0".into()))?;
+                        let cursor = self.call(constructor, vec![value, zero])?.expect("cursor constructor result");
+                        self.core(ir::CoreOp::RoleWrap { value: cursor, ty })?
+                    }
+                    (thir::Builtin::StrFind | thir::Builtin::StrFindLast, [part]) => {
+                        let part = value!(self, part);
+                        let index = if *op == thir::Builtin::StrFind {
+                            self.core(ir::CoreOp::StrFind { value, part })?
+                        } else {
+                            self.core(ir::CoreOp::StrFindLast { value, part })?
+                        };
+                        let ty = self.ty(expr.ty.as_ref().expect("typed search"), expr.span)?;
+                        self.maybe_index(index, ty)?
+                    }
+                    (op, args) => {
+                        let mut values = vec![];
+                        for arg in args {
+                            values.push(value!(self, arg));
+                        }
+                        match self.scalar_builtin(op, value, &values, expr.span)? {
+                            Some(value) => value,
+                            None => return Err(LowerError::unsupported(expr.span, format!("builtin {op:?}"))),
+                        }
+                    }
                 }
             }
             E::RatNew { numerator, denominator } => {
@@ -156,17 +173,14 @@ impl BodyLowerer<'_, '_> {
 
     pub(super) fn equal(&mut self, left: ir::ValueId, right: ir::ValueId, span: Span) -> Result<ir::ValueId> {
         let ty = self.b.body().values.get(left)?.ty;
-        let kind = match self.b.module().types.get(ty)? {
-            ir::Type::Int => CompareKind::Int,
-            ir::Type::Bool => CompareKind::Bool,
-            ir::Type::Str => CompareKind::Str,
-            _ => return Err(LowerError::unsupported(span, "non-scalar match subject")),
+        let Some(kind) = super::operators::match_kind(self.b.module().types.get(ty)?) else {
+            return Err(LowerError::unsupported(span, "non-scalar match subject"));
         };
-        self.core(compare(kind, CompareOp::Eq, left, right, span)?)
+        self.core(super::operators::equality(kind, left, right, span)?)
     }
 }
 
-fn literal(constant: &thir::Constant) -> ir::Literal {
+pub(super) fn literal(constant: &thir::Constant) -> ir::Literal {
     match constant {
         thir::Constant::Int(value) => ir::Literal::Int(value.clone()),
         thir::Constant::Bool(value) => ir::Literal::Bool(*value),

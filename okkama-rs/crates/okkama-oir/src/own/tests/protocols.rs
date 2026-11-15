@@ -1,52 +1,21 @@
 use super::*;
-use super::synchronous::{fixtures, roundtrip, TrustedNative};
+use super::synchronous::{fixtures, roundtrip};
+use crate::catalogue::RuntimeCatalogue;
 
-fn runtime_contract(module: &Module, profile: Profile) -> Option<TrustedNative> {
-    let cleanup = module.functions.iter().find(|(_, function)| function.symbol == "drop_fn")?.1;
-    let callable = cleanup.signature.params[0];
-    let mut types = module.types.clone();
-    let mut signature = Signature {
-        params: vec![callable], results: vec![], ownership_abi: OwnershipAbi::Unelaborated,
-    };
-    if profile == Profile::Own {
-        let deps = types.intern(Type::Service(ServiceType::Deps)).unwrap();
-        let own = types.intern(Type::Service(ServiceType::Own)).unwrap();
-        signature.params.extend([deps, own]);
-        signature.results.push(own);
-        signature.ownership_abi = OwnershipAbi::Explicit { input_packet: 2, output_packet: 0 };
-    }
-    Some(TrustedNative {
-        name: "oir.sync_closure.cleanup", signature,
-        summary: Summary {
-            entry_kind: EntryKind::CallBoundary,
-            parameters: vec![ParameterEffect {
-                convention: FreshConvention::Take, retention: None, deps: vec![],
-                destination: TransferDestination::None,
-            }],
-            results: vec![],
-            contract: CallContract {
-                results: vec![], failures: vec![], suspends: false, async_destroy: false,
-                publication: Publication::Atomic, protocol: None,
-            },
-        },
-    })
+// The real runtime catalogue: open sync callables and their cleanup intrinsic
+// are registered only for the exact Closure protocol and ABI (#569 O1).
+fn runtime_contract(module: &Module, profile: Profile) -> RuntimeCatalogue {
+    RuntimeCatalogue::for_profile(module, profile)
 }
 
-fn context(trusted: &Option<TrustedNative>) -> VerifyContext<'_> {
-    match trusted {
-        Some(trusted) => VerifyContext { text_locations: None, external_contracts: trusted },
-        None => VerifyContext::default(),
-    }
+fn context(trusted: &RuntimeCatalogue) -> VerifyContext<'_> {
+    VerifyContext { text_locations: None, external_contracts: trusted }
 }
 
-fn rewrite(source: &str) -> OwnOutput {
+fn try_rewrite(source: &str) -> Result<OwnOutput, OwnError> {
     let module = crate::text::parse(source).unwrap();
     let high = runtime_contract(&module, Profile::High);
-    if high.is_some() {
-        verify_with(&module, &VerifyOptions::default(), context(&high)).unwrap();
-    } else {
-        verify_high(&module).unwrap();
-    }
+    verify_with(&module, &VerifyOptions::default(), context(&high)).unwrap();
     let mut catalog = TestNatives::default();
     for (protocol, data) in module.protocols.iter() {
         if data.kind == ProtocolKind::Services {
@@ -59,22 +28,26 @@ fn rewrite(source: &str) -> OwnOutput {
             });
         }
     }
-    if let Some(trusted) = high {
-        let callable = trusted.signature.params[0];
-        let summary = module.summaries.iter().find(|(_, summary)| summary.parameters.len() == 2).unwrap().1;
-        catalog.callable.insert(callable, summary.clone());
-        catalog.named.insert(trusted.name.into(), trusted.summary);
+    for (ty, _) in module.types.iter() {
+        if let Some(summary) = high.open_callable(ty) {
+            catalog.callable.insert(ty, summary.clone());
+        }
+    }
+    let cleanup = crate::catalogue::SYNC_CLOSURE_CLEANUP;
+    if let Some(summary) = high.cleanup_summary(cleanup) {
+        catalog.named.insert(cleanup.into(), summary.clone());
     }
     let output = elaborate_ownership(module, &catalog, &OwnOptions::default()).unwrap();
     let trusted = runtime_contract(&output.module, Profile::Own);
-    rewrite_synchronous_with(output, &OwnOptions::default(), context(&trusted)).unwrap()
+    rewrite_synchronous_with(output, &OwnOptions::default(), context(&trusted))
+}
+
+fn rewrite(source: &str) -> OwnOutput {
+    try_rewrite(source).unwrap()
 }
 
 fn verify_output(module: &Module) -> VerifyStats {
     let trusted = runtime_contract(module, Profile::Own);
-    if trusted.is_none() {
-        return verify_own(module).unwrap().stats().clone();
-    }
     verify_with(module, &VerifyOptions::default(), context(&trusted)).unwrap().stats().clone()
 }
 
@@ -425,4 +398,231 @@ fn reviewed_protocol_manifest_covers_every_pair_and_precision_report() {
         .map(|(name, _)| name.to_owned()).collect();
     assert_eq!(reported, high);
     assert_eq!(fixtures("protocol-invalid").len(), 13);
+}
+
+
+// #569 O1: the open contract comes from the runtime catalogue. Own refuses a
+// narrower catalogue entry, and the verifier refuses an unregistered one.
+#[test]
+fn open_calls_require_the_registered_conservative_contract() {
+    let source = include_str!("protocol-high/closure-open.oir");
+    let output = rewrite(source).module;
+    let report = verify_own(&output).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B55), "{report:?}");
+
+    let module = crate::text::parse(source).unwrap();
+    let catalogue = RuntimeCatalogue::for_module(&module);
+    let (callable, mut identity) = module.types.iter()
+        .find_map(|(ty, _)| catalogue.open_callable(ty).map(|summary| (ty, summary.clone()))).unwrap();
+    // The hand-written identity Mopen: the result only aliases the argument.
+    identity.results[0] = ResultRelation {
+        fresh: vec![], aliases: vec![SummarySelection::Parameter(1)], external_deps: vec![1], opaque: false,
+        provenance: AdmissionProvenance::UnboundResult,
+    };
+    let mut natives = TestNatives::default();
+    natives.callable.insert(callable, identity);
+    let cleanup = crate::catalogue::SYNC_CLOSURE_CLEANUP;
+    natives.named.insert(cleanup.into(), catalogue.cleanup_summary(cleanup).unwrap().clone());
+    let error = elaborate_ownership(module, &natives, &OwnOptions::default()).unwrap_err();
+    assert!(format!("{error:?}").contains("registered conservative"), "{error:?}");
+}
+
+// #569 O1 audit: identical protocol declarations are one protocol. The catalogue
+// registers the first; a call naming a later identical one is still canonical.
+#[test]
+fn identical_open_protocol_declarations_are_one_protocol() {
+    let mut module = rewrite(include_str!("protocol-high/closure-open.oir")).module;
+    let first = crate::catalogue::open_callable_protocol_id(&module).unwrap();
+    let second = module.protocols.alloc(crate::catalogue::open_callable_protocol()).unwrap();
+    assert_eq!(crate::catalogue::open_callable_protocol_id(&module), Some(first));
+    let mut renamed = 0;
+    for (_, summary) in module.summaries.iter_mut() {
+        if summary.contract.protocol == Some(first) {
+            summary.contract.protocol = Some(second);
+            renamed += 1;
+        }
+    }
+    assert!(renamed > 0);
+    verify_output(&module);
+    // A different protocol under the same contract stays rejected.
+    let mut other = crate::catalogue::open_callable_protocol();
+    other.roots.clear();
+    *module.protocols.get_mut(second).unwrap() = other;
+    reject(&module, RuleId::B55);
+}
+
+#[test]
+fn the_cleanup_intrinsic_is_not_trusted_by_its_name() {
+    let mut module = rewrite(include_str!("protocol-high/closure-open.oir")).module;
+    let catalogue = RuntimeCatalogue::for_module(&module);
+    assert!(catalogue.cleanup_summary(crate::catalogue::SYNC_CLOSURE_CLEANUP).is_some());
+    let (_, cleanup) = module.functions.iter().find(|(_, function)| function.symbol == "drop_fn").unwrap();
+    let summary = cleanup.summary.unwrap();
+    module.summaries.get_mut(summary).unwrap().contract.failures = vec![FailureKind::Thrown];
+    reject(&module, RuleId::B51);
+    let mut module = rewrite(include_str!("protocol-high/closure-open.oir")).module;
+    let (id, _) = module.functions.iter().find(|(_, function)| function.symbol == "drop_fn").unwrap();
+    module.functions.get_mut(id).unwrap().signature.params.swap(1, 2);
+    assert!(RuntimeCatalogue::for_module(&module).cleanup_summary(crate::catalogue::SYNC_CLOSURE_CLEANUP).is_none());
+    reject(&module, RuleId::T5);
+}
+
+#[test]
+fn open_contract_shape_for_plain_and_resource_signatures() {
+    let source = include_str!("protocol-high/closure-open.oir");
+    let mut module = crate::text::parse(source).unwrap();
+    let protocol = crate::catalogue::open_callable_protocol_id(&module).unwrap();
+    let resource = module.types.iter().find_map(|(id, ty)| matches!(ty, Type::Object { .. }).then_some(id)).unwrap();
+    let int = module.types.intern(Type::Int).unwrap();
+    let plain = module.types.intern(Type::Fn(FnType { params: vec![int], result: Some(int), is_async: false }))
+        .unwrap();
+    let summary = crate::catalogue::open_callable_summary(&module, plain, protocol).unwrap();
+    assert_eq!(summary.parameters[0].convention, FreshConvention::Borrow);
+    assert_eq!(summary.parameters[1].convention, FreshConvention::Borrow);
+    assert!(!summary.results[0].opaque && summary.results[0].aliases.is_empty());
+    let mixed = module.types.intern(Type::Fn(FnType {
+        params: vec![int, resource], result: Some(resource), is_async: false,
+    })).unwrap();
+    let summary = crate::catalogue::open_callable_summary(&module, mixed, protocol).unwrap();
+    assert_eq!(summary.parameters[0].convention, FreshConvention::Borrow);
+    assert_eq!(summary.parameters[2].convention, FreshConvention::Take);
+    assert_eq!(summary.results[0].aliases, vec![SummarySelection::OwnerGraph(0), SummarySelection::OwnerGraph(2)]);
+    assert_eq!(summary.results[0].external_deps, vec![0, 2]);
+    assert!(summary.results[0].opaque);
+    assert!(!summary.contract.suspends && !summary.contract.async_destroy);
+    assert!(!summary.contract.failures.contains(&FailureKind::Cancelled));
+    let asynchronous = module.types.intern(Type::Fn(FnType { params: vec![], result: None, is_async: true }))
+        .unwrap();
+    assert!(crate::catalogue::open_callable_summary(&module, asynchronous, protocol).is_none());
+}
+
+// #569 O1 audit: a result that may alias a bound environment can leave the binding's
+// scope only together with that environment's graph. Own's fall-through selects the
+// result's whole graph; a selection of only its fresh part leaves the environment to
+// the scope's end, and the result outlives what it may alias.
+#[test]
+fn open_result_outliving_a_bound_environment_scope_is_rejected() {
+    let extra = concat!(
+        "scope SL action in @lambda\n",
+        "func @lambda(%captured: R, %x: R) -> R [lambda captures 1] {\n",
+        "    boundary BL lexical in SL\n",
+        "    ^entry in SL unwind ^failed:\n",
+        "    [ip] exit.prepare return %captured at BL\n",
+        "    result.exit edge normal(0), value %captured, demand want, prepare ip\n",
+        "    ret %captured\n",
+        "    ^failed(%failure: failure) in SL:\n",
+        "    raise %failure\n",
+        "}\n",
+        "scope SM action in @mk\n",
+        "func @mk() -> fn(R) -> R {\n",
+        "    boundary BM lexical in SM\n",
+        "    ^entry in SM unwind ^failed:\n",
+        "    %r: R = call @make()\n",
+        "    %c: fn(R) -> R = fn.closure @lambda, [%r], ty fn(R) -> R\n",
+        "    [ip] exit.prepare return %c at BM\n",
+        "    result.exit edge normal(0), value %c, demand want, prepare ip\n",
+        "    ret %c\n",
+        "    ^failed(%failure: failure) in SM:\n",
+        "    raise %failure\n",
+        "}\n",
+        "scope SG action in @g\n",
+        "scope SGI block in @g parent SG\n",
+        "func @g() -> R {\n",
+        "    boundary BG lexical in SG\n",
+        "    boundary BGI lexical in SGI\n",
+        "    binding bc \"c\": fn(R) -> R in SGI\n",
+        "    ^entry in SG unwind ^failed:\n",
+        "    %dict: type = type.of ty fn(R) -> R, descriptor descriptor_contract(managed=runtime,\n",
+        "        retention=owner_graph(0), cleanup=@drop_fn, async_destroy=false, summary=Md)\n",
+        "    br ^inner\n",
+        "    ^inner in SGI unwind ^failed:\n",
+        "    %c: fn(R) -> R = call @mk()\n",
+        "    bind %c, binding bc\n",
+        "    %r: R = call @make()\n",
+        "    %result: R = fn.call %c(consume %r) summary(Mopen)\n",
+        "    [ipass] exit.prepare fallthrough %result at BGI\n",
+        "    result.exit edge normal(0), value %result, demand want, prepare ipass\n",
+        "    br ^after(%result)\n",
+        "    ^after(%out: R) in SG unwind ^failed:\n",
+        "    [ip] exit.prepare return %out at BG\n",
+        "    result.exit edge normal(0), value %out, demand want, prepare ip\n",
+        "    ret %out\n",
+        "    ^failed(%failure: failure) in SG:\n",
+        "    raise %failure\n",
+        "}\n",
+    );
+    let source = format!("{}{extra}", include_str!("protocol-high/closure-open.oir"));
+    let mut module = rewrite(&source).module;
+    verify_output(&module);
+    let (_, function) = module.functions.iter_mut().find(|(_, function)| function.symbol == "g").unwrap();
+    let body = function.body.as_mut().unwrap();
+    let root = body.blocks.get(body.entry).unwrap().lexical_scope;
+    let inner: Vec<_> = body.blocks.iter().filter(|(_, block)| block.lexical_scope != root).filter_map(|(id, block)| {
+        let TermKind::InvokeOwn { op, .. } = &block.term.kind else { return None };
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref() else { return None };
+        matches!(body.selections.get(*selection), Ok(SelectionExpr::Value(_))).then_some(id)
+    }).collect();
+    let [fallthrough] = inner[..] else { panic!("{inner:?}") };
+    let TermKind::InvokeOwn { op, .. } = &body.blocks.get(fallthrough).unwrap().term.kind else { panic!() };
+    let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref() else { panic!() };
+    let fresh = body.selections.alloc(SelectionExpr::Admissible(*selection)).unwrap();
+    let term = &mut body.blocks.get_mut(fallthrough).unwrap().term.kind;
+    let TermKind::InvokeOwn { op, .. } = term else { panic!() };
+    let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_mut() else { panic!() };
+    *selection = fresh;
+    let trusted = runtime_contract(&module, Profile::Own);
+    let report = verify_with(&module, &VerifyOptions::default(), context(&trusted)).unwrap_err();
+    assert!(report.diagnostics.iter().all(|diagnostic| diagnostic.rule == RuleId::B31
+        && diagnostic.message.contains("stable dependency has been closed")), "{report:?}");
+    reject(&module, RuleId::B31);
+}
+
+// #569 O1: the environment is borrowed, so a fresh temporary callable ends at the
+// call boundary. A result that may alias its captured resource cannot outlive it.
+#[test]
+fn open_result_aliasing_a_temporary_environment_is_rejected() {
+    let extra = concat!(
+        "scope SL action in @lambda\n",
+        "func @lambda(%captured: R, %x: R) -> R [lambda captures 1] {\n",
+        "    boundary BL lexical in SL\n",
+        "    ^entry in SL unwind ^failed:\n",
+        "    [ip] exit.prepare return %captured at BL\n",
+        "    result.exit edge normal(0), value %captured, demand want, prepare ip\n",
+        "    ret %captured\n",
+        "    ^failed(%failure: failure) in SL:\n",
+        "    raise %failure\n",
+        "}\n",
+        "scope SM action in @mk\n",
+        "func @mk() -> fn(R) -> R {\n",
+        "    boundary BM lexical in SM\n",
+        "    ^entry in SM unwind ^failed:\n",
+        "    %r: R = call @make()\n",
+        "    %c: fn(R) -> R = fn.closure @lambda, [%r], ty fn(R) -> R\n",
+        "    [ip] exit.prepare return %c at BM\n",
+        "    result.exit edge normal(0), value %c, demand want, prepare ip\n",
+        "    ret %c\n",
+        "    ^failed(%failure: failure) in SM:\n",
+        "    raise %failure\n",
+        "}\n",
+        "scope SG action in @g\n",
+        "func @g() -> R {\n",
+        "    boundary BG lexical in SG\n",
+        "    ^entry in SG unwind ^failed:\n",
+        "    %dict: type = type.of ty fn(R) -> R, descriptor descriptor_contract(managed=runtime,\n",
+        "        retention=owner_graph(0), cleanup=@drop_fn, async_destroy=false, summary=Md)\n",
+        "    %c: fn(R) -> R = call @mk()\n",
+        "    %r: R = call @make()\n",
+        "    %result: R = fn.call %c(consume %r) summary(Mopen)\n",
+        "    [ip] exit.prepare return %result at BG\n",
+        "    result.exit edge normal(0), value %result, demand want, prepare ip\n",
+        "    ret %result\n",
+        "    ^failed(%failure: failure) in SG:\n",
+        "    raise %failure\n",
+        "}\n",
+    );
+    let source = format!("{}{extra}", include_str!("protocol-high/closure-open.oir"));
+    let error = try_rewrite(&source).unwrap_err();
+    let OwnError::InvalidOutput(report) = error else { panic!("{error:?}") };
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B51
+        && diagnostic.message.contains("settled by callee cleanup")), "{report:?}");
 }

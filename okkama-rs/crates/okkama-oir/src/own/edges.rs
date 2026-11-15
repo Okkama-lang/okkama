@@ -101,6 +101,20 @@ impl Graph {
                     });
                     targets.push((next, false, None));
                 }
+                TermKind::Lookup { collection, found, missing, .. } => {
+                    // The produced element depends on everything its collection
+                    // depends on; it stands in the collection's place on the edge.
+                    let args = found.args.iter().map(|arg| match arg {
+                        EdgeArg::Value(value) => *value,
+                        EdgeArg::Produced(_) => *collection,
+                    }).collect();
+                    let destination = body.blocks.get(found.block).map_err(arena)?.lexical_scope;
+                    edges.push(SemanticEdge {
+                        source, target: found.block, ordinal: 0, failure_point: None, args,
+                        unwind: false, plan: EdgePlan::between(module, block.lexical_scope, Some(destination))?,
+                    });
+                    targets.push((missing, false, None));
+                }
                 TermKind::Ret { .. } | TermKind::RetDefer { .. } | TermKind::Raise(_) => {}
                 TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
                     if let Some(unwind) = &block.unwind {
@@ -124,7 +138,7 @@ impl Graph {
                     }
                 }
             }
-            let offset = usize::from(matches!(block.term.kind, TermKind::Catch { .. }));
+            let offset = usize::from(matches!(block.term.kind, TermKind::Catch { .. } | TermKind::Lookup { .. }));
             for (ordinal, (target, unwind, failure_point)) in targets.into_iter().enumerate() {
                 budget.work(1 + target.args.len())?;
                 let destination = body.blocks.get(target.block).map_err(arena)?.lexical_scope;

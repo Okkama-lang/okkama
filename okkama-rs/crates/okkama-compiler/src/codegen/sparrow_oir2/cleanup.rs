@@ -437,6 +437,30 @@ impl Emitter<'_> {
     pub(super) fn construction(&mut self, op: &o::Operation, normal: &o::InvokeEdge)
         -> Result<s::Instruction, GenerateError>
     {
+        if let o::Operation::Core(o::CoreOp::VariantNew { ty, case, fields, packet: None }) = op
+            && let s::Type::Variant(variant) = translate_type(self.module, *ty)?
+        {
+            let object = *self.objects[variant as usize].variant_cases.get(*case as usize)
+                .ok_or_else(|| error("variant construction of an unknown case"))?;
+            let layout = &self.objects[object as usize].layout;
+            if layout.has_destroy || layout.may_reach_resource {
+                return Err(error("variant case reaches resources"));
+            }
+            let inputs = fields.iter().map(|&value| self.reg(value)).collect::<Result<Vec<_>, _>>()?;
+            let created = fresh(&mut self.result, s::Type::Object(object))?;
+            let value = fresh(&mut self.result, s::Type::Variant(variant))?;
+            self.result.code.push(s::Instruction::Data { op: s::DataOp::ObjNew, inputs, output: Some(created),
+                immediate: s::Immediate::Object(object) });
+            self.result.code.push(data(s::DataOp::Move, vec![created], value, s::Immediate::None));
+            let schema = [P::Value(s::Type::Variant(variant))];
+            let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &schema)?;
+            for assignment in &mut edge.assignments {
+                if assignment.source == s::Source::ProducedSlot(0) {
+                    assignment.source = s::Source::Location(L::Register(value));
+                }
+            }
+            return Ok(s::Instruction::Br(edge));
+        }
         let (declaration, inputs, packet, construction, op, immediate, ty) = match op {
             o::Operation::Core(o::CoreOp::VariantNew { ty, case: 0, fields, packet }) => {
                 let s::Type::Object(id) = translate_type(self.module, *ty)? else {
@@ -679,6 +703,29 @@ impl Emitter<'_> {
                 self.result.proofs.roots.push(s::RootRequirement {
                     pc: pc as u32 + 1, locations: roots.into_iter().collect(),
                 });
+            }
+        }
+        // A plain variant construction expands to allocate/move/branch; neither step touches a service.
+        for pc in 0..self.result.code.len().saturating_sub(2) {
+            if let s::Instruction::Data { op: s::DataOp::ObjNew, output: Some(object), .. } = self.result.code[pc]
+                && let s::Instruction::Data { op: s::DataOp::Move, inputs, output: Some(value), .. }
+                    = &self.result.code[pc + 1]
+                && inputs.as_slice() == [object]
+                && matches!(self.result.registers[*value as usize], s::Type::Variant(_))
+                && matches!(self.result.code[pc + 2], s::Instruction::Br(_))
+            {
+                let before = states.get(&(pc as u32)).cloned().unwrap_or_default();
+                let mut roots = self.result.proofs.roots.iter().filter(|root| root.pc == pc as u32)
+                    .flat_map(|root| root.locations.iter().copied()).collect::<BTreeSet<_>>();
+                roots.extend(&before);
+                for (offset, created) in [(1, object), (2, *value)] {
+                    states.insert(pc as u32 + offset, before.clone());
+                    let mut locations = roots.clone();
+                    locations.insert(L::Register(created));
+                    self.result.proofs.roots.push(s::RootRequirement {
+                        pc: pc as u32 + offset, locations: locations.into_iter().collect(),
+                    });
+                }
             }
         }
         for (&block_id, &pc) in terms {

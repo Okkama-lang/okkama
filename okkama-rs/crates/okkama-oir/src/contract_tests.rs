@@ -55,7 +55,10 @@ pub(crate) fn module() -> Module {
     module.summaries.alloc(Summary {
         entry_kind: EntryKind::CallBoundary,
         parameters: vec![ParameterEffect { convention: FreshConvention::Borrow, retention: None, deps: vec![], destination: TransferDestination::None }],
-        results: vec![ResultRelation { fresh: vec![], aliases: vec![], external_deps: vec![], provenance: AdmissionProvenance::UnboundResult }],
+        results: vec![ResultRelation {
+            fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
+            provenance: AdmissionProvenance::UnboundResult,
+        }],
         contract: CallContract { results: vec![sample()], failures: vec![FailureKind::Thrown, FailureKind::Cancelled], suspends: false, async_destroy: false, publication: Publication::Atomic, protocol: None },
     }).unwrap();
     module.protocols.alloc(ProtocolDecl { kind: ProtocolKind::Storage,

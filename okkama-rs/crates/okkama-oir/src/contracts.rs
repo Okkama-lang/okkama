@@ -260,6 +260,11 @@ pub struct ResultRelation {
     pub fresh: Vec<CreationSiteId>,
     pub aliases: Vec<SummarySelection>,
     pub external_deps: Vec<u16>,
+    /// The result is one of the fresh families or one of the aliases, and
+    /// which one is unknown. Without it, a fresh site with aliases describes
+    /// one fresh identity that contains those aliases (a constructor field).
+    /// An opaque result never takes the identity of an input or a fresh site.
+    pub opaque: bool,
     pub provenance: AdmissionProvenance,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

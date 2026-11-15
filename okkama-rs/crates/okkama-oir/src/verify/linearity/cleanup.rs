@@ -819,7 +819,7 @@ impl Engine<'_, '_> {
             return None;
         };
         if *function != *callee || call.summary != Some(*summary) || declaration.summary != Some(*summary)
-            || relation.fresh.len() != 1 || !relation.aliases.is_empty()
+            || relation.fresh.len() != 1 || !relation.aliases.is_empty() || relation.opaque
             || relation.provenance != AdmissionProvenance::UnboundResult || declaration.body.is_none() {
             return None;
         }

@@ -424,7 +424,8 @@ fn allocated_roots(f: &Function, allocation: &Allocation)
                             map.insert(AllocatedRoot { slot, offset, tagged_int: false });
                         }
                     }
-                    ProducedType::Value(Type::Bool | Type::Never | Type::Descriptor) => {}
+                    ProducedType::Value(Type::Bool | Type::Never | Type::Descriptor | Type::Byte | Type::Float
+                        | Type::Char) => {}
                     ProducedType::Value(ty) => {
                         map.insert(AllocatedRoot { slot, offset: 0, tagged_int: ty == Type::Int });
                     }

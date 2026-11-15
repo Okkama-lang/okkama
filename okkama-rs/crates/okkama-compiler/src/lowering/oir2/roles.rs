@@ -22,8 +22,9 @@ pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Anal
             let methods = methods.clone();
             let mut slots = vec![];
             for (slot, method) in methods.iter().enumerate() {
+                let source_name = &analysis.registry.roles[role.0].methods[slot].name;
                 let index = info.methods.iter().position(|candidate| {
-                    candidate.name == method.name && candidate.params.len() == method.signature.params.len()
+                    candidate.name == *source_name && candidate.params.len() == method.signature.params.len()
                         && candidate.params.iter().zip(&method.signature.params)
                             .all(|((_, ty), lowered)| declarations.types.get(ty) == Some(lowered))
                 }).ok_or_else(|| LowerError::invalid(span, format!("unknown role slot {}", method.name)))?;
@@ -148,37 +149,46 @@ pub(super) fn finish_adapter(builder: &mut ir::FunctionBuilder<'_>, root: ir::Sc
     Ok(())
 }
 
-/// The ByteSource bridge used by the C3 builtin golden. Other adapters keep a diagnostic.
+/// The ByteSource bridges: a string (its UTF-8 bytes, the C3 builtin golden) and a byte
+/// array (the bytes themselves, for `out <- @byte(...)`). Other adapters keep a diagnostic.
+/// The adapters are ordinary lowered objects, like the C3 builtin evidence: neither own nor
+/// the backend may treat them as runtime services.
 pub(super) fn declare_builtins(declarations: &mut Declarations, analysis: &Analysis<'_>) -> Result<()> {
     super::builtin_roles::declare(declarations, analysis)?;
     let Some(role) = analysis.registry.standard.byte_source else {
         return Ok(());
     };
-    let mut requested = false;
-    for body in &analysis.bodies {
-        super::walk::block(&body.block, &mut |expr| {
-            if let thir::ExprKind::Coerce { coercion: thir::Coercion::RoleWrap, value } = &expr.kind {
-                requested |= value.ty == Some(ty::Ty::Str) && expr.ty == Some(ty::Ty::role(role));
-            }
-        });
+    for (input, name) in [(ty::Ty::Str, "core.StringSource"), (ty::Ty::array(ty::Ty::Byte), "core.BytesSource")] {
+        let mut requested = false;
+        for body in &analysis.bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                if let thir::ExprKind::Coerce { coercion: thir::Coercion::RoleWrap, value } = &expr.kind {
+                    requested |= value.ty.as_ref() == Some(&input) && expr.ty == Some(ty::Ty::role(role));
+                }
+            });
+        }
+        if requested {
+            byte_source(declarations, role, &input, name)?;
+        }
     }
-    if !requested {
-        return Ok(());
-    }
+    Ok(())
+}
+
+fn byte_source(declarations: &mut Declarations, role: ty::RoleId, input: &ty::Ty, name: &str) -> Result<()> {
     let span = crate::source::Span::default();
     let role_type = declarations.ty(&ty::Ty::role(role), span)?;
-    let string = declarations.types[&ty::Ty::Str];
-    let bytes = declarations.types[&ty::Ty::array(ty::Ty::Byte)];
+    let value_type = declarations.ty(input, span)?;
+    let bytes = declarations.ty(&ty::Ty::array(ty::Ty::Byte), span)?;
     let declaration = declarations.builder.declare(ir::Declaration {
-        name: "core.StringSource".into(), type_params: vec![], loc: None,
+        name: name.into(), type_params: vec![], loc: None,
         kind: ir::DeclarationKind::Object {
-            fields: vec![ir::Field { name: "value".into(), ty: string, default: None, once: false }],
-            witnesses: vec![], destroy: None, builtin: true,
+            fields: vec![ir::Field { name: "value".into(), ty: value_type, default: None, once: false }],
+            witnesses: vec![], destroy: None, builtin: false,
         },
     })?;
     let object = declarations.builder.intern_type(ir::Type::Object { decl: declaration, args: vec![] })?;
     let function = declarations.builder.declare_function(ir::Function {
-        symbol: "core.StringSource.bytes".into(),
+        symbol: format!("{name}.bytes"),
         signature: ir::Signature {
             params: vec![object], results: vec![bytes], ownership_abi: ir::OwnershipAbi::Unelaborated,
         },
@@ -194,7 +204,11 @@ pub(super) fn declare_builtins(declarations: &mut Declarations, analysis: &Analy
     let value = builder.emit_schema(ir::Operation::Core(ir::CoreOp::ObjGet {
         object: receiver, field: ir::FieldRef { declaration, index: 0 },
     }))?[0];
-    let bytes = builder.emit_schema(ir::Operation::Core(ir::CoreOp::StrUtf8 { value }))?[0];
+    let bytes = if *input == ty::Ty::Str {
+        builder.emit_schema(ir::Operation::Core(ir::CoreOp::StrUtf8 { value }))?[0]
+    } else {
+        value
+    };
     finish_adapter(&mut builder, root, entry, Some(bytes))?;
     let body = builder.finish()?;
     declarations.builder.define_function(function, body)?;
@@ -203,9 +217,9 @@ pub(super) fn declare_builtins(declarations: &mut Declarations, analysis: &Analy
         witnesses.push(ir::Witness { role: role_type, slots: vec![function] });
     }
     let constructor = declarations.builder.declare_function(ir::Function {
-        symbol: "core.StringSource.new".into(),
+        symbol: format!("{name}.new"),
         signature: ir::Signature {
-            params: vec![string], results: vec![object], ownership_abi: ir::OwnershipAbi::Unelaborated,
+            params: vec![value_type], results: vec![object], ownership_abi: ir::OwnershipAbi::Unelaborated,
         },
         attrs: vec![ir::FunctionAttr::Ctor(declaration)], type_params: vec![], summary: None,
         async_creation_summary: None, async_body_summary: None, body: None, loc: None,
@@ -229,6 +243,6 @@ pub(super) fn declare_builtins(declarations: &mut Declarations, analysis: &Analy
     finish_adapter(&mut builder, root, entry, Some(value))?;
     let body = builder.finish()?;
     declarations.builder.define_function(constructor, body)?;
-    declarations.builtin_adapters.insert((string, role_type), constructor);
+    declarations.builtin_adapters.insert((value_type, role_type), constructor);
     Ok(())
 }

@@ -8,6 +8,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Tomato keeps an await's outcome when the cancellation comes after it
+  (#663).** A task whose awaited future had settled, and which was only
+  waiting for its turn, raised `Cancelled` at that finished `await` when it was
+  cancelled meanwhile, and the outcome was lost. It now runs on with the
+  outcome, and the cancellation is raised at its next `await` (#546). A
+  cancellation requested before the future settled still raises at that
+  `await`. New case `L08.cancel.after-await-settled`.
+  `L08.collect.settlement-order` had relied on the old behaviour for an
+  incidental loser, so that loser now waits on a chain that never starts. The
+  expected output is the same.
+
 - **`okkama check` checks test code too (#649).** It used to strip `test` and
   `fake` blocks before analysis, so their errors showed up only on
   `okkama run -t`. It now also analyses the test profile of files that have

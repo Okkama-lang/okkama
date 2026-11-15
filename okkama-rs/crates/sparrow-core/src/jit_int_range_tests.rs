@@ -124,6 +124,8 @@ fn pointer_free_physical_length_bounds_cover_all_heap_representations() {
     assert_eq!(word::small_value(word::small(i64::from(u32::MAX)).unwrap()), Some(i64::from(u32::MAX)));
 }
 
+// Asserts Tomato destroy order; champ-abi compiles resource identities out (`created` is a no-op).
+#[cfg(not(feature = "champ-abi"))]
 #[test]
 fn pointer_free_operation_results_survive_await_and_keep_big_aliases_and_cleanup() {
     crate::on_vm_thread(|| {
@@ -198,6 +200,8 @@ fn pointer_free_unbound_conversion_generic_fallback_remains_rooted() {
     }).unwrap();
 }
 
+// Asserts Tomato destroy order; champ-abi compiles resource identities out (`created` is a no-op).
+#[cfg(not(feature = "champ-abi"))]
 #[test]
 fn pointer_free_modulo_zero_unwind_preserves_lengths_failure_and_cleanup() {
     crate::on_vm_thread(|| {
