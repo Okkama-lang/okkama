@@ -1037,7 +1037,8 @@ variants!(NumericType {
     Float => "float",
     Rat => "rat",
     Bool => "bool",
-    Str => "str"
+    Str => "str",
+    Char => "char"
 });
 record!(FieldValue, "field_value", { field, value });
 variants!(ConstructionStatus {

@@ -263,6 +263,34 @@ fn provenance_retention_and_high_buffer_shapes() {
     assert!(checked.unwind.is_some());
 }
 
+/// #679: `c.code()` and `string(c)` are total; `char(n)` fails outside the Unicode scalar values.
+#[test]
+fn char_conversions_have_contracts() {
+    let module = module();
+    let registry = ContractRegistry::new(&module);
+    let convert = |from, to| Operation::Core(CoreOp::Convert { value: v(1), from, to });
+    for (from, to, result, fails) in [
+        (NumericType::Char, NumericType::Int, ScalarType::Int, false),
+        (NumericType::Char, NumericType::Str, ScalarType::Str, false),
+        (NumericType::Int, NumericType::Char, ScalarType::Char, true),
+    ] {
+        let contract = registry.lookup(&convert(from, to)).unwrap();
+        assert_eq!(contract.normal.results.len(), 1, "{from:?} -> {to:?}");
+        assert_eq!(contract.normal.results[0].ty, ResultType::Scalar(result), "{from:?} -> {to:?}");
+        assert_eq!(contract.unwind.is_some(), fails, "{from:?} -> {to:?}");
+    }
+    for (from, to) in [
+        (NumericType::Char, NumericType::Float),
+        (NumericType::Char, NumericType::Byte),
+        (NumericType::Byte, NumericType::Char),
+        (NumericType::Str, NumericType::Char),
+        (NumericType::Char, NumericType::Char),
+    ] {
+        assert!(matches!(registry.lookup(&convert(from, to)), Err(ContractError::InvalidConversion { .. })),
+            "{from:?} -> {to:?}");
+    }
+}
+
 #[test]
 fn missing_declarations_and_protocol_poststates_are_explicit() {
     let mut module = module();

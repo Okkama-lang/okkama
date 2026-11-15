@@ -416,6 +416,7 @@ pub(crate) fn numeric_type(ty: o::NumericType) -> Option<s::Type> {
         o::NumericType::Byte => Some(s::Type::Byte),
         o::NumericType::Float => Some(s::Type::Float),
         o::NumericType::Rat => Some(s::Type::Rat),
+        o::NumericType::Char => Some(s::Type::Char),
     }
 }
 
@@ -494,6 +495,7 @@ pub(crate) fn family_operation(core: &o::CoreOp) -> Option<(s::DataOp, Vec<o::Va
         C::StrStartsWith { value, part } => (D::StrStartsWith, vec![value, part]),
         C::StrEndsWith { value, part } => (D::StrEndsWith, vec![value, part]),
         C::StrUtf8 { value } => (D::StrUtf8, vec![value]),
+        C::StrCharacters { value } => (D::StrCharacters, vec![value]),
         _ => return None,
     })
 }

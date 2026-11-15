@@ -558,7 +558,9 @@ impl<'a> ContractRegistry<'a> {
                 let trap = match (from, to) {
                     (T::Int, T::Float | T::Byte) | (T::Float, T::Int | T::Byte) | (T::Rat, T::Float | T::Byte) => true,
                     (T::Byte, T::Int | T::Float | T::Rat) | (T::Int | T::Float, T::Rat) | (T::Rat, T::Int) |
-                    (T::Int | T::Byte | T::Float | T::Rat | T::Bool, T::Str) => false,
+                    (T::Int | T::Byte | T::Float | T::Rat | T::Bool | T::Char, T::Str) | (T::Char, T::Int) => false,
+                    // #679: `char(n)` fails outside 0..0x10FFFF and on surrogates.
+                    (T::Int, T::Char) => true,
                     _ => return Err(ContractError::InvalidConversion { from, to }),
                 };
                 self.apply(Rule::Data { ty: to.result_type(), trap }, c, validate)?;

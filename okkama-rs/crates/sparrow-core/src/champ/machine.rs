@@ -493,6 +493,7 @@ pub(crate) fn scalar_code(ty: s::Type) -> Option<u64> {
         s::Type::Byte => 3,
         s::Type::Float => 4,
         s::Type::Rat => 5,
+        s::Type::Char => 6,
         _ => return None,
     })
 }
@@ -506,6 +507,7 @@ fn scalar_type(code: Word) -> Option<(okkama_sparrow::Type, Repr)> {
         3 => (okkama_sparrow::Type::Byte, Repr::Raw),
         4 => (okkama_sparrow::Type::Float, Repr::Raw),
         5 => (okkama_sparrow::Type::Rat, Repr::Ref),
+        6 => (okkama_sparrow::Type::Char, Repr::Raw),
         _ => return None,
     })
 }
@@ -668,6 +670,7 @@ pub(crate) fn scalar(runtime: &mut Runtime, op: s::DataOp, first: Word, second: 
             let bytes = runtime.heap.text(first).as_bytes().to_vec();
             Ok(runtime.heap.allocate_bytes(&bytes))
         }
+        D::StrCharacters => ops::str_fn(runtime, StrFn::Characters, vec![first]),
         D::StrTrimStart | D::StrTrimEnd | D::StrLower | D::StrUpper => {
             let op = match op {
                 D::StrTrimStart => StrFn::TrimStart,

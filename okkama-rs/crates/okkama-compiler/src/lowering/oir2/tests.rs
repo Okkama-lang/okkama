@@ -121,14 +121,15 @@ fn oir2_scalar_builtins_golden() {
 
 #[test]
 fn oir2_unsupported_source_constructs_are_diagnostics() {
-    // A construct OIR-2 cannot express yet (char conversions, #679) stops with a located diagnostic.
-    let source = "module app; main() is int { let c = char(65); 0; }";
+    // A construct OIR-2 cannot express yet (the elementary function intrinsics) stops with a located
+    // diagnostic. Char conversions served here until #679 gave them `cvt`.
+    let source = "module app; main() is int { let c = 65.min(66); 0; }";
     let error = print_oir2(source).expect_err("unsupported program must stop");
     let LowerError::Unsupported { message, span } = error else {
         panic!("wrong diagnostic: {error}");
     };
     assert!(message.contains("unsupported in OIR-2 lowering"), "{message}");
-    assert!(message.contains("char conversion"), "{message}");
+    assert!(message.contains("builtin Math"), "{message}");
     assert!(!span.is_empty());
 }
 
@@ -232,12 +233,12 @@ fn oir2_boundary_edge_cases_roundtrip() {
 #[test]
 fn oir2_declared_unsupported_bodies_name_the_function() {
     for (source, name, construct) in [
-        ("module app; object O { O() { try { char(65).code(); } catch e is Error { 0; } } } main() is int { 0; }",
-            "app.O.new#0", "char conversion"),
-        ("module app; object O { O(); destroy { char(65).code(); } } main() is int { 0; }",
-            "app.O.destroy", "char conversion"),
-        ("module app; object O { has n is int = char(65).code(); O(); } main() is int { 0; }",
-            "app.O.default#0", "char conversion"),
+        ("module app; object O { O() { try { 65.min(66); } catch e is Error { 0; } } } main() is int { 0; }",
+            "app.O.new#0", "builtin Math"),
+        ("module app; object O { O(); destroy { 65.min(66); } } main() is int { 0; }",
+            "app.O.destroy", "builtin Math"),
+        ("module app; object O { has n is int = 65.min(66); O(); } main() is int { 0; }",
+            "app.O.default#0", "builtin Math"),
     ] {
         let error = print_oir2(source).expect_err("unsupported declared body must stop the module");
         let LowerError::Unsupported { span, message } = error else {
@@ -510,12 +511,12 @@ fn oir2_s2_control_flow_and_aliases_roundtrip() {
 #[test]
 fn oir2_s2_unsupported_bodies_name_the_function() {
     for (source, name) in [
-        ("module app; object O { O() { try { char(65).code(); } catch e is Error { 2; } } } main() is int { 0; }",
+        ("module app; object O { O() { try { 65.min(66); } catch e is Error { 2; } } } main() is int { 0; }",
             "app.O.new#0"),
-        ("module app; object O { O(); f() is int { char(65).code(); } } main() is int { 0; }", "app.O.f#0"),
-        ("module app; object O { has n is int = char(65).code(); O(); } main() is int { 0; }",
+        ("module app; object O { O(); f() is int { 65.min(66); } } main() is int { 0; }", "app.O.f#0"),
+        ("module app; object O { has n is int = 65.min(66); O(); } main() is int { 0; }",
             "app.O.default#0"),
-        ("module app; object O { O(); destroy { char(65).code(); } } main() is int { 0; }", "app.O.destroy"),
+        ("module app; object O { O(); destroy { 65.min(66); } } main() is int { 0; }", "app.O.destroy"),
         (concat!("module app; object O { has n is int = 1; O() { let alias = self; n = 2; } } ",
             "main() is int { 0; }"), "app.O.new#0"),
         (concat!("module app; object O { has n is int; O(b is bool) { ",
@@ -649,9 +650,10 @@ fn oir2_defer_lexical_captures_roundtrip() {
 
 #[test]
 fn oir2_outside_s3_constructs_report_unsupported() {
+    // Char conversions were the examples here until #679 gave them `cvt`.
     for body in [
-        "let c = char(65); 0;",
-        "let n = 1.char().code(); 0;",
+        "let n = 65.min(66); 0;",
+        "let x = 1.5.floor(); 0;",
     ] {
         let source = format!("module app; enum Stop is Error = (now); main() is int {{ {body} }}");
         let error = print_oir2(&source).expect_err("outside the slice must remain unsupported");
@@ -2036,3 +2038,26 @@ fn own_regression_golden(name: &str, source: &str) {
     ir::verify::verify_with(&parsed, &options.verify,
         ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog }).unwrap();
 }
+
+/// #679: `c.code()`, `char(n)`, `string(c)` and `c.string()` lower to `cvt` with their kinds; `char(n)` is the
+/// only one that can fail, so it alone needs a failure path.
+#[test]
+fn oir2_char_conversions_lower_to_cvt() {
+    let source = "module app;\nmain() is int {\n    let c = 'Ж';\n    let n = c.code();\n    \
+        let d = char(n + 1);\n    let s = string(d) + d.string();\n    s.length();\n}\n";
+    let module = lower_std(source).unwrap_or_else(|error| panic!("{error}"));
+    verify_high(&module, "char conversions");
+    let main = module.functions.iter()
+        .find(|(_, function)| function.symbol == "main")
+        .and_then(|(_, function)| function.body.as_ref())
+        .expect("main body");
+    let mut conversions = vec![];
+    for (_, inst) in main.insts.iter() {
+        if let ir::Operation::Core(ir::CoreOp::Convert { from, to, .. }) = inst.op {
+            conversions.push((from, to));
+        }
+    }
+    use ir::NumericType as N;
+    assert_eq!(conversions, [(N::Char, N::Int), (N::Int, N::Char), (N::Char, N::Str), (N::Char, N::Str)]);
+}
+

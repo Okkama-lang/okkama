@@ -8,6 +8,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Char conversions on the OIR-2 → SPB 17 → Champ path (#679).** `c.code()`,
+  `char(n)`, `string(c)` and `c.string()` stopped the OIR-2 producer: `cvt`
+  had no char kind. OIR-2 `cvt` now takes char (char → int and char → str
+  total; int → char fails outside 0..0x10FFFF and on surrogates with Tomato's
+  message "char needs a Unicode scalar value (0..0x10FFFF, not a
+  surrogate)"); SPB 17 `Convert` admits the same three pairs, and Champ and
+  its JIT run them with Tomato's semantics. `s.characters()` reaches SPB 17
+  as `str.ext` sub-code 16 (`StrCharacters`, appended; no existing id
+  changed). Cases `L01.lex.crlf.raw-string-keeps-cr`,
+  `L02.char.code-round-trip`, `L02.char.string-cast` and
+  `L02.char.surrogate-rejected` pass on Champ; `L06.const.values` now passes
+  own and low and stops in the SPB 17 layout on its collection constants.
 - **The OIR-2 High verifier admits `fut.done`, `fut.cancel` and `fut.cancelled`
   (#688).** Rule H6 rejected them although plan P2.5 §3.1 lowers
   `f.done()`, `f.cancel()` and `f.cancelled()` to these operations in High
