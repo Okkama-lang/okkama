@@ -1366,6 +1366,9 @@ mod coverage;
 #[path = "defer_tests.rs"]
 mod defer_tests;
 
+#[path = "own_case_tests.rs"]
+mod own_case_tests;
+
 #[test]
 fn oir2_pipeline_scalar() {
     let source = SourceFile::new("app.ok", "module app; main() is int { 7; }").unwrap();

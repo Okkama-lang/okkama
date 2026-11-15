@@ -313,23 +313,51 @@ fn transfer(
             }
         }
         match &instruction.op {
-            Operation::Collection(_) if arrays::supported(module, body, classification, &instruction.op) => {
-                let deps = match &instruction.op {
-                    Operation::Collection(CollectionOp::ArrayNew { values, .. }) => values.iter()
-                        .flat_map(|value| state.values[value.as_u32() as usize].deps.iter().copied()).collect(),
-                    Operation::Collection(CollectionOp::ArrayGet { array, .. }) => {
-                        state.values[array.as_u32() as usize].deps.clone()
-                    }
-                    Operation::Collection(CollectionOp::ArrayLen { .. }) => BTreeSet::new(),
-                    _ => unreachable!(),
-                };
+            Operation::Collection(CollectionOp::BuilderNew { .. } | CollectionOp::MapBuilderNew { .. }) => {}
+            // A transition moves the admissible parts of inserted values to the
+            // builder's owner, approximated by the function root scope.
+            Operation::Collection(collection) if arrays::consumed_buffer(&instruction.op).is_some() => {
+                let buffer = arrays::consumed_buffer(&instruction.op).unwrap();
+                let mut deps = state.values[buffer.as_u32() as usize].deps.clone();
+                let mut inserted = BTreeSet::new();
+                for value in arrays::inserted(collection) {
+                    inserted.extend(state.values[value.as_u32() as usize].deps.iter().copied());
+                }
+                if !inserted.is_empty() {
+                    let owner = super::edges::stack(module, data.lexical_scope)?[0];
+                    transfer_selected(&mut state, owner, &inserted, true, 1);
+                    deps.extend(inserted);
+                }
                 for result in &instruction.results {
-                    state.values[result.as_u32() as usize].deps = deps.clone();
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps = deps.clone();
+                    }
                 }
             }
+            // Derived collections, variants and projections create no identity and
+            // take no packet: inserted obligations stay with their owners and the
+            // result depends on everything its operands depend on.
+            Operation::Collection(_)
+            | Operation::Core(CoreOp::VariantOf { .. } | CoreOp::VariantGet { .. } | CoreOp::Retag { .. }) => {
+                let mut deps = BTreeSet::new();
+                for operand in cfg::operation_uses(&instruction.op, body)
+                    .map_err(|error| flow_error(format!("operands: {error}")))? {
+                    deps.extend(&state.values[operand.value.as_u32() as usize].deps);
+                }
+                for result in &instruction.results {
+                    if managed(body, *result, classification)? {
+                        state.values[result.as_u32() as usize].deps = deps.clone();
+                    }
+                }
+            }
+            // Plain observations borrow their operands and produce no dependency.
+            Operation::Core(_) if routing::handling(&instruction.op) == routing::Handling::Scalar
+                && instruction.results.iter().all(|value| !classification.types
+                    .get(&body.values.get(*value).unwrap().ty).is_some_and(TypeClassification::may_own)) => {}
             Operation::Const(_) => {}
             Operation::Core(CoreOp::RangeNew { .. } | CoreOp::Undef { .. }) => {}
-            Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Complete, .. }) => {
+            Operation::Core(CoreOp::ObjNew { construction: ConstructionStatus::Complete, .. }
+                | CoreOp::VariantNew { .. }) => {
                 let mut retained = BTreeSet::new();
                 for operand in crate::cfg::operation_uses(&instruction.op, body)
                     .map_err(|error| flow_error(format!("operands: {error}")))? {

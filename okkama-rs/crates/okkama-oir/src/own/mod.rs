@@ -387,10 +387,8 @@ pub fn elaborate_ownership(
     universe.solve(&module, &types, &mut budget)?;
     let mut analysis = scopes::analyze(&module, &types, &universe, &mut budget)?;
     universe.annotate(&mut module, &analysis.scopes, &mut budget)?;
+    analysis.managed_references = types.iter().filter_map(|(id, facts)| facts.references.then_some(*id)).collect();
     analysis.types = types;
-    analysis.managed_references = module.types.iter().filter_map(|(id, ty)| {
-        matches!(ty, Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any).then_some(id)
-    }).collect();
     Ok(OwnOutput {
         module,
         census: DynamicCensus::default(),

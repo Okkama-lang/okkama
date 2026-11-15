@@ -6,6 +6,7 @@ mod construction;
 mod control;
 mod finalize;
 mod defers;
+mod buffers;
 use super::*;
 use super::analyze::analyze_function;
 use super::bindings::{block, parameter, plain_or_service, LatestValue, SealedSsa, SsaSlot};
@@ -203,6 +204,14 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 let managed = driver.managed(ty);
                 let latest = driver.ssa.declare(driver.module, &mut driver.body, next,
                     SsaSlot::Value(value), ty, managed)?;
+                if super::emit::linear(driver.module, &driver.body, latest.value)? {
+                    env.linear.insert(latest.value);
+                    let own = driver.module.types.intern(Type::Service(ServiceType::Own)).map_err(arena)?;
+                    let journal = driver.ssa.declare(driver.module, &mut driver.body, next,
+                        SsaSlot::Journal(value), own, false)?.value;
+                    env.linear.insert(journal);
+                    env.journals.insert(value, journal);
+                }
                 env.values.insert(value, latest);
             }
             if let Some(flow) = flows[&function].entries.get(original) {
@@ -435,16 +444,22 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         point.env.cleanup.failure = Some(point.env.value(*failure)?.value);
                         driver.failures.push(FailureRoute { point, target: None });
                     }
-                    TermKind::Unreachable => {
-                        if !point.env.all_linear().is_empty() {
-                            return Err(flow_error("unreachable tombstone contains live ownership"));
-                        }
+                    // A tombstone with live linear state (an exhaustive match's
+                    // default) becomes an unreachable trap: the verifier treats it
+                    // as a program failure, so every live scope must unwind.
+                    TermKind::Unreachable if !point.env.all_linear().is_empty() => {
+                        let trap = TermKind::Trap { code: TrapCode::Unreachable, message: "unreachable".into() };
+                        driver.failure_term(point, &trap)?;
                     }
+                    TermKind::Unreachable => {}
                     TermKind::Throw(_) | TermKind::Panic(_) | TermKind::Trap { .. } => {
                         driver.failure_term(point, &data.term.kind)?;
                     }
                     TermKind::Catch { failure, ty, handler, next } => {
                         driver.catch(point, *failure, *ty, handler, next)?;
+                    }
+                    TermKind::Lookup { kind, collection, key, found, missing } => {
+                        driver.lookup(point, *kind, *collection, *key, found, missing)?;
                     }
                     _ => return Err(flow_error("unsupported High terminator")),
                 }
@@ -466,16 +481,24 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 continue;
             }
             let FailureRoute { mut point, target } = driver.failures.pop().unwrap();
+            let target = driver.consumed_buffer_target(&point.env, target)?;
             let target = target.filter(|target| {
                 let data = high.blocks.get(target.block).unwrap();
                 !data.insts.is_empty() || !matches!(data.term.kind, TermKind::Raise(value)
                     if data.params.last() == Some(&value) && target.args.is_empty())
             });
+            point = driver.abandon_unrouted(point, target.as_ref())?;
             // Pre-accept failure restores fresh parts to their proven original
             // admission. P1 staging proves constructor-root input packets empty.
             let packets: Vec<_> = point.env.linear.iter().copied().collect();
             for packet in packets {
                 if Some(packet) == point.env.cleanup.pending {
+                    continue;
+                }
+                // Builder buffers and their journals travel to the High abandon handler by name.
+                let ty = driver.body.values.get(packet).map_err(arena)?.ty;
+                if !matches!(driver.module.types.get(ty), Ok(Type::Service(ServiceType::Own)))
+                    || point.env.journals.values().any(|journal| *journal == packet) {
                     continue;
                 }
                 let owner = if let Some(owner) = point.env.restore_to.get(&packet) {
@@ -585,12 +608,25 @@ struct Driver<'a, 'o> {
     constructor_inputs: BTreeMap<InstId, BTreeSet<ScopeId>>,
 }
 impl Driver<'_, '_> {
+    /// Whether values of `ty` carry full dependencies. Linear buffers never do:
+    /// their element journal travels separately (`LiveEnv::journals`).
     fn managed(&self, ty: TypeId) -> bool {
         (self.analysis.types.get(&ty).is_some_and(TypeClassification::may_own)
-            || matches!(self.module.types.get(ty), Ok(Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any)))
-            && !matches!(self.module.types.get(ty), Ok(Type::Service(_) | Type::Descriptor))
+            || self.analysis.managed_references.contains(&ty))
+            && !matches!(self.module.types.get(ty), Ok(Type::Service(_) | Type::Descriptor | Type::Builder(_)
+                | Type::MapBuilder(..) | Type::Frame(_)))
     }
-    fn emit(&mut self, mut point: Landing, op: Operation) -> Result<Landing, OwnError> {
+    fn emit(&mut self, point: Landing, op: Operation) -> Result<Landing, OwnError> {
+        self.emit_restoring(point, op, None)
+    }
+    /// `restored` names the High buffer whose checked unwind results (buffer
+    /// and element journal) replace it under the same High name.
+    fn emit_restoring(
+        &mut self,
+        mut point: Landing,
+        op: Operation,
+        restored: Option<ValueId>,
+    ) -> Result<Landing, OwnError> {
         let mut needed: BTreeSet<ValueId> = BTreeSet::new();
         if let Some(target) = &self.current_unwind {
             needed.extend(&target.args);
@@ -615,7 +651,13 @@ impl Driver<'_, '_> {
             _ => None,
         };
         let emission = self.emitter.emit(self.module, &mut self.body, point.block, point.env, op)?;
-        if let Some(unwind) = emission.unwind {
+        if let Some(mut unwind) = emission.unwind {
+            if let Some(buffer) = restored {
+                let value = unwind.result(SlotName::Buffer)?;
+                unwind.env.values.insert(buffer, LatestValue { value, deps: None });
+                let journal = unwind.result(SlotName::Packet)?;
+                unwind.env.journals.insert(buffer, journal);
+            }
             // A failed close has already left the child scope before outer defers run.
             if let Some(parent) = closed_parent {
                 self.body.blocks.get_mut(unwind.block).map_err(arena)?.lexical_scope = parent;
@@ -703,13 +745,24 @@ impl Driver<'_, '_> {
                 let Operation::Lexical(LexicalOp::Stage { value, .. }) = instruction.op else { unreachable!() };
                 return self.stage(point, action, field, value);
             }
-            Operation::Core(CoreOp::ObjNew { .. } | CoreOp::ObjNext { .. }
+            Operation::Core(CoreOp::ObjNew { .. } | CoreOp::ObjNext { .. } | CoreOp::VariantNew { .. }
                 | CoreOp::ObjInit { .. } | CoreOp::ObjGet { .. } | CoreOp::ObjPending { .. }
                 | CoreOp::SuccTake { .. }) => {
                 return self.construct(point, instruction);
             }
-            Operation::Collection(_) if arrays::supported(self.module, self.high, self.analysis, &instruction.op) => {}
+            // High collections never name element packets: inserted obligations stay
+            // with their owners and the result retains them through full deps.
+            Operation::Collection(ref collection) if arrays::packet(collection).is_none() => {
+                if matches!(collection, CollectionOp::BuilderNew { .. } | CollectionOp::MapBuilderNew { .. })
+                    || arrays::consumed_buffer(&instruction.op).is_some() {
+                    return self.buffer(point, instruction, op);
+                }
+            }
+            Operation::Core(CoreOp::VariantOf { .. } | CoreOp::VariantGet { .. } | CoreOp::Retag { .. }) => {}
             Operation::Const(_) | Operation::Core(CoreOp::Undef { .. }) => {}
+            // Plain observations (val.eq, variant.tag, ...) only borrow their operands.
+            Operation::Core(_) if routing::handling(&op) == routing::Handling::Scalar
+                && instruction.results.iter().all(|value| !self.managed(self.high.values.get(*value).unwrap().ty)) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !self.managed(self.high.values.get(*value).unwrap().ty)
             }) && op.operand_refs().iter().all(|operand| match operand.reference {
@@ -765,7 +818,8 @@ impl Driver<'_, '_> {
                 needed.extend(&target.args);
                 needed.extend(&self.failure_live[&target.block]);
             }
-            point.env.values.retain(|value, _| needed.contains(value));
+            let journals = &point.env.journals;
+            point.env.values.retain(|value, _| needed.contains(value) || journals.contains_key(value));
         }
         let effects = self.analysis.scopes[&scope].effects.clone();
         let op = if unwind {
@@ -861,9 +915,15 @@ impl Driver<'_, '_> {
             .chain(point.env.scopes.iter().map(|(scope, value)| (SsaSlot::Scope(*scope), LatestValue {
                 value: *value, deps: None,
             }))).collect();
+        slots.extend(point.env.journals.iter().map(|(buffer, journal)| (SsaSlot::Journal(*buffer), LatestValue {
+            value: *journal, deps: None,
+        })));
         let arguments: Vec<_> = target.args.iter().map(|value| point.env.value(*value)).collect::<Result<_, _>>()?;
-        for (parameter, latest) in original.params.iter().zip(arguments) {
+        for ((parameter, latest), argument) in original.params.iter().zip(arguments).zip(&target.args) {
             slots.insert(SsaSlot::Value(*parameter), latest);
+            if let Some(journal) = point.env.journals.get(argument) {
+                slots.insert(SsaSlot::Journal(*parameter), LatestValue { value: *journal, deps: None });
+            }
         }
         let destination = self.blocks[&target.block];
         let args = self.ssa.incoming(&self.body, destination, point.block, self.ordinal, &slots)?;

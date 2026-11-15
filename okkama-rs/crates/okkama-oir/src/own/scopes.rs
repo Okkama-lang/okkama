@@ -201,6 +201,12 @@ pub(super) fn inventory(
                         let scope = body.boundaries.get(*boundary).map_err(arena)?.scope;
                         scopes.get_mut(&scope).unwrap().blockers.insert(ElisionBlocker::ExplicitTransport);
                     }
+                    // A finished or abandoned builder returns its element journal,
+                    // even an empty one, to the lexical owner of the instruction.
+                    Operation::Collection(CollectionOp::BuilderFinish { .. } | CollectionOp::BuilderAbandon { .. }
+                        | CollectionOp::MapBuilderFinish { .. } | CollectionOp::MapBuilderAbandon { .. }) => {
+                        scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::Journal);
+                    }
                     Operation::Exit(ExitOp::Extend { .. }) => {
                         scopes.get_mut(&block.lexical_scope).unwrap().blockers.insert(ElisionBlocker::Reserve);
                     }

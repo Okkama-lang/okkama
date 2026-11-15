@@ -10,6 +10,8 @@ pub enum SsaSlot {
     Linear(u32),
     Binding(BindingId),
     Value(ValueId),
+    /// The element journal of a High builder buffer.
+    Journal(ValueId),
     ExitValue,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
