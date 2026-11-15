@@ -281,29 +281,30 @@ func @main() -> int [entry, async] async-creation(M13) async-body(M12) {
     %10: str = const "never and"
     %11: bool = const true
     [i9] %12: future<bool> = call @app.Values.flag#1(%9, %10, %11)
+    temp %12, S7
     %13: bool = await %12, result bool
     want %13
-    [i12] exit.prepare fallthrough %13 at B1
+    [i13] exit.prepare fallthrough %13 at B1
     want %8
-    [i14] exit.prepare fallthrough %8 at B1
+    [i15] exit.prepare fallthrough %8 at B1
     want %9
-    [i16] exit.prepare fallthrough %9 at B1
-    result.exit edge normal(0), value %13, demand want, prepare #12
-    result.exit edge normal(0), value %8, demand want, prepare #14
-    result.exit edge normal(0), value %9, demand want, prepare #16
+    [i17] exit.prepare fallthrough %9 at B1
+    result.exit edge normal(0), value %13, demand want, prepare #13
+    result.exit edge normal(0), value %8, demand want, prepare #15
+    result.exit edge normal(0), value %9, demand want, prepare #17
     high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
     br ^b2(%13, %8, %9)
     ^b4(%14: io.stdout.Stdout, %15: app.Values) in S8 unwind ^b1:
     %16: bool = const false
     want %16
-    [i19] exit.prepare fallthrough %16 at B2
+    [i20] exit.prepare fallthrough %16 at B2
     want %14
-    [i21] exit.prepare fallthrough %14 at B2
+    [i22] exit.prepare fallthrough %14 at B2
     want %15
-    [i23] exit.prepare fallthrough %15 at B2
-    result.exit edge normal(0), value %16, demand want, prepare #19
-    result.exit edge normal(0), value %14, demand want, prepare #21
-    result.exit edge normal(0), value %15, demand want, prepare #23
+    [i24] exit.prepare fallthrough %15 at B2
+    result.exit edge normal(0), value %16, demand want, prepare #20
+    result.exit edge normal(0), value %14, demand want, prepare #22
+    result.exit edge normal(0), value %15, demand want, prepare #24
     br ^b2(%16, %14, %15)
     ^b5(%17: bool, %18: io.stdout.Stdout, %19: app.Values, %20: bool) in S6 unwind ^b1:
     bind %17, binding b3
@@ -316,36 +317,37 @@ func @main() -> int [entry, async] async-creation(M13) async-body(M12) {
     ^b6(%25: io.stdout.Stdout, %26: app.Values, %27: bool) in S9 unwind ^b1:
     %28: bool = const true
     want %28
-    [i32] exit.prepare fallthrough %28 at B3
+    [i33] exit.prepare fallthrough %28 at B3
     want %25
-    [i34] exit.prepare fallthrough %25 at B3
+    [i35] exit.prepare fallthrough %25 at B3
     want %26
-    [i36] exit.prepare fallthrough %26 at B3
+    [i37] exit.prepare fallthrough %26 at B3
     want %27
-    [i38] exit.prepare fallthrough %27 at B3
-    result.exit edge normal(0), value %28, demand want, prepare #32
-    result.exit edge normal(0), value %25, demand want, prepare #34
-    result.exit edge normal(0), value %26, demand want, prepare #36
-    result.exit edge normal(0), value %27, demand want, prepare #38
+    [i39] exit.prepare fallthrough %27 at B3
+    result.exit edge normal(0), value %28, demand want, prepare #33
+    result.exit edge normal(0), value %25, demand want, prepare #35
+    result.exit edge normal(0), value %26, demand want, prepare #37
+    result.exit edge normal(0), value %27, demand want, prepare #39
     br ^b5(%28, %25, %26, %27)
     ^b7(%29: io.stdout.Stdout, %30: app.Values, %31: bool) in S10 unwind ^b1:
     %32: str = const "never or"
     %33: bool = const false
-    [i41] %34: future<bool> = call @app.Values.flag#1(%30, %32, %33)
+    [i42] %34: future<bool> = call @app.Values.flag#1(%30, %32, %33)
+    temp %34, S10
     %35: bool = await %34, result bool
     want %35
-    [i44] exit.prepare fallthrough %35 at B4
+    [i46] exit.prepare fallthrough %35 at B4
     want %29
-    [i46] exit.prepare fallthrough %29 at B4
+    [i48] exit.prepare fallthrough %29 at B4
     want %30
-    [i48] exit.prepare fallthrough %30 at B4
+    [i50] exit.prepare fallthrough %30 at B4
     want %31
-    [i50] exit.prepare fallthrough %31 at B4
-    result.exit edge normal(0), value %35, demand want, prepare #44
-    result.exit edge normal(0), value %29, demand want, prepare #46
-    result.exit edge normal(0), value %30, demand want, prepare #48
-    result.exit edge normal(0), value %31, demand want, prepare #50
-    high.effects at #41 failures [thrown, program, panic, native, cancelled], suspends true
+    [i52] exit.prepare fallthrough %31 at B4
+    result.exit edge normal(0), value %35, demand want, prepare #46
+    result.exit edge normal(0), value %29, demand want, prepare #48
+    result.exit edge normal(0), value %30, demand want, prepare #50
+    result.exit edge normal(0), value %31, demand want, prepare #52
+    high.effects at #42 failures [thrown, program, panic, native, cancelled], suspends true
     br ^b5(%35, %29, %30, %31)
     ^b8(%36: int, %37: io.stdout.Stdout, %38: app.Values, %39: bool, %40: bool, %41: map<str, int>) in S6 unwind ^b1:
     bind %36, binding b5
@@ -354,187 +356,189 @@ func @main() -> int [entry, async] async-creation(M13) async-body(M12) {
     %43: str = const "resumed"
     %44: int = const 1
     %45: int = int.add %42, %44
-    [i57] %46: future<int> = call @app.Values.v#0(%38, %43, %45)
+    [i59] %46: future<int> = call @app.Values.v#0(%38, %43, %45)
+    temp %46, S6
     %47: int = await %46, result int
     bind %47, binding b7
-    high.effects at #57 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #59 failures [thrown, program, panic, native, cancelled], suspends true
     cond %39, ^b12(%37, %38, %39, %40, %41, %36, %42, %47), ^b13(%37, %38, %39, %40, %41, %36, %42, %47)
     ^b9(%48: int, %49: io.stdout.Stdout, %50: app.Values, %51: bool, %52: bool, %53: map<str, int>) in S11 unwind ^b1:
     want %48
-    [i61] exit.prepare fallthrough %48 at B5
+    [i64] exit.prepare fallthrough %48 at B5
     want %49
-    [i63] exit.prepare fallthrough %49 at B5
+    [i66] exit.prepare fallthrough %49 at B5
     want %50
-    [i65] exit.prepare fallthrough %50 at B5
+    [i68] exit.prepare fallthrough %50 at B5
     want %51
-    [i67] exit.prepare fallthrough %51 at B5
+    [i70] exit.prepare fallthrough %51 at B5
     want %52
-    [i69] exit.prepare fallthrough %52 at B5
+    [i72] exit.prepare fallthrough %52 at B5
     want %53
-    [i71] exit.prepare fallthrough %53 at B5
-    result.exit edge normal(0), value %48, demand want, prepare #61
-    result.exit edge normal(0), value %49, demand want, prepare #63
-    result.exit edge normal(0), value %50, demand want, prepare #65
-    result.exit edge normal(0), value %51, demand want, prepare #67
-    result.exit edge normal(0), value %52, demand want, prepare #69
-    result.exit edge normal(0), value %53, demand want, prepare #71
+    [i74] exit.prepare fallthrough %53 at B5
+    result.exit edge normal(0), value %48, demand want, prepare #64
+    result.exit edge normal(0), value %49, demand want, prepare #66
+    result.exit edge normal(0), value %50, demand want, prepare #68
+    result.exit edge normal(0), value %51, demand want, prepare #70
+    result.exit edge normal(0), value %52, demand want, prepare #72
+    result.exit edge normal(0), value %53, demand want, prepare #74
     br ^b8(%48, %49, %50, %51, %52, %53)
     ^b10(%54: io.stdout.Stdout, %55: app.Values, %56: bool, %57: bool, %58: map<str, int>) in S12 unwind ^b1:
     %59: str = const "never fallback"
     %60: int = const 0
-    [i74] %61: future<int> = call @app.Values.v#0(%55, %59, %60)
+    [i77] %61: future<int> = call @app.Values.v#0(%55, %59, %60)
+    temp %61, S12
     %62: int = await %61, result int
     want %62
-    [i77] exit.prepare fallthrough %62 at B6
+    [i81] exit.prepare fallthrough %62 at B6
     want %54
-    [i79] exit.prepare fallthrough %54 at B6
+    [i83] exit.prepare fallthrough %54 at B6
     want %55
-    [i81] exit.prepare fallthrough %55 at B6
+    [i85] exit.prepare fallthrough %55 at B6
     want %56
-    [i83] exit.prepare fallthrough %56 at B6
+    [i87] exit.prepare fallthrough %56 at B6
     want %57
-    [i85] exit.prepare fallthrough %57 at B6
+    [i89] exit.prepare fallthrough %57 at B6
     want %58
-    [i87] exit.prepare fallthrough %58 at B6
-    result.exit edge normal(0), value %62, demand want, prepare #77
-    result.exit edge normal(0), value %54, demand want, prepare #79
-    result.exit edge normal(0), value %55, demand want, prepare #81
-    result.exit edge normal(0), value %56, demand want, prepare #83
-    result.exit edge normal(0), value %57, demand want, prepare #85
-    result.exit edge normal(0), value %58, demand want, prepare #87
-    high.effects at #74 failures [thrown, program, panic, native, cancelled], suspends true
+    [i91] exit.prepare fallthrough %58 at B6
+    result.exit edge normal(0), value %62, demand want, prepare #81
+    result.exit edge normal(0), value %54, demand want, prepare #83
+    result.exit edge normal(0), value %55, demand want, prepare #85
+    result.exit edge normal(0), value %56, demand want, prepare #87
+    result.exit edge normal(0), value %57, demand want, prepare #89
+    result.exit edge normal(0), value %58, demand want, prepare #91
+    high.effects at #77 failures [thrown, program, panic, native, cancelled], suspends true
     br ^b8(%62, %54, %55, %56, %57, %58)
     ^b11(%63: bool, %64: io.stdout.Stdout, %65: app.Values, %66: bool, %67: bool, %68: map<str, int>, %69: int, %70: int, %71: int) in S6 unwind ^b1:
     cond %63, ^b15(%64, %65, %66, %67, %68, %69, %70, %71), ^b16(%64, %65, %66, %67, %68, %69, %70, %71)
     ^b12(%72: io.stdout.Stdout, %73: app.Values, %74: bool, %75: bool, %76: map<str, int>, %77: int, %78: int, %79: int) in S13 unwind ^b1:
     %80: bool = const true
     want %80
-    [i90] exit.prepare fallthrough %80 at B7
+    [i94] exit.prepare fallthrough %80 at B7
     want %72
-    [i92] exit.prepare fallthrough %72 at B7
+    [i96] exit.prepare fallthrough %72 at B7
     want %73
-    [i94] exit.prepare fallthrough %73 at B7
+    [i98] exit.prepare fallthrough %73 at B7
     want %74
-    [i96] exit.prepare fallthrough %74 at B7
+    [i100] exit.prepare fallthrough %74 at B7
     want %75
-    [i98] exit.prepare fallthrough %75 at B7
+    [i102] exit.prepare fallthrough %75 at B7
     want %76
-    [i100] exit.prepare fallthrough %76 at B7
+    [i104] exit.prepare fallthrough %76 at B7
     want %77
-    [i102] exit.prepare fallthrough %77 at B7
+    [i106] exit.prepare fallthrough %77 at B7
     want %78
-    [i104] exit.prepare fallthrough %78 at B7
+    [i108] exit.prepare fallthrough %78 at B7
     want %79
-    [i106] exit.prepare fallthrough %79 at B7
-    result.exit edge normal(0), value %80, demand want, prepare #90
-    result.exit edge normal(0), value %72, demand want, prepare #92
-    result.exit edge normal(0), value %73, demand want, prepare #94
-    result.exit edge normal(0), value %74, demand want, prepare #96
-    result.exit edge normal(0), value %75, demand want, prepare #98
-    result.exit edge normal(0), value %76, demand want, prepare #100
-    result.exit edge normal(0), value %77, demand want, prepare #102
-    result.exit edge normal(0), value %78, demand want, prepare #104
-    result.exit edge normal(0), value %79, demand want, prepare #106
+    [i110] exit.prepare fallthrough %79 at B7
+    result.exit edge normal(0), value %80, demand want, prepare #94
+    result.exit edge normal(0), value %72, demand want, prepare #96
+    result.exit edge normal(0), value %73, demand want, prepare #98
+    result.exit edge normal(0), value %74, demand want, prepare #100
+    result.exit edge normal(0), value %75, demand want, prepare #102
+    result.exit edge normal(0), value %76, demand want, prepare #104
+    result.exit edge normal(0), value %77, demand want, prepare #106
+    result.exit edge normal(0), value %78, demand want, prepare #108
+    result.exit edge normal(0), value %79, demand want, prepare #110
     br ^b11(%80, %72, %73, %74, %75, %76, %77, %78, %79)
     ^b13(%81: io.stdout.Stdout, %82: app.Values, %83: bool, %84: bool, %85: map<str, int>, %86: int, %87: int, %88: int) in S14 unwind ^b1:
     %89: bool = bool.not %84
     want %89
-    [i109] exit.prepare fallthrough %89 at B8
+    [i113] exit.prepare fallthrough %89 at B8
     want %81
-    [i111] exit.prepare fallthrough %81 at B8
+    [i115] exit.prepare fallthrough %81 at B8
     want %82
-    [i113] exit.prepare fallthrough %82 at B8
+    [i117] exit.prepare fallthrough %82 at B8
     want %83
-    [i115] exit.prepare fallthrough %83 at B8
+    [i119] exit.prepare fallthrough %83 at B8
     want %84
-    [i117] exit.prepare fallthrough %84 at B8
+    [i121] exit.prepare fallthrough %84 at B8
     want %85
-    [i119] exit.prepare fallthrough %85 at B8
+    [i123] exit.prepare fallthrough %85 at B8
     want %86
-    [i121] exit.prepare fallthrough %86 at B8
+    [i125] exit.prepare fallthrough %86 at B8
     want %87
-    [i123] exit.prepare fallthrough %87 at B8
+    [i127] exit.prepare fallthrough %87 at B8
     want %88
-    [i125] exit.prepare fallthrough %88 at B8
-    result.exit edge normal(0), value %89, demand want, prepare #109
-    result.exit edge normal(0), value %81, demand want, prepare #111
-    result.exit edge normal(0), value %82, demand want, prepare #113
-    result.exit edge normal(0), value %83, demand want, prepare #115
-    result.exit edge normal(0), value %84, demand want, prepare #117
-    result.exit edge normal(0), value %85, demand want, prepare #119
-    result.exit edge normal(0), value %86, demand want, prepare #121
-    result.exit edge normal(0), value %87, demand want, prepare #123
-    result.exit edge normal(0), value %88, demand want, prepare #125
+    [i129] exit.prepare fallthrough %88 at B8
+    result.exit edge normal(0), value %89, demand want, prepare #113
+    result.exit edge normal(0), value %81, demand want, prepare #115
+    result.exit edge normal(0), value %82, demand want, prepare #117
+    result.exit edge normal(0), value %83, demand want, prepare #119
+    result.exit edge normal(0), value %84, demand want, prepare #121
+    result.exit edge normal(0), value %85, demand want, prepare #123
+    result.exit edge normal(0), value %86, demand want, prepare #125
+    result.exit edge normal(0), value %87, demand want, prepare #127
+    result.exit edge normal(0), value %88, demand want, prepare #129
     br ^b11(%89, %81, %82, %83, %84, %85, %86, %87, %88)
     ^b14(%90: int, %91: io.stdout.Stdout, %92: app.Values, %93: bool, %94: bool, %95: map<str, int>, %96: int, %97: int, %98: int) in S6 unwind ^b1:
     %99: str = cvt %90, from int, to str
     %100: array<str> = array.new [%99], ty array<str>
-    [i128] call @io.stdout.Stdout.writeln#4(%37, %100)
+    [i132] call @io.stdout.Stdout.writeln#4(%37, %100)
     %101: int = const 0
     want %101
-    [i131] exit.prepare return %101 at B0
-    result.exit edge normal(0), value %101, demand want, prepare #131
-    high.effects at #128 failures [thrown, program, panic, native, cancelled], suspends true
+    [i135] exit.prepare return %101 at B0
+    result.exit edge normal(0), value %101, demand want, prepare #135
+    high.effects at #132 failures [thrown, program, panic, native, cancelled], suspends true
     ret %101
     ^b15(%102: io.stdout.Stdout, %103: app.Values, %104: bool, %105: bool, %106: map<str, int>, %107: int, %108: int, %109: int) in S15 unwind ^b1:
     %110: int = const 0
     want %110
-    [i134] exit.prepare fallthrough %110 at B9
+    [i138] exit.prepare fallthrough %110 at B9
     want %102
-    [i136] exit.prepare fallthrough %102 at B9
+    [i140] exit.prepare fallthrough %102 at B9
     want %103
-    [i138] exit.prepare fallthrough %103 at B9
+    [i142] exit.prepare fallthrough %103 at B9
     want %104
-    [i140] exit.prepare fallthrough %104 at B9
+    [i144] exit.prepare fallthrough %104 at B9
     want %105
-    [i142] exit.prepare fallthrough %105 at B9
+    [i146] exit.prepare fallthrough %105 at B9
     want %106
-    [i144] exit.prepare fallthrough %106 at B9
+    [i148] exit.prepare fallthrough %106 at B9
     want %107
-    [i146] exit.prepare fallthrough %107 at B9
+    [i150] exit.prepare fallthrough %107 at B9
     want %108
-    [i148] exit.prepare fallthrough %108 at B9
+    [i152] exit.prepare fallthrough %108 at B9
     want %109
-    [i150] exit.prepare fallthrough %109 at B9
-    result.exit edge normal(0), value %110, demand want, prepare #134
-    result.exit edge normal(0), value %102, demand want, prepare #136
-    result.exit edge normal(0), value %103, demand want, prepare #138
-    result.exit edge normal(0), value %104, demand want, prepare #140
-    result.exit edge normal(0), value %105, demand want, prepare #142
-    result.exit edge normal(0), value %106, demand want, prepare #144
-    result.exit edge normal(0), value %107, demand want, prepare #146
-    result.exit edge normal(0), value %108, demand want, prepare #148
-    result.exit edge normal(0), value %109, demand want, prepare #150
+    [i154] exit.prepare fallthrough %109 at B9
+    result.exit edge normal(0), value %110, demand want, prepare #138
+    result.exit edge normal(0), value %102, demand want, prepare #140
+    result.exit edge normal(0), value %103, demand want, prepare #142
+    result.exit edge normal(0), value %104, demand want, prepare #144
+    result.exit edge normal(0), value %105, demand want, prepare #146
+    result.exit edge normal(0), value %106, demand want, prepare #148
+    result.exit edge normal(0), value %107, demand want, prepare #150
+    result.exit edge normal(0), value %108, demand want, prepare #152
+    result.exit edge normal(0), value %109, demand want, prepare #154
     br ^b14(%110, %102, %103, %104, %105, %106, %107, %108, %109)
     ^b16(%111: io.stdout.Stdout, %112: app.Values, %113: bool, %114: bool, %115: map<str, int>, %116: int, %117: int, %118: int) in S16 unwind ^b1:
     %119: int = int.add %116, %118
     want %119
-    [i153] exit.prepare fallthrough %119 at B10
+    [i157] exit.prepare fallthrough %119 at B10
     want %111
-    [i155] exit.prepare fallthrough %111 at B10
+    [i159] exit.prepare fallthrough %111 at B10
     want %112
-    [i157] exit.prepare fallthrough %112 at B10
+    [i161] exit.prepare fallthrough %112 at B10
     want %113
-    [i159] exit.prepare fallthrough %113 at B10
+    [i163] exit.prepare fallthrough %113 at B10
     want %114
-    [i161] exit.prepare fallthrough %114 at B10
+    [i165] exit.prepare fallthrough %114 at B10
     want %115
-    [i163] exit.prepare fallthrough %115 at B10
+    [i167] exit.prepare fallthrough %115 at B10
     want %116
-    [i165] exit.prepare fallthrough %116 at B10
+    [i169] exit.prepare fallthrough %116 at B10
     want %117
-    [i167] exit.prepare fallthrough %117 at B10
+    [i171] exit.prepare fallthrough %117 at B10
     want %118
-    [i169] exit.prepare fallthrough %118 at B10
-    result.exit edge normal(0), value %119, demand want, prepare #153
-    result.exit edge normal(0), value %111, demand want, prepare #155
-    result.exit edge normal(0), value %112, demand want, prepare #157
-    result.exit edge normal(0), value %113, demand want, prepare #159
-    result.exit edge normal(0), value %114, demand want, prepare #161
-    result.exit edge normal(0), value %115, demand want, prepare #163
-    result.exit edge normal(0), value %116, demand want, prepare #165
-    result.exit edge normal(0), value %117, demand want, prepare #167
-    result.exit edge normal(0), value %118, demand want, prepare #169
+    [i173] exit.prepare fallthrough %118 at B10
+    result.exit edge normal(0), value %119, demand want, prepare #157
+    result.exit edge normal(0), value %111, demand want, prepare #159
+    result.exit edge normal(0), value %112, demand want, prepare #161
+    result.exit edge normal(0), value %113, demand want, prepare #163
+    result.exit edge normal(0), value %114, demand want, prepare #165
+    result.exit edge normal(0), value %115, demand want, prepare #167
+    result.exit edge normal(0), value %116, demand want, prepare #169
+    result.exit edge normal(0), value %117, demand want, prepare #171
+    result.exit edge normal(0), value %118, demand want, prepare #173
     br ^b14(%119, %111, %112, %113, %114, %115, %116, %117, %118)
 }
 

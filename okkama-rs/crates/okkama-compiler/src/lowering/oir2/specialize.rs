@@ -619,7 +619,6 @@ impl Specializer<'_, '_> {
 
     fn stmt(&mut self, stmt: &mut thir::Stmt, env: &[(ty::ParamId, ty::Ty)]) -> Result<()> {
         use thir::StmtKind as S;
-        super::asynchronous::check_defer(stmt)?;
         match &mut stmt.kind {
             S::Let { value, .. } | S::Expr(value) | S::Throw(value) | S::BindField { value, .. }
             | S::StageField { value, .. } | S::Rebind { value, .. } | S::Defer(value) => self.expr(value, env)?,

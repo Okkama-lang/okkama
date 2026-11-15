@@ -244,20 +244,21 @@ func @main() -> int [entry, async] async-creation(M13) async-body(M12) {
     bind %1, binding b1
     %2: str = const "first"
     [i5] %3: future<void> = call @app.Values.log#2(%1, %2)
+    temp %3, S6
     await %3
     %4: str = const "second"
-    [i8] %5: future<void> = call @app.Values.log#2(%1, %4)
+    [i9] %5: future<void> = call @app.Values.log#2(%1, %4)
     bind %5, binding b2
     await %5
     await %5
     %6: int = const 0
     want %6
-    [i14] exit.prepare return %6 at B0
-    result.exit edge normal(0), value %6, demand want, prepare #14
+    [i15] exit.prepare return %6 at B0
+    result.exit edge normal(0), value %6, demand want, prepare #15
     high.effects at #0 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #2 failures [thrown, program, panic, native, cancelled], suspends true
     high.effects at #5 failures [thrown, program, panic, native, cancelled], suspends true
-    high.effects at #8 failures [thrown, program, panic, native, cancelled], suspends true
+    high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
     ret %6
     ^b1(%7: failure) in S6:
     raise %7

@@ -1,5 +1,6 @@
 //! The W1 cases of the async plan (#601, plan §4 V10): plain await, compiled through OIR-2 and run in Champ in
-//! process, each checked in full against its case.json. With `SPARROW_CORE_GC_STRESS=1` every safepoint collects.
+//! process, each checked in full against its case.json; and R3's async programs with resources that reach Champ.
+//! With `SPARROW_CORE_GC_STRESS=1` every safepoint collects.
 #![cfg(feature = "champ-abi")]
 
 mod champ_support;
@@ -60,6 +61,7 @@ full_check! {
     w1_order_lazy_branches => "L08.order.lazy-branches",
     w1_void_await_for_effect => "L08.void.await-for-effect",
     k2_future_cancel_unstarted => "L08.future.cancel-unstarted",
+    r3_role_restriction_through_async => "L12.role-restriction-through-async",
 }
 
 /// `catch e is Cancelled` compiles through OIR-2 and SPB 17 and lets every other failure pass (#724, language spec
@@ -92,4 +94,42 @@ fn k2_catch_cancelled_compiles_and_lets_other_failures_pass() {
         "}\n",
     )).unwrap();
     assert_eq!((run.stdout.as_str(), run.result), ("7\n-2\n", Ok(0)));
+}
+
+/// A resource that prints its destroy, so the run shows when each one closes.
+const LEASE: &str = concat!(
+    "module app; import \"io/stdout\" take Stdout; ",
+    "object Lease { has name is string; Lease(name is string) { self.name = name; } label() is string { name; } ",
+    "destroy { Stdout().writeln(\"destroy \" + name); } } ",
+);
+
+fn lease_run(rest: &str) -> String {
+    let run = run_source(&format!("{LEASE}{rest}")).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "stdout={:?}", run.stdout);
+    run.stdout
+}
+
+/// OIR-2 §10.2: the cache owns the resource result; both awaits see it, the body's local closes before the
+/// result is published, and the Future's owner destroys the result once (corpus `async-results` checks 2–4).
+#[test]
+fn r3_resource_result_is_cached_and_destroyed_once() {
+    let stdout = lease_run(concat!(
+        "object Work { Work(); async make() is Lease { let local = Lease(\"L\"); Lease(\"R\"); } } ",
+        "async main() is int { { let f = Work().make(); let r = await f; Stdout().writeln(\"first \" + r.label()); ",
+        "let again = await f; Stdout().writeln(\"again \" + again.label()); } Stdout().writeln(\"end\"); 0; }",
+    ));
+    assert_eq!(stdout, "destroy L\nfirst R\nagain R\ndestroy R\nend\n");
+}
+
+/// OIR-2 §§10.2–10.3: an awaited temporary's fresh result belongs to the awaiting scope, a discarded one too
+/// (corpus `async-results` checks 5–6); a temporary inside an expression closes with its statement.
+#[test]
+fn r3_awaited_temporary_result_closes_with_its_awaiting_scope() {
+    let stdout = lease_run(concat!(
+        "object Work { Work(); async make(n is string) is Lease { Lease(n); } } ",
+        "async main() is int { { await Work().make(\"T\"); Stdout().writeln(\"in block\"); ",
+        "let kept = (await Work().make(\"K\")).label(); Stdout().writeln(\"kept \" + kept); } ",
+        "Stdout().writeln(\"end\"); 0; }",
+    ));
+    assert_eq!(stdout, "in block\ndestroy K\nkept K\ndestroy T\nend\n");
 }

@@ -1,12 +1,19 @@
-//! P2.5 V5 (#601): plain async in the High producer.
+//! P2.5 V5 and R3 (#601): async in the High producer.
 //!
 //! - An async call is an ordinary High `call` of a function with `FunctionAttr::Async`. Its result is
 //!   `future<T>` (plan §3.1). High has no packets (H2), so `fut.new` never appears here: own rewrites
-//!   the call into `fut.new … environment deferred(…)` (elaboration §7.2).
+//!   the call into `fut.new … environment deferred(…)` (elaboration §7.2). Receivers, arguments and
+//!   results that own resources need nothing more in High: own derives the cold inputs and the
+//!   cached outcome from the unelaborated call (R3, OIR-2 §§10.1–10.2).
 //! - `await e` is the shared `await %f, result T`: a value, no deps. The producer never emits
-//!   `await.take`; own decides take, because only own has the alias facts (decision C1).
+//!   `await.take`; own decides take, because only own has the alias facts (decision C1). A Future
+//!   that is a call's result awaited at once is a temporary: the producer marks it `temp` in the
+//!   awaiting scope, its cleanup boundary (OIR-2 §10.3), which is how own finds the temporary take.
 //! - `f.done()`, `f.cancel()` and `f.cancelled()` are `fut.done`, `fut.cancel` and `fut.cancelled`.
-//! - Every async construct outside plain async keeps a named source diagnostic for its later slice.
+//! - `defer await …`: a defer entry whose expression awaits is an async defer entry (async ABI C-6),
+//!   `[defer(), async]` with the async envelopes of H6. It has no replacement: a `return` inside it
+//!   is refused by name (`async-defer-replace`).
+//! - Every async construct outside these keeps a named source diagnostic for its later slice.
 use super::body::BodyLowerer;
 use super::{LowerError, Result};
 use crate::analysis::{registry::Registry, thir, ty::Ty};
@@ -19,8 +26,9 @@ const SPAWN_ASYNC: &str = "spawn of an async action (P2.5 slice P1, fut.spawn)";
 const SPAWN_WORKER: &str = "spawn of a process worker (P2.5 slice X1, proc.spawn)";
 /// A bound async action value and its call (Bible §20.11).
 const BOUND_ASYNC: &str = "bound async action value (P2.5 slice F1)";
-/// `defer await …`: an async defer entry (async ABI C-6).
-const DEFER_AWAIT: &str = "defer await (P2.5 slice R3, async defer entry)";
+/// A `return` inside a deferred expression that awaits: an async defer entry has no replacement in 0.6.0
+/// (async ABI C-6, verifier rule `async-defer-replace`).
+const ASYNC_DEFER_REPLACE: &str = "return inside an awaiting defer (async ABI C-6, async-defer-replace)";
 
 /// Declares the High creation and body summaries of an async entry (elaboration H6).
 ///
@@ -183,23 +191,36 @@ pub(super) fn outside_plain(expr: &thir::Expr) -> Option<&'static str> {
     }
 }
 
-/// `defer await …` and every other deferred expression that awaits.
-pub(super) fn check_defer(stmt: &thir::Stmt) -> Result<()> {
-    if matches!(stmt.kind, thir::StmtKind::Defer(_))
-        && thir::stmt_contains(stmt, &|expr| matches!(expr.kind, thir::ExprKind::Await(_))) {
-        return Err(LowerError::unsupported(stmt.span, DEFER_AWAIT));
-    }
-    Ok(())
+/// Whether a deferred expression awaits: its defer entry is then an async defer entry (async ABI C-6).
+pub(super) fn awaits(expr: &thir::Expr) -> bool {
+    thir::first_in(expr, &|expr| matches!(expr.kind, thir::ExprKind::Await(_))).is_some()
+}
+
+/// The diagnostic of a `return` inside a deferred expression that awaits (async ABI C-6).
+pub(super) fn async_defer_replace(span: Span) -> LowerError {
+    LowerError::unsupported(span, ASYNC_DEFER_REPLACE)
+}
+
+/// Whether an awaited operand is a temporary Future: the result of a call, awaited at once. A Future
+/// read from a binding or a field, or returned by `cancel()`, belongs to its owner (OIR-2 §10.3).
+fn temporary(operand: &thir::Expr) -> bool {
+    matches!(&operand.kind, thir::ExprKind::Call { callee, .. }
+        if !matches!(callee, thir::Callee::Builtin { .. } | thir::Callee::Test(_)))
 }
 
 impl BodyLowerer<'_, '_> {
     /// `await e`: the shared await of the Future's cached outcome. It may fail with the outcome's
     /// failure, suspend and be cancelled, so it observes the current failure continuation (H5).
+    /// A temporary Future is marked `temp` in the awaiting scope first (OIR-2 §10.3).
     pub(super) fn await_value(&mut self, operand: &thir::Expr, result: Option<&Ty>, span: Span)
         -> Result<Option<ir::ValueId>> {
         let Some(future) = self.value(operand)? else {
             return Ok(None);
         };
+        if temporary(operand) {
+            let scope = self.scope();
+            self.b.emit(ir::Operation::Lexical(ir::LexicalOp::Temp { value: future, scope }), &[])?;
+        }
         let result = result.map(|ty| self.ty(ty, span)).transpose()?;
         self.sync_failure()?;
         let values = self.b.emit_schema(ir::Operation::Async(ir::AsyncOp::Await { future, result }))?;

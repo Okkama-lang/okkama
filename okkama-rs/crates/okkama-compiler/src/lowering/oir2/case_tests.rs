@@ -51,7 +51,7 @@ pub(super) fn case_high(id: &str) -> Result<ir::Module, PipelineError> {
     source_high(id, text, directory)
 }
 
-fn source_high(id: &str, text: String, directory: PathBuf) -> Result<ir::Module, PipelineError> {
+pub(super) fn source_high(id: &str, text: String, directory: PathBuf) -> Result<ir::Module, PipelineError> {
     let file = SourceFile::new("main.ok", text).unwrap();
     let program = syntax::parse(&file, &ParseOptions::default()).unwrap();
     let roots = [(&program, file.name(), Some(&file))];
