@@ -78,8 +78,12 @@ impl P1Contracts {
         ] {
             entries.push(entry(&format!("{TEST_INTRINSIC_PREFIX}{name}"), params, vec![], false, 2));
         }
-        let handles = objects.iter().enumerate().filter(|(_, object)| object.handle)
-            .map(|(id, object)| (object.name.clone(), id as u32)).collect::<BTreeMap<_, _>>();
+        let mut handles = BTreeMap::new();
+        for (id, object) in objects.iter().enumerate().filter(|(_, object)| object.handle) {
+            // A second declaration of one name would silently replace the first (`HANDLE_NAME`).
+            enforce(handles.insert(object.name.clone(), id as u32).is_none(), "HANDLE_NAME",
+                "two native handle declarations share one name")?;
+        }
         let mut natives = BTreeMap::new();
         for &native in abi::Native::ALL {
             if catalogue::admitted(native.symbol()).is_err() {

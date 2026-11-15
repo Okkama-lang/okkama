@@ -190,9 +190,10 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                     &adapter
                 }
             };
-            require(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
+            enforce(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
                 && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
-                && f.proofs.entry == trusted.proofs.entry, "external signature/summary mismatch")?;
+                && f.proofs.entry == trusted.proofs.entry,
+                "EXTERNAL_SIGNATURE", "external signature/summary mismatch")?;
             continue;
         }
         check_fallible_data(f)?;

@@ -162,6 +162,22 @@ fn a_test_is_a_void_observation_body_beside_the_entry() {
     reject(&p, "TEST_ENTRY");
 }
 
+#[test]
+fn a_test_is_a_body_of_the_program_not_an_external_entry() {
+    // An external test: the host would run it, not the program. Its body stays, so only the external
+    // marker differs from a valid test.
+    let mut p = profile(is_ints());
+    p.functions[1].proofs.entry.as_mut().unwrap().external = Some("app@1::check/0".into());
+    reject(&p, "TEST_ENTRY");
+    // A test function without code.
+    let mut p = profile(is_ints());
+    let f = &mut p.functions[1];
+    f.code.clear();
+    f.blocks.clear();
+    f.proofs.roots.clear();
+    reject(&p, "TEST_ENTRY");
+}
+
 /// The bodyless declaration of a test intrinsic, as the trusted P1 catalogue states it.
 fn intrinsic(name: &str, registers: Vec<Type>) -> Function {
     Function {
@@ -200,7 +216,9 @@ fn test_intrinsics_need_the_test_profile() {
     let mut p = profile(is_ints());
     p.functions.push(intrinsic("okkama.test.skip", vec![Type::Int]));
     let contracts = p1::P1Contracts::new(&p.objects).unwrap();
-    assert!(verify_load(&p, &contracts).unwrap_err().message.contains("external signature/summary mismatch"));
+    let failure = verify_load(&p, &contracts).unwrap_err();
+    assert!(failure.message.contains("external signature/summary mismatch"), "{failure}");
+    assert_eq!(failure.rule, "EXTERNAL_SIGNATURE", "{failure}");
 }
 
 /// A declaration with `storage` fields named `f<i>`; `destroy` makes it a resource object (an identity).
