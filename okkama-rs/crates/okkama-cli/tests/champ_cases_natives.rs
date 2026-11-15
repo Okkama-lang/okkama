@@ -174,7 +174,7 @@ fn champ_atomic_plain_specializations() {
 /// Cell is an ordinary std object over the registered Atomic of its specialization.
 #[test]
 #[ignore = "Cell construction fails the SPB 17 FRESH_PACKET load rule for every specialization, int included \
-    (pre-existing; ticket to be filed)"]
+    (#671)"]
 fn champ_cell_plain_specializations() {
     expect_output(concat!(
         "module app v1.0.0;\n",
