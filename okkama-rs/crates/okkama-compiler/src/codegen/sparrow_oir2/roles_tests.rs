@@ -808,3 +808,21 @@ fn a_reaching_box_makes_any_collections_managed_and_plain_roles_stay_plain() {
     assert!(p.objects.iter().any(|object| object.any_box && !object.layout.may_reach_resource));
     load(&p).unwrap();
 }
+
+/// #700: an observation that keeps no obligation may still retain a parameter: `Holder(item:)` stores the role
+/// value it is given, so the call summary states the retained parameter as the entry contract does.
+#[test]
+fn an_observation_call_states_the_parameters_it_retains() {
+    let p = compile(ROLES);
+    let holder = function(&p, "app.Holder.new#0");
+    assert_eq!(p.functions[holder].proofs.entry.as_ref().unwrap().retained_params, vec![0]);
+    let main = &p.functions[function(&p, "main")];
+    let summary = main.code.iter().find_map(|instruction| match instruction {
+        s::Instruction::Champ { op: s::Opcode::InvokeObserve, arguments, .. }
+            if arguments.contains(&s::Argument::Entry(holder as u32)) => arguments.iter().find_map(|argument| {
+                match argument { s::Argument::Summary(id) => Some(*id), _ => None }
+            }),
+        _ => None,
+    }).expect("observation call of Holder.new");
+    assert_eq!(p.tables.summaries[summary as usize].retained_params, vec![0]);
+}

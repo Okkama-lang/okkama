@@ -372,7 +372,10 @@ impl Emitter<'_> {
         }
         let may_fail = !summary.contract.failures.is_empty();
         let id = self.summaries.len() as u32;
-        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params: vec![] });
+        // An observation keeps no obligation, but its result may still depend on a parameter (a holder of a
+        // role or Atomic reference): the entry contract states the same retained parameters.
+        let retained_params = retained_parameters(summary)?.into_iter().collect();
+        self.summaries.push(s::Summary { entry: function.as_u32(), may_fail, retained_params });
         let mut arguments = vec![A::Entry(function.as_u32()), A::Summary(id)];
         arguments.extend(call.args.iter().map(|arg| self.loc(arg.value).map(A::Location))
             .collect::<Result<Vec<_>, _>>()?);

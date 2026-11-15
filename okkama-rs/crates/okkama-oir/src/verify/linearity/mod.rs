@@ -54,6 +54,8 @@ struct Engine<'m, 's> {
     emit: bool,
     reported: BTreeSet<(L, R)>,
     managed: &'s [bool],
+    /// Types whose values may hold an obligation (`obligation_types`).
+    obligations: &'s [bool],
     flow_memory: usize,
     materialized_scopes: Option<BTreeSet<ScopeId>>,
     witnesses: std::rc::Rc<Vec<bool>>,
@@ -119,6 +121,7 @@ impl Slot {
 
 pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mut State<'m>) {
     let managed = managed_types(module, state);
+    let obligations = obligation_types(module, state);
     for (id, declaration) in module.declarations.iter() {
         if let DeclarationKind::Object { fields, .. } = &declaration.kind {
             for field in fields {
@@ -148,7 +151,7 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
         let mut engine = Engine {
             module, function, declaration, body, state, emit: false,
             reported: BTreeSet::new(),
-            managed: &managed, flow_memory: 0, materialized_scopes: None,
+            managed: &managed, obligations: &obligations, flow_memory: 0, materialized_scopes: None,
             witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
