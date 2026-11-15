@@ -227,7 +227,7 @@ fn object(name: &str, storage: Vec<Type>, destroy: bool, handle: bool) -> Object
     let count = storage.len() as u32;
     Object {
         name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle, role: None,
-        implements: vec![],
+        implements: vec![], any_box: false,
         fields: (0..count).map(|index| Field { name: format!("f{index}"), storage: index, once: false }).collect(),
         layout: ObjectRuntimeLayout {
             allocation_words: (1 + count + if destroy { 4 } else { 0 }).max(2),

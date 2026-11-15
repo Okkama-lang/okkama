@@ -86,7 +86,7 @@ fn an_incomparable_check_fails_its_case_instead_of_stopping() {
     let mut program = suite();
     program.objects.push(s::Object {
         name: "runtime.buffer.BufferState".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
-        handle: true, role: None, implements: vec![], fields: vec![],
+        handle: true, role: None, implements: vec![], any_box: false, fields: vec![],
         layout: s::ObjectRuntimeLayout {
             allocation_words: 2, identity_offset: None, has_destroy: false, may_reach_resource: false,
             may_async_destroy: false, storage_fields: vec![], trace_layout: vec![], selection_layout: vec![],
