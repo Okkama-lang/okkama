@@ -8,6 +8,26 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Tomato delivers a cancellation to a nested frame resumed by the scheduler
+  (#670).** A task awaiting its own async call, whose frame's awaited future
+  had settled and queued it, ignored a cancellation requested before that
+  frame ran: the request stayed on the task, the frame's next `await`
+  suspended, a second `cancel()` did nothing, and the task hung (or the run
+  stopped with "no task can make progress"). The frame's next `await` now
+  raises `Cancelled`, once, and it unwinds through the frame and the task.
+  New case `L08.cancel.nested-frame-next-await`.
+
+- **Tomato keeps an await's outcome when the cancellation comes after it
+  (#663).** A task whose awaited future had settled, and which was only
+  waiting for its turn, raised `Cancelled` at that finished `await` when it was
+  cancelled meanwhile, and the outcome was lost. It now runs on with the
+  outcome, and the cancellation is raised at its next `await` (#546). A
+  cancellation requested before the future settled still raises at that
+  `await`. New case `L08.cancel.after-await-settled`.
+  `L08.collect.settlement-order` had relied on the old behaviour for an
+  incidental loser, so that loser now waits on a chain that never starts. The
+  expected output is the same.
+
 - **`okkama check` checks test code too (#649).** It used to strip `test` and
   `fake` blocks before analysis, so their errors showed up only on
   `okkama run -t`. It now also analyses the test profile of files that have
@@ -194,6 +214,65 @@ fake fields; role fakes and their ordinary typed fields remain available.
   run passed 534 of 1038 cases on Champ, with no case failing on both
   engines.
 
+- **Champ coverage, wave 2 (#660, #661, #569, #657).** On Champ the
+  conformance suite rose from 534 to 665 of 1039 cases, and no case
+  fails on both engines.
+  - **Backend.**
+    - A conversion is fallible only where its types make it so: `int.string()`
+      is total, so code with a live resource no longer needs an unwind for it
+      (#658).
+    - SPB 17 carries `byte`, `float`, `rat`, `char` and enum variants, with
+      comparisons, structural equality and variant access. The loader checks
+      each new form, keeps float constants finite and restricts structural
+      equality to plain values.
+  - **Own and low.**
+    - Collections, maps and variants keep their elements' obligations with
+      their owners.
+    - A builder carries an explicit journal of its elements.
+    - A `catch` landing has a deps recipe, and `m[k] else …` lowers.
+  - **Producer.**
+    - Arithmetic and bit operations on `float`, `rat` and `byte`, and the
+      string builtins.
+    - `catch case`, `try?`, stream writes, module constants and spread
+      arguments.
+  - **Open calls (O1).** A call of an action value whose target is unknown
+    follows one registered contract, checked against a catalogue:
+    - the environment is borrowed, so one action value can be called many
+      times;
+    - the result may be fresh or alias the environment or an argument.
+
+    The verifier treats two filters with the same keys as one cell, so
+    repeated calls of one callable no longer leave phantom fresh inputs.
+
+  Independent audits found no unsound acceptance; their findings are fixed
+  or ticketed (#653–#656, #666–#670).
+
+
+- **Champ coverage, wave 3 (#569, #601, #645, #654, #666–#668).** On
+  Champ the conformance suite rose from 665 to 673 of 1040 cases, and no
+  case fails on both engines.
+  - **Test mode.** `okkama run -t` runs through OIR-2 on Champ: SPB 17 carries
+    a tests table and a `test.check` operation, and `skip`, `close`, `text` and
+    `bytes` are test intrinsics with plain operands (C8b).
+  - **Natives.** A catalogue beside the runtime ABI table classifies every
+    native by ABI kind, transport, handle role and effect; 594 synchronous
+    natives are admitted, and none is trusted by name alone. `native object`
+    declarations are handles without a destroy token, and a canonical symbol
+    that no provider registers fails at run time after the program has run up
+    to it (C7, #645).
+  - **Own.** A builder's elements live in the journal of the scope that made
+    the builder, so they are destroyed with that scope, not at function exit
+    (#666). Test functions are fixed observation roots, like `main` (#667). A
+    handler that own routes a failure past must abandon its buffers and
+    re-raise; a callee with no language parameters receives an empty packet
+    (#668).
+  - **Loader.** Every rule of the load gate now has a positive and a negative
+    test (#654). The tests found two defects. An exhausted evidence budget was
+    reported under another rule's code; that is fixed. An owned return can drop
+    a live successor's must-use permission, because the successor check does
+    not follow the exit protocol yet; that is #680.
+  - **Async.** The OIR-2 data model for suspension, frame layouts and the
+    await-unwind adapter (#601 V1).
 - **OIR-2 ownership elaboration, synchronous part (#565).** A pass from
   `high` to `own` makes ownership explicit for synchronous code. It covers:
   - scope ends, call conventions and per-scope exits with the reserve;

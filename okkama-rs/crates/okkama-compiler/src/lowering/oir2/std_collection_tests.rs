@@ -185,7 +185,7 @@ fn oir2_c8_l09_sources() {
                     Err(report) => {
                         eprintln!("C8 {name}: {report:#?}");
                         assert!(matches!(name, "collections.frequencies" | "collections.heap-and-deque"
-                            | "compare.failing-order-stops-the-sort"));
+                            | "compare.failing-order-stops-the-sort" | "collections.ordered-sets"));
                         assert!(report.diagnostics.iter().all(|diagnostic| {
                             diagnostic.rule == ir::verify::RuleId::B111
                         }));
@@ -205,8 +205,7 @@ fn oir2_c8_l09_sources() {
             }
             Err(error) => {
                 eprintln!("C8 {name}: {error}");
-                assert_eq!(name, "collections.ordered-sets", "unexpected producer blocker: {error}");
-                assert!(error.to_string().contains("closure or capability (#569)"));
+                panic!("unexpected producer blocker in {name}: {error}");
             }
         }
     }

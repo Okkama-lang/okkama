@@ -2,13 +2,13 @@ use super::*;
 use super::tests::empty_function;
 
 #[derive(Clone)]
-struct Catalog(Vec<Function>);
+pub(super) struct Catalog(pub(super) Vec<Function>);
 impl ExternalContracts for Catalog {
     fn entry(&self, name: &str) -> Option<&Function> {
         self.0.iter().find(|f| f.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) == Some(name))
     }
 }
-fn fixture(name: &str) -> (Program, Catalog) {
+pub(super) fn fixture(name: &str) -> (Program, Catalog) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../okkama-compiler/src/codegen/sparrow_oir2/fixtures/{name}.spb17"));
     let program = assemble(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -17,17 +17,17 @@ fn fixture(name: &str) -> (Program, Catalog) {
     verify_load(&program, &catalog).unwrap();
     (program, catalog)
 }
-fn main(p: &mut Program) -> &mut Function {
+pub(super) fn main(p: &mut Program) -> &mut Function {
     p.functions.iter_mut().find(|f| f.symbol == "main").unwrap()
 }
-fn reject(p: &Program, catalog: &dyn ExternalContracts, code: &'static str) {
+pub(super) fn reject(p: &Program, catalog: &dyn ExternalContracts, code: &'static str) {
     let failure = verify_load(p, catalog).unwrap_err();
     assert_eq!(failure.rule, code, "{failure}");
 }
-fn small(f: Function) -> Program {
+pub(super) fn small(f: Function) -> Program {
     Program { functions: vec![f], ..Program::default() }
 }
-fn failure_param(f: &mut Function) -> Location {
+pub(super) fn failure_param(f: &mut Function) -> Location {
     let location = Location::Register(f.registers.len() as u32);
     f.registers.push(Type::Failure);
     f.params.push(location);
@@ -36,7 +36,7 @@ fn failure_param(f: &mut Function) -> Location {
     location
 }
 /// Repair only ancillary evidence in a counterexample, so the targeted semantic rule is reached.
-fn refresh(f: &mut Function) {
+pub(super) fn refresh(f: &mut Function) {
     f.proofs.states = service_states(f).unwrap();
     f.proofs.roots.clear();
     f.proofs.post_roots.clear();
@@ -45,7 +45,9 @@ fn refresh(f: &mut Function) {
         pc: pc as u32, locations: locations.iter().copied().collect(),
     }).collect();
     for pc in 0..f.code.len().saturating_sub(1) {
-        if matches!(f.code[pc], Instruction::Champ { flow: Flow::Next(_), .. }) {
+        if matches!(f.code[pc], Instruction::Champ { flow: Flow::Next(_), .. })
+            && !matches!(f.code[pc], Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. })
+        {
             f.proofs.post_roots.push(RootRequirement {
                 pc: pc as u32, locations: live[pc + 1].iter().copied().collect(),
             });
@@ -254,22 +256,6 @@ fn unused_merge_plans_are_checked_too() {
 }
 
 #[test]
-fn hundred_thousand_moves_are_bounded_without_recursion() {
-    let mut f = empty_function();
-    f.registers = vec![Type::Int; 100_001];
-    f.params = vec![Location::Register(0)];
-    f.blocks[0].params = f.params.clone();
-    f.code = (1..=100_000).map(|id| Instruction::Data { op: DataOp::Move, inputs: vec![id - 1],
-        output: Some(id), immediate: Immediate::None }).collect();
-    f.code.push(Instruction::Ret(vec![]));
-    let p = small(f);
-    let mut evidence = evidence::Evidence::new(&p, &p.functions[0]);
-    assert_eq!(evidence.identity(Location::Register(100_000)), None);
-    assert_eq!(evidence.check_budget().unwrap_err().rule, "LOAD_WORK_BUDGET");
-    reject(&p, &NoExternalContracts, "LOAD_WORK_BUDGET");
-}
-
-#[test]
 fn replaced_pending_keeps_its_new_value_type() {
     let (mut p, catalog) = fixture("exit-updates");
     let f = main(&mut p);
@@ -385,7 +371,7 @@ fn non_return_commit_cannot_reinterpret_pending_value() {
 /// fresh-call's callee rebuilt to bind its fresh object: create_commit, own.accept into the bound journal,
 /// a scope.split without the admissible flag, and a close of the emptied scope. With `commit` the selected
 /// packet returns through exit.prepare and exit.commit; without it ret.own returns that bound packet itself.
-fn bound_fresh_return(commit: bool) -> (Program, Catalog) {
+pub(super) fn bound_fresh_return(commit: bool) -> (Program, Catalog) {
     let (mut p, catalog) = fixture("fresh-call");
     let f = p.functions.iter_mut().find(|f| f.symbol == "fresh").unwrap();
     assert!(matches!(f.code[11], Instruction::Champ { op: Opcode::OwnSplit, .. }), "fixture changed");

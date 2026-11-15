@@ -387,10 +387,8 @@ pub fn elaborate_ownership(
     universe.solve(&module, &types, &mut budget)?;
     let mut analysis = scopes::analyze(&module, &types, &universe, &mut budget)?;
     universe.annotate(&mut module, &analysis.scopes, &mut budget)?;
+    analysis.managed_references = types.iter().filter_map(|(id, facts)| facts.references.then_some(*id)).collect();
     analysis.types = types;
-    analysis.managed_references = module.types.iter().filter_map(|(id, ty)| {
-        matches!(ty, Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any).then_some(id)
-    }).collect();
     Ok(OwnOutput {
         module,
         census: DynamicCensus::default(),
@@ -401,6 +399,14 @@ pub fn elaborate_ownership(
 
 #[cfg(test)]
 mod tests;
+
+/// The module entry and the test functions are roots the runtime calls with no
+/// arguments and no packet: their ownership ABI stays an observation, and every
+/// obligation of their root scope is cleaned up before they return (spec §14).
+fn fixed_root(module: &Module, function: FuncId) -> bool {
+    module.entry == Some(function)
+        || module.tests.as_ref().is_some_and(|tests| tests.iter().any(|test| test.function == function))
+}
 
 fn flow_error(message: impl Into<String>) -> OwnError {
     phase_error(OwnDiagnosticKind::InvalidFlow, message)

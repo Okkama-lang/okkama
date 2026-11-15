@@ -18,9 +18,24 @@ mod iteration_tests;
 #[cfg(test)]
 mod functional_tests;
 mod specialize;
+mod callables;
+mod anonymous;
+mod bound;
+mod caps;
+mod known_calls;
+#[cfg(test)]
+mod open_calls;
+mod test_profile;
+#[cfg(test)]
+mod test_profile_tests;
+#[cfg(test)]
+mod callable_tests;
 mod native_summaries;
+#[cfg(test)]
+mod native_catalogue_tests;
 mod pipeline;
 pub use pipeline::{PipelineError, compile_linked, compile_linked_with, lower_linked_high};
+pub use pipeline::{compile_linked_tests_with, lower_linked_tests_high};
 mod construction;
 mod declarations;
 mod defer;
@@ -35,6 +50,9 @@ mod std_collection_tests;
 mod roles;
 mod walk;
 mod scalar;
+mod operators;
+mod globals;
+mod streams;
 mod structure;
 #[cfg(test)]
 mod tests;
@@ -42,6 +60,8 @@ mod tests;
 mod specialization_tests;
 #[cfg(test)]
 mod role_tests;
+#[cfg(test)]
+mod case_tests;
 
 use crate::analysis::{Analysis, thir};
 use crate::oir2 as ir;
@@ -106,9 +126,33 @@ type Result<T> = std::result::Result<T, LowerError>;
 /// Independent developer entry: analysis supplies resolved THIR and declarations.
 /// No CLI routing, ownership elaboration or semantic verifier is invoked here.
 pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
+    lower(analysis, false)
+}
+
+/// #569 O1 evidence only: open invocations of `fn` parameters receive the
+/// registered open sync callable ABI instead of the C3a diagnostic. C3b, after
+/// the audit, integrates open invocations into the producer itself.
+#[cfg(test)]
+pub(crate) fn lower_to_oir2_with_open_calls(analysis: &Analysis<'_>) -> Result<ir::Module> {
+    lower(analysis, true)
+}
+
+fn lower(analysis: &Analysis<'_>, open_calls: bool) -> Result<ir::Module> {
     let prepared = specialize::prepare(analysis)?;
-    let analysis = &prepared;
+    let constants = &analysis.registry.const_state;
+    let constant_names: Vec<_> = analysis.registry.consts.iter().map(|constant| {
+        let module = &analysis.registry.modules[constant.module].name;
+        format!("{}.const.{}", module.replace('/', "."), constant.name)
+    }).collect();
+    let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
+    declarations.declare_lambdas(&prepared.callables)?;
+    let walked: Vec<_> = analysis.bodies.iter()
+        .chain(prepared.callables.bodies.iter().map(|discovered| &discovered.body)).collect();
+    let globals = declarations.declare_globals(constants, &constant_names, &walked)?;
+    let bound_entries = bound::entries(declarations.builder.module(), &prepared.callables,
+        &declarations.functions, &declarations.types)?;
+    let calls = std::cell::RefCell::new(known_calls::CallSpans::new());
     // Check ordinary/default/cleanup bodies before constructor specializations.
     let mut bodies: Vec<_> = analysis.bodies.iter().collect();
     bodies.sort_by_key(|body| matches!(body.owner, thir::BodyOwner::Ctor { .. }));
@@ -157,11 +201,37 @@ pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 listed,
                 defers: &declarations.defers,
                 deferred: None,
+                key: callables::BodyKey { root: body.owner.clone(), path: vec![] },
+                lambdas: &declarations.lambdas, globals: &globals, calls: &calls, bound_entries: &bound_entries,
+                test_intrinsics: &declarations.test_intrinsics,
             };
             let lowered = body::BodyLowerer::lower(builder, body, root, &declarations.types, context)
                 .map_err(|error| error.in_function(&symbol))?;
             declarations.builder.define_function(function, lowered)?;
         }
+    }
+    for lambda in &declarations.lambdas {
+        let function = lambda.function;
+        let root = declarations.builder.declare_scope(ir::ScopeDecl {
+            function, parent: None, kind: ir::ScopeKind::Action, loc: None,
+        })?;
+        let symbol = declarations.builder.module().functions.get(function)?.symbol.clone();
+        let builder = declarations.builder.function_builder(function, root)?;
+        let context = body::BodyContext {
+            functions: &declarations.functions,
+            natives: &declarations.natives,
+            error_text: declarations.error_text,
+            builtin_adapters: &declarations.builtin_adapters,
+            objects: &declarations.objects,
+            constructors: &declarations.constructors,
+            given: vec![], listed: None, defers: &declarations.defers, deferred: None,
+            key: lambda.source.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
+            calls: &calls, bound_entries: &bound_entries,
+            test_intrinsics: &declarations.test_intrinsics,
+        };
+        let lowered = body::BodyLowerer::lower(builder, &lambda.source.body, root, &declarations.types, context)
+            .map_err(|error| error.in_function(&symbol))?;
+        declarations.builder.define_function(function, lowered)?;
     }
     for deferred in &declarations.defers {
         let function = deferred.function;
@@ -179,6 +249,9 @@ pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers,
             deferred: Some(deferred.receiver),
+            key: deferred.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
+            calls: &calls, bound_entries: &bound_entries,
+            test_intrinsics: &declarations.test_intrinsics,
         };
         let lowered = body::BodyLowerer::lower(builder, &deferred.source, root, &declarations.types, context)
             .map_err(|error| error.in_function(&symbol))?;
@@ -186,6 +259,13 @@ pub fn lower_to_oir2(analysis: &Analysis<'_>) -> Result<ir::Module> {
     }
     let mut module = declarations.builder.finish()?;
     structure::finish(&mut module)?;
+    test_profile::check(&module)?;
+    if open_calls {
+        #[cfg(test)]
+        open_calls::attach(&mut module)?;
+    } else {
+        known_calls::check(&module, &calls.into_inner())?;
+    }
     structure::check(&module)?;
     once::check(&module)?;
     Ok(module)

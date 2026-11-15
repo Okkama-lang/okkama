@@ -914,7 +914,7 @@ variants!(TransferDestination {
     Cache => "cache",
     FailureContext => "failure_context"
 });
-record!(ResultRelation, "result_relation", { fresh, aliases, external_deps, provenance });
+record!(ResultRelation, "result_relation", { fresh, aliases, external_deps, opaque, provenance });
 record!(Summary, "summary", { entry_kind, parameters, results, contract });
 record!(CallContract, "call_contract", { results, failures, suspends, async_destroy, publication, protocol });
 variants!(Publication {

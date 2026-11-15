@@ -31,9 +31,37 @@ fn kind(module: &o::Module, ty: o::TypeId) -> Result<P, GenerateError> {
     })
 }
 
-/// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`).
+/// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
+/// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
+/// evaluated the same way: they fail only outside a running case.
 fn fallible_scalar(op: &o::Operation) -> bool {
-    matches!(op, o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::Convert { .. }))
+    if test_check(op).is_some() {
+        return true;
+    }
+    match op {
+        o::Operation::Core(o::CoreOp::IntMod { .. } | o::CoreOp::RangeNew { .. } | o::CoreOp::IntDiv { .. }
+            | o::CoreOp::RatNew { .. } | o::CoreOp::ValEq { .. } | o::CoreOp::ValNe { .. }
+            | o::CoreOp::VariantGet { .. }) => true,
+        o::Operation::Core(o::CoreOp::Convert { from, to, .. }) => {
+            matches!((numeric_type(*from), numeric_type(*to)),
+                (Some(from), Some(to)) if s::conversion(from, to) == Some(true))
+        }
+        _ => false,
+    }
+}
+
+/// A test assertion as its SPB 17 test operation and operands.
+fn test_check(op: &o::Operation) -> Option<(s::DataOp, Vec<o::ValueId>)> {
+    let o::Operation::Core(core) = op else {
+        return None;
+    };
+    Some(match *core {
+        o::CoreOp::TestOk { condition } => (s::DataOp::TestOk, vec![condition]),
+        o::CoreOp::TestIs { left, right } => (s::DataOp::TestIs, vec![left, right]),
+        o::CoreOp::TestIsnt { left, right } => (s::DataOp::TestIsnt, vec![left, right]),
+        o::CoreOp::TestFail { message } => (s::DataOp::TestFail, vec![message]),
+        _ => return None,
+    })
 }
 
 pub(super) fn needs_s2(module: &o::Module, function: &o::Function) -> Result<bool, GenerateError> {
@@ -368,7 +396,29 @@ impl Emitter<'_> {
                             s::Type::Int, s::Immediate::None, vec![*value])),
                         o::CoreOp::IntMod { left, right } => Some((s::DataOp::IntMod,
                             s::Type::Int, s::Immediate::None, vec![*left, *right])),
-                        _ => None,
+                        o::CoreOp::IntDiv { left, right } => Some((s::DataOp::RatNew,
+                            s::Type::Rat, s::Immediate::None, vec![*left, *right])),
+                        o::CoreOp::RatNew { numerator, denominator } => Some((s::DataOp::RatNew,
+                            s::Type::Rat, s::Immediate::None, vec![*numerator, *denominator])),
+                        o::CoreOp::ValEq { left, right } => Some((s::DataOp::ValEq,
+                            s::Type::Bool, s::Immediate::None, vec![*left, *right])),
+                        o::CoreOp::ValNe { left, right } => Some((s::DataOp::ValNe,
+                            s::Type::Bool, s::Immediate::None, vec![*left, *right])),
+                        o::CoreOp::VariantGet { value, case, field } => {
+                            let storage = variant_storage(self.module, self.objects, *field)?;
+                            let ty = self.objects[field.declaration.as_u32() as usize].layout.storage_fields
+                                [storage as usize];
+                            Some((s::DataOp::VariantGet, ty, s::Immediate::Updates(vec![*case, storage]), vec![*value]))
+                        }
+                        o::CoreOp::Convert { value, from, to } if fallible_scalar(op) => {
+                            let target = numeric_type(*to).ok_or_else(|| later("conversion type"))?;
+                            if numeric_type(*from).is_none() {
+                                return Err(later("conversion type"));
+                            }
+                            Some((s::DataOp::Convert, target, s::Immediate::None, vec![*value]))
+                        }
+                        // The check's bool outcome (whether it held) is not used by the source.
+                        _ => test_check(op).map(|(check, inputs)| (check, s::Type::Bool, s::Immediate::None, inputs)),
                     };
                     if let Some((op, result, immediate, inputs)) = scalar {
                         let context = s::ResultContext {
@@ -593,6 +643,10 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
         }
         term_pcs.insert(block_id, pc);
         let size = match &block.term.kind {
+            // A plain variant value is its case object moved into the variant type.
+            o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
+                o::Operation::Core(o::CoreOp::VariantNew { packet: None, ty, .. })
+                    if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 3,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
@@ -737,6 +791,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                     }
                     continue;
                 }
+                op if test_check(op).is_some() => {
+                    let (op, operands) = test_check(op).expect("test assertion");
+                    if !inst.results.is_empty() {
+                        return Err(error("test assertion cannot produce results"));
+                    }
+                    let inputs = operands.iter().map(|&value| emitter.reg(value)).collect::<Result<_, _>>()?;
+                    // The check's outcome is a fresh bool: whether it held. The source discards it.
+                    let held = fresh(&mut emitter.result, s::Type::Bool)?;
+                    emitter.evaluate(data(op, inputs, held, s::Immediate::None), block.unwind.as_ref())?;
+                    continue;
+                }
                 o::Operation::Core(o::CoreOp::RangeLen { value }) => {
                     if inst.results.len() != 1 {
                         return Err(error("range.len requires one result"));
@@ -773,7 +838,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                             *value = emitter.reg(o::ValueId::from_u32(*value))?;
                         }
                     }
-                    let fallible = matches!(&translated, s::Instruction::Data { op, .. } if op.fallible());
+                    let fallible = emitter.result.data_fallible(&translated);
                     if fallible != fallible_scalar(&inst.op) {
                         return Err(error(format!("{}: fallible scalar classification", inst.op.opcode())));
                     }

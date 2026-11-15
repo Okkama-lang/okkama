@@ -16,32 +16,50 @@ fn at<T>(items: &[T], index: u32) -> Result<&T, Error> {
 
 fn ty_valid(ty: Type, p: &Program) -> Check {
     if let Type::Object(id) | Type::Successor(id) = ty {
-        at(&p.objects, id)?;
+        enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
+    }
+    if let Type::Handle(id) = ty {
+        enforce(p.objects.get(id as usize).is_some_and(|object| object.handle),
+            "HANDLE_TYPE", "a handle type names no native handle declaration")?;
+    }
+    if let Type::Variant(id) = ty {
+        enforce(p.objects.get(id as usize).is_some_and(|object| !object.variant_cases.is_empty()),
+            "VARIANT_TYPE", "variant type names a declaration without variant cases")?;
     }
     if let Type::Array(shape) = ty {
         enforce(shape.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
         if let ArrayLeaf::Object(id) = shape.leaf {
-            let mut pending = vec![Type::Object(id)];
-            let mut seen = BTreeSet::new();
-            while let Some(ty) = pending.pop() {
-                match ty {
-                    Type::Object(id) if seen.insert(id) => {
-                        let object = p.objects.get(id as usize)
-                            .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
-                        enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
-                            && !object.layout.may_async_destroy, "ARRAY_PLAIN", "array element reaches resources")?;
-                        pending.extend(&object.layout.storage_fields);
-                    }
-                    Type::Array(inner) => {
-                        enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
-                        if let ArrayLeaf::Object(id) = inner.leaf {
-                            pending.push(Type::Object(id));
-                        }
-                    }
-                    Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_) => {}
-                    _ => return Err(violation("ARRAY_PLAIN", "array element graph is not closed plain data")),
+            let handle = p.objects.get(id as usize).is_some_and(|object| object.handle);
+            enforce(!handle, "HANDLE_TYPE", "an array element names a native handle declaration")?;
+            closed_plain(id, p, "ARRAY_PLAIN")?;
+        }
+    }
+    Ok(())
+}
+
+/// The object graph from `root` is closed plain data: no destroy, nothing that reaches a resource,
+/// and only scalar, text, range, bytes, array and plain object fields. `rule` names the caller's rule.
+fn closed_plain(root: u32, p: &Program, rule: &'static str) -> Check {
+    let mut pending = vec![Type::Object(root)];
+    let mut seen = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        match ty {
+            Type::Object(id) if seen.insert(id) => {
+                let object = p.objects.get(id as usize)
+                    .ok_or_else(|| violation("ARRAY_ELEMENT", "unknown array element object"))?;
+                enforce(!object.layout.has_destroy && !object.layout.may_reach_resource
+                    && !object.layout.may_async_destroy, rule, "object graph reaches resources")?;
+                pending.extend(&object.layout.storage_fields);
+            }
+            Type::Array(inner) => {
+                enforce(inner.depth > 0, "ARRAY_SHAPE", "array depth must be positive")?;
+                if let ArrayLeaf::Object(id) = inner.leaf {
+                    pending.push(Type::Object(id));
                 }
             }
+            Type::Int | Type::Bool | Type::Str | Type::Range | Type::Bytes | Type::Object(_)
+                | Type::Byte | Type::Float | Type::Char | Type::Rat => {}
+            _ => return Err(violation(rule, "object graph is not closed plain data")),
         }
     }
     Ok(())
@@ -66,6 +84,21 @@ fn constant_type(value: &Constant) -> Result<Type, Error> {
         Constant::Bool(_) => Ok(Type::Bool),
         Constant::Descriptor(_) => Ok(Type::Descriptor),
         Constant::Str(_) => Ok(Type::Str),
+        Constant::Byte(value) => {
+            enforce(*value <= 255, "CONST_BYTE", "byte constant outside 0..255")?;
+            Ok(Type::Byte)
+        }
+        Constant::Char(value) => {
+            enforce(char::from_u32(*value).is_some(), "CONST_CHAR", "char constant is not a Unicode scalar value")?;
+            Ok(Type::Char)
+        }
+        Constant::Float(bits) => {
+            // Floats are always finite in Okkama; every other source of a float checks it at run time.
+            let canonical = bits.parse::<u64>()
+                .is_ok_and(|value| value.to_string() == *bits && f64::from_bits(value).is_finite());
+            enforce(canonical, "CONST_FLOAT", "float constant is not a canonical finite binary64 bit pattern")?;
+            Ok(Type::Float)
+        }
     }
 }
 
@@ -73,6 +106,7 @@ pub fn verify(p: &Program) -> Check {
     if let Some(entry) = p.entry {
         at(&p.functions, entry)?;
     }
+    check_tests(p)?;
     for object in &p.objects {
         let layout = &object.layout;
         let count = layout.storage_fields.len() as u64;
@@ -90,6 +124,20 @@ pub fn verify(p: &Program) -> Check {
             }
             Ok(())
         };
+        if object.handle {
+            let plain = object.fields.is_empty() && object.error_cases.is_empty() && object.enum_cases == 0
+                && object.variant_cases.is_empty() && layout.storage_fields.is_empty() && !layout.has_destroy
+                && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
+            enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
+        }
+        if !object.variant_cases.is_empty() {
+            let mut seen = BTreeSet::new();
+            let plain = object.fields.is_empty() && layout.storage_fields.is_empty() && !layout.may_reach_resource
+                && object.variant_cases.iter().all(|&case| seen.insert(case) && p.objects.get(case as usize)
+                    .is_some_and(|case| case.variant_cases.is_empty() && !case.layout.has_destroy
+                        && !case.layout.may_reach_resource));
+            enforce(plain, "VARIANT_CASES", "variant cases must be distinct plain case objects")?;
+        }
         unique(&object.fields.iter().map(|field| field.storage).collect::<Vec<_>>())?;
         unique(&layout.trace_layout)?;
         unique(&layout.selection_layout)?;
@@ -100,7 +148,7 @@ pub fn verify(p: &Program) -> Check {
                     "understated object retention metadata")?;
             }
             let traced = matches!(ty, Type::Error | Type::Bytes | Type::Array(_) | Type::Str | Type::Object(_)
-                | Type::Successor(_) | Type::Failure);
+                | Type::Successor(_) | Type::Failure | Type::Rat | Type::Variant(_) | Type::Handle(_));
             require(layout.trace_layout.contains(&(index as u32)) == traced, "incorrect object trace layout")?;
         }
     }
@@ -123,6 +171,33 @@ pub fn verify(p: &Program) -> Check {
     }
     for f in &p.functions {
         verify_function(p, f).map_err(|e| Error { message: format!("{}: {}", f.symbol, e.message), ..e })?;
+    }
+    Ok(())
+}
+
+/// The tests table of the test profile: unique names, distinct `() -> void` observation bodies that are
+/// not the program entry. Test intrinsics belong to the test profile only.
+fn check_tests(p: &Program) -> Check {
+    for f in &p.functions {
+        let name = f.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref());
+        enforce(p.tests.is_some() || !name.is_some_and(|name| name.starts_with(TEST_INTRINSIC_PREFIX)),
+            "TEST_PROFILE", "test intrinsics need a tests table")?;
+    }
+    let Some(tests) = &p.tests else {
+        return Ok(());
+    };
+    let mut names = BTreeSet::new();
+    let mut functions = BTreeSet::new();
+    for test in tests {
+        enforce(!test.name.is_empty() && names.insert(test.name.as_str()), "TEST_TABLE",
+            "test names must be non-empty and unique")?;
+        let f = p.functions.get(test.function as usize)
+            .ok_or_else(|| violation("TEST_TABLE", "test function index out of range"))?;
+        enforce(functions.insert(test.function), "TEST_TABLE", "two tests share one function")?;
+        enforce(p.entry != Some(test.function), "TEST_ENTRY", "the program entry cannot be a test")?;
+        let external = f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some());
+        enforce(f.entry_abi == EntryAbi::Observation && f.params.is_empty() && f.results.is_empty()
+            && !external && !f.code.is_empty(), "TEST_ENTRY", "a test needs a () -> void observation body")?;
     }
     Ok(())
 }
@@ -320,12 +395,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let Some(Argument::Evaluation(evaluation)) = args.first() else {
                 return Err(violation("EVALUATE_OPERATION", "missing evaluation operation"));
             };
-            enforce(evaluation.op.fallible() || matches!(evaluation.op, DataOp::RangeEnd | DataOp::RangeLen),
-                "EVALUATE_OPERATION", "operation is outside scalar outcomes")?;
             let types = locations.iter().map(|&location| match loc_type(f, location)? {
                 ProducedType::Value(ty) => Ok(ty),
                 _ => Err(violation("EVALUATE_OPERAND", "evaluation cannot consume services")),
             }).collect::<Result<Vec<_>, _>>()?;
+            enforce(evaluation.op.fallible(&types, Some(evaluation.result))
+                || matches!(evaluation.op, DataOp::RangeEnd | DataOp::RangeLen),
+                "EVALUATE_OPERATION", "operation is outside scalar outcomes")?;
             check_data_types(p, evaluation.op, &types, Some(evaluation.result), &evaluation.immediate)?;
             ctx.value = Some(evaluation.result);
             ctx.may_fail = true;
@@ -597,7 +673,7 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
     let expect = |args: &[Type], result: Option<Type>| -> Check {
         require(types == args && out == result, "scalar operand/result type or arity mismatch")
     };
-    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase);
+    let immediate_none = !matches!(op, Const | RangeNew | ObjNew | ObjInit | ObjGet | ObjNext | EnumCase | VariantGet);
     if immediate_none {
         require(*imm == Immediate::None, "unexpected scalar immediate")?;
     }
@@ -611,7 +687,8 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             };
             let object = at(&p.objects, *id)?;
             enforce(object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
-                && !object.layout.may_reach_resource && (*case as usize) < object.error_cases.len(),
+                && !object.layout.may_reach_resource
+                && ((*case as usize) < object.error_cases.len() || *case < object.enum_cases),
                 "ENUM_CASE", "invalid plain enum case")?;
             expect(&[], Some(Type::Object(*id)))
         }
@@ -640,14 +717,72 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
         StrConcat => expect(&[Type::Str, Type::Str], Some(Type::Str)),
         StrEq | StrNe | StrLt | StrLe | StrGt | StrGe => expect(&[Type::Str, Type::Str], Some(Type::Bool)),
         StrLen => expect(&[Type::Str], Some(Type::Int)),
-        Convert => require(types.len() == 1 && out.is_some() && types.iter().chain(out.iter())
-            .all(|ty| matches!(ty, Type::Int | Type::Bool | Type::Str)), "conversion outside P1"),
+        ByteEq | ByteNe | ByteLt | ByteLe | ByteGt | ByteGe => expect(&[Type::Byte, Type::Byte], Some(Type::Bool)),
+        CharEq | CharNe | CharLt | CharLe | CharGt | CharGe => expect(&[Type::Char, Type::Char], Some(Type::Bool)),
+        FloatEq | FloatNe | FloatLt | FloatLe | FloatGt | FloatGe => {
+            expect(&[Type::Float, Type::Float], Some(Type::Bool))
+        }
+        RatEq | RatNe | RatLt | RatLe | RatGt | RatGe => expect(&[Type::Rat, Type::Rat], Some(Type::Bool)),
+        RatNew => expect(&[Type::Int, Type::Int], Some(Type::Rat)),
+        EnumEq | EnumNe => {
+            let enumeration = match types {
+                [Type::Object(left), Type::Object(right)] if left == right => {
+                    let object = at(&p.objects, *left)?;
+                    object.fields.is_empty() && object.layout.storage_fields == [Type::Int]
+                        && (!object.error_cases.is_empty() || object.enum_cases > 0)
+                }
+                _ => false,
+            };
+            enforce(enumeration && out == Some(Type::Bool), "ENUM_EQ_TYPE",
+                "enum comparison needs two values of one plain enum and a bool result")
+        }
+        VariantTag => enforce(matches!(types, [Type::Variant(_)]) && out == Some(Type::Int), "VARIANT_TAG",
+            "variant.tag needs a variant value and an int result"),
+        VariantGet => {
+            let field = match (types, imm) {
+                ([Type::Variant(variant)], Immediate::Updates(indices)) => match indices.as_slice() {
+                    [case, storage] => p.objects[*variant as usize].variant_cases.get(*case as usize)
+                        .and_then(|&case| p.objects.get(case as usize))
+                        .filter(|case| case.fields.iter().any(|field| field.storage == *storage))
+                        .and_then(|case| case.layout.storage_fields.get(*storage as usize).copied()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            enforce(field.is_some() && out == field, "VARIANT_GET",
+                "variant.get needs a case of the variant and one of its payload fields")
+        }
+        ValEq | ValNe => {
+            let object = matches!(types, [Type::Object(left), Type::Object(right)] if left == right);
+            enforce(object && out == Some(Type::Bool), "VAL_EQ_TYPE",
+                "value comparison needs two objects of one declaration and a bool result")?;
+            // Structural equality is defined on plain values; identities and error payloads are not compared.
+            let [Type::Object(id), _] = types else { return Ok(()) };
+            closed_plain(*id, p, "VAL_EQ_TYPE")
+        }
+        Convert => enforce(matches!((types, out), ([from], Some(to)) if conversion(*from, to).is_some()),
+            "CONVERT_TYPE", "conversion between these types is not defined"),
+        TestOk | TestFail | TestIs | TestIsnt => {
+            enforce(p.tests.is_some(), "TEST_PROFILE", "test operations need a tests table")?;
+            let valid = match (op, types) {
+                (TestOk, [Type::Bool]) | (TestFail, [Type::Str]) => true,
+                (TestIs | TestIsnt, [left, right]) => left == right && matches!(left,
+                    Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Str
+                    | Type::Range | Type::Bytes | Type::Array(_) | Type::Object(_) | Type::Successor(_)
+                    | Type::Variant(_)),
+                _ => false,
+            };
+            enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
+                "test operation operand types differ from its check, or its result is not bool")
+        }
         Move => {
             require(types.len() == 1, "move requires one source")?;
             let valid = out == Some(types[0]) || matches!((types[0], out),
                 (Type::Successor(a), Some(Type::Object(b))) if a == b)
                 || matches!((types[0], out), (Type::Object(id), Some(Type::Error))
-                    if !p.objects[id as usize].error_cases.is_empty());
+                    if !p.objects[id as usize].error_cases.is_empty())
+                || matches!((types[0], out), (Type::Object(case), Some(Type::Variant(variant)))
+                    if p.objects[variant as usize].variant_cases.contains(&case));
             require(valid, "invalid move/succ.take type")
         }
         Undef => require(types.is_empty() && out.is_some(), "invalid undef"),

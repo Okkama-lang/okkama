@@ -1,0 +1,24 @@
+oir 2 high
+module app
+requires core, test, async
+test "async body" = "@$test0"
+scope S0 action in "@$test0"
+summary M0 call-boundary contract call_contract(failures=[thrown, program, panic, native, cancelled], suspends=true,
+        publication=atomic)
+summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract
+        call_contract(results=[future<void>], failures=[program, panic, native], publication=atomic)
+
+func "@$test0"() -> void [async] async-creation(M1) async-body(M0) {
+    boundary B0 lexical in S0
+    selection s0: selection = union([])
+    ^b0 in S0 unwind ^b1:
+    %0: bool = const true
+    test.ok %0
+    %1: int = const 2
+    %2: int = const 2
+    test.is %1, %2
+    exit.prepare return select s0 at B0
+    ret
+    ^b1(%3: failure) in S0:
+    raise %3
+}

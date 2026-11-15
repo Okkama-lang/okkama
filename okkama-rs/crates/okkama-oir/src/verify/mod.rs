@@ -29,6 +29,7 @@ mod graph;
 mod dominance;
 mod contracts;
 mod authority;
+mod entry_packets;
 mod construction;
 mod summaries;
 mod high;
@@ -66,6 +67,9 @@ pub trait ExternalContracts {
     fn intrinsic_summary(&self, _: &str) -> Option<&Summary> { None }
     /// Runtime entries authorized to destroy a descriptor's complete owner graph.
     fn descriptor_cleanup(&self, _: &str) -> Option<&Summary> { None }
+    /// The registered conservative contract of an open sync call of this `fn`
+    /// type (#569 O1). Without a registration, an open invocation is rejected.
+    fn open_callable(&self, _: TypeId) -> Option<Summary> { None }
 }
 #[derive(Debug)]
 pub struct NoExternalContracts;
@@ -277,6 +281,7 @@ fn run_mode<'m>(
     dominance::check(module, function, &mut state);
     contracts::check(module, function, &mut state);
     authority::check(module, function, &mut state);
+    entry_packets::check(module, function, &mut state);
     if options.mode == VerifyMode::Full {
         summaries::check(module, function, &mut state);
         high::check(module, function, &mut state);

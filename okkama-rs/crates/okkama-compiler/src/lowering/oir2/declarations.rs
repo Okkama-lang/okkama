@@ -16,8 +16,11 @@ pub(super) struct Declarations {
     pub objects: HashMap<ty::ObjectId, ir::DeclId>,
     pub constructors: HashMap<(ty::ObjectId, usize, Vec<usize>), ir::FuncId>,
     pub defers: Vec<super::defer::Deferred>,
+    pub lambdas: Vec<super::anonymous::Lambda>,
     pub builtin_adapters: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub ctor_fields: HashMap<ir::FuncId, Vec<usize>>,
+    /// Registered test intrinsics (`okkama.test.*`) by assertion name; the test profile only.
+    pub test_intrinsics: HashMap<String, ir::FuncId>,
 }
 
 impl Declarations {
@@ -26,6 +29,10 @@ impl Declarations {
         let source = &reg.modules[reg.entry_module];
         let mut builder = ir::ModuleBuilder::new(&source.name, ir::Profile::High);
         builder.raw_mut().requires.push(ir::Feature::Core);
+        if reg.test_mode {
+            builder.raw_mut().requires.push(ir::Feature::Test);
+            builder.raw_mut().tests = Some(vec![]);
+        }
         builder.raw_mut().version = source.program.module.version.as_ref().map(|v| {
             format!("{}.{}.{}", v.major, v.minor, v.patch)
         });
@@ -40,6 +47,8 @@ impl Declarations {
             ctor_fields: HashMap::new(),
             builtin_adapters: HashMap::new(),
             defers: vec![],
+            lambdas: vec![],
+            test_intrinsics: HashMap::new(),
         };
         for (ty, lowered) in [
             (ty::Ty::Int, ir::Type::Int),
@@ -49,8 +58,18 @@ impl Declarations {
         ] {
             this.types.insert(ty, this.builder.intern_type(lowered)?);
         }
-        if let Some(handle) = reg.handles.first() {
-            return Err(LowerError::unsupported(handle.span, "native object declaration"));
+        // OIR-2 §6.5, P2.4 §4.7: a handle is an opaque value of the native registry. It has no
+        // fields, no Okkama destroy and no ownership token; its identity is module and name.
+        for (index, handle) in reg.handles.iter().enumerate() {
+            let module = reg.modules[handle.module].name.replace('/', ".");
+            let declaration = this.builder.declare(ir::Declaration {
+                name: format!("{module}.{}", handle.name),
+                type_params: vec![],
+                kind: ir::DeclarationKind::Handle,
+                loc: None,
+            })?;
+            let lowered = this.builder.intern_type(ir::Type::Handle(declaration))?;
+            this.types.insert(ty::Ty::Handle(ty::HandleId(index)), lowered);
         }
         let byte = this.builder.intern_type(ir::Type::Byte)?;
         this.types.insert(ty::Ty::Byte, byte);
@@ -63,8 +82,8 @@ impl Declarations {
             let Some(decl) = object.decl else {
                 continue;
             };
-            if !object.params.is_empty() || !object.caps.is_empty() {
-                return Err(LowerError::unsupported(decl.span, "generic object, capability or role witness"));
+            if !object.params.is_empty() {
+                return Err(LowerError::unsupported(decl.span, "generic object"));
             }
             let id = this.builder.declare(ir::Declaration {
                 name: if object.name.contains('<') {
@@ -85,6 +104,7 @@ impl Declarations {
             let successor = this.builder.intern_type(ir::Type::Successor(lowered))?;
             this.types.insert(ty::Ty::Successor(Box::new(ty::Ty::object(ty::ObjectId(index)))), successor);
         }
+        this.reserve_caps(analysis)?;
         for (index, role) in reg.roles.iter().enumerate() {
             if role.decl.is_none() || !role.params.is_empty() {
                 continue;
@@ -156,12 +176,14 @@ impl Declarations {
         // Nominal identities are reserved. Intern concrete collection shapes before
         // resolving fields/signatures, including recursive nominal payloads.
         let mut requested = vec![];
-        for body in &analysis.bodies {
-            requested.extend(body.locals.iter().map(|local| (local.ty.clone(), body.span)));
-            super::walk::block(&body.block, &mut |expr| {
-                if let Some(ty) = &expr.ty {
-                    requested.push((ty.clone(), expr.span));
-                }
+        for root in &analysis.bodies {
+            super::walk::bodies(root, &mut |body| {
+                requested.extend(body.locals.iter().map(|local| (local.ty.clone(), body.span)));
+                super::walk::block(&body.block, &mut |expr| {
+                    if let Some(ty) = &expr.ty {
+                        requested.push((ty.clone(), expr.span));
+                    }
+                });
             });
         }
         for (index, object) in reg.objects.iter().enumerate() {
@@ -169,6 +191,9 @@ impl Declarations {
                 continue;
             }
             requested.extend(object.fields.iter().map(|field| (field.ty.clone(), field.span)));
+            for cap in &object.caps {
+                requested.extend(cap.fields.iter().map(|(_, ty, _)| (ty.clone(), cap.span)));
+            }
             for (method_index, method) in object.methods.iter().enumerate() {
                 if !analysis.bodies.iter().any(|body| body.owner == thir::BodyOwner::Method {
                     object: ty::ObjectId(index), method: method_index,
@@ -222,12 +247,14 @@ impl Declarations {
                 unreachable!("reserved role");
             };
             let span = role.decl.expect("source role").span;
-            let methods = role.methods.iter().map(|method| {
+            let methods = role.methods.iter().enumerate().map(|(slot, method)| {
                 if method.is_async || method.variadic {
                     return Err(LowerError::unsupported(span, "async or variadic role slot"));
                 }
+                let overloaded = role.methods.iter().filter(|other| other.name == method.name).count() > 1;
+                let name = if overloaded { format!("{}#slot{slot}", method.name) } else { method.name.clone() };
                 Ok(ir::RoleMethod {
-                    name: method.name.clone(),
+                    name,
                     signature: ir::Signature {
                         params: method.params.iter().map(|(_, ty)| this.ty(ty, span)).collect::<Result<_>>()?,
                         results: method.result.iter().map(|ty| this.ty(ty, span)).collect::<Result<_>>()?,
@@ -239,9 +266,13 @@ impl Declarations {
                 methods, builtin: false,
             };
         }
+        let mut all_bodies = vec![];
+        for root in &analysis.bodies {
+            super::walk::bodies(root, &mut |body| all_bodies.push(body.clone()));
+        }
         let error = ty::Ty::role(reg.system.error);
-        let mut uses_error = analysis.bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == error));
-        for body in &analysis.bodies {
+        let mut uses_error = all_bodies.iter().any(|body| body.locals.iter().any(|local| local.ty == error));
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| uses_error |= expr.ty.as_ref() == Some(&error));
         }
         if uses_error {
@@ -261,7 +292,7 @@ impl Declarations {
             let lowered = this.builder.intern_type(ir::Type::Role { decl: declaration, args: vec![] })?;
             this.types.insert(error, lowered);
             let mut calls_text = false;
-            for body in &analysis.bodies {
+            for body in &all_bodies {
                 super::walk::block(&body.block, &mut |expr| {
                     calls_text |= matches!(expr.kind, thir::ExprKind::Call {
                         callee: thir::Callee::Role { role, slot: 0, .. }, ..
@@ -273,8 +304,11 @@ impl Declarations {
                     vec![this.types[&ty::Ty::Str]], vec![], source.program.module.span)?);
             }
         }
+        if reg.test_mode {
+            this.declare_test_intrinsics(&all_bodies, source.program.module.span)?;
+        }
         let mut requested_ctors = HashMap::new();
-        for body in &analysis.bodies {
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
                 if let thir::ExprKind::Call {
                     callee: thir::Callee::Ctor { object, ctor, given, .. }, ..
@@ -285,7 +319,7 @@ impl Declarations {
         }
         // Declare all symbols before bodies: forward references and stable field/default links.
         for body in &analysis.bodies {
-            if body.is_async {
+            if body.is_async && !matches!(body.owner, thir::BodyOwner::Test(_)) {
                 return Err(LowerError::unsupported(body.span, "async action or cleanup"));
             }
             let mut params = vec![];
@@ -297,6 +331,10 @@ impl Declarations {
                         _ => Some(ty::Ty::Int),
                     };
                     ("main".into(), vec![ir::FunctionAttr::Entry], result)
+                }
+                thir::BodyOwner::Test(index) => {
+                    let attrs = if body.is_async { vec![ir::FunctionAttr::Async] } else { vec![] };
+                    (format!("$test{index}"), attrs, None)
                 }
                 thir::BodyOwner::Method { object, method } => {
                     let info = &reg.objects[object.0];
@@ -332,6 +370,16 @@ impl Declarations {
                     params.push(this.ty(&ty::Ty::object(object), body.span)?);
                     let name = &this.builder.module().declarations.get(decl)?.name;
                     (format!("{name}.destroy"), vec![ir::FunctionAttr::Destroy(decl)], None)
+                }
+                thir::BodyOwner::CapField { object, cap, field } => {
+                    let info = &reg.objects[object.0];
+                    let decl = this.objects[&object];
+                    let name = &this.builder.module().declarations.get(decl)?.name;
+                    let capability = &info.caps[cap];
+                    let (field_name, result, _) = &capability.fields[field];
+                    let symbol = format!("{name}.cap.{}.{field_name}#{field}", capability.name);
+                    params.push(this.ty(&ty::Ty::object(object), body.span)?);
+                    (symbol, vec![], Some(result.clone()))
                 }
                 _ => return Err(LowerError::unsupported(body.span, "test, closure or capability body")),
             };
@@ -396,7 +444,12 @@ impl Declarations {
                 thir::BodyOwner::Ctor { object, .. } | thir::BodyOwner::Method { object, .. }
                     if reg.modules[reg.objects[object.0].module].name == "async/atomic" => {
                     let info = &reg.objects[object.0];
-                    let suffix = info.name.split_once('_').expect("closed Atomic").1;
+                    // Only the closed specializations (`Atomic_int`) are VM operations; the module's own
+                    // declarations, as when async/atomic is the root, have no P1 ABI.
+                    let Some((_, suffix)) = info.name.split_once('_') else {
+                        return Err(LowerError::unsupported(body.span, format!("{} outside the closed P1 Atomic ABI",
+                            info.name)));
+                    };
                     let op = match body.owner {
                         thir::BodyOwner::Ctor { .. } => "new_value",
                         thir::BodyOwner::Method { method, .. } => info.methods[method].name.as_str(),
@@ -424,6 +477,9 @@ impl Declarations {
             if body.owner == thir::BodyOwner::Entry {
                 this.builder.raw_mut().entry = Some(function);
             }
+            if let thir::BodyOwner::Test(index) = body.owner {
+                super::test_profile::declare(&mut this.builder, function, &reg.tests[index])?;
+            }
             this.functions.insert(body.owner.clone(), function);
             if let thir::BodyOwner::Ctor { object, ctor } = body.owner {
                 let given = primary_given.or(shorthand).unwrap_or_default();
@@ -431,6 +487,15 @@ impl Declarations {
                 this.ctor_fields.insert(function, given);
             }
         }
+        if reg.test_mode {
+            let tests = reg.tests.iter().enumerate().map(|(index, test)| {
+                let function = this.functions.get(&thir::BodyOwner::Test(index)).copied()
+                    .ok_or_else(|| LowerError::invalid(test.span, "missing test body"))?;
+                Ok(ir::TestDecl { name: test.name.clone(), function })
+            }).collect::<Result<Vec<_>>>()?;
+            this.builder.raw_mut().tests = Some(tests);
+        }
+        this.define_caps(analysis)?;
         let mut object_ids: Vec<_> = this.objects.iter().map(|(&object, &decl)| (object, decl)).collect();
         object_ids.sort_by_key(|(object, _)| *object);
         for (object, decl) in object_ids {
@@ -462,7 +527,7 @@ impl Declarations {
         // Shorthand omissions change the language signature, so each supplied-field
         // set gets a finite direct-call specialization. Defaults still run in it.
         let mut calls = Vec::new();
-        for body in &analysis.bodies {
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
                 if let thir::ExprKind::Call {
                     callee: thir::Callee::Ctor { object, ctor, given, .. }, ..
@@ -500,13 +565,16 @@ impl Declarations {
             this.ctor_fields.insert(id, given);
         }
         let mut native_calls = vec![];
-        for body in &analysis.bodies {
+        for body in &all_bodies {
             super::walk::block(&body.block, &mut |expr| {
                 if let thir::ExprKind::Call { callee: thir::Callee::Native(index), .. } = expr.kind {
                     native_calls.push(index);
                 }
             });
-            this.declare_defers(body)?;
+        }
+        for body in &analysis.bodies {
+            let key = super::callables::BodyKey { root: body.owner.clone(), path: vec![] };
+            this.declare_defers(body, this.functions[&body.owner], &key)?;
         }
         native_calls.sort();
         native_calls.dedup();
@@ -526,6 +594,34 @@ impl Declarations {
         super::roles::declare_witnesses(&mut this, analysis)?;
         super::roles::declare_builtins(&mut this, analysis)?;
         Ok(this)
+    }
+
+    /// `test.skip`, `test.close`, `test.text` and `test.bytes` are registered test intrinsics with typed
+    /// plain operands (OIR-2 §7.4); the other assertions are core operations.
+    fn declare_test_intrinsics(&mut self, bodies: &[thir::Body], span: Span) -> Result<()> {
+        let mut calls = vec![];
+        for body in bodies {
+            super::walk::block(&body.block, &mut |expr| {
+                if let thir::ExprKind::Call { callee: thir::Callee::Test(name), args } = &expr.kind
+                    && super::test_profile::INTRINSICS.contains(&name.as_str()) {
+                    calls.push((name.clone(), args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>()));
+                }
+            });
+        }
+        for (name, types) in calls {
+            if self.test_intrinsics.contains_key(&name) {
+                continue;
+            }
+            let mut params = vec![];
+            for ty in types {
+                let ty = ty.ok_or_else(|| LowerError::invalid(span, "untyped test assertion operand"))?;
+                self.collection_type(&ty, span)?;
+                params.push(self.ty(&ty, span)?);
+            }
+            let function = self.external(&format!("okkama.test.{name}"), false, params, vec![], vec![], span)?;
+            self.test_intrinsics.insert(name, function);
+        }
+        Ok(())
     }
 
     fn external(&mut self, name: &str, native: bool, params: Vec<ir::TypeId>, results: Vec<ir::TypeId>,
@@ -561,6 +657,19 @@ impl Declarations {
             T::Array(element) | T::Varargs(element) => {
                 self.collection_type(element, span)?;
                 ir::Type::Array(self.ty(element, span)?)
+            }
+            T::Action(action) => {
+                if action.is_async {
+                    return Err(LowerError::unsupported(span, "async action type (#570)"));
+                }
+                for ty in action.params.iter().chain(action.result.iter()) {
+                    self.collection_type(ty, span)?;
+                }
+                ir::Type::Fn(ir::FnType {
+                    params: action.params.iter().map(|ty| self.ty(ty, span)).collect::<Result<_>>()?,
+                    result: action.result.as_ref().map(|ty| self.ty(ty, span)).transpose()?,
+                    is_async: false,
+                })
             }
             T::Map(key, value) => {
                 self.collection_type(key, span)?;

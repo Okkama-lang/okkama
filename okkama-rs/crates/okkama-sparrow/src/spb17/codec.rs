@@ -114,6 +114,10 @@ impl<'a> Reader<'a> {
         }
     }
 
+    fn next_is(&self, word: &str) -> bool {
+        matches!(self.tokens.as_ref().and_then(|tokens| tokens.front()), Some(Token::Word(next)) if next == word)
+    }
+
     fn label(&mut self, expected: &str) -> Result<(), Error> {
         if self.tokens.is_some() && self.word()? != expected {
             return Err(self.fail(format!("expected `{expected}`")));
@@ -264,8 +268,14 @@ impl<A: Wire, B: Wire> Wire for (A, B) {
     fn get(r: &mut Reader<'_>) -> Result<Self, Error> { Ok((A::get(r)?, B::get(r)?)) }
 }
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// Fields after `;` are always present in binary and omitted from assembly when they hold their default,
+/// so programs that do not use them keep their assembly; an explicit default there is non-canonical.
 macro_rules! record {
-    ($name:ident { $( $field:ident ),* $(,)? }) => {
+    ($name:ident { $( $field:ident ),* $(,)? $(; $( $optional:ident ),* $(,)? )? }) => {
         impl Wire for $name {
             fn put(&self, w: &mut Writer) {
                 w.label(concat!(stringify!($name), " {"));
@@ -273,6 +283,12 @@ macro_rules! record {
                     w.label(stringify!($field));
                     self.$field.put(w);
                 )*
+                $($(
+                    if w.text.is_none() || !is_default(&self.$optional) {
+                        w.label(stringify!($optional));
+                        self.$optional.put(w);
+                    }
+                )*)?
                 w.label("}\n");
             }
             fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
@@ -282,16 +298,32 @@ macro_rules! record {
                     r.label(stringify!($field))?;
                     let $field = Wire::get(r)?;
                 )*
+                $($(
+                    let $optional = if r.tokens.is_none() {
+                        Wire::get(r)?
+                    } else if r.next_is(stringify!($optional)) {
+                        r.label(stringify!($optional))?;
+                        let value = Wire::get(r)?;
+                        if is_default(&value) {
+                            return Err(r.fail(concat!("non-canonical default `", stringify!($optional), "`")));
+                        }
+                        value
+                    } else {
+                        Default::default()
+                    };
+                )*)?
                 r.label("}")?;
-                Ok($name { $( $field ),* })
+                Ok($name { $( $field, )* $($( $optional, )*)? })
             }
         }
     };
 }
 
 record! { Program {
-    module, version, objects, tables, functions, entry,
+    module, version, objects, tables, functions, entry; tests,
 } }
+
+record! { Test { name, function } }
 
 record! { ObjectRuntimeLayout {
     storage_fields, allocation_words, identity_offset, has_destroy,
@@ -300,7 +332,7 @@ record! { ObjectRuntimeLayout {
 
 record! { Field { name, storage, once } }
 record! { Object {
-    name, fields, layout, error_cases,
+    name, fields, layout, error_cases; enum_cases, variant_cases, handle,
 } }
 
 record! { Assignment {
@@ -398,9 +430,10 @@ macro_rules! tagged {
 }
 
 tagged! { Type {
-    0 => Int, 1 => Bool, 6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
+    0 => Int, 1 => Bool, 2 => Byte, 3 => Float, 4 => Rat, 5 => Char,
+    6 => Str, 20 => Range, 11 => Failure, 21 => Bytes, 22 => Error,
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
-    23 => Array(shape: ArrayType),
+    23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
 } }
 record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
@@ -415,7 +448,7 @@ tagged! { Location { 0 => Register(id: u32), 1 => Service(id: u32) } }
 tagged! { Source { 0 => Location(loc: Location), 1 => ProducedSlot(slot: u32) } }
 tagged! { Flow { 0 => Next(locations: Vec<Location>), 1 => Outcomes(outcomes: Vec<Outcome>) } }
 tagged! { Constant { 0 => Int(value: String), 1 => Bool(value: bool), 2 => Str(value: String),
-    3 => Descriptor(id: u32) } }
+    3 => Descriptor(id: u32), 4 => Byte(value: u32), 5 => Char(value: u32), 6 => Float(bits: String) } }
 tagged! { Immediate {
     0 => None, 1 => Constant(value: Constant), 2 => Inclusive(flag: bool),
     3 => Object(id: u32), 4 => Field(index: u32), 5 => Updates(indices: Vec<u32>),
@@ -486,6 +519,15 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         70 => Some("str.concat"),
         71 => Some("str.cmp"),
         72 => Some("str.len"),
+        47 => Some("byte.cmp"),
+        48 => Some("char.cmp"),
+        49 => Some("float.cmp"),
+        50 => Some("rat.cmp"),
+        51 => Some("rat.new"),
+        52 => Some("enum.cmp"),
+        53 => Some("val.cmp"),
+        54 => Some("variant.tag"),
+        55 => Some("variant.get"),
         26 => Some("cvt"),
         84 => Some("range.new"),
         85 => Some("range.part"),
@@ -503,6 +545,7 @@ fn opcode_name(code: u8) -> Option<&'static str> {
         147 => Some("raise"),
         136 => Some("fail.secondary"),
         137 => Some("fail.caused"),
+        150 => Some("test.check"),
         255 => Some("champ"),
         _ => None,
     }
@@ -536,6 +579,37 @@ impl DataOp {
             Self::StrGt => (71, Some(4)),
             Self::StrGe => (71, Some(5)),
             Self::StrLen => (72, None),
+            Self::ByteEq => (47, Some(0)),
+            Self::ByteNe => (47, Some(1)),
+            Self::ByteLt => (47, Some(2)),
+            Self::ByteLe => (47, Some(3)),
+            Self::ByteGt => (47, Some(4)),
+            Self::ByteGe => (47, Some(5)),
+            Self::CharEq => (48, Some(0)),
+            Self::CharNe => (48, Some(1)),
+            Self::CharLt => (48, Some(2)),
+            Self::CharLe => (48, Some(3)),
+            Self::CharGt => (48, Some(4)),
+            Self::CharGe => (48, Some(5)),
+            Self::FloatEq => (49, Some(0)),
+            Self::FloatNe => (49, Some(1)),
+            Self::FloatLt => (49, Some(2)),
+            Self::FloatLe => (49, Some(3)),
+            Self::FloatGt => (49, Some(4)),
+            Self::FloatGe => (49, Some(5)),
+            Self::RatEq => (50, Some(0)),
+            Self::RatNe => (50, Some(1)),
+            Self::RatLt => (50, Some(2)),
+            Self::RatLe => (50, Some(3)),
+            Self::RatGt => (50, Some(4)),
+            Self::RatGe => (50, Some(5)),
+            Self::RatNew => (51, None),
+            Self::EnumEq => (52, Some(0)),
+            Self::EnumNe => (52, Some(1)),
+            Self::ValEq => (53, Some(0)),
+            Self::ValNe => (53, Some(1)),
+            Self::VariantTag => (54, None),
+            Self::VariantGet => (55, None),
             Self::Convert => (26, None),
             Self::RangeNew => (84, None),
             Self::ArrayNew => (80, None),
@@ -550,11 +624,15 @@ impl DataOp {
             Self::EnumCase => (94, None),
             Self::FailSecondary => (136, None),
             Self::FailCaused => (137, None),
+            Self::TestOk => (150, Some(0)),
+            Self::TestIs => (150, Some(1)),
+            Self::TestIsnt => (150, Some(2)),
+            Self::TestFail => (150, Some(3)),
         }
     }
 
     fn read(code: u8, r: &mut Reader<'_>) -> Result<Self, Error> {
-        let sub = if matches!(code, 24 | 41 | 71 | 85) { Some(r.number()?) } else { None };
+        let sub = if matches!(code, 24 | 41 | 71 | 85 | 47..=50 | 52 | 53 | 150) { Some(r.number()?) } else { None };
         match (code, sub) {
             (1, None) => Ok(Self::Const),
             (2, None) => Ok(Self::Move),
@@ -581,6 +659,37 @@ impl DataOp {
             (71, Some(4)) => Ok(Self::StrGt),
             (71, Some(5)) => Ok(Self::StrGe),
             (72, None) => Ok(Self::StrLen),
+            (47, Some(0)) => Ok(Self::ByteEq),
+            (47, Some(1)) => Ok(Self::ByteNe),
+            (47, Some(2)) => Ok(Self::ByteLt),
+            (47, Some(3)) => Ok(Self::ByteLe),
+            (47, Some(4)) => Ok(Self::ByteGt),
+            (47, Some(5)) => Ok(Self::ByteGe),
+            (48, Some(0)) => Ok(Self::CharEq),
+            (48, Some(1)) => Ok(Self::CharNe),
+            (48, Some(2)) => Ok(Self::CharLt),
+            (48, Some(3)) => Ok(Self::CharLe),
+            (48, Some(4)) => Ok(Self::CharGt),
+            (48, Some(5)) => Ok(Self::CharGe),
+            (49, Some(0)) => Ok(Self::FloatEq),
+            (49, Some(1)) => Ok(Self::FloatNe),
+            (49, Some(2)) => Ok(Self::FloatLt),
+            (49, Some(3)) => Ok(Self::FloatLe),
+            (49, Some(4)) => Ok(Self::FloatGt),
+            (49, Some(5)) => Ok(Self::FloatGe),
+            (50, Some(0)) => Ok(Self::RatEq),
+            (50, Some(1)) => Ok(Self::RatNe),
+            (50, Some(2)) => Ok(Self::RatLt),
+            (50, Some(3)) => Ok(Self::RatLe),
+            (50, Some(4)) => Ok(Self::RatGt),
+            (50, Some(5)) => Ok(Self::RatGe),
+            (51, None) => Ok(Self::RatNew),
+            (52, Some(0)) => Ok(Self::EnumEq),
+            (52, Some(1)) => Ok(Self::EnumNe),
+            (53, Some(0)) => Ok(Self::ValEq),
+            (53, Some(1)) => Ok(Self::ValNe),
+            (54, None) => Ok(Self::VariantTag),
+            (55, None) => Ok(Self::VariantGet),
             (26, None) => Ok(Self::Convert),
             (84, None) => Ok(Self::RangeNew),
             (80, None) => Ok(Self::ArrayNew),
@@ -595,6 +704,10 @@ impl DataOp {
             (94, None) => Ok(Self::EnumCase),
             (136, None) => Ok(Self::FailSecondary),
             (137, None) => Ok(Self::FailCaused),
+            (150, Some(0)) => Ok(Self::TestOk),
+            (150, Some(1)) => Ok(Self::TestIs),
+            (150, Some(2)) => Ok(Self::TestIsnt),
+            (150, Some(3)) => Ok(Self::TestFail),
             _ => Err(r.fail(format!("unknown scalar opcode {code}/{sub:?}"))),
         }
     }

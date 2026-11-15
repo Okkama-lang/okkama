@@ -21,6 +21,12 @@ pub(super) struct BodyContext<'t> {
     pub defers: &'t [super::defer::Deferred],
     // Some(receiver snapshot present) denotes a lazy helper rather than its source action.
     pub deferred: Option<bool>,
+    pub key: super::callables::BodyKey,
+    pub calls: &'t std::cell::RefCell<super::known_calls::CallSpans>,
+    pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
+    pub lambdas: &'t [super::anonymous::Lambda],
+    pub globals: &'t HashMap<usize, ir::DeclId>,
+    pub test_intrinsics: &'t HashMap<String, ir::FuncId>,
 }
 
 pub(super) struct BodyLowerer<'a, 't> {
@@ -105,10 +111,17 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             failure_frames: vec![], caught: vec![], rethrows: HashMap::new(), rethrow_inputs: HashMap::new(),
             receiver: None, early_self: None, field_base, field_end: count,
         };
-        let receiver = usize::from(this.context.deferred.unwrap_or(matches!(source.owner,
-            thir::BodyOwner::Method { .. } | thir::BodyOwner::Destroy { .. })));
+        let lambda = this.context.lambdas.iter().find(|lambda| lambda.source.key == this.context.key);
+        let layout = lambda.map(|lambda| lambda.source.captures.clone()).unwrap_or_default();
+        let captured_receiver = layout.iter().any(|capture| capture.source == super::callables::Snapshot::Receiver);
+        let receiver = usize::from(this.context.deferred.unwrap_or(captured_receiver || matches!(source.owner,
+            thir::BodyOwner::Method { .. } | thir::BodyOwner::Destroy { .. } | thir::BodyOwner::CapField { .. })));
         if receiver == 1 {
             this.receiver = params.first().copied();
+        }
+        if this.context.deferred.is_none() && this.context.bound_entries.contains(&this.function()) {
+            let object = owner.expect("bound method owner");
+            this.check_pending(this.receiver.expect("bound method receiver"), this.context.objects[&object])?;
         }
         if this.context.deferred.is_none() {
             this.initialize_fields()?;
@@ -116,7 +129,15 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         if this.is_constructor() {
             this.initialize_constructor(&params)?;
         } else {
-            for (local, value) in source.params.iter().zip(params.into_iter().skip(receiver)) {
+            let offset = if this.context.deferred.is_none() { layout.len().max(receiver) } else { receiver };
+            if this.context.deferred.is_none() {
+                for (capture, &value) in layout.iter().zip(&params) {
+                    if let Some(local) = capture.target {
+                        this.bind(local, value)?;
+                    }
+                }
+            }
+            for (local, value) in source.params.iter().zip(params.into_iter().skip(offset)) {
                 this.bind(*local, value)?;
             }
         }
@@ -509,6 +530,11 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         use thir::ExprKind as E;
         let result_ty = expr.ty.as_ref().filter(|ty| **ty != Ty::Never);
         match &expr.kind {
+            E::Call { callee: thir::Callee::Test(name), args } => self.test_call(name, args, expr.span),
+            E::CapSelect { .. } | E::CapRead { .. } => self.cap_expr(expr),
+            E::BoundAction { .. } | E::BoundRoleAction { .. } => self.bound(expr),
+            E::Closure { .. } => self.anonymous(expr),
+            E::CallValue { .. } => self.invoke_anonymous(expr),
             E::Array(_) | E::Map(_) | E::Index { .. } | E::ArrayCast { .. }
             | E::Coerce { coercion: thir::Coercion::Retag, .. } => self.collection_expr(expr),
             E::Binary { op: thir::BinaryOp::ArrayConcat | thir::BinaryOp::ArrayDifference
@@ -520,7 +546,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             }
             E::Local(local) => Ok(self.env[local.0]),
             E::SelfValue => self.self_value().map(Some),
-            E::Field(field) => self.read_field(*field).map(Some),
+            E::Field(field) | E::OwnerField(field) => self.read_field(*field).map(Some),
             E::PendingField(field) => self.pending_field(*field).map(Some),
             E::VariantNew { case, values } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed variant"), expr.span)?;
@@ -574,7 +600,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 let (case, field) = selected.ok_or_else(|| LowerError::invalid(expr.span, "payload field index"))?;
                 self.core(ir::CoreOp::VariantGet { value, case, field }).map(Some)
             }
-            E::Pack { items, spread: None } => {
+            E::Pack { items, spread } => {
                 let ty = self.ty(expr.ty.as_ref().expect("typed pack"), expr.span)?;
                 let mut values = vec![];
                 for item in items {
@@ -583,7 +609,24 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                     };
                     values.push(value);
                 }
-                self.collection(ir::CollectionOp::ArrayNew { ty, values, packet: None }).map(Some)
+                // A spread tail (`f(1, xs...)`) follows the listed values; arrays are immutable,
+                // so a lone tail is passed as it is.
+                let tail = match spread {
+                    Some(spread) => match self.value(spread)? {
+                        Some(tail) => Some(tail),
+                        None => return Ok(None),
+                    },
+                    None => None,
+                };
+                match tail {
+                    Some(tail) if values.is_empty() => Ok(Some(tail)),
+                    Some(tail) => {
+                        let head = self.collection(ir::CollectionOp::ArrayNew { ty, values, packet: None })?;
+                        let arrays = vec![head, tail];
+                        self.collection(ir::CollectionOp::ArrayConcat { arrays, ty, packet: None }).map(Some)
+                    }
+                    None => self.collection(ir::CollectionOp::ArrayNew { ty, values, packet: None }).map(Some),
+                }
             }
             E::Unpack(value) => self.value(value),
             E::EnumCase { ty, case } => {

@@ -142,12 +142,13 @@ impl Engine<'_, '_> {
         if !piece.family && graph.contains(&piece.origin) {
             return true;
         }
+        // A retired filter without labels names no particular incarnation.
         piece.predicates.iter().any(|(filter, selected)| {
             *selected && !filter.stale && filter.keys.is_subset(graph)
                 && (filter.keys.iter().all(|key| !matches!(key,
                     Origin::RetiredInstruction(..) | Origin::RetiredInvoke(..) | Origin::RetiredProjection(..)
                     | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..)))
-                    || filter.labels.is_subset(labels))
+                    || (!filter.labels.is_empty() && filter.labels.is_subset(labels)))
         })
     }
     #[allow(clippy::too_many_arguments)]
@@ -173,6 +174,8 @@ impl Engine<'_, '_> {
         let mut all_labels = SharedSet::new();
         let mut fresh_refs: std::collections::BTreeMap<CreationSiteId, BTreeSet<Origin>> =
             std::collections::BTreeMap::new();
+        let opaque_sites: BTreeSet<_> = summary.results.iter().filter(|relation| relation.opaque)
+            .flat_map(|relation| relation.fresh.iter().copied()).collect();
         for (index, relation) in summary.results.iter().enumerate() {
             let Some(&slot) = language.get(index) else {
                 continue;
@@ -183,7 +186,10 @@ impl Engine<'_, '_> {
                 aliases.extend(self.summary_selection(before, &arguments, alias));
                 labels.extend(self.summary_labels(before, &arguments, alias));
             }
-            let opaque = relation.aliases.len() > 1 || summary.results.len() > 1 || relation.fresh.len() > 1;
+            // A declared opaque relation (an open callable) never identifies its
+            // result with an input alias or a single fresh site (#569 O1).
+            let opaque = relation.opaque || relation.aliases.len() > 1 || summary.results.len() > 1
+                || relation.fresh.len() > 1;
             if opaque {
                 let view = match origin {
                     Origin::Instruction(inst, _) => Origin::ViewInstruction(inst, slot as u16),
@@ -292,7 +298,13 @@ impl Engine<'_, '_> {
             let key = creation(origin, site);
             let mut piece = Piece::new(key, state);
             piece.family = summary.results.len() > 1;
-            if piece.family {
+            // A sync callee lets its fresh graph escape only through its results,
+            // and its return check proves exactly that: the exported packet lies in
+            // the union of the result graphs. So the fresh piece of an opaque (or
+            // multi-result) call is the part reachable from every result naming
+            // its site, never from the last one alone. The labels are the results'
+            // own, added when they are defined, not the aliased inputs' (#569 O1).
+            if piece.family || opaque_sites.contains(&site) {
                 let filter = self.graph_filter(flow, fresh_refs.remove(&site).unwrap_or_default(),
                     SharedSet::new(), false);
                 piece.predicates.insert(filter, true);
@@ -516,6 +528,14 @@ impl Engine<'_, '_> {
                     allowed.extend(&flow.full_deps[value.as_u32() as usize]);
                 }
             }
+            // An opaque callee result stays opaque in every relation that retains
+            // it, else callers would give it one identity and direct references.
+            let retained = flow.refs[value.as_u32() as usize].clone();
+            let mut reachable = self.possible(flow, &retained);
+            reachable.extend(retained);
+            if !relation.opaque && reachable.into_iter().any(|key| self.opaque_call_view(key)) {
+                self.error(R::B51, "body returns an opaque call result under a non-opaque summary relation");
+            }
             let refs = &flow.full_deps[value.as_u32() as usize];
             // Fields do not retain their container (§4.1). Owner-dependent
             // views must expose their carried dependencies to summary checks (§4.2/§6.2).
@@ -550,6 +570,36 @@ impl Engine<'_, '_> {
                 self.error(R::B51, "body aliases an input without a declared result alias");
             }
         }
+    }
+}
+
+impl Engine<'_, '_> {
+    /// The view of a call result whose summary relation declares it opaque.
+    fn opaque_call_view(&self, key: Origin) -> bool {
+        let (op, slot) = match key {
+            Origin::ViewInstruction(inst, slot) | Origin::RetiredViewInstruction(inst, slot) => {
+                let Ok(inst) = self.body.insts.get(inst) else {
+                    return false;
+                };
+                (&inst.op, slot)
+            }
+            Origin::ViewInvoke(block, slot) | Origin::RetiredViewInvoke(block, slot) => {
+                let Ok(block) = self.body.blocks.get(block) else {
+                    return false;
+                };
+                let TermKind::InvokeOwn { op, .. } = &block.term.kind else {
+                    return false;
+                };
+                (op.as_ref(), slot)
+            }
+            _ => return false,
+        };
+        let Some((call, _, _)) = super::super::summaries::call(op) else {
+            return false;
+        };
+        call.summary.and_then(|id| self.module.summaries.get(id).ok())
+            .and_then(|summary| summary.results.get(usize::from(slot)))
+            .is_some_and(|relation| relation.opaque)
     }
 }
 

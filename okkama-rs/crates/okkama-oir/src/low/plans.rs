@@ -246,7 +246,7 @@ pub(super) fn fresh_summaries(module: &Module, budget: &mut Budget<'_>) -> Resul
         let [relation] = summary.results.as_slice() else {
             continue;
         };
-        if relation.fresh.len() != 1 || !relation.aliases.is_empty()
+        if relation.fresh.len() != 1 || !relation.aliases.is_empty() || relation.opaque
             || relation.provenance != AdmissionProvenance::UnboundResult {
             continue;
         }

@@ -112,6 +112,7 @@ fn targets(data: &Block) -> Vec<BlockId> {
             result.extend(unwind.iter().map(|edge| edge.block));
         }
         TermKind::Catch { handler, next, .. } => result.extend([handler.block, next.block]),
+        TermKind::Lookup { found, missing, .. } => result.extend([found.block, missing.block]),
         _ => {}
     }
     result

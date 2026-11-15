@@ -38,6 +38,20 @@ fn phase(phase: &'static str, error: impl std::fmt::Debug) -> PipelineError {
 pub fn lower_linked_high(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
     -> Result<o::Module, PipelineError>
 {
+    lower_linked_mode(roots, loader, false)
+}
+
+/// The test profile (§14): roots carry their desugared tests and fakes, and the loader
+/// parses imports in test mode. The module selects its tests table instead of `main`.
+pub fn lower_linked_tests_high(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
+    -> Result<o::Module, PipelineError>
+{
+    lower_linked_mode(roots, loader, true)
+}
+
+fn lower_linked_mode(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, test_mode: bool)
+    -> Result<o::Module, PipelineError>
+{
     if roots.is_empty() {
         return Err(phase("analysis", "no source files"));
     }
@@ -46,7 +60,14 @@ pub fn lower_linked_high(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
     }).collect();
     let graph = modules::load_graph(&roots, loader).map_err(|error| phase("imports", error))?;
     let sources = modules::source_modules(&graph, &roots);
-    let analysis = analysis::analyze(sources).map_err(|error| phase("analysis", error))?;
+    let analysis = analysis::analyze_mode(sources, 1, test_mode).map_err(|error| phase("analysis", error))?;
+    // Async execution is #570: an async test stops the whole test profile before lowering, by name.
+    let asynchronous = analysis.registry.tests.iter().filter(|test| test.is_async).collect::<Vec<_>>();
+    if let Some(first) = asynchronous.first() {
+        let names = asynchronous.iter().map(|test| format!("{:?}", test.name)).collect::<Vec<_>>().join(", ");
+        let message = format!("async test {names} (#570)");
+        return Err(PipelineError::Lower(super::LowerError::unsupported(first.span, message)));
+    }
     lower_to_oir2(&analysis).map_err(PipelineError::Lower)
 }
 
@@ -60,8 +81,26 @@ pub fn compile_linked(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader)
 pub fn compile_linked_with(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, mode: o::VerifyMode)
     -> Result<Vec<u8>, PipelineError>
 {
-    let verify = o::VerifyOptions { mode, ..o::VerifyOptions::default() };
     let high = lower_linked_high(roots, loader)?;
+    compile_high_with(high, mode)
+}
+
+/// [`compile_linked_with`] for the test profile: SPB 17 with its tests table.
+pub fn compile_linked_tests_with(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, mode: o::VerifyMode)
+    -> Result<Vec<u8>, PipelineError>
+{
+    let high = lower_linked_tests_high(roots, loader)?;
+    compile_high_with(high, mode)
+}
+
+/// The phases after the producer: verify_high, own, verify_own, low, verify_low, SPB 17 and its load check.
+pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<Vec<u8>, PipelineError> {
+    let execution = if high.tests.is_some() {
+        o::verify::ExecutionMode::Tests
+    } else {
+        o::verify::ExecutionMode::Production
+    };
+    let verify = o::VerifyOptions { mode, execution, ..o::VerifyOptions::default() };
     let catalog = P1NativeSummaries::for_module(&high).map_err(|error| phase("contracts", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
     o::verify_high_with(&high, &verify, context())
@@ -79,7 +118,7 @@ pub fn compile_linked_with(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader
     o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
     let layouts = layouts(&low)?;
     let objects = sparrow_oir2::objects(&low, &layouts).map_err(|error| phase("layout", error))?;
-    let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("contracts", error))?;
+    let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("spb_contracts", error))?;
     let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
         .map_err(|error| phase("compile_low", error))?;
     s::verify_load(&output.program, &contracts).map_err(|error| phase("verify_load", error))?;
@@ -93,13 +132,12 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             o::DeclarationKind::Object { fields, destroy, builtin, .. } => (fields.as_slice(), *destroy, *builtin),
             o::DeclarationKind::Enum { .. } | o::DeclarationKind::Variant { .. } => (&[][..], None, false),
             o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => (&[][..], None, false),
+            o::DeclarationKind::Handle => (&[][..], None, false),
             _ => return Err(phase("layout", format!("unsupported declaration {}", declaration.name))),
         };
-        let atomic = match declaration.name.as_str() {
-            "async.atomic.Atomic_int" if builtin && fields.is_empty() && destroy.is_none() => Some(s::Type::Int),
-            "async.atomic.Atomic_string" if builtin && fields.is_empty() && destroy.is_none() => Some(s::Type::Str),
-            _ => None,
-        };
+        let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
+            .filter(|_| builtin && fields.is_empty() && destroy.is_none())
+            .and_then(s::p1::atomic_value);
         if (builtin && atomic.is_none()) || fields.iter().any(|field| field.once) {
             return Err(phase("layout", format!("missing final runtime override for {}", declaration.name)));
         }
@@ -112,7 +150,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
         let trace_layout = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
             matches!(ty, s::Type::Bytes | s::Type::Array(_) | s::Type::Str | s::Type::Object(_) | s::Type::Successor(_)
-                | s::Type::Failure).then_some(index as u32)
+                | s::Type::Failure | s::Type::Rat | s::Type::Variant(_) | s::Type::Handle(_)).then_some(index as u32)
         }).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.
         layouts.insert(id.as_u32(), sparrow_oir2::ObjectLayout {

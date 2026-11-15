@@ -58,15 +58,23 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected verified low profile".into()));
     }
-    if !module.imports.is_empty() || !module.protocols.is_empty()
-        || module.tests.is_some() || module.requires.iter().any(|feature| *feature != o::Feature::Core)
+    // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
+    let profile = |feature: &o::Feature| *feature == o::Feature::Core
+        || *feature == o::Feature::Test && module.tests.is_some();
+    if !module.imports.is_empty() || !module.protocols.is_empty() || !module.requires.iter().all(profile)
+        || module.tests.is_some() != module.requires.contains(&o::Feature::Test)
     {
         return Err(unsupported("unresolved declarations, protocols or service metadata"));
     }
+    let tests = module.tests.as_ref().map(|tests| tests.iter().map(|test| s::Test {
+        name: test.name.clone(),
+        function: test.function.as_u32(),
+    }).collect());
     let mut p = s::Program {
         module: module.name.clone(),
         version: module.version.clone().unwrap_or_default(),
         entry: module.entry.map(|id| id.as_u32()),
+        tests,
         ..s::Program::default()
     };
     p.objects = objects(module, layouts)?;
@@ -98,6 +106,7 @@ pub fn generate_with_allocation(module: &o::Module, layouts: &dyn LayoutRegistry
         p.functions.push(translated);
     }
     for function in &mut p.functions {
+        successors::forward_taken(function)?;
         successors::prune_dead_aliases(function);
         successors::close_unwind_permissions(function)?;
         complete_codegen_roots(function)?;
@@ -135,12 +144,21 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
             o::DeclarationKind::Role { builtin: true, .. } if declaration.name == "Error" => {
                 (&[][..], &[][..], None)
             }
+            o::DeclarationKind::Handle => (&[][..], &[][..], None),
             _ => return Err(unsupported("non-object declaration")),
         };
         if !witnesses.is_empty() {
             return Err(unsupported("object witnesses"));
         }
         let layout = layouts.object_layout(id.as_u32())?;
+        if let o::DeclarationKind::Variant { cases, is_error: false } = &declaration.kind {
+            for case in cases {
+                let case = layouts.object_layout(case.layout.as_u32())?;
+                if case.runtime.has_destroy || case.runtime.may_reach_resource {
+                    return Err(unsupported("variant case that reaches resources"));
+                }
+            }
+        }
         if layout.runtime.has_destroy != destroy.is_some() {
             return Err(GenerateError("descriptor destroy/layout mismatch".into()));
         }
@@ -164,6 +182,19 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                     })
                 }).unwrap_or_default(),
             },
+            variant_cases: match &declaration.kind {
+                o::DeclarationKind::Variant { cases, is_error: false } => {
+                    cases.iter().map(|case| case.layout.as_u32()).collect()
+                }
+                _ => vec![],
+            },
+            enum_cases: match &declaration.kind {
+                o::DeclarationKind::Enum { cases, is_error: false } => {
+                    u32::try_from(cases.len()).map_err(|_| GenerateError("too many enum cases".into()))?
+                }
+                _ => 0,
+            },
+            handle: matches!(declaration.kind, o::DeclarationKind::Handle),
             name: declaration.name.clone(),
             fields: fields.iter().zip(&layout.source_fields).map(|(field, &storage)| s::Field {
                 name: field.name.clone(),
@@ -202,14 +233,27 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
         }
         o::Type::Enum(decl) => s::Type::Object(decl.as_u32()),
         o::Type::Variant(decl) => {
-            let o::DeclarationKind::Variant { cases, is_error: true } = &module.declarations.get(*decl)?.kind else {
-                return Err(unsupported("non-Error variant type"));
+            let o::DeclarationKind::Variant { cases, is_error } = &module.declarations.get(*decl)?.kind else {
+                return Err(GenerateError("variant type references non-variant declaration".into()));
             };
+            if !is_error {
+                return Ok(s::Type::Variant(decl.as_u32()));
+            }
             let [case] = cases.as_slice() else { return Err(unsupported("multi-case Error variant type")); };
             s::Type::Object(case.layout.as_u32())
         }
         o::Type::Descriptor => s::Type::Descriptor,
+        o::Type::Handle(decl) => {
+            if !matches!(module.declarations.get(*decl)?.kind, o::DeclarationKind::Handle) {
+                return Err(GenerateError("handle type references a non-handle declaration".into()));
+            }
+            s::Type::Handle(decl.as_u32())
+        }
         o::Type::Bool => s::Type::Bool,
+        o::Type::Byte => s::Type::Byte,
+        o::Type::Float => s::Type::Float,
+        o::Type::Rat => s::Type::Rat,
+        o::Type::Char => s::Type::Char,
         o::Type::Str => s::Type::Str,
         o::Type::Range => s::Type::Range,
         o::Type::Never => s::Type::Never,
@@ -228,12 +272,39 @@ pub(crate) fn translate_type(module: &o::Module, id: o::TypeId) -> Result<s::Typ
     })
 }
 
+/// The storage index of a variant case payload field.
+pub(crate) fn variant_storage(module: &o::Module, objects: &[s::Object], field: o::FieldRef)
+    -> Result<u32, GenerateError>
+{
+    let declaration = module.declarations.get(field.declaration)?;
+    if !matches!(declaration.kind, o::DeclarationKind::Object { .. }) {
+        return Err(GenerateError("variant payload field outside a case object".into()));
+    }
+    objects.get(field.declaration.as_u32() as usize).and_then(|case| case.fields.get(field.index as usize))
+        .map(|field| field.storage).ok_or_else(|| GenerateError("invalid variant payload field".into()))
+}
+
+/// The SPB 17 type of an OIR-2 conversion operand.
+pub(crate) fn numeric_type(ty: o::NumericType) -> Option<s::Type> {
+    match ty {
+        o::NumericType::Int => Some(s::Type::Int),
+        o::NumericType::Bool => Some(s::Type::Bool),
+        o::NumericType::Str => Some(s::Type::Str),
+        o::NumericType::Byte => Some(s::Type::Byte),
+        o::NumericType::Float => Some(s::Type::Float),
+        o::NumericType::Rat => Some(s::Type::Rat),
+    }
+}
+
 fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError> {
     Ok(match literal {
         o::Literal::Int(value) => s::Constant::Int(value.clone()),
         o::Literal::Bool(value) => s::Constant::Bool(*value),
         o::Literal::Str(value) => s::Constant::Str(value.clone()),
-        _ => return Err(unsupported("constant outside int/bool/string")),
+        o::Literal::Byte(value) => s::Constant::Byte(u32::from(*value)),
+        o::Literal::Char(value) => s::Constant::Char(u32::from(*value)),
+        o::Literal::Float(bits) => s::Constant::Float(bits.to_string()),
+        _ => return Err(unsupported("constant outside int/bool/byte/char/float/string")),
     })
 }
 
@@ -335,7 +406,8 @@ fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function,
         if let o::ValueFacts::Plain { certificate } = &data.facts {
             let valid = match certificate {
                 o::PlainCertificate::Scalar => matches!(registers[value.as_u32() as usize],
-                    s::Type::Int | s::Type::Bool | s::Type::Str | s::Type::Range | s::Type::Never),
+                    s::Type::Int | s::Type::Bool | s::Type::Str | s::Type::Range | s::Type::Never
+                    | s::Type::Byte | s::Type::Float | s::Type::Char | s::Type::Rat),
                 o::PlainCertificate::ClosedGraph { ty } => *ty == data.ty,
                 o::PlainCertificate::Descriptor(_) => return Err(unsupported("descriptor plainness evidence")),
             };
@@ -489,6 +561,44 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             C::StrConcat { left, right } => (D::StrConcat, vec![reg(*left), reg(*right)]),
             C::StrEq { left, right } => (D::StrEq, vec![reg(*left), reg(*right)]),
             C::StrNe { left, right } => (D::StrNe, vec![reg(*left), reg(*right)]),
+            C::ByteEq { left, right } => (D::ByteEq, vec![reg(*left), reg(*right)]),
+            C::ByteNe { left, right } => (D::ByteNe, vec![reg(*left), reg(*right)]),
+            C::ByteLt { left, right } => (D::ByteLt, vec![reg(*left), reg(*right)]),
+            C::ByteLe { left, right } => (D::ByteLe, vec![reg(*left), reg(*right)]),
+            C::ByteGt { left, right } => (D::ByteGt, vec![reg(*left), reg(*right)]),
+            C::ByteGe { left, right } => (D::ByteGe, vec![reg(*left), reg(*right)]),
+            C::CharEq { left, right } => (D::CharEq, vec![reg(*left), reg(*right)]),
+            C::CharNe { left, right } => (D::CharNe, vec![reg(*left), reg(*right)]),
+            C::CharLt { left, right } => (D::CharLt, vec![reg(*left), reg(*right)]),
+            C::CharLe { left, right } => (D::CharLe, vec![reg(*left), reg(*right)]),
+            C::CharGt { left, right } => (D::CharGt, vec![reg(*left), reg(*right)]),
+            C::CharGe { left, right } => (D::CharGe, vec![reg(*left), reg(*right)]),
+            C::FloatEq { left, right } => (D::FloatEq, vec![reg(*left), reg(*right)]),
+            C::FloatNe { left, right } => (D::FloatNe, vec![reg(*left), reg(*right)]),
+            C::FloatLt { left, right } => (D::FloatLt, vec![reg(*left), reg(*right)]),
+            C::FloatLe { left, right } => (D::FloatLe, vec![reg(*left), reg(*right)]),
+            C::FloatGt { left, right } => (D::FloatGt, vec![reg(*left), reg(*right)]),
+            C::FloatGe { left, right } => (D::FloatGe, vec![reg(*left), reg(*right)]),
+            C::RatEq { left, right } => (D::RatEq, vec![reg(*left), reg(*right)]),
+            C::RatNe { left, right } => (D::RatNe, vec![reg(*left), reg(*right)]),
+            C::RatLt { left, right } => (D::RatLt, vec![reg(*left), reg(*right)]),
+            C::RatLe { left, right } => (D::RatLe, vec![reg(*left), reg(*right)]),
+            C::RatGt { left, right } => (D::RatGt, vec![reg(*left), reg(*right)]),
+            C::RatGe { left, right } => (D::RatGe, vec![reg(*left), reg(*right)]),
+            C::EnumEq { left, right } => (D::EnumEq, vec![reg(*left), reg(*right)]),
+            C::EnumNe { left, right } => (D::EnumNe, vec![reg(*left), reg(*right)]),
+            C::IntDiv { left, right } => (D::RatNew, vec![reg(*left), reg(*right)]),
+            C::RatNew { numerator, denominator } => (D::RatNew, vec![reg(*numerator), reg(*denominator)]),
+            C::VariantTag { value } => (D::VariantTag, vec![reg(*value)]),
+            C::VariantOf { value, ty } if matches!(translate_type(module, *ty)?, s::Type::Variant(_)) => {
+                (D::Move, vec![reg(*value)])
+            }
+            C::VariantGet { value, case, field } => {
+                immediate = s::Immediate::Updates(vec![*case, variant_storage(module, objects, *field)?]);
+                (D::VariantGet, vec![reg(*value)])
+            }
+            C::ValEq { left, right } => (D::ValEq, vec![reg(*left), reg(*right)]),
+            C::ValNe { left, right } => (D::ValNe, vec![reg(*left), reg(*right)]),
             C::StrLt { left, right } => (D::StrLt, vec![reg(*left), reg(*right)]),
             C::StrLe { left, right } => (D::StrLe, vec![reg(*left), reg(*right)]),
             C::StrGt { left, right } => (D::StrGt, vec![reg(*left), reg(*right)]),
@@ -499,19 +609,15 @@ fn translate_instruction(module: &o::Module, body: &o::Body, inst: &o::Instructi
             C::RangeStart { value } => (D::RangeStart, vec![reg(*value)]),
             C::RangeEnd { value } => (D::RangeEnd, vec![reg(*value)]),
             C::Convert { value, from, to } => {
-                let included = |ty: o::NumericType| matches!(ty, o::NumericType::Int | o::NumericType::Bool |
-                    o::NumericType::Str);
-                if !included(*from) || !included(*to) {
-                    return Err(unsupported("conversion outside int/bool/string"));
-                }
-                let numeric = |ty: o::NumericType| match ty {
-                    o::NumericType::Int => s::Type::Int,
-                    o::NumericType::Bool => s::Type::Bool,
-                    _ => s::Type::Str,
+                let (Some(source), Some(target)) = (numeric_type(*from), numeric_type(*to)) else {
+                    return Err(unsupported("conversion type"));
                 };
+                if s::conversion(source, target).is_none() {
+                    return Err(unsupported("conversion pair"));
+                }
                 let result = inst.results.first().ok_or_else(|| GenerateError("missing conversion result".into()))?;
-                if translate_type(module, body.values.get(*value)?.ty)? != numeric(*from)
-                    || translate_type(module, body.values.get(*result)?.ty)? != numeric(*to)
+                if translate_type(module, body.values.get(*value)?.ty)? != source
+                    || translate_type(module, body.values.get(*result)?.ty)? != target
                 {
                     return Err(GenerateError("conversion annotation disagrees with SSA types".into()));
                 }

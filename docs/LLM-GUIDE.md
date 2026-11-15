@@ -92,6 +92,23 @@ summary.
     `../okkama-work`.
   - Remove the worktree and its Docker volume `okkama-gate-target-<name>`
     after the merge. Never put worktrees inside the repository.
+- **Tests encode intended behaviour (owner, 2026-11-15).**
+  - **What a test states.** A test states what the program should do: the
+    spec, a conformance `case.json`, or Tomato's observable behaviour. It
+    never states what the code does today.
+  - **When a test fails.** Never change a test's expectation to make it
+    pass. Decide whether the code or the test's intent is wrong. If an owner
+    decision changed the intent, cite the decision in the commit.
+  - **Known gaps.** No test may pin a known gap ("still unsupported",
+    "stops at X"). A gap is a ticket. A test of the intended behaviour may
+    be `#[ignore]`d with the ticket number, or written so it becomes a full
+    check once the gap closes (the `through_low` pattern of the Champ
+    harnesses).
+  - **Unit tests with every change.** Every new rule gets a positive test
+    and a negative test, and the negative test must fail without the rule;
+    check that on the old code. Every new function or pass gets unit tests
+    of its contract. End-to-end and conformance runs do not replace unit
+    tests.
 - **Board.** Every slice is a sub-issue of its epic, with the milestone and
   Release v0.6.0. Set it In Progress when taken and Done with its commit.
   Deferred items become Todo sub-issues right away.

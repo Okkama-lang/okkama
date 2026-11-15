@@ -17,6 +17,10 @@ pub struct TypeClassification {
     pub service_types: BTreeSet<TypeId>,
     pub descriptors: Vec<DescriptorContract>,
     pub unresolved: BTreeSet<TypeId>,
+    /// The value graph reaches an opaque reference (function, cap, role, any or
+    /// future). The verifier requires full dependencies for such values even
+    /// when every reachable target is plain.
+    pub references: bool,
 }
 
 impl TypeClassification {
@@ -188,6 +192,7 @@ pub(super) fn classify(
             service_types: BTreeSet::new(),
             descriptors: vec![],
             unresolved: BTreeSet::new(),
+            references: false,
         };
         let mut terms = Terms { module, free: &free, ids: BTreeMap::new(), nodes: vec![] };
         let root_term = terms.intern(root, &Environment::new(), budget)?;
@@ -217,6 +222,8 @@ pub(super) fn classify(
                 }
             }
             let mut children = vec![];
+            facts.references |= matches!(module.types.get(ty).map_err(arena)?,
+                Type::Fn(_) | Type::Cap { .. } | Type::Role { .. } | Type::Any | Type::Future(_));
             match module.types.get(ty).map_err(arena)? {
                 Type::Successor(child) | Type::Array(child) | Type::Builder(child) | Type::LowCell(child) => {
                     children.push(*child);

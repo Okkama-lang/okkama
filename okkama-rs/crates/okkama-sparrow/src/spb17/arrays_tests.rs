@@ -90,9 +90,12 @@ fn array_loader_checks_transitive_element_graph_independently() {
         trace_layout: vec![], selection_layout: vec![],
     };
     p.objects = vec![
-        Object { name: "plain_lie".into(), error_cases: vec![], fields: vec![],
+        Object { name: "plain_lie".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
+            handle: false, fields: vec![],
             layout: layout(vec![Type::Object(1)], false) },
-        Object { name: "resource".into(), error_cases: vec![], fields: vec![], layout: layout(vec![], true) },
+        Object { name: "resource".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![],
+            handle: false, fields: vec![],
+            layout: layout(vec![], true) },
     ];
     p.functions[0].registers[1] = Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 });
     // Visit the graph from the first object's array field before ordinary retention checks.
@@ -137,7 +140,8 @@ fn scalar_outcome_extensions_reject_wrong_kinds_and_service_operands() {
 #[test]
 fn enum_case_checks_its_closed_catalog() {
     let mut p = fixture();
-    p.objects.push(Object { name: "E".into(), fields: vec![], error_cases: vec!["E.one".into()],
+    p.objects.push(Object { name: "E".into(), fields: vec![], error_cases: vec!["E.one".into()], enum_cases: 0,
+        variant_cases: vec![], handle: false,
         layout: ObjectRuntimeLayout {
             storage_fields: vec![Type::Int], allocation_words: 2, identity_offset: None,
             has_destroy: false, may_reach_resource: false, may_async_destroy: false,
@@ -147,4 +151,63 @@ fn enum_case_checks_its_closed_catalog() {
     p.functions[0].code[0] = Instruction::Data { op: DataOp::EnumCase, inputs: vec![], output: Some(0),
         immediate: Immediate::Updates(vec![0, 1]) };
     assert_eq!(verify_load(&p, &NoExternalContracts).unwrap_err().rule, "ENUM_CASE");
+}
+
+/// The fixture with one unused array register whose element is object 0 with `fields`.
+fn element_array(fields: Vec<Type>, has_destroy: bool) -> Program {
+    let mut p = fixture();
+    let untraced = |ty: &Type| matches!(ty, Type::Int | Type::Bool | Type::Range | Type::Descriptor);
+    let traced = fields.iter().enumerate().filter(|(_, ty)| !untraced(ty))
+        .map(|(index, _)| index as u32).collect();
+    let count = fields.len() as u32;
+    p.objects.push(Object { name: "Element".into(), fields: vec![], error_cases: vec![], enum_cases: 0,
+        variant_cases: vec![], handle: false,
+        layout: ObjectRuntimeLayout {
+            storage_fields: fields,
+            allocation_words: (1 + count + 4 * u32::from(has_destroy)).max(2),
+            identity_offset: has_destroy.then_some(8 * (1 + count)),
+            has_destroy,
+            may_reach_resource: has_destroy,
+            may_async_destroy: false,
+            trace_layout: traced,
+            selection_layout: vec![],
+        } });
+    if has_destroy {
+        let mut destroy = tests::empty_function();
+        destroy.symbol = "destroy".into();
+        destroy.registers = vec![Type::Object(0)];
+        destroy.params = vec![Location::Register(0)];
+        destroy.blocks[0].params = destroy.params.clone();
+        destroy.proofs.entry = Some(EntryContract { destroy: Some(0), ..EntryContract::default() });
+        p.functions.push(destroy);
+    }
+    p.functions[0].registers.push(Type::Array(ArrayType { leaf: ArrayLeaf::Object(0), depth: 1 }));
+    p
+}
+
+#[test]
+fn array_of_closed_plain_objects_loads() {
+    let nested = Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 2 });
+    let p = element_array(vec![Type::Int, Type::Str, Type::Bool, Type::Range, Type::Bytes, nested], false);
+    verify_load(&p, &NoExternalContracts).unwrap();
+}
+
+#[test]
+fn array_element_fields_must_be_closed_plain_data() {
+    for field in [Type::Failure, Type::Error, Type::Descriptor] {
+        let p = element_array(vec![Type::Int, field], false);
+        let failure = verify_load(&p, &NoExternalContracts).unwrap_err();
+        assert_eq!(failure.rule, "ARRAY_PLAIN", "{field:?}: {failure}");
+        assert!(failure.message.contains("not closed plain data"), "{field:?}: {failure}");
+    }
+}
+
+#[test]
+fn array_element_cannot_have_a_destroy() {
+    // A destroy layout always reaches resources (verify: "destroy layout must reach self"), so this
+    // element fails both conditions of the same ARRAY_PLAIN check.
+    let p = element_array(vec![Type::Int], true);
+    let failure = verify_load(&p, &NoExternalContracts).unwrap_err();
+    assert_eq!(failure.rule, "ARRAY_PLAIN", "{failure}");
+    assert!(failure.message.contains("reaches resources"), "{failure}");
 }

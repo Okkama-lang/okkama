@@ -1,3 +1,12 @@
+#[path = "anonymous_tests.rs"]
+mod anonymous_tests;
+#[path = "bound_tests.rs"]
+mod bound_tests;
+#[path = "cap_tests.rs"]
+mod cap_tests;
+#[path = "open_call_tests.rs"]
+mod open_call_tests;
+
 use super::{LowerError, lower_to_oir2};
 use super::native_summaries::P1NativeSummaries;
 use crate::analysis::{self, thir};
@@ -113,8 +122,8 @@ fn oir2_scalar_builtins_golden() {
 #[test]
 fn oir2_unsupported_source_constructs_are_diagnostics() {
     for (body, expected) in [
-        ("let n = try? 1; 0;", "try?"),
-        ("1 & 2;", "binary"),
+        ("let c = char(65); 0;", "char conversion"),
+        ("byte(8) >>> 1; 0;", "byte >>>"),
     ] {
         let source = format!("module app; main() is int {{ {body} }}");
         let error = print_oir2(&source).expect_err("unsupported program must stop");
@@ -208,12 +217,12 @@ fn oir2_boundary_edge_cases_roundtrip() {
 #[test]
 fn oir2_declared_unsupported_bodies_name_the_function() {
     for (source, name, construct) in [
-        ("module app; object O { O() { try { 1 & 2; } catch e is Error { 0; } } } main() is int { 0; }",
-            "app.O.new#0", "binary"),
-        ("module app; object O { O(); destroy { 1 & 2; } } main() is int { 0; }",
-            "app.O.destroy", "binary"),
-        ("module app; object O { has n is int = 1 & 2; O(); } main() is int { 0; }",
-            "app.O.default#0", "binary"),
+        ("module app; object O { O() { try { char(65).code(); } catch e is Error { 0; } } } main() is int { 0; }",
+            "app.O.new#0", "char conversion"),
+        ("module app; object O { O(); destroy { char(65).code(); } } main() is int { 0; }",
+            "app.O.destroy", "char conversion"),
+        ("module app; object O { has n is int = char(65).code(); O(); } main() is int { 0; }",
+            "app.O.default#0", "char conversion"),
     ] {
         let error = print_oir2(source).expect_err("unsupported declared body must stop the module");
         let LowerError::Unsupported { span, message } = error else {
@@ -486,12 +495,12 @@ fn oir2_s2_control_flow_and_aliases_roundtrip() {
 #[test]
 fn oir2_s2_unsupported_bodies_name_the_function() {
     for (source, name) in [
-        ("module app; object O { O() { try { 1 & 2; } catch e is Error { 2; } } } main() is int { 0; }",
+        ("module app; object O { O() { try { char(65).code(); } catch e is Error { 2; } } } main() is int { 0; }",
             "app.O.new#0"),
-        ("module app; object O { O(); f() is int { 1 & 2; } } main() is int { 0; }", "app.O.f#0"),
-        ("module app; object O { has n is int = 1 & 2; O(); } main() is int { 0; }",
+        ("module app; object O { O(); f() is int { char(65).code(); } } main() is int { 0; }", "app.O.f#0"),
+        ("module app; object O { has n is int = char(65).code(); O(); } main() is int { 0; }",
             "app.O.default#0"),
-        ("module app; object O { O(); destroy { 1 & 2; } } main() is int { 0; }", "app.O.destroy"),
+        ("module app; object O { O(); destroy { char(65).code(); } } main() is int { 0; }", "app.O.destroy"),
         (concat!("module app; object O { has n is int = 1; O() { let alias = self; n = 2; } } ",
             "main() is int { 0; }"), "app.O.new#0"),
         (concat!("module app; object O { has n is int; O(b is bool) { ",
@@ -626,8 +635,8 @@ fn oir2_defer_lexical_captures_roundtrip() {
 #[test]
 fn oir2_outside_s3_constructs_report_unsupported() {
     for body in [
-        "let n = try? 1; 0;",
-        "try { throw Stop.now; } catch Stop.now { 0; }",
+        "let c = char(65); 0;",
+        "let n = 1.char().code(); 0;",
     ] {
         let source = format!("module app; enum Stop is Error = (now); main() is int {{ {body} }}");
         let error = print_oir2(&source).expect_err("outside the slice must remain unsupported");
@@ -1224,6 +1233,11 @@ fn oir2_std_closed_specializations_and_error_cases() {
         concat!("module app; import \"cell\" take Cell; ",
             "main() is int { let a = Cell(1); let b = Cell(\"a\"); ",
             "a.replace(a.value() + 1); b.replace(b.value() + \"b\"); a.value(); }"),
+        // #569 C7: closed and compare_and_replace are registered for every plain specialization.
+        concat!("module app; import \"async/atomic\" take Atomic; ",
+            "main() is int { let a = Atomic(1); let b = Atomic(true); let c = Atomic([\"x\"]); ",
+            "let swapped = b.compare_and_replace(true, false); ",
+            "if a.compare_and_replace(1, 2) && !a.closed() && !swapped { c.value().size(); } else { 0; } }"),
         concat!("module app; import \"io/stdout\" take Stdout; enum E is Error = (empty, text(s is string)); ",
             "main() is int { try { throw E.empty; } catch e is E { Stdout().writeln(e.text(), \"!\"); } 0; }"),
         concat!("module app; import \"io/stdout\" take Stdout; enum E is Error = (bad); ",
@@ -1242,11 +1256,8 @@ fn oir2_std_closed_specializations_and_error_cases() {
 #[test]
 fn oir2_std_rejects_other_intrinsics_resources_and_async() {
     for body in [
-        "let a = Atomic(1); a.closed(); 0;",
-        "let a = Atomic(1); a.compare_and_replace(1, 2); 0;",
         "let a = Atomic(R()); 0;",
         "let a = Cell(R()); 0;",
-        "let action = () is int { 1; }; 0;",
     ] {
         let source = format!("module app; import \"async/atomic\" take Atomic; import \"cell\" take Cell; \
             object R {{ R(); destroy {{ }} }} main() is int {{ {body} }}");
@@ -1330,7 +1341,7 @@ fn oir2_high_observation_requires_a_trusted_external() {
             entry_kind: ir::EntryKind::ObservationAdmissionStaysCaller,
             parameters: vec![],
             results: vec![ir::ResultRelation {
-                fresh: vec![], aliases: vec![], external_deps: vec![],
+                fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
                 provenance: ir::AdmissionProvenance::UnboundResult,
             }],
             contract: ir::CallContract {
@@ -1357,6 +1368,9 @@ mod coverage;
 
 #[path = "defer_tests.rs"]
 mod defer_tests;
+
+#[path = "own_case_tests.rs"]
+mod own_case_tests;
 
 #[test]
 fn oir2_pipeline_scalar() {

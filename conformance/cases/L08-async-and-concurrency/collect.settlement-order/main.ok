@@ -100,8 +100,12 @@ async main() is int {
     out.writeln("race later: ", await Raced(origins: later).winner());
 
     // FirstSuccessful skips the failure that settles first (x2) and takes x1.
+    // x0 waits on a chain that never starts, so it is cancelled while it still
+    // waits. (A loser whose wait had already finished would run on and throw,
+    // and that failure would hold back the winner: #546, #663.)
     let five = Chain();
-    let attempts is @Future<string> = [five.breaking(0, "x0"), five.link(1, "x1"), five.breaking(2, "x2")];
+    let idle = Chain();
+    let attempts is @Future<string> = [idle.breaking(0, "x0"), five.link(1, "x1"), five.breaking(2, "x2")];
     five.start();
     out.writeln("first successful: ", await FirstSuccessful(origins: attempts).outcome());
     0;

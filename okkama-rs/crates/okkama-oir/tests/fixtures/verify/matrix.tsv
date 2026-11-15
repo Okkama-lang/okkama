@@ -27,6 +27,7 @@ OIR2-B5.1	valid/B5-declared-summary.oir	invalid/B5-missing-summary.oir
 OIR2-B5.2	valid/M1-observation-registry.oir	invalid/M1-object-method-is-not-observation.oir
 OIR2-B5.3	valid/M2-provenance-table.oir	invalid/M2-bound-take-not-fresh.oir
 OIR2-B5.4	valid/B5-callee-settles-before-caller.oir	invalid/B5-call-restores-accepted-inputs.oir
+OIR2-B5.5	valid/B5-open-callable-contract.oir	invalid/B5-open-identity-summary.oir
 OIR2-B6.1	valid/B6-entry-state-unwind.oir	invalid/B6-block-local-unwind.oir
 OIR2-B6.2	valid/checked-split-normal-and-unwind.oir	invalid/B6-duplicate-linear-slot.oir
 OIR2-B6.3	valid/B6-split-block-after-admit.oir	invalid/B6-stale-unwind-state.oir
@@ -53,6 +54,7 @@ OIR2-B11.1	valid/B11-closed-generic-descriptor.oir	invalid/B11-closed-generic-de
 OIR2-B11.2	valid/B11-sync-hidden-async.oir	invalid/B11-sync-hidden-async.oir
 OIR2-B11.3	valid/B11-native-boundary.oir	invalid/B11-native-boundary.oir
 OIR2-B11.4	valid/B11-four-profile-pipeline.oir	invalid/B11-four-profile-pipeline.oir
+OIR2-B11.5	valid/B5-open-callable-contract.oir	invalid/B11-open-async-cleanup.oir
 OIR2-H1	valid/H1-single-scope-entry.oir	invalid/H1-multiple-scope-entries.oir
 OIR2-H2	valid/H2-nonlinear-high.oir	invalid/H2-linear-high.oir
 OIR2-H3	valid/H3-dominating-defer-prefix.oir	invalid/H3-defer-prefix-merge.oir

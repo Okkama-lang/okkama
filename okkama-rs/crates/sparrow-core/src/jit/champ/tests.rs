@@ -848,12 +848,14 @@ fn p1_runtime() -> Box<Runtime> {
         ("async.atomic.Atomic_string", vec![s::Type::Str, s::Type::Bool], vec![]),
         ("async.atomic.AtomicClosed", vec![s::Type::Int], vec!["AtomicClosed.closed".to_string()]),
         ("app.Problem.note", vec![s::Type::Str], vec!["Problem.note".to_string()]),
+        ("runtime.buffer.BufferState", vec![], vec![]),
     ] {
         let trace_layout = fields.iter().enumerate().filter_map(|(index, ty)| {
             (*ty == s::Type::Str).then_some(index as u32)
         }).collect();
         program.objects.push(s::Object {
-            name: name.into(), error_cases,
+            name: name.into(), error_cases, enum_cases: 0, variant_cases: vec![],
+            handle: name == "runtime.buffer.BufferState",
             fields: if name == "app.Problem.note" {
                 vec![s::Field { name: "message".into(), storage: 0, once: false }]
             } else {
@@ -867,7 +869,30 @@ fn p1_runtime() -> Box<Runtime> {
         });
     }
     let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
-    program.functions = contracts.entries().to_vec();
+    // Test intrinsics belong to a test profile (`check_tests`); these programs have no tests table.
+    program.functions = contracts.entries().iter().filter(|entry| !entry.symbol.starts_with(s::TEST_INTRINSIC_PREFIX))
+        .cloned().collect();
+    for symbol in ["runtime/utf@1::utf8_encode/1", "runtime/stdio@1::stdout_write/1",
+        "runtime/buffer@1::buffer_state_create/1", "runtime/buffer@1::buffer_state_size/1",
+        "runtime/buffer@1::buffer_state_closed/1", "runtime/buffer@1::buffer_state_close/1"]
+    {
+        program.functions.push(contracts.native(symbol).unwrap().clone());
+    }
+    // An unresolved provider: the checked adapter with handle transport of its own module.
+    program.objects.push(s::Object {
+        name: "app.Port".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: true,
+        fields: vec![],
+        layout: s::ObjectRuntimeLayout {
+            allocation_words: 2, identity_offset: None, has_destroy: false, may_reach_resource: false,
+            may_async_destroy: false, storage_fields: vec![], trace_layout: vec![], selection_layout: vec![],
+        },
+    });
+    let mut port = contracts.native("runtime/buffer@1::buffer_state_size/1").unwrap().clone();
+    port.symbol = "app@1::port_open/1".into();
+    port.proofs.entry.as_mut().unwrap().external = Some("app@1::port_open/1".into());
+    port.registers = vec![s::Type::Str];
+    port.results = vec![s::Type::Handle(program.objects.len() as u32 - 1)];
+    program.functions.push(port);
     let mut runtime = Runtime::new_champ(program, vec![]).unwrap();
     runtime.heap.set_stress(true);
     runtime
@@ -1215,4 +1240,52 @@ fn champ_s1_fallible_data_leaves_like_a_failing_call() {
         let failure = runtime.failure(ctx.failure).unwrap();
         assert!(matches!(&failure.kind, FailureKind::Program(text) if text == message), "{:?}", failure.kind);
     }
+}
+
+#[test]
+fn champ_native_handles_are_registry_values_under_collection() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let initial = runtime.heap.allocate_bytes(b"ab");
+    runtime.roots.push((initial, Repr::Ref));
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::buffer_state_create/1", &[initial]);
+    assert_eq!(outcome, c::NORMAL);
+    let post = post.unwrap();
+    assert!(runtime.champ_packet_keys(&post.packet).unwrap().is_empty(), "a handle carries no destroy token");
+    let handle = post.value;
+    runtime.roots.clear();
+    runtime.roots.push((handle, Repr::Ref));
+    runtime.heap.collect(|visit| visit(handle, Repr::Ref));
+    let (_, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::buffer_state_size/1", &[handle]);
+    assert_eq!(runtime.small_or_big(post.unwrap().value), Some(2));
+    // Tomato parity: close is idempotent and reports whether this call closed the state.
+    for expected in [1, 0] {
+        let (_, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::buffer_state_close/1", &[handle]);
+        assert_eq!(post.unwrap().value, expected);
+    }
+    let (_, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::buffer_state_closed/1", &[handle]);
+    assert_eq!(post.unwrap().value, 1);
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, "runtime/buffer@1::buffer_state_size/1", &[handle]);
+    assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
+    let post = post.unwrap();
+    assert_eq!(post.packet.record, 0, "accepted input is settled before unwind");
+    assert!(matches!(runtime.failure(post.failure).unwrap().kind, FailureKind::Native(_)));
+}
+
+#[test]
+fn champ_unresolved_native_fails_as_a_missing_provider() {
+    let mut runtime = p1_runtime();
+    let mut ctx = context(&mut runtime);
+    let name = runtime.heap.allocate_text("x");
+    runtime.roots.push((name, Repr::Ref));
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, "app@1::port_open/1", &[name]);
+    assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
+    let post = post.unwrap();
+    assert_eq!(post.packet.record, 0);
+    let FailureKind::Native(payload) = runtime.failure(post.failure).unwrap().kind else { panic!("native failure") };
+    runtime.roots.push((payload, Repr::Ref));
+    ctx.status = OK;
+    ctx.failure = 0;
+    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
+    assert_eq!(runtime.heap.text(text), "Native symbol \"app@1::port_open/1\" is not registered");
 }

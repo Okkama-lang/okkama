@@ -210,3 +210,174 @@ pub(super) fn close_unwind_permissions(function: &mut s::Function) -> Result<(),
     }
     Ok(())
 }
+
+/// A successor's must-use state on one path: live permissions and, for each taken successor, the
+/// object reference its succ.take produced.
+#[derive(Clone, PartialEq, Eq)]
+struct Permissions {
+    active: BTreeSet<s::Location>,
+    taken: BTreeMap<s::Location, s::Location>,
+}
+
+/// OIR-2 discharges must-use at least once and keeps the reference readable after succ.take (§8), so
+/// Own may forward a taken successor alias and take it again. SPB 17 keeps exactly one permission per
+/// path. Forward the object reference the take produced instead: the destination becomes a plain object
+/// parameter, and a later succ.take of it is a plain move. No permission is created or dropped.
+/// The forwarded objects now live longer: they become roots wherever they are live, as Low roots the
+/// successor alias they replace.
+pub(super) fn forward_taken(function: &mut s::Function) -> Result<(), GenerateError> {
+    let mut forwarded = BTreeSet::new();
+    while let Some((sources, params)) = taken_forwards(function) {
+        for (pc, ordinal, index, object) in sources {
+            forwarded.insert(object);
+            let edge = match &mut function.code[pc] {
+                s::Instruction::Br(edge) => edge,
+                s::Instruction::Cond { yes, no, .. } => if ordinal == 0 { yes } else { no },
+                s::Instruction::Champ { flow: s::Flow::Outcomes(outcomes), .. } => &mut outcomes[ordinal].edge,
+                _ => unreachable!("edge instruction"),
+            };
+            edge.assignments[index].source = s::Source::Location(object);
+        }
+        for param in params {
+            if let s::Type::Successor(id) = function.registers[param as usize] {
+                function.registers[param as usize] = s::Type::Object(id);
+            }
+        }
+    }
+    if forwarded.is_empty() {
+        return Ok(());
+    }
+    let mut bare = function.clone();
+    bare.proofs.roots.clear();
+    bare.proofs.post_roots.clear();
+    bare.proofs.dependencies.clear();
+    let live = s::live_locations(&bare)?;
+    for (pc, locations) in live.iter().enumerate() {
+        let roots = locations.intersection(&forwarded).copied().collect::<Vec<_>>();
+        if !roots.is_empty() {
+            function.proofs.roots.push(s::RootRequirement { pc: pc as u32, locations: roots });
+        }
+        if let s::Instruction::Champ { flow: s::Flow::Next(_), op, .. } = function.code[pc]
+            && !matches!(op, s::Opcode::RetOwn | s::Opcode::RetDefer)
+        {
+            let roots = live.get(pc + 1).into_iter().flatten().copied()
+                .filter(|location| forwarded.contains(location)).collect::<Vec<_>>();
+            if !roots.is_empty() {
+                function.proofs.post_roots.push(s::RootRequirement { pc: pc as u32, locations: roots });
+            }
+        }
+    }
+    Ok(())
+}
+
+type Forward = (usize, usize, usize, s::Location);
+
+/// One round of `forward_taken`: the edge sources to replace and the parameters to retype, or `None`
+/// when nothing can be forwarded. Inconsistent states are left for the verifier to reject.
+fn taken_forwards(function: &s::Function) -> Option<(Vec<Forward>, BTreeSet<u32>)> {
+    let successor = |location: s::Location| matches!(location, s::Location::Register(id)
+        if matches!(function.registers[id as usize], s::Type::Successor(_)));
+    if function.code.is_empty() || !function.registers.iter().any(|ty| matches!(ty, s::Type::Successor(_))) {
+        return None;
+    }
+    let blocks = function.blocks.iter().enumerate().map(|(index, block)| (block.pc, index))
+        .collect::<BTreeMap<_, _>>();
+    let start = Permissions {
+        active: function.params.iter().copied().filter(|&location| successor(location)).collect(),
+        taken: BTreeMap::new(),
+    };
+    let mut incoming = vec![None; function.blocks.len()];
+    incoming[0] = Some(start);
+    let mut work = vec![0];
+    // Per (pc, ordinal, assignment): the object to forward, or None where the source holds no object.
+    let mut forwards = BTreeMap::<(usize, usize, usize), Option<s::Location>>::new();
+    while let Some(index) = work.pop() {
+        let mut state: Permissions = incoming[index].clone()?;
+        let block = &function.blocks[index];
+        let end = function.blocks.get(index + 1).map_or(function.code.len(), |block| block.pc as usize);
+        for pc in block.pc as usize..end {
+            let instruction = &function.code[pc];
+            if let s::Instruction::Data { op, inputs, output, .. } = instruction {
+                if *op == s::DataOp::Move
+                    && let Some(&input) = inputs.first()
+                    && successor(s::Location::Register(input))
+                    && state.active.remove(&s::Location::Register(input))
+                    && let Some(output) = output
+                {
+                    state.taken.insert(s::Location::Register(input), s::Location::Register(*output));
+                }
+                if let Some(output) = output && successor(s::Location::Register(*output)) {
+                    state.active.insert(s::Location::Register(*output));
+                }
+            }
+            for (ordinal, edge) in edges(instruction).into_iter().enumerate() {
+                let mut next = state.clone();
+                for (position, assignment) in edge.assignments.iter().enumerate() {
+                    if !successor(assignment.destination) {
+                        continue;
+                    }
+                    let s::Source::Location(source) = assignment.source else {
+                        next.active.insert(assignment.destination);
+                        continue;
+                    };
+                    if state.active.contains(&source) {
+                        next.active.remove(&source);
+                        next.active.insert(assignment.destination);
+                    } else {
+                        // A parameter already retyped by an earlier round forwards its own object.
+                        let object = if successor(source) {
+                            state.taken.get(&source).copied()
+                        } else {
+                            Some(source)
+                        };
+                        let entry = forwards.entry((pc, ordinal, position)).or_insert(object);
+                        if *entry != object {
+                            *entry = None;
+                        }
+                    }
+                }
+                let target = blocks[&edge.target_pc];
+                match &mut incoming[target] {
+                    Some(previous) => {
+                        if previous.active != next.active {
+                            return None;
+                        }
+                        let before = previous.taken.len();
+                        previous.taken.retain(|location, object| next.taken.get(location) == Some(object));
+                        if previous.taken.len() != before {
+                            work.push(target);
+                        }
+                    }
+                    slot => {
+                        *slot = Some(next);
+                        work.push(target);
+                    }
+                }
+            }
+        }
+    }
+    // A parameter becomes an object only when every edge into it forwards a taken successor's object.
+    let mut candidates = BTreeMap::<u32, bool>::new();
+    for (pc, instruction) in function.code.iter().enumerate() {
+        for (ordinal, edge) in edges(instruction).into_iter().enumerate() {
+            for (position, assignment) in edge.assignments.iter().enumerate() {
+                let s::Location::Register(destination) = assignment.destination else { continue };
+                if !successor(assignment.destination) {
+                    continue;
+                }
+                let forwarded = forwards.get(&(pc, ordinal, position)).is_some_and(Option::is_some);
+                *candidates.entry(destination).or_insert(true) &= forwarded;
+            }
+        }
+    }
+    let params = candidates.into_iter().filter_map(|(param, all)| all.then_some(param)).collect::<BTreeSet<_>>();
+    if params.is_empty() {
+        return None;
+    }
+    let sources = forwards.into_iter().filter_map(|((pc, ordinal, position), object)| {
+        let edge = edges(&function.code[pc])[ordinal];
+        let s::Location::Register(destination) = edge.assignments[position].destination else { return None };
+        params.contains(&destination).then_some((pc, ordinal, position, object?))
+    }).collect();
+    Some((sources, params))
+}

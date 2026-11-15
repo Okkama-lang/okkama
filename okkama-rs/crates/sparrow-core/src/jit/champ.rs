@@ -1001,6 +1001,10 @@ impl Emit<'_, '_> {
                     s::Immediate::Constant(s::Constant::Bool(value)) => u64::from(*value),
                     s::Immediate::Constant(s::Constant::Descriptor(value)) => *value as u64,
                     s::Immediate::Constant(s::Constant::Str(value)) => self.heap.allocate_text(value),
+                    s::Immediate::Constant(s::Constant::Byte(value) | s::Constant::Char(value)) => u64::from(*value),
+                    s::Immediate::Constant(s::Constant::Float(bits)) => {
+                        bits.parse().map_err(|_| Error("invalid float constant".into()))?
+                    }
                     _ => return Err(Error("invalid constant".into())),
                 };
                 self.constants.push((word, machine::repr(ty)));
@@ -1121,13 +1125,114 @@ impl Emit<'_, '_> {
                 };
                 self.call("int", &[self.ctx, opcode, left, right]).unwrap()
             }
+            D::Convert => {
+                let from = self.source.registers[inputs[0] as usize];
+                let codes = machine::scalar_code(from).zip(machine::scalar_code(ty))
+                    .ok_or_else(|| Error("Champ conversion outside scalar types".into()))?;
+                let from = self.iconst(codes.0);
+                let to = self.iconst(codes.1);
+                self.call("champ_machine_convert", &[self.ctx, from, to, words[0]]).unwrap()
+            }
+            D::ByteEq | D::ByteNe | D::ByteLt | D::ByteLe | D::ByteGt | D::ByteGe
+                | D::CharEq | D::CharNe | D::CharLt | D::CharLe | D::CharGt | D::CharGe => {
+                let condition = match op {
+                    D::ByteEq | D::CharEq => IntCC::Equal,
+                    D::ByteNe | D::CharNe => IntCC::NotEqual,
+                    D::ByteLt | D::CharLt => IntCC::UnsignedLessThan,
+                    D::ByteLe | D::CharLe => IntCC::UnsignedLessThanOrEqual,
+                    D::ByteGt | D::CharGt => IntCC::UnsignedGreaterThan,
+                    _ => IntCC::UnsignedGreaterThanOrEqual,
+                };
+                let result = self.builder.ins().icmp(condition, words[0], words[1]);
+                self.builder.ins().uextend(types::I64, result)
+            }
+            D::FloatEq | D::FloatNe | D::FloatLt | D::FloatLe | D::FloatGt | D::FloatGe => {
+                let condition = match op {
+                    D::FloatEq => FloatCC::Equal,
+                    D::FloatNe => FloatCC::NotEqual,
+                    D::FloatLt => FloatCC::LessThan,
+                    D::FloatLe => FloatCC::LessThanOrEqual,
+                    D::FloatGt => FloatCC::GreaterThan,
+                    _ => FloatCC::GreaterThanOrEqual,
+                };
+                let left = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), words[0]);
+                let right = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), words[1]);
+                let result = self.builder.ins().fcmp(condition, left, right);
+                self.builder.ins().uextend(types::I64, result)
+            }
+            D::RatEq | D::RatNe | D::RatLt | D::RatLe | D::RatGt | D::RatGe => {
+                let order = self.call("champ_machine_rat_order", &[self.ctx, words[0], words[1]]).unwrap();
+                let condition = match op {
+                    D::RatEq => IntCC::Equal,
+                    D::RatNe => IntCC::NotEqual,
+                    D::RatLt => IntCC::SignedLessThan,
+                    D::RatLe => IntCC::SignedLessThanOrEqual,
+                    D::RatGt => IntCC::SignedGreaterThan,
+                    _ => IntCC::SignedGreaterThanOrEqual,
+                };
+                let result = self.builder.ins().icmp_imm_s(condition, order, 0);
+                self.builder.ins().uextend(types::I64, result)
+            }
+            D::RatNew => self.call("rat_new", &[self.ctx, words[0], words[1]]).unwrap(),
+            D::EnumEq | D::EnumNe => {
+                // A plain enum value is an object whose only storage word is its tagged case number.
+                let left = self.load(words[0], 8);
+                let right = self.load(words[1], 8);
+                let condition = if op == D::EnumEq { IntCC::Equal } else { IntCC::NotEqual };
+                let result = self.builder.ins().icmp(condition, left, right);
+                self.builder.ins().uextend(types::I64, result)
+            }
+            D::ValEq | D::ValNe => {
+                let s::Type::Object(descriptor) = self.source.registers[inputs[0] as usize] else {
+                    return Err(Error("Champ value equality outside objects".into()));
+                };
+                let descriptor = self.iconst(u64::from(descriptor));
+                let equal = self.call("champ_machine_value_eq", &[self.ctx, descriptor, words[0], words[1]]).unwrap();
+                if op == D::ValEq { equal } else { self.builder.ins().bxor_imm_s(equal, 1) }
+            }
+            D::VariantTag => {
+                let s::Type::Variant(variant) = self.source.registers[inputs[0] as usize] else {
+                    return Err(Error("Champ variant.tag outside variants".into()));
+                };
+                let header = self.load(words[0], 0);
+                let descriptor = self.builder.ins().ushr_imm_u(header, 32);
+                let mut tag = self.iconst(0);
+                for (case, &object) in self.program.objects[variant as usize].variant_cases.iter().enumerate() {
+                    let active = self.builder.ins().icmp_imm_s(IntCC::Equal, descriptor, i64::from(object));
+                    let number = self.iconst(case as u64);
+                    tag = self.builder.ins().select(active, number, tag);
+                }
+                let doubled = self.builder.ins().ishl_imm_u(tag, 1);
+                self.builder.ins().bor_imm_u(doubled, 1)
+            }
+            D::VariantGet => {
+                let (s::Type::Variant(variant), s::Immediate::Updates(indices)) =
+                    (self.source.registers[inputs[0] as usize], immediate) else {
+                    return Err(Error("Champ variant.get outside variants".into()));
+                };
+                let case = self.program.objects[variant as usize].variant_cases[indices[0] as usize];
+                let case = self.iconst(u64::from(case));
+                let storage = self.iconst(u64::from(indices[1]));
+                self.call("champ_machine_variant_get", &[self.ctx, case, storage, words[0]]).unwrap()
+            }
+            D::TestOk | D::TestIs | D::TestIsnt | D::TestFail => {
+                let kind = self.iconst(match op {
+                    D::TestOk => 0,
+                    D::TestIs => 1,
+                    D::TestIsnt => 2,
+                    _ => 3,
+                });
+                let function = self.iconst(self.index as u64);
+                let register = self.iconst(u64::from(inputs[0]));
+                let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
+                self.call("champ_machine_test", &[self.ctx, kind, function, register, words[0], right]).unwrap()
+            }
             D::BoolNot => self.builder.ins().bxor_imm_s(words[0], 1),
             D::BoolEq | D::BoolNe => {
                 let condition = if op == D::BoolEq { IntCC::Equal } else { IntCC::NotEqual };
                 let result = self.builder.ins().icmp(condition, words[0], words[1]);
                 self.builder.ins().uextend(types::I64, result)
             }
-            _ => return Err(Error(format!("Champ J1 data operation {op:?} is outside the executable slice"))),
         };
         Ok(value)
     }
@@ -1136,7 +1241,9 @@ impl Emit<'_, '_> {
 /// Data helpers that can return with a non-OK status: an application failure (`DataOp::fallible`)
 /// or a terminal stop such as an exhausted memory budget. Their result is then not a value.
 fn sets_status(op: s::DataOp) -> bool {
-    op.fallible() || matches!(op, s::DataOp::IntMul | s::DataOp::StrConcat)
+    use s::DataOp as D;
+    matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
+        | D::VariantGet | D::TestOk | D::TestIs | D::TestIsnt | D::TestFail)
 }
 
 #[cfg(test)]

@@ -186,6 +186,7 @@ fn operation(module: &Module, body: &Body, op: &Operation, state: &mut State<'_>
         state.error(R::B51, "observation cannot accept an input packet");
     }
     dispatch(module, body, op, summary, state);
+    open_invocation(module, body, op, summary, state);
     let target = target.or_else(|| cap_target(module, op));
     if let Some(target) = target.and_then(|id| module.functions.get(id).ok()) {
         if summary.entry_kind == EntryKind::ObservationAdmissionStaysCaller
@@ -279,4 +280,100 @@ fn dispatch(module: &Module, body: &Body, op: &Operation, summary: &Summary, sta
         }
         _ => {}
     }
+}
+
+// #569 O1: an action value without a finite known origin is an open invocation.
+// Its only contract is the registered conservative one (OIR-2 §6.4): the module
+// cannot narrow it to an identity, a fresh-only or a suspending declaration.
+fn open_invocation(module: &Module, body: &Body, op: &Operation, summary: &Summary, state: &mut State<'_>) {
+    let Operation::Call(CallOp::Closure { callee, .. }) = op else {
+        return;
+    };
+    if !open_callee(module, body, callee.value, state) {
+        return;
+    }
+    let contract = &summary.contract;
+    if contract.suspends || contract.async_destroy || contract.publication != Publication::Atomic
+        || contract.failures.contains(&FailureKind::Cancelled) {
+        state.error(R::B115, "open sync invocation cannot suspend, deliver cancellation or hide async cleanup");
+    }
+    // High carries producer-declared call hints (H2); own replaces them with the
+    // catalogue contract, and every elaborated profile must keep exactly that one.
+    if module.profile == Profile::High {
+        return;
+    }
+    let Ok(callable) = body.values.get(callee.value).map(|value| value.ty) else {
+        return;
+    };
+    let exact = |id: &ProtocolId| module.protocols.get(*id).is_ok_and(|protocol| {
+        *protocol == crate::catalogue::open_callable_protocol()
+    });
+    let protocol = contract.protocol.filter(exact);
+    // Identical protocol declarations are one protocol: the registered entry may
+    // name the first of them and the call another one.
+    let registered = state.context.external_contracts.open_callable(callable)
+        .filter(|registered| registered.contract.protocol.as_ref().is_some_and(exact))
+        .map(|mut registered| {
+            registered.contract.protocol = protocol;
+            registered
+        });
+    let canonical = protocol.and_then(|id| crate::catalogue::open_callable_summary(module, callable, id));
+    if protocol.is_none() || registered.as_ref() != Some(summary) || canonical.as_ref() != Some(summary) {
+        state.error(R::B55, "open invocation requires the registered conservative open-callable contract");
+    }
+}
+
+/// Mirrors own's finite origins: closures, bound actions and witnessed role
+/// slots, through retags and block parameters. Entry parameters, produced edge
+/// results and every other definition are open.
+fn open_callee(module: &Module, body: &Body, value: ValueId, state: &mut State<'_>) -> bool {
+    let mut pending = vec![value];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut edges = None;
+    while let Some(value) = pending.pop() {
+        if !state.step(1) {
+            return true;
+        }
+        if !seen.insert(value) {
+            continue;
+        }
+        let Ok(data) = body.values.get(value) else {
+            return true;
+        };
+        match data.def {
+            Definition::InstResult { inst, .. } => match body.insts.get(inst).map(|inst| &inst.op) {
+                Ok(Operation::Core(CoreOp::FnClosure { .. } | CoreOp::FnBind { .. })) => {}
+                Ok(Operation::Core(CoreOp::FnBindRole { role, slot, .. })) => {
+                    if !role_witnessed(module, *role, *slot) {
+                        return true;
+                    }
+                }
+                Ok(Operation::Core(CoreOp::Retag { value, .. })) => pending.push(*value),
+                _ => return true,
+            },
+            Definition::BlockParam { block, index } => {
+                if block == body.entry {
+                    return true;
+                }
+                let edges = edges.get_or_insert_with(|| super::graph::edges(body, state));
+                for edge in edges.iter().filter(|edge| edge.target == block) {
+                    match edge.args.get(index as usize) {
+                        Some(EdgeArg::Value(argument)) => pending.push(*argument),
+                        _ => return true,
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn role_witnessed(module: &Module, role: DeclId, slot: u32) -> bool {
+    module.declarations.iter().any(|(_, declaration)| match &declaration.kind {
+        DeclarationKind::Object { witnesses, .. } => witnesses.iter().any(|witness| {
+            matches!(module.types.get(witness.role), Ok(Type::Role { decl, .. }) if *decl == role)
+                && witness.slots.get(slot as usize).is_some()
+        }),
+        _ => false,
+    })
 }

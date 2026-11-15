@@ -76,14 +76,15 @@ impl Engine<'_, '_> {
             } else {
                 let mut yes = piece.clone();
                 let mut no = piece.clone();
-                if piece.predicates.get(&filter) != Some(&false) {
+                let recorded = piece.predicate(&filter);
+                if recorded != Some(false) {
                     yes.predicates.insert(filter.clone(), true);
                     if *fresh {
                         yes.provenance &= FRESH;
                     }
                     selected.pieces.insert(yes);
                 }
-                if piece.predicates.get(&filter) != Some(&true) {
+                if recorded != Some(true) {
                     no.predicates.insert(filter.clone(), false);
                     rest.pieces.insert(no);
                 }

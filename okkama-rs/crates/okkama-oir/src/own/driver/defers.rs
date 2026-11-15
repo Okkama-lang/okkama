@@ -189,6 +189,9 @@ impl Driver<'_, '_> {
             .chain(env.bindings.iter().map(|(key, value)| (SsaSlot::Binding(*key), *value)))
             .chain(env.scopes.iter().map(|(key, value)| (SsaSlot::Scope(*key), LatestValue {
                 value: *value, deps: None,
+            })))
+            .chain(env.journals.iter().map(|(key, value)| (SsaSlot::Journal(*key), LatestValue {
+                value: *value, deps: None,
             }))).collect();
         if let Some(value) = env.cleanup.pending {
             slots.insert(SsaSlot::Linear(0), LatestValue { value, deps: None });
@@ -213,8 +216,12 @@ impl Driver<'_, '_> {
             let ty = self.body.values.get(latest.value).map_err(arena)?.ty;
             let managed = self.managed(ty);
             let parameter = ssa.declare(self.module, &mut self.body, destination, slot, ty, managed)?;
+            if env.linear.remove(&latest.value) {
+                env.linear.insert(parameter.value);
+            }
             match slot {
                 SsaSlot::Value(key) => { env.values.insert(key, parameter); }
+                SsaSlot::Journal(key) => { env.journals.insert(key, parameter.value); }
                 SsaSlot::Binding(key) => { env.bindings.insert(key, parameter); }
                 SsaSlot::Scope(key) => { env.scopes.insert(key, parameter.value); }
                 SsaSlot::Linear(0) => {

@@ -213,15 +213,10 @@ fn oir2_generic_open_types_are_explicit_diagnostics() {
 
 #[test]
 fn oir2_generic_later_constructs_keep_source_diagnostics() {
-    for source in [
-        concat!("module app; object Box<T> { has value is T; Box(:value); } ",
-            "main() is int { Box(value: () is int { 1; }); 0; }"),
-        concat!("module app; object Box<T> { has value is T; Box(:value); ",
-            "async get() is T { value; } } main() is int { Box(value: 1).get(); 0; }"),
-    ] {
-        with_analysis(source, |analysis| {
-            let error = lower_to_oir2(analysis).unwrap_err();
-            assert!(matches!(error, LowerError::Unsupported { span, .. } if !span.is_empty()), "{error}");
-        });
-    }
+    let source = concat!("module app; object Box<T> { has value is T; Box(:value); ",
+        "async get() is T { value; } } main() is int { Box(value: 1).get(); 0; }");
+    with_analysis(source, |analysis| {
+        let error = lower_to_oir2(analysis).unwrap_err();
+        assert!(matches!(error, LowerError::Unsupported { span, .. } if !span.is_empty()), "{error}");
+    });
 }
