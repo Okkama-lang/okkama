@@ -245,8 +245,11 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, str
         }
         let header = runtime.heap.header_of(object);
         // Kinds without identity are leaves: the loader's ARRAY_PLAIN admits only arrays whose
-        // element graph is closed and plain, and Bytes and Range payloads hold no references.
-        if matches!(heap::kind(header), heap::STRING | heap::BIGINT | heap::ARRAY | heap::PAYLOAD) {
+        // element graph is closed and plain. Of the payloads only a Range is a leaf; failures and
+        // service records can hold identities and still stop the walk.
+        let range = heap::kind(header) == heap::PAYLOAD
+            && runtime.heap.payload::<crate::ops::RangeValue>(object).is_some();
+        if range || matches!(heap::kind(header), heap::STRING | heap::BIGINT | heap::ARRAY) {
             continue;
         }
         if heap::kind(header) != heap::OBJECT {

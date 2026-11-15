@@ -195,6 +195,10 @@ impl<'a> Evidence<'a> {
     }
 
     fn flat(&mut self, location: Location) -> Option<Inventory> {
+        // An empty packet has no journals to classify, wherever it came from (loops included).
+        if self.inventory(location).is_some_and(|keys| keys.is_empty()) {
+            return Some(Inventory::new());
+        }
         let definitions = self.definitions.get(&location).cloned().unwrap_or_default();
         if definitions.is_empty() {
             return self.inventory(location).filter(Inventory::is_empty);

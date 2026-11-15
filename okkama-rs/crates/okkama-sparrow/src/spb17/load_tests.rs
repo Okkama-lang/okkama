@@ -562,3 +562,21 @@ fn creation_may_reach_its_commit_past_unrelated_instructions() {
     refresh(f);
     verify_load(&p, &catalog).unwrap();
 }
+
+#[test]
+fn no_edge_may_enter_the_entry_block() {
+    // A back edge into block 0 would give an entry parameter incoming definitions, and the
+    // evidence would no longer see the caller-supplied value (audit of bb7abd0b, finding 1).
+    let mut f = empty_function();
+    let flag = Location::Register(0);
+    f.registers = vec![Type::Bool];
+    f.params = vec![flag];
+    f.blocks = vec![Block { pc: 0, params: vec![flag] }, Block { pc: 1, params: vec![] }];
+    let again = Assignment { destination: flag, source: Source::Location(flag) };
+    f.code = vec![
+        Instruction::Cond { condition: 0, yes: Edge { target_pc: 1, assignments: vec![] },
+            no: Edge { target_pc: 0, assignments: vec![again] } },
+        Instruction::Ret(vec![]),
+    ];
+    reject(&small(f), &NoExternalContracts, "ENTRY_BLOCK_TARGET");
+}

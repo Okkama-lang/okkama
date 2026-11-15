@@ -844,6 +844,9 @@ fn verify_function(p: &Program, f: &Function) -> Check {
             }
             for (edge, produced) in checked_edges(p, f, inst)? {
                 let target = *pcs.get(&edge.target_pc).ok_or_else(|| error("edge target is not a block"))?;
+                // The evidence reads an entry parameter's caller-supplied value only when the
+                // parameter has no incoming edge; a back edge to block 0 would hide that value.
+                enforce(target != 0, "ENTRY_BLOCK_TARGET", "no edge may enter the entry block")?;
                 let params = &f.blocks[target].params;
                 require(edge.assignments.len() == params.len(), "bad edge arity")?;
                 for (assignment, &param) in edge.assignments.iter().zip(params) {
