@@ -51,6 +51,26 @@ pub(super) fn error_case_get(module: &o::Module, body: &o::Body, op: &o::Operati
     Ok(Some((*value, *field)))
 }
 
+/// A payload read of the single case of an Error variant: SPB 17 holds that value as its case's object
+/// (translate_type), so the read cannot meet another case and is a plain field read, never an evaluate.
+pub(super) fn only_case_read(module: &o::Module, body: &o::Body, op: &o::Operation) -> Result<bool, GenerateError> {
+    let o::Operation::Core(o::CoreOp::VariantGet { value, .. }) = op else { return Ok(false) };
+    Ok(single_error_case(module, body.values.get(*value)?.ty)?.is_some())
+}
+
+/// [`fallible_scalar`] in its module: a read of an Error variant's only case cannot fail.
+pub(super) fn fallible_in(module: &o::Module, body: &o::Body, op: &o::Operation) -> Result<bool, GenerateError> {
+    Ok(fallible_scalar(op) && !only_case_read(module, body, op)?)
+}
+
+/// An invocation that computes into a register and takes its normal edge: a total scalar family operation
+/// or a read of an Error variant's only case.
+pub(super) fn total_invocation(module: &o::Module, body: &o::Body, op: &o::Operation)
+    -> Result<bool, GenerateError>
+{
+    Ok(total_family_operation(op) || only_case_read(module, body, op)?)
+}
+
 /// OIR scalar operations whose SPB data form is fallible (`DataOp::fallible`). A conversion fails only
 /// where its pair of types can trap; a total one (int to string) stays plain data. Test assertions are
 /// evaluated the same way: they fail only outside a running case.
@@ -800,6 +820,28 @@ impl Emitter<'_> {
                 {
                     return self.family_invocation(data, &inputs, normal, unwind);
                 }
+                // The single case of an Error variant is the value's own object (translate_type): its payload
+                // read cannot meet another case, so it is a field read that takes the normal edge.
+                if let o::Operation::Core(o::CoreOp::VariantGet { value, case, field }) = op.as_ref()
+                    && let s::Type::Object(id) = translate_type(self.module, self.body.values.get(*value)?.ty)?
+                    && single_error_case(self.module, self.body.values.get(*value)?.ty)?.is_some()
+                {
+                    if *case != 0 || field.declaration.as_u32() != id {
+                        return Err(error("variant.get outside the only Error case"));
+                    }
+                    let storage = variant_storage(self.module, self.objects, *field)?;
+                    let ty = self.objects[id as usize].layout.storage_fields[storage as usize];
+                    let input = self.reg(*value)?;
+                    let read = fresh(&mut self.result, ty)?;
+                    self.result.code.push(data(s::DataOp::ObjGet, vec![input], read, s::Immediate::Field(storage)));
+                    let mut edge = self.edge(normal.block, &normal.args, o::Outcome::Normal, &[P::Value(ty)])?;
+                    for assignment in &mut edge.assignments {
+                        if assignment.source == s::Source::ProducedSlot(0) {
+                            assignment.source = s::Source::Location(L::Register(read));
+                        }
+                    }
+                    return Ok(s::Instruction::Br(edge));
+                }
                 if let o::Operation::Core(core) = op.as_ref() {
                     let scalar = match core {
                         o::CoreOp::RangeNew { start, end, inclusive } => Some((s::DataOp::RangeNew,
@@ -1113,7 +1155,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 return Err(error("duplicate instruction"));
             }
             let inst = body.insts.get(inst_id)?;
-            if block.unwind.is_some() && !fallible_scalar(&inst.op) && !total_family_operation(&inst.op)
+            if block.unwind.is_some() && !fallible_in(module, body, &inst.op)?
+                && !total_invocation(module, body, &inst.op)?
                 && o::ContractRegistry::new(module)
                 .lookup(&inst.op).map_err(|failure| error(failure.to_string()))?.unwind.is_some()
             {
@@ -1129,7 +1172,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                 // allocate the closure layout, then move it into the `fn` role; move a cap and its packet.
                 op if expansion(op) > 1 => expansion(op),
                 // evaluate, then the function failure exit unless the block unwind receives the failure.
-                op if fallible_scalar(op) && block.unwind.is_none() => 2,
+                op if fallible_in(module, body, op)? && block.unwind.is_none() => 2,
                 _ => 1,
             };
             pc = pc.checked_add(size).ok_or_else(|| error("too much code"))?;
@@ -1146,10 +1189,8 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::VariantNew { packet: None, ty, .. })
                     if matches!(translate_type(module, *ty), Ok(s::Type::Variant(_)))) => 3,
-            // A total scalar family operation computes into a register and branches with it, as does the
-            // payload read of a one-case Error variant.
-            o::TermKind::InvokeOwn { op, .. } if total_family_operation(op)
-                || error_case_get(module, body, op)?.is_some() => 2,
+            // A total scalar family operation computes into a register and branches with it.
+            o::TermKind::InvokeOwn { op, .. } if total_invocation(module, body, op)? => 2,
             o::TermKind::InvokeOwn { op, .. } if matches!(op.as_ref(),
                 o::Operation::Core(o::CoreOp::ObjNew { packet: None, .. }
                     | o::CoreOp::ObjNext { packet: None, .. } | o::CoreOp::VariantNew { packet: None, .. })) => 2,
@@ -1410,7 +1451,7 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                         }
                     }
                     let fallible = emitter.result.data_fallible(&translated);
-                    if fallible != fallible_scalar(&inst.op) {
+                    if fallible != fallible_in(module, body, &inst.op)? {
                         return Err(error(format!("{}: fallible scalar classification", inst.op.opcode())));
                     }
                     if fallible {

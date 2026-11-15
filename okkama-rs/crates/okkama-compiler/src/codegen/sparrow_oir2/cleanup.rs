@@ -315,7 +315,7 @@ impl Emitter<'_> {
                         // An expanded value (an action value, a cap with a packet) exists after its last step.
                         op if super::expansion(op) > 1 => (instructions[&id] + super::expansion(op) - 1, true),
                         // An evaluate has no post state: its result exists where the normal outcome lands.
-                        op if super::fallible_scalar(op) => {
+                        op if super::fallible_in(self.module, self.body, op)? => {
                             let raise = self.body.blocks.iter().any(|(_, block)| {
                                 block.insts.contains(&id) && block.unwind.is_none()
                             });
@@ -678,7 +678,7 @@ impl Emitter<'_> {
                     // four-step action value is a construction expansion with its own boundaries below.
                     states.insert(pc + 1, before);
                 }
-                if super::fallible_scalar(&instruction.op) {
+                if super::fallible_in(self.module, self.body, &instruction.op)? {
                     // The evaluate consumes no service: its raise block and normal landing see the same state.
                     states.insert(pc + 1, active.clone());
                     if block.unwind.is_none() {
@@ -885,7 +885,7 @@ impl Emitter<'_> {
         // did plus its result.
         for (&block_id, &pc) in terms {
             let o::TermKind::InvokeOwn { op, .. } = &self.body.blocks.get(block_id)?.term.kind else { continue };
-            if !super::total_family_operation(op) && super::error_case_get(self.module, self.body, op)?.is_none() {
+            if !super::total_invocation(self.module, self.body, op)? {
                 continue;
             }
             let before = states.get(&pc).cloned().unwrap_or_default();

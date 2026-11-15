@@ -539,6 +539,9 @@ impl Emit<'_, '_> {
                     self.store(post, 0, zero);
                     self.store(post, 8, zero);
                     self.store(post, 16, failure);
+                    // As ret.own: the loader admits a raise only once every service is consumed, so the
+                    // entry's input packet has moved on (into a call, an acceptance or a close).
+                    self.store(self.io, 0, zero);
                     let ordinal = self.iconst(match &self.source.entry_abi {
                         s::EntryAbi::Defer { labels } => labels.len() as u64 + 1,
                         _ => 1,
