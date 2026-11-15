@@ -215,9 +215,10 @@
   - [16.4 Compact choices](#164-compact-choices)
   - [16.5 Closed or open: enums and roles](#165-closed-or-open-enums-and-roles)
   - [16.6 A worked example: a protocol and a state machine](#166-a-worked-example-a-protocol-and-a-state-machine)
-  - [16.7 Enums elsewhere](#167-enums-elsewhere)
-  - [16.8 Limits](#168-limits)
-  - [16.9 What this design costs](#169-what-this-design-costs)
+  - [16.7 Where enums came from](#167-where-enums-came-from)
+  - [16.8 Enums elsewhere](#168-enums-elsewhere)
+  - [16.9 Limits](#169-limits)
+  - [16.10 What this design costs](#1610-what-this-design-costs)
 - [Chapter 17. Generics](#chapter-17-generics)
   - [17.1 Parameters on objects, roles and enums](#171-parameters-on-objects-roles-and-enums)
   - [17.2 One `T`, one type](#172-one-t-one-type)
@@ -10816,7 +10817,33 @@ and that functional languages write as algebraic data types. The trade-off
 of §16.5 applies: a new kind of message touches every `match`, which is
 exactly the list of places that must decide what the message means.
 
-## 16.7 Enums elsewhere
+## 16.7 Where enums came from
+
+Okkama's enum joins two lines of descent.
+
+- **Named values.** Pascal gave programmers enumerated types: a closed set
+  of names such as `(red, green, blue)`, with an order and the operations
+  `succ` and `pred` [[Wirth 1971](#ref-wirth1971)]. Its variant records attached data to a
+  tag, but the compiler did not check that the tag matched the data read.
+  C's enumerations went the other way and are names for integers.
+- **Cases that carry data.** HOPE, designed by Burstall, MacQueen and
+  Sannella, declared a type by its constructors, each with its own fields,
+  and defined functions by pattern matching on them [[Burstall 1980](#ref-burstall1980)]. ML
+  adopted these *datatypes* [[Milner 1997](#ref-milner1997)], and through ML they reached
+  Haskell, Rust and Swift as algebraic data types.
+- **Checked coverage.** With a closed set of constructors, a compiler can
+  tell whether a `match` covers every case and name the one it misses.
+  Maranget describes how compilers do it and how to report the missing
+  pattern usefully [[Maranget 2007](#ref-maranget2007)].
+
+Okkama takes the closed set from Pascal without the order: cases have no
+ordinal and no `<` (§16.1). It takes payloads from HOPE and ML, and checked
+coverage for every `match` that produces a value. It does not yet take
+recursive datatypes (#287) or nested patterns (#288), the two features
+that make algebraic data types the natural way to write trees and
+interpreters in ML and Haskell.
+
+## 16.8 Enums elsewhere
 
 | | Okkama | C | Pascal | Java | Rust | Haskell | Go |
 |---|---|---|---|---|---|---|---|
@@ -10833,7 +10860,7 @@ out what those languages build on top of it: nested patterns, recursion,
 derived orderings and methods. The first two are missing for now. The last
 two are left out on purpose, for the reasons in §16.1.
 
-## 16.8 Limits
+## 16.9 Limits
 
 - **No recursive variants.** A case cannot carry its own enum, directly or
   indirectly:
@@ -10862,7 +10889,7 @@ The compiler answers:
 - **Redundant cases pass silently.** A repeated payload-free case, a repeated
   literal, or an `else` that can never run is accepted (issue #286).
 
-## 16.9 What this design costs
+## 16.10 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
   priority takes a `match` or a `?? !!`. A language with `toString` and
@@ -19839,7 +19866,7 @@ limits are deliberate, and Chapter 28 discusses the ones that are not.
 - <a id="ref-brown1998"></a>William J. Brown, Raphael C. Malveau, Hays W. McCormick III, Thomas J. Mowbray (1998). *AntiPatterns: Refactoring Software, Architectures, and Projects in Crisis*. Wiley.
 - <a id="ref-bugayenko2016"></a>Yegor Bugayenko (2016). *Elegant Objects*, Volume 1. Self-published (CreateSpace).
 - <a id="ref-bugayenko2017"></a>Yegor Bugayenko (2017). *Elegant Objects*, Volume 2. Self-published (CreateSpace).
-- <a id="ref-burstall1980"></a>Rod M. Burstall, David B. MacQueen, Donald T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*: 136–143. ACM. https://doi.org/10.1145/800087.802799
+- <a id="ref-burstall1980"></a>R. M. Burstall, D. B. MacQueen, D. T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*, 136–143. https://doi.org/10.1145/800087.802799
 - <a id="ref-canning1989"></a>Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - <a id="ref-cardelli1985"></a>Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
 - <a id="ref-jep421"></a>Brent Christian (2021). JEP 421: Deprecate Finalization for Removal. OpenJDK. https://openjdk.org/jeps/421

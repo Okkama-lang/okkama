@@ -316,7 +316,33 @@ and that functional languages write as algebraic data types. The trade-off
 of §16.5 applies: a new kind of message touches every `match`, which is
 exactly the list of places that must decide what the message means.
 
-## 16.7 Enums elsewhere
+## 16.7 Where enums came from
+
+Okkama's enum joins two lines of descent.
+
+- **Named values.** Pascal gave programmers enumerated types: a closed set
+  of names such as `(red, green, blue)`, with an order and the operations
+  `succ` and `pred` [@wirth1971]. Its variant records attached data to a
+  tag, but the compiler did not check that the tag matched the data read.
+  C's enumerations went the other way and are names for integers.
+- **Cases that carry data.** HOPE, designed by Burstall, MacQueen and
+  Sannella, declared a type by its constructors, each with its own fields,
+  and defined functions by pattern matching on them [@burstall1980]. ML
+  adopted these *datatypes* [@milner1997], and through ML they reached
+  Haskell, Rust and Swift as algebraic data types.
+- **Checked coverage.** With a closed set of constructors, a compiler can
+  tell whether a `match` covers every case and name the one it misses.
+  Maranget describes how compilers do it and how to report the missing
+  pattern usefully [@maranget2007].
+
+Okkama takes the closed set from Pascal without the order: cases have no
+ordinal and no `<` (§16.1). It takes payloads from HOPE and ML, and checked
+coverage for every `match` that produces a value. It does not yet take
+recursive datatypes (#287) or nested patterns (#288), the two features
+that make algebraic data types the natural way to write trees and
+interpreters in ML and Haskell.
+
+## 16.8 Enums elsewhere
 
 | | Okkama | C | Pascal | Java | Rust | Haskell | Go |
 |---|---|---|---|---|---|---|---|
@@ -333,7 +359,7 @@ out what those languages build on top of it: nested patterns, recursion,
 derived orderings and methods. The first two are missing for now. The last
 two are left out on purpose, for the reasons in §16.1.
 
-## 16.8 Limits
+## 16.9 Limits
 
 - **No recursive variants.** A case cannot carry its own enum, directly or
   indirectly:
@@ -350,7 +376,7 @@ two are left out on purpose, for the reasons in §16.1.
 - **Redundant cases pass silently.** A repeated payload-free case, a repeated
   literal, or an `else` that can never run is accepted (issue #286).
 
-## 16.9 What this design costs
+## 16.10 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
   priority takes a `match` or a `?? !!`. A language with `toString` and
