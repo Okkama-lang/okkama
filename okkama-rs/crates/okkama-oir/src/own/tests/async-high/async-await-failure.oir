@@ -1,0 +1,79 @@
+oir 2 high
+// failure.rethrown-at-every-await: the body fails, the Future caches the failure, and every await rethrows it.
+// The first await is caught; the second unwinds out of async main.
+module async_await_failure
+entry @main
+enum Broken is Error = (broken)
+protocol Services kind services holders [scope, cache, frame, receipt, root] rules [protocol_rule(transition=settle,
+    from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
+    protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
+    normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+scope SF action in @fail
+scope S0 action in @main
+scope S1 try in @main parent S0
+scope S2 catch in @main parent S0
+summary MfailC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MfailB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, cancelled], suspends=true, publication=atomic)
+summary MmainC call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[future<int>], publication=atomic)
+summary MmainB call-boundary results [result_relation(provenance=unbound_result)] contract
+    call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true,
+    publication=atomic)
+func @fail() -> int [async] async-creation(MfailC) async-body(MfailB) {
+    ^entry in SF unwind ^failed:
+    %broken: Broken = enum.case Broken, case 0
+    throw %broken
+    ^failed(%failure: failure) in SF:
+    raise %failure
+}
+func @main() -> int [entry, async] async-creation(MmainC) async-body(MmainB) {
+    binding b0 "pending": future<int> in S0
+    binding b1 "a": int in S0
+    binding b2 "e": Broken in S2
+    binding b3 "b": int in S0
+    boundary B0 lexical in S0
+    boundary B1 lexical in S1
+    boundary B2 lexical in S2
+    ^b0 in S0 unwind ^b1:
+    %f: future<int> = call @fail()
+    bind %f, binding b0
+    br ^b4
+    ^b1(%0: failure) in S0:
+    raise %0
+    ^b2(%a: int) in S0 unwind ^b1:
+    bind %a, binding b1
+    %b: int = await %f, result int
+    bind %b, binding b3
+    %sum: int = int.add %a, %b
+    want %sum
+    [iprep0] exit.prepare return %sum at B0
+    result.exit edge normal(0), value %sum, demand want, prepare iprep0
+    ret %sum
+    ^b3(%2: failure) in S0 unwind ^b1:
+    catch %2 is Broken, ^b5(%2, $value), ^b6(%2)
+    ^b4 in S1 unwind ^b3:
+    %v: int = await %f, result int
+    want %v
+    [iprep1] exit.prepare fallthrough %v at B1
+    result.exit edge normal(0), value %v, demand want, prepare iprep1
+    br ^b2(%v)
+    ^b5(%4: failure, %e: Broken) in S2 unwind ^b1:
+    bind %e, binding b2
+    br ^b8(%4)
+    ^b6(%6: failure) in S0 unwind ^b1:
+    raise %6
+    ^b7(%7: failure, %8: failure) in S0 unwind ^b1:
+    %9: failure = fail.caused %8, %7
+    raise %9
+    ^b8(%10: failure) in S2 unwind ^b7(%10):
+    discard %e
+    result.exit edge normal(0), value %e, demand discard, prepare none
+    %caught: int = const -1
+    want %caught
+    [iprep2] exit.prepare fallthrough %caught at B2
+    result.exit edge normal(0), value %caught, demand want, prepare iprep2
+    br ^b2(%caught)
+}

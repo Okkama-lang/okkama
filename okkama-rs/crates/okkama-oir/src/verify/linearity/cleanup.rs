@@ -503,6 +503,22 @@ impl Engine<'_, '_> {
         let _work = super::super::work_profile::Operation::new("cleanup::required_effects");
         let mut required = Effects::default();
         for piece in pieces {
+            // A cache duty settles by the parity protocol of async ABI D24.2: no
+            // settle waits, a cold Future settles as an observed Cancelled, and a
+            // settled one releases its outcome packet into the owner's serial plan.
+            // It needs the outcome's cleanup effects; inputs are separate pieces.
+            if let Some(outcome) = self.cache_duty_outcome(piece) {
+                if let Some(ty) = outcome {
+                    let effects = super::super::effects::cleanup(self.module, self.body, ty, self.state);
+                    required.suspends |= effects.suspends;
+                    for kind in effects.failures {
+                        if !required.failures.contains(&kind) {
+                            required.failures.push(kind);
+                        }
+                    }
+                }
+                continue;
+            }
             let types = self.origin_types(piece.origin, piece, before);
             if types.is_empty() {
                 required.suspends = true;
@@ -520,6 +536,21 @@ impl Engine<'_, '_> {
             }
         }
         required
+    }
+
+    /// The outcome type of a piece that is the cache duty `ServiceOf{f, Cache}`
+    /// created by its own `fut.new` (D12): `Some(None)` for a void Future.
+    fn cache_duty_outcome(&self, piece: &Piece) -> Option<Option<TypeId>> {
+        if piece.holder != Some(piece.origin) {
+            return None;
+        }
+        let (Origin::Instruction(inst, _) | Origin::RetiredInstruction(inst, _)) = piece.origin else {
+            return None;
+        };
+        match self.body.insts.get(inst).map(|inst| &inst.op) {
+            Ok(Operation::Async(AsyncOp::FutureNew { result, .. })) => Some(*result),
+            _ => None,
+        }
     }
 
     fn origin_types(&self, origin: Origin, piece: &Piece, flow: &Flow) -> Vec<TypeId> {

@@ -14,6 +14,7 @@ pub(super) fn async_cleanup_and_profiles(module: &Module, selected: Option<FuncI
         if !super::graph::eligible(function, body, state) {
             continue;
         }
+        super::own_async::check(module, function, body, state);
         for (value, data) in body.values.iter() {
             if module.types.get(data.ty) == Ok(&Type::Service(ServiceType::CarrierState)) {
                 state.at(L::Value { function, value }, None);

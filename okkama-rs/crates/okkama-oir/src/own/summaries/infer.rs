@@ -182,11 +182,14 @@ impl Universe {
             });
             // P1.3 §3.4: include failures introduced by elaboration. Offering
             // managed call inputs emits scope.split even for a scalar result.
-            if module.profile == Profile::High && (partitions_inputs || matches!(op,
-                Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. } | LexicalOp::Stage { .. })
-                    | Operation::Exit(ExitOp::Prepare { .. })))
+            // Binding a Future splits nothing: its cache duty stays in the owner state (D12).
+            let binds = matches!(op, Operation::Lexical(LexicalOp::Bind { .. } | LexicalOp::Rebind { .. }));
+            if module.profile == Profile::High && (partitions_inputs || binds || matches!(op,
+                Operation::Lexical(LexicalOp::Stage { .. }) | Operation::Exit(ExitOp::Prepare { .. })))
                 && cfg::operation_uses(op, body).is_ok_and(|uses| uses.iter().any(|operand| {
-                    body.values.get(operand.value).is_ok_and(|value| types[&value.ty].may_own())
+                    body.values.get(operand.value).is_ok_and(|value| {
+                        types[&value.ty].may_own() && !(binds && futures::is_future(module, value.ty))
+                    })
                 })) {
                 normal::failures(&mut summary.contract.failures, &[FailureKind::Program]);
             }
@@ -322,6 +325,12 @@ impl Universe {
                 summary.contract.suspends |= effects.suspends;
                 summary.contract.async_destroy |= effects.suspends;
             }
+        }
+        if declaration.attrs.contains(&FunctionAttr::Async) {
+            // The body of an async action may suspend, and its final successful
+            // exit delivers deferred cancellation (D18).
+            summary.contract.suspends = true;
+            normal::failures(&mut summary.contract.failures, &[FailureKind::Cancelled]);
         }
         normal::normalize(&mut summary, budget)?;
         Ok(BodyInference { summary, replacements })

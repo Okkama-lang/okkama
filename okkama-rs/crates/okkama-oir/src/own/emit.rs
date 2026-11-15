@@ -352,6 +352,11 @@ impl<'a> OutcomeEmitter<'a> {
                     ValueFacts::Managed { deps } => deps,
                     _ => body.deps.alloc(DepExpr::Empty).map_err(arena)?,
                 }
+            } else if *slot == SlotName::Value && matches!(op, Operation::Async(AsyncOp::FutureNew { .. })) {
+                // A Future depends on the stable key of its own cache duty (D12).
+                let key = body.keys.alloc(KeyExpr::ServiceOf { value: *value, kind: ServiceKeyKind::Cache })
+                    .map_err(arena)?;
+                body.deps.alloc(DepExpr::Key(key)).map_err(arena)?
             } else if *slot == SlotName::Value && matches!(op, Operation::Ownership(OwnershipOp::Empty {})) {
                 // A caught payload (`catch` landing) retains what its failure carried.
                 let selection = body.selections.alloc(SelectionExpr::Value(*value)).map_err(arena)?;
