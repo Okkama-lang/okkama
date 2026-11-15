@@ -90,7 +90,7 @@ open items wait for that rewrite.
   `defer await`.
 - **Absence is not reported uniformly.** Some modules return a `Maybe`,
   some throw a typed error for a missing value, some take a fallback
-  (Section 7.13). The json module's reading style is the reference the
+  (Section 7.14). The json module's reading style is the reference the
   library is being aligned with.
 - **The test runner (#339).** `okkama run -t` has no report formats, seeds,
   parallel workers or deadlines yet; the library can already render reports
@@ -139,7 +139,7 @@ bound usually serves.
 
 **Combinators on `Maybe`.** `map`, `and_then` and `filter` on a `Maybe`
 shorten chains of optional steps. Each is also a second way to say what a
-compact choice `?? !!` or a `match` already says (Section 7.13).
+compact choice `?? !!` or a `match` already says (Section 7.14).
 
 **Errors in signatures.** An Okkama signature does not list the errors an
 action may throw (Section 10.19). Listing them is what CLU and Java's
@@ -167,7 +167,7 @@ language is, argued where they appear:
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
   (Sections 12.13, 13.16);
-- ceremony wherever a value may be absent (Section 7.12);
+- ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);
 - a fake to write for every role a test replaces (Section 15.11);

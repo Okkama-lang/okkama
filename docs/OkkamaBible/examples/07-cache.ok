@@ -1,0 +1,50 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A cache from keys to values of any types. K keys a map, so it must be a key type (Chapter 17).
+object Cache<K, V> {
+    has entries is %K:V;
+    has hits is int;
+    has misses is int;
+    Cache(:entries) { self.hits = 0; self.misses = 0; }
+
+    // Absence is part of the answer: the caller decides what a miss means.
+    find(key is K) is Maybe<V> {
+        if entries.has(key) { Maybe.some(entries[key]); } else { Maybe.none; }
+    }
+    // A lookup that is counted returns the next state of the cache.
+    looked_up(key is K) is ^Cache<K, V> {
+        if entries.has(key) { ^hits = hits + 1; } else { ^misses = misses + 1; }
+    }
+    remembered(key is K, value is V) is ^Cache<K, V> {
+        ^entries = entries + [key: value];
+    }
+    report() is string { "hits " + hits.string() + ", misses " + misses.string(); }
+}
+
+object Point {
+    has x is int;
+    has y is int;
+    Point(:x, :y);
+}
+
+main() is int {
+    let out = Stdout();
+    let empty is %string:int = [:];
+    let prices = Cache(entries: empty).remembered("tea", 300).remembered("cake", 450);
+    // Three ways to meet a Maybe: a fallback, a compact choice, a match.
+    out.writeln("tea " + (prices.find("tea") else 0).string());
+    out.writeln(prices.find("jam") ?? .some(cents): "jam " + cents.string() !! .none: "no jam");
+    let counted = prices.looked_up("tea").looked_up("jam").looked_up("cake");
+    out.writeln(counted.report());
+    // The same object with a value-object key and a string value.
+    let nameless is %Point:string = [:];
+    let names = Cache(entries: nameless).remembered(Point(x: 0, y: 0), "origin");
+    match names.find(Point(x: 0, y: 0)) {
+        case Maybe.some(name) { out.writeln("(0, 0) is the " + name); }
+        case Maybe.none { out.writeln("(0, 0) has no name"); }
+    }
+    out.writeln("(1, 2) is " + (names.find(Point(x: 1, y: 2)) else "unnamed"));
+    0;
+}

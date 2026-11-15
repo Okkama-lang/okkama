@@ -89,10 +89,11 @@
   - [7.7 `Presence<T>`: three states for updates](#77-presencet-three-states-for-updates)
   - [7.8 Absence at the edges](#78-absence-at-the-edges)
   - [7.9 A worked example: settings](#79-a-worked-example-settings)
-  - [7.10 Absence with behaviour: the null object](#710-absence-with-behaviour-the-null-object)
-  - [7.11 How other languages handle absence](#711-how-other-languages-handle-absence)
-  - [7.12 What it costs](#712-what-it-costs)
-  - [7.13 Limits](#713-limits)
+  - [7.10 Absence in generic code](#710-absence-in-generic-code)
+  - [7.11 Absence with behaviour: the null object](#711-absence-with-behaviour-the-null-object)
+  - [7.12 How other languages handle absence](#712-how-other-languages-handle-absence)
+  - [7.13 What it costs](#713-what-it-costs)
+  - [7.14 Limits](#714-limits)
 - [Chapter 8. Collections](#chapter-8-collections)
   - [8.1 Arrays](#81-arrays)
   - [8.2 Functional operations](#82-functional-operations)
@@ -3729,7 +3730,99 @@ and throws `SettingError.malformed` for "there but not a number", and it leaves
 every decision about absence to its caller. That split — the reader reports,
 the user decides — is the design the standard library's readers follow.
 
-## 7.10 Absence with behaviour: the null object
+## 7.10 Absence in generic code
+
+`Maybe<T>` is an ordinary generic type, so it composes with generic objects
+the way any type does. A cache is the textbook case: it knows nothing about
+its keys and values, and a lookup may miss.
+
+```okkama
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A cache from keys to values of any types. K keys a map, so it must be a key type (Chapter 17).
+object Cache<K, V> {
+    has entries is %K:V;
+    has hits is int;
+    has misses is int;
+    Cache(:entries) { self.hits = 0; self.misses = 0; }
+
+    // Absence is part of the answer: the caller decides what a miss means.
+    find(key is K) is Maybe<V> {
+        if entries.has(key) { Maybe.some(entries[key]); } else { Maybe.none; }
+    }
+    // A lookup that is counted returns the next state of the cache.
+    looked_up(key is K) is ^Cache<K, V> {
+        if entries.has(key) { ^hits = hits + 1; } else { ^misses = misses + 1; }
+    }
+    remembered(key is K, value is V) is ^Cache<K, V> {
+        ^entries = entries + [key: value];
+    }
+    report() is string { "hits " + hits.string() + ", misses " + misses.string(); }
+}
+
+object Point {
+    has x is int;
+    has y is int;
+    Point(:x, :y);
+}
+
+main() is int {
+    let out = Stdout();
+    let empty is %string:int = [:];
+    let prices = Cache(entries: empty).remembered("tea", 300).remembered("cake", 450);
+    // Three ways to meet a Maybe: a fallback, a compact choice, a match.
+    out.writeln("tea " + (prices.find("tea") else 0).string());
+    out.writeln(prices.find("jam") ?? .some(cents): "jam " + cents.string() !! .none: "no jam");
+    let counted = prices.looked_up("tea").looked_up("jam").looked_up("cake");
+    out.writeln(counted.report());
+    // The same object with a value-object key and a string value.
+    let nameless is %Point:string = [:];
+    let names = Cache(entries: nameless).remembered(Point(x: 0, y: 0), "origin");
+    match names.find(Point(x: 0, y: 0)) {
+        case Maybe.some(name) { out.writeln("(0, 0) is the " + name); }
+        case Maybe.none { out.writeln("(0, 0) has no name"); }
+    }
+    out.writeln("(1, 2) is " + (names.find(Point(x: 1, y: 2)) else "unnamed"));
+    0;
+}
+```
+
+Output:
+
+```text
+tea 300
+no jam
+hits 2, misses 1
+(0, 0) is the origin
+(1, 2) is unnamed
+```
+
+- **The miss belongs to the answer.** `find(key) is Maybe<V>` returns
+  `Maybe.some(value)` or `Maybe.none`, whatever `V` is. The cache does not
+  invent a default for a type it knows nothing about, and the caller decides
+  what a miss means: a fallback with `else`, a compact choice with `?? !!`,
+  or a `match` (Section 7.3).
+- **No sentinel can collide with a value.** A cache of prices that returned
+  `0` or `-1` for a miss would be wrong for the first item that costs
+  nothing. With `Maybe`, every value of `V`, including `0`, `""` and an empty
+  array, is a hit.
+- **The key is a type parameter used as a map key.** `K` keys the map
+  `%K:V`, so the compiler holds every specialization to the key rules of
+  Section 8.3: `Cache<string, int>` and `Cache<Point, string>` compile, and a
+  `Cache<@int, string>` would not (Chapter 17).
+- **Counting is a successor.** `looked_up(key)` returns the next state of the
+  cache with one more hit or miss; the `find` that answers the question does
+  not change anything.
+
+The design keeps two questions apart that sentinel-based caches merge: "is
+it there?" and "what is it?". The cost is the same as everywhere in this
+chapter, one `else` or one `match` at each call site, and in generic code it
+buys more than elsewhere, because a generic object has no value it could
+safely use as a sentinel for every `V`.
+
+## 7.11 Absence with behaviour: the null object
 
 Sometimes absence has behaviour. A service that may or may not have a logger
 does not want a `Maybe<Logger>` and a choice at every call; it wants a logger
@@ -3753,7 +3846,7 @@ an ordinary value of the type that the reader must remember to treat
 specially. Okkama's searches answer `Maybe` precisely so that no `int` has to
 mean "nothing".
 
-## 7.11 How other languages handle absence
+## 7.12 How other languages handle absence
 
 Okkama's approach belongs to a family that started with ML's `option` type
 and Haskell's `Maybe` [[Pierce 2002](#ref-pierce2002); [Haskell 2010](#ref-haskell2010)]. The table compares the
@@ -3778,7 +3871,7 @@ message and therefore a moment's thought. The difference is small in
 characters and large in culture: the shortest way to get a value out of a
 `Maybe` is to say what absence means.
 
-## 7.12 What it costs
+## 7.13 What it costs
 
 - **Ceremony at the boundaries.** Every lookup that may miss needs a fallback,
   a match or a `try?`. Code that reads many optional fields — configuration,
@@ -3794,7 +3887,7 @@ characters and large in culture: the shortest way to get a value out of a
   converting between them is explicit (`fold()`, `as_presence()`). This is the
   price of keeping the third state; most programs never need `Presence`.
 
-## 7.13 Limits
+## 7.14 Limits
 
 - `Maybe` has no library of combinators such as `map`, `and_then` or `filter`
   in the language today; chained optional computations are written with
@@ -20118,7 +20211,7 @@ open items wait for that rewrite.
   `defer await`.
 - **Absence is not reported uniformly.** Some modules return a `Maybe`,
   some throw a typed error for a missing value, some take a fallback
-  (Section 7.13). The json module's reading style is the reference the
+  (Section 7.14). The json module's reading style is the reference the
   library is being aligned with.
 - **The test runner (#339).** `okkama run -t` has no report formats, seeds,
   parallel workers or deadlines yet; the library can already render reports
@@ -20167,7 +20260,7 @@ bound usually serves.
 
 **Combinators on `Maybe`.** `map`, `and_then` and `filter` on a `Maybe`
 shorten chains of optional steps. Each is also a second way to say what a
-compact choice `?? !!` or a `match` already says (Section 7.13).
+compact choice `?? !!` or a `match` already says (Section 7.14).
 
 **Errors in signatures.** An Okkama signature does not list the errors an
 action may throw (Section 10.19). Listing them is what CLU and Java's
@@ -20195,7 +20288,7 @@ language is, argued where they appear:
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
   (Sections 12.13, 13.16);
-- ceremony wherever a value may be absent (Section 7.12);
+- ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);
 - a fake to write for every role a test replaces (Section 15.11);

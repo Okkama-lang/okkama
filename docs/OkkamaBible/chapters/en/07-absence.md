@@ -253,7 +253,38 @@ and throws `SettingError.malformed` for "there but not a number", and it leaves
 every decision about absence to its caller. That split — the reader reports,
 the user decides — is the design the standard library's readers follow.
 
-## 7.10 Absence with behaviour: the null object
+## 7.10 Absence in generic code
+
+`Maybe<T>` is an ordinary generic type, so it composes with generic objects
+the way any type does. A cache is the textbook case: it knows nothing about
+its keys and values, and a lookup may miss.
+
+{{example:07-cache}}
+
+- **The miss belongs to the answer.** `find(key) is Maybe<V>` returns
+  `Maybe.some(value)` or `Maybe.none`, whatever `V` is. The cache does not
+  invent a default for a type it knows nothing about, and the caller decides
+  what a miss means: a fallback with `else`, a compact choice with `?? !!`,
+  or a `match` (Section 7.3).
+- **No sentinel can collide with a value.** A cache of prices that returned
+  `0` or `-1` for a miss would be wrong for the first item that costs
+  nothing. With `Maybe`, every value of `V`, including `0`, `""` and an empty
+  array, is a hit.
+- **The key is a type parameter used as a map key.** `K` keys the map
+  `%K:V`, so the compiler holds every specialization to the key rules of
+  Section 8.3: `Cache<string, int>` and `Cache<Point, string>` compile, and a
+  `Cache<@int, string>` would not (Chapter 17).
+- **Counting is a successor.** `looked_up(key)` returns the next state of the
+  cache with one more hit or miss; the `find` that answers the question does
+  not change anything.
+
+The design keeps two questions apart that sentinel-based caches merge: "is
+it there?" and "what is it?". The cost is the same as everywhere in this
+chapter, one `else` or one `match` at each call site, and in generic code it
+buys more than elsewhere, because a generic object has no value it could
+safely use as a sentinel for every `V`.
+
+## 7.11 Absence with behaviour: the null object
 
 Sometimes absence has behaviour. A service that may or may not have a logger
 does not want a `Maybe<Logger>` and a choice at every call; it wants a logger
@@ -277,7 +308,7 @@ an ordinary value of the type that the reader must remember to treat
 specially. Okkama's searches answer `Maybe` precisely so that no `int` has to
 mean "nothing".
 
-## 7.11 How other languages handle absence
+## 7.12 How other languages handle absence
 
 Okkama's approach belongs to a family that started with ML's `option` type
 and Haskell's `Maybe` [@pierce2002; @haskell2010]. The table compares the
@@ -302,7 +333,7 @@ message and therefore a moment's thought. The difference is small in
 characters and large in culture: the shortest way to get a value out of a
 `Maybe` is to say what absence means.
 
-## 7.12 What it costs
+## 7.13 What it costs
 
 - **Ceremony at the boundaries.** Every lookup that may miss needs a fallback,
   a match or a `try?`. Code that reads many optional fields — configuration,
@@ -318,7 +349,7 @@ characters and large in culture: the shortest way to get a value out of a
   converting between them is explicit (`fold()`, `as_presence()`). This is the
   price of keeping the third state; most programs never need `Presence`.
 
-## 7.13 Limits
+## 7.14 Limits
 
 - `Maybe` has no library of combinators such as `map`, `and_then` or `filter`
   in the language today; chained optional computations are written with
