@@ -17,6 +17,16 @@ impl Driver<'_, '_> {
         // Every successful return of an async body is an exit transaction: its commit
         // gives the value, packet and deps the coro pass publishes (async ABI C-2).
         let publishes = destination.is_none() && self.async_exit(&point)?;
+        // An observation entry returns only its declared results (#781): no packet goes back to the caller. Its
+        // root is elided because nothing it returns may own (scopes inventory), so a managed result that cannot
+        // own leaves the retained inner scopes as their ordinary closes leave it, without a reserve to commit.
+        let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+        let function = self.module.scopes.get(scope).map_err(arena)?.function;
+        let observation = self.module.functions.get(function).map_err(arena)?.signature.ownership_abi
+            == OwnershipAbi::Observation;
+        let owns = value.is_some_and(|value| self.analysis.types.get(&self.high.values.get(value).unwrap().ty)
+            .is_some_and(TypeClassification::may_own));
+        let managed = managed && !(destination.is_none() && observation && !owns);
         if (!managed && !replaces && !publishes) || point.env.scopes.is_empty() {
             return Ok(point);
         }

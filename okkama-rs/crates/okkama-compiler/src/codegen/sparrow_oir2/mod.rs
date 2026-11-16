@@ -75,8 +75,9 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     }
     let mut allocations = Vec::new();
     for function in &p.functions {
-        let allocation = s::allocate(function)?;
-        s::check_allocation(function, &allocation)?;
+        let live = s::Liveness::of(function)?;
+        let allocation = s::allocate_with(function, &live)?;
+        s::check_allocation_with(function, &allocation, &live)?;
         allocations.push(allocation);
     }
     Ok(AllocatedProgram { program: p, allocations })

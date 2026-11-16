@@ -20,6 +20,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Large std instantiations and row readers build on Champ (#781).** An
+  observation entry that returned a managed value which cannot own from a
+  retained inner scope committed a reserve and returned its packet, beyond
+  its one declared result (`T2`); own now closes those scopes without a
+  reserve. The SPB 17 allocation checker kept every dead alias that edge
+  copies coalesced into a slot, so its stored states grew with PCs times
+  aliases (about 1 400 entries per PC in `main` of `L09.db.row-readers`, past
+  the 8 Mi bound); with the function's liveness it now forgets the
+  locations that are not live (22 entries per PC at most there, 60 611 in
+  all), which can only make it reject, never accept.
+  `L04.once.generic-std-instantiation` and `L09.db.row-readers` pass on
+  Champ.
+
 - **An early-self constructor that fails after handing out `self` builds on
   Champ (#780).** A pending check, and the check that a valued `for` ran,
   inside `try` continued from the trap block's carried locals instead of the

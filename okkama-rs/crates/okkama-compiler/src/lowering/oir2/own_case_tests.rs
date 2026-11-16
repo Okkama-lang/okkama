@@ -718,3 +718,26 @@ fn oir2_early_self_takes_its_unbound_fields_as_adjacent_undefs() {
     assert_eq!(incomplete, 1);
     own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
 }
+
+/// #781: an observation entry (`pick`, whose root scope owns nothing) returns a managed value that cannot own
+/// from inside its loop, whose role call keeps the loop scope. It returns only its declared result: own closes
+/// the loop scope without a reserve to commit to the caller, whose packet the entry would return (T2).
+#[test]
+fn oir2_observation_entry_returns_a_managed_result_from_a_retained_scope() {
+    let source = concat!("module app; role Gen { value() is int; } ",
+        "object Base does Gen { has n is int; Base(:n); value() is int { n; } } ",
+        "object Wrapped does Gen { has origin is Gen; has condition is (int) is bool; ",
+        "Wrapped(:origin, :condition); value() is int { origin.value(); } } ",
+        "object Picker { has origin is Gen; has condition is (int) is bool; has attempts is int; ",
+        "Picker(:origin, :condition, :attempts); ",
+        "pick() is Gen { for (0..attempts) -> index { let sample = origin; ",
+        "if condition(sample.value() + index) { return Wrapped(origin: sample, condition: condition); } } ",
+        "Base(n: 0); } } ",
+        "main() is int { let p = Picker(origin: Base(n: 3), condition: (n is int) is bool { n % 2 == 0; }, ",
+        "attempts: 5); p.pick().value(); }");
+    let low = own_to_low(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, pick) = low.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Picker.pick"))
+        .unwrap();
+    assert_eq!(pick.signature.ownership_abi, ir::OwnershipAbi::Observation);
+    assert_eq!(pick.signature.results.len(), 1);
+}
