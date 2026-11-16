@@ -28,6 +28,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   at its creation, so the producer now refuses it as `unsupported`
   ("covariant successor result of an async role slot").
 
+- **SPB 17: `verify` types `fut.spawn.bound` itself (#791 N1).** Opcode 87
+  has the operand shape `l` and the Future check of `fut.cancel`, so the
+  structural verifier refuses a service operand (`SPB_STRUCTURE`) or a
+  register that is not a Future (`SPB_FUTURE_TYPES`) without the load check.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own

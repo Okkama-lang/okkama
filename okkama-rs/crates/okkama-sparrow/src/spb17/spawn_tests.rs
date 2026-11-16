@@ -205,12 +205,28 @@ fn a_bound_spawn_moves_no_duty_and_the_cache_settles_at_its_owner() {
     assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
 }
 
+// #791 N1: `verify` alone types opcode 87, with the shape `l` and the Future operand of `fut.cancel`; the rule of
+// `SPB_SPAWN` for the bound form is then the operand check (ruling PR-E: the bound form names no service).
+
 #[test]
 fn a_bound_spawn_names_no_service() {
-    reject_with(&spawner_program(Spawner::BoundWithService), suspension::SPAWN, "no service");
+    let p = spawner_program(Spawner::BoundWithService);
+    let failure = verify(&p).unwrap_err();
+    assert_eq!(failure.rule, "SPB_STRUCTURE", "{failure}");
+    assert!(failure.message.contains("invalid operands for fut.spawn.bound"), "{failure}");
+    reject_with(&p, "SPB_STRUCTURE", "invalid operands for fut.spawn.bound");
 }
 
 #[test]
 fn a_bound_spawn_takes_a_future() {
-    reject_with(&spawner_program(Spawner::BoundOfInt), suspension::SPAWN, "no service");
+    let p = spawner_program(Spawner::BoundOfInt);
+    let failure = verify(&p).unwrap_err();
+    assert_eq!(failure.rule, verify::FUTURE_TYPES, "{failure}");
+    assert!(failure.message.contains("fut.spawn.bound needs a Future"), "{failure}");
+    reject_with(&p, verify::FUTURE_TYPES, "fut.spawn.bound needs a Future");
+}
+
+#[test]
+fn verify_alone_admits_a_bound_spawn_of_a_future() {
+    verify(&spawner_program(Spawner::Bound)).unwrap();
 }
