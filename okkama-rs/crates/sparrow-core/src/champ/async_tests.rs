@@ -2550,3 +2550,6 @@ mod spawn;
 
 #[path = "async_drivers_tests.rs"]
 mod drivers;
+
+#[path = "async_natives_tests.rs"]
+mod natives;
