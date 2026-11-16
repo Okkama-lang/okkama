@@ -998,6 +998,67 @@ fn champ_p1_atomic_specializations_closed_failure_and_gc() {
     }
 }
 
+/// A native with a map parameter and a map result (#752) runs through its data adapter: a Champ map crosses the
+/// native bridge in both directions as Tomato's natives take and return it, entries in key order, with the
+/// collector stressed; a provider refusal is the native's `NativeFailure`.
+#[test]
+fn champ_natives_take_and_return_maps() {
+    use crate::ops::{Key, MapValue};
+    let symbol = "runtime/environment@1::environment_normalize/1";
+    let mut program = s::Program {
+        composites: vec![s::Composite::Map { key: s::Type::Str, value: s::Type::Str }],
+        ..s::Program::default()
+    };
+    let declared = s::Function {
+        symbol: symbol.into(), entry_abi: s::EntryAbi::Owned, registers: vec![s::Type::Map(0)],
+        services: vec![s::ServiceKind::Packet], params: vec![s::Location::Register(0), s::Location::Service(0)],
+        results: vec![s::Type::Map(0)], blocks: vec![], code: vec![],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract {
+                external: Some(symbol.into()), failures: s::p1::NATIVE_FAILURES, ..s::EntryContract::default()
+            }),
+            ..s::FunctionProofs::default()
+        },
+    };
+    let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
+    program.functions.push(contracts.adapter(&declared, &program.composites).unwrap());
+    let mut runtime = Runtime::new_champ(program, vec![]).unwrap();
+    runtime.heap.set_stress(true);
+    let mut ctx = context(&mut runtime);
+    let map = |runtime: &mut Runtime, pairs: &[(&str, &str)]| {
+        let mut map = MapValue { key: Repr::Ref, value: Repr::Ref, entries: Default::default(),
+            owned: Default::default() };
+        for (key, value) in pairs {
+            let (key_word, value_word) = (runtime.heap.allocate_text(key), runtime.heap.allocate_text(value));
+            runtime.roots.extend([(key_word, Repr::Ref), (value_word, Repr::Ref)]);
+            map.entries.upsert(Key::text((*key).into()), (key_word, value_word));
+        }
+        let word = runtime.heap.allocate_payload(Box::new(map));
+        runtime.roots.push((word, Repr::Ref));
+        word
+    };
+    let entries = |runtime: &Runtime, map: Word| -> Vec<(String, String)> {
+        runtime.heap.payload::<MapValue>(map).unwrap().entries.values()
+            .map(|&(key, value)| (runtime.heap.text(key).to_string(), runtime.heap.text(value).to_string()))
+            .collect()
+    };
+    let input = map(&mut runtime, &[("ZETA", "last"), ("ALPHA", "first"), ("EMPTY", "")]);
+    let (outcome, post) = p1_call(&mut runtime, &mut ctx, symbol, &[input]);
+    assert_eq!((outcome, ctx.status), (c::NORMAL, OK));
+    let output = post.unwrap().value;
+    runtime.roots.push((output, Repr::Ref));
+    runtime.heap.collect(|visit| visit(output, Repr::Ref));
+    let expected = [("ALPHA", "first"), ("EMPTY", ""), ("ZETA", "last")];
+    assert_eq!(entries(&runtime, output), expected.map(|(key, value)| (key.to_string(), value.to_string())));
+    let empty = map(&mut runtime, &[]);
+    let (_, post) = p1_call(&mut runtime, &mut ctx, symbol, &[empty]);
+    assert!(entries(&runtime, post.unwrap().value).is_empty());
+    let invalid = map(&mut runtime, &[("A=B", "x")]);
+    let (outcome, _) = p1_call(&mut runtime, &mut ctx, symbol, &[invalid]);
+    assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
+    assert!(matches!(runtime.failure(ctx.failure).unwrap().kind, FailureKind::Native(_)));
+}
+
 #[test]
 fn champ_p1_atomic_replace_preserves_old_string_borrow() {
     let mut runtime = p1_runtime();

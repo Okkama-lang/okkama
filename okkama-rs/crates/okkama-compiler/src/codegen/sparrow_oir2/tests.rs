@@ -979,3 +979,33 @@ fn globals_lay_out_init_data_children_first() {
         .replace("array.new [%inner, %inner]", "array.new [%inner, %more]"));
     assert!(globals(&module).unwrap_err().0.contains("int.add"));
 }
+
+/// Arrays, builders and maps of native handles (#751): a handle is an array leaf, so its arrays, its builders
+/// and maps of it translate, and the composites table registers the builder and the map.
+#[test]
+fn handle_collections_translate_to_handle_leaves_and_composites() {
+    let module = parse(concat!(
+        "oir 2 low\nmodule app v1.0.0\nrequires core\n\nnative object app.Node\n\n",
+        "scope S action in @probe\n",
+        "func @probe(%a: array<app.Node>, %b: array<array<app.Node>>, %c: builder<app.Node>, ",
+        "%d: map<str, app.Node>) -> int abi observation {\n^entry in S:\n",
+        "    %zero: int = const 0\n    ret %zero\n}\n",
+    ));
+    let node = module.declarations.iter().find(|(_, d)| d.name == "app.Node").map(|(id, _)| id).unwrap().as_u32();
+    let typed = |wanted: fn(&o::Type) -> bool| module.types.iter().find(|(_, ty)| wanted(ty)).map(|(id, _)| id)
+        .unwrap();
+    let nodes = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Handle(node), depth: 1 });
+    let rows = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Handle(node), depth: 2 });
+    let array = typed(|ty| matches!(ty, o::Type::Array(_)));
+    assert_eq!(translate_type(&module, array).unwrap(), nodes);
+    let nested = module.types.iter().find(|(_, ty)| matches!(ty, o::Type::Array(item) if *item == array))
+        .map(|(id, _)| id).unwrap();
+    assert_eq!(translate_type(&module, nested).unwrap(), rows);
+    let table = composites(&module);
+    let builder = translate_type(&module, typed(|ty| matches!(ty, o::Type::Builder(_)))).unwrap();
+    let s::Type::Builder(index) = builder else { panic!("{builder:?}") };
+    assert_eq!(table.entries()[index as usize], s::Composite::Builder { array: nodes });
+    let map = translate_type(&module, typed(|ty| matches!(ty, o::Type::Map(..)))).unwrap();
+    let s::Type::Map(index) = map else { panic!("{map:?}") };
+    assert_eq!(table.entries()[index as usize], s::Composite::Map { key: s::Type::Str, value: s::Type::Handle(node) });
+}

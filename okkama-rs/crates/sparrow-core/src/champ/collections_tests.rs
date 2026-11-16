@@ -189,3 +189,64 @@ fn map_builders_put_append_and_finish() {
     let keyed = collection(&mut runtime, &program, s::DataOp::MapNew, &[], s::Type::Map(3), &[p, two]).unwrap();
     assert_eq!(lookup(&runtime, &program, keyed, q, point), Some(two));
 }
+
+/// Arrays, builders and maps of native handles (#751). A handle word is the reference to its registry cell,
+/// which the native bridge watches and releases with its handle when the collector frees it (`host::released`):
+/// a collection of handles keeps every cell alive, and a collection collected releases them.
+#[test]
+fn handle_collections_keep_their_registry_cells() {
+    use s::Opcode as O;
+    let nodes = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Handle(0), depth: 1 });
+    let mut node = object("runtime.json.JsonNode", vec![], 0);
+    node.handle = true;
+    let program = s::Program {
+        objects: vec![node],
+        composites: vec![
+            s::Composite::Builder { array: nodes },
+            s::Composite::Map { key: s::Type::Str, value: s::Type::Handle(0) },
+        ],
+        ..s::Program::default()
+    };
+    let mut runtime = Runtime::new_champ(program.clone(), vec![]).unwrap();
+    // A registry cell as the native bridge makes one: `[header, id]`, watched.
+    let cell = |runtime: &mut Runtime, id: u64| {
+        let cell = runtime.heap.allocate_array(Repr::Raw, &[id]);
+        runtime.heap.watch(cell);
+        cell
+    };
+    let ids = |runtime: &Runtime, cells: &[Word]| -> Vec<u64> {
+        cells.iter().map(|&cell| runtime.heap.elements(cell)[0]).collect()
+    };
+    let (first, second) = (cell(&mut runtime, 7), cell(&mut runtime, 9));
+    let handle = s::Type::Handle(0);
+    let array = collection(&mut runtime, &program, s::DataOp::ArrayNew, &[handle, handle], nodes, &[first, second])
+        .unwrap();
+    assert_eq!(runtime.heap.elements(array).to_vec(), vec![first, second]);
+    runtime.heap.collect(|visit| visit(array, Repr::Ref));
+    assert!(runtime.heap.take_released().is_empty(), "an array traces its handle elements");
+    assert_eq!(ids(&runtime, &[first, second]), vec![7, 9]);
+    // A builder holds what it was given until it finishes into an array of the same handles.
+    let builder_type = s::Type::Builder(0);
+    let buffer = collection(&mut runtime, &program, s::DataOp::BuilderNew, &[], builder_type, &[]).unwrap();
+    let third = cell(&mut runtime, 11);
+    builder(&mut runtime, &program, O::BuilderPush, false, builder_type, &[buffer, third]).unwrap();
+    builder(&mut runtime, &program, O::BuilderAppend, false, builder_type, &[buffer, array]).unwrap();
+    runtime.heap.collect(|visit| visit(buffer, Repr::Ref));
+    assert!(runtime.heap.take_released().is_empty(), "a builder traces its handle items");
+    let finished = builder(&mut runtime, &program, O::BuilderFinish, false, builder_type, &[buffer]).unwrap();
+    assert_eq!(runtime.heap.elements(finished).to_vec(), vec![third, first, second]);
+    // A map value holds its handle.
+    let name = runtime.heap.allocate_text("root");
+    let map = collection(&mut runtime, &program, s::DataOp::MapNew, &[], s::Type::Map(1), &[name, third]).unwrap();
+    runtime.heap.collect(|visit| visit(map, Repr::Ref));
+    let mut released = runtime.heap.take_released();
+    released.sort_unstable();
+    let mut held = vec![first, second];
+    held.sort_unstable();
+    assert_eq!(released, held, "a map traces its handle values, and nothing else holds the others");
+    assert_eq!(lookup(&runtime, &program, map, name, s::Type::Str), Some(third));
+    assert_eq!(ids(&runtime, &[third]), vec![11]);
+    // An unreachable map no longer keeps its cell.
+    runtime.heap.collect(|_| {});
+    assert_eq!(runtime.heap.take_released(), vec![third]);
+}

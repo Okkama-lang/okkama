@@ -281,6 +281,9 @@ pub enum ArrayLeaf {
     Rat,
     Variant(u32),
     Map(u32),
+    /// A native handle of the handle declaration `id` (#751): plain data without an Okkama destroy (P2.4 §4.7),
+    /// traced as the reference to its registry cell and never compared.
+    Handle(u32),
     /// The leaf of an uninferred empty literal: no element value exists.
     Never,
 }
@@ -303,6 +306,7 @@ impl ArrayType {
                 ArrayLeaf::Rat => Type::Rat,
                 ArrayLeaf::Variant(id) => Type::Variant(id),
                 ArrayLeaf::Map(id) => Type::Map(id),
+                ArrayLeaf::Handle(id) => Type::Handle(id),
                 ArrayLeaf::Never => Type::Never,
             }),
             depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
@@ -326,6 +330,7 @@ impl ArrayType {
             Type::Rat => ArrayLeaf::Rat,
             Type::Variant(id) => ArrayLeaf::Variant(id),
             Type::Map(id) => ArrayLeaf::Map(id),
+            Type::Handle(id) => ArrayLeaf::Handle(id),
             Type::Never => ArrayLeaf::Never,
             Type::Byte => return Some(Type::Bytes),
             Type::Array(shape) => {
@@ -1271,3 +1276,5 @@ mod roles_tests;
 mod view_collections_tests;
 #[cfg(test)]
 mod ordering_tests;
+#[cfg(test)]
+mod handle_collections_tests;
