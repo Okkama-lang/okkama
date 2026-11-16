@@ -178,11 +178,12 @@ async main() is int {
 "#, "made\nchild 5\nchild 6\n5\ndone true\n", 0);
 }
 
-/// A duty is never settled twice, from a schedule and from a packet: the outcome of a stored Future is
-/// destroyed once, when `get` ends, as Tomato does. Under PR-B (#784) the bound holder keeps the entry in `main`,
-/// so Champ destroys the outcome once but only at `main`'s close: #794.
+/// A duty is never settled twice, from a schedule and from a packet: the outcome of a stored Future is destroyed
+/// exactly once. `await f` in `get` reads the cached outcome without taking it (a Future keeps its outcome), so the
+/// outcome lives with the Future, whose duty travels with the holder `h` to `main`, and it is destroyed when `main`
+/// closes (ABI D24.2, Bible §11.4). Ruling on #794 (2026-11-16): the rebuild tree's Tomato and Champ agree on this;
+/// the 0.5.8 release destroyed it when `get` ended.
 #[test]
-#[ignore = "#794: a Done Future stored in a bound holder settles at the binding's close (PR-B deviation)"]
 fn a_stored_done_future_releases_its_outcome_once() {
     expect(r#"module app v1.0.0;
 import "io/stdout" take Stdout;
@@ -212,5 +213,5 @@ async main() is int {
     Stdout().writeln("end");
     0;
 }
-"#, "destroy 3\n3\nend\n", 0);
+"#, "3\nend\ndestroy 3\n", 0);
 }
