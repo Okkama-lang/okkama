@@ -43,7 +43,9 @@ fn p1_a_spawned_task_runs_before_the_spawner_continues() {
 }
 
 /// A sync action spawns a task that awaits a cold Future it was given (ABI D24.2 review B7): the task starts the
-/// Future on its own stack, and the sync owner's close settles both duties without suspending.
+/// Future on its own stack, and the sync owner's close settles both duties without suspending. Here the task has
+/// settled by the close; the Running row (detach from a sync owner) becomes reachable with Q1, when a task can wait
+/// for something outside.
 #[test]
 fn p1_a_sync_owner_spawns_a_task_over_a_future_argument() {
     expect(concat!(
@@ -91,4 +93,18 @@ fn p1_spawn_of_a_generic_async_action() {
         "object Box<T> { has value is T; Box(:value); async get() is T { Stdout().writeln(\"get\"); value; } }\n",
         "async main() is int { let t = spawn Box(value: 3).get(); Stdout().writeln(\"spawned\"); await t; }\n",
     ), "get\nspawned\n", 3);
+}
+
+/// A spawned task that nobody awaits still releases what it owns (Bible §11.9): its outcome holds a resource, and
+/// the owner's close releases the outcome packet into its plan (OIR-2 async ABI D24.2, cache row Done), so the
+/// destroy runs exactly once, at the close of `main`'s scope. Tomato never destroys it (a leak there).
+#[test]
+fn p1_an_unawaited_spawned_task_releases_its_outcome_at_the_owner_close() {
+    expect(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "object Res { has name is string; Res(:name); destroy { Stdout().writeln(\"destroy \" + name); } }\n",
+        "object Maker { Maker(); async make() is Res { Res(name: \"made\"); } }\n",
+        "async main() is int { spawn Maker().make(); Stdout().writeln(\"main\"); 0; }\n",
+    ), "main\ndestroy made\n", 0);
 }
