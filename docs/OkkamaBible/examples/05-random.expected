@@ -1,0 +1,5 @@
+seed 2026: 100 189 297 428 532 568 491 389 313 185 108
+same seed: true
+seed 7:    76 201 327 369 481 569 556 421 305 201 94
+sevens expected: 600
+secure token: 16 bytes, never the same twice

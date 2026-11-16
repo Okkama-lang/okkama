@@ -70,7 +70,8 @@
   - [5.10 A worked example: drift and exact money](#510-a-worked-example-drift-and-exact-money)
   - [5.11 What exactness costs, in digits](#511-what-exactness-costs-in-digits)
   - [5.12 Floating point in practice: cancellation and compensated sums](#512-floating-point-in-practice-cancellation-and-compensated-sums)
-  - [5.13 Limits](#513-limits)
+  - [5.13 Randomness is a capability](#513-randomness-is-a-capability)
+  - [5.14 Limits](#514-limits)
 - [Chapter 6. Text](#chapter-6-text)
   - [6.1 Three layers of text](#61-three-layers-of-text)
   - [6.2 Okkama's choice: immutable code points](#62-okkamas-choice-immutable-code-points)
@@ -3153,7 +3154,106 @@ declaration, and its accuracy is the program's job, with the old remedies:
 compensated sums, formulas rearranged to avoid cancellation, and
 comparisons with a tolerance.
 
-## 5.13 Limits
+## 5.13 Randomness is a capability
+
+A random number is an effect: two calls with the same arguments give
+different answers. In most languages it hides behind a global function, and
+a test that wants to repeat a run must find and reset that hidden state.
+Okkama's library makes it an object that a program receives, like a clock or
+a file.
+
+```okkama
+module bible/random v1.0.0;
+
+// Randomness is a capability passed in, not a global. A seeded source repeats
+// its sequence exactly, so a program that draws numbers can be tested; a
+// secure source has no seed at all.
+import "io/stdout" take Stdout;
+import "random/source" take Randomizing, PcgRandom, SecureRandom;
+
+// Rolls two dice with whatever source it is given.
+object Table {
+    has dice is Randomizing;
+    Table(:dice);
+
+    // How often each sum from 2 to 12 comes up in `rolls` throws.
+    counts(rolls is int) is @int {
+        (1..=rolls).reduce([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) -> seen, roll {
+            let sum = dice.integer(1, 7) + dice.integer(1, 7);
+            seen.replaced(sum - 2, seen[sum - 2] + 1);
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let first = Table(dice: PcgRandom(seed: 2026)).counts(3600);
+    let again = Table(dice: PcgRandom(seed: 2026)).counts(3600);
+    let other = Table(dice: PcgRandom(seed: 7)).counts(3600);
+    out.writeln("seed 2026: " + first.map() -> n { n.string(); }.join(" "));
+    out.writeln("same seed: " + (first == again).string());
+    out.writeln("seed 7:    " + other.map() -> n { n.string(); }.join(" "));
+    out.writeln("sevens expected: " + (3600 / 6).string());
+    out.writeln("secure token: " + SecureRandom().bytes(16).size().string() + " bytes, never the same twice");
+    0;
+}
+```
+
+Output:
+
+```text
+seed 2026: 100 189 297 428 532 568 491 389 313 185 108
+same seed: true
+seed 7:    76 201 327 369 481 569 556 421 305 201 94
+sevens expected: 600
+secure token: 16 bytes, never the same twice
+```
+
+- **The source is passed in.** `Table` takes a `Randomizing` and never asks
+  where it came from. In production it gets `SecureRandom()`, and in a test
+  it gets `PcgRandom(seed: 2026)`. The code that rolls the dice is the same
+  in both.
+- **A seed repeats the sequence exactly.** Two tables built with seed 2026
+  produce equal counts, and seed 7 produces others. The sequence is part of
+  the library's published contract: the generator is PCG-XSH-RR 64/32
+  [[O'Neill 2014](#ref-oneill2014)], with its constants and the order in which it consumes
+  outputs written down, so a recorded test keeps its numbers across
+  versions.
+- **Ranges are half-open and unbiased.** `integer(1, 7)` gives 1 to 6.
+  Reducing a 32-bit output modulo 6 would favour the small values slightly,
+  so the source draws again until a sample falls in an exact multiple of the
+  range (rejection sampling). The counts above sit around the expected 600
+  sevens and fall off symmetrically to the ends, as two dice should.
+- **A secure source has no seed.** `SecureRandom` reads the operating
+  system's cryptographic generator and offers no way to make it repeat. A
+  token cannot be made predictable by a constructor argument passed by
+  mistake.
+
+Other languages put the same pieces in other places.
+
+- **Python.** The module-level functions of `random` are "bound methods of
+  a hidden instance" of a Mersenne Twister, shared by the whole program, and
+  the documentation warns that they "should not be used for security
+  purposes"; `secrets` is the other module [[Python documentation](#ref-pyrandom)].
+- **Go.** `math/rand` once behaved "as if `Seed(1)` is called at startup",
+  so every run repeated the same numbers. Go 1.20 seeded it automatically,
+  and Go 1.22's `math/rand/v2` made ChaCha8 the default behind its global
+  functions [[Cox 2024](#ref-cox2024rand)].
+- **Java.** `java.util.Random` is a 48-bit linear congruential generator, and
+  `SecureRandom` is a separate class with the same interface, so it is easy
+  to reach for the wrong one.
+- **Rust.** The standard library has no generator at all; the `rand` crate
+  supplies them, seeded or from the operating system.
+
+Okkama's choice follows from the rule against module-level state (Section 19.6): a
+generator the program can reach without being given it would be a global
+variable with a mutable stream. The cost is one more constructor argument
+for every object that draws numbers. What it buys is a test that repeats,
+and a security boundary that is visible in the types: a function that takes
+a `Randomizing` says that it draws, and only `SecureRandom` is safe for
+tokens.
+
+## 5.14 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.5).
@@ -22413,6 +22513,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cox2007"></a>Russ Cox (2007). Regular Expression Matching Can Be Simple And Fast (but is slow in Java, Perl, PHP, Python, Ruby, ...). January 2007. https://swtch.com/~rsc/regexp/regexp1.html
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
+- <a id="ref-cox2024rand"></a>Russ Cox (2024). Evolving the Go Standard Library with math/rand/v2. *The Go Blog*, 1 May 2024. https://go.dev/blog/randv2
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - <a id="ref-dscope"></a>D Language Foundation (2026). Scope Guard Statement. *D Language Specification*, Statements. https://dlang.org/spec/statement.html#scope-guard-statement
 - <a id="ref-dunittest"></a>D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html
@@ -22510,6 +22611,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
+- <a id="ref-oneill2014"></a>Melissa E. O'Neill (2014). *PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random Number Generation*. Technical report HMC-CS-2014-0905, Harvey Mudd College. https://www.pcg-random.org/paper.html
 - <a id="ref-ocamlfun"></a>The OCaml Development Team (2024). Module Fun. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Fun.html
 - <a id="ref-ocamlint"></a>The OCaml Development Team (2024). Module Int. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Int.html
 - <a id="ref-ocamlmanual"></a>The OCaml Development Team (2024). *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/index.html
@@ -22535,6 +22637,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-pyfunctions"></a>Python Software Foundation (2026). Built-in Functions: map. *The Python Standard Library*. https://docs.python.org/3/library/functions.html#map
 - <a id="ref-pystdtypes"></a>Python Software Foundation (2026). Built-in Types: Mapping Types — dict. *The Python Standard Library*. https://docs.python.org/3/library/stdtypes.html#mapping-types-dict
 - <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pyrandom"></a>Python Software Foundation (2026). random — Generate pseudo-random numbers. *The Python Standard Library*. https://docs.python.org/3/library/random.html
 - <a id="ref-pyfractions"></a>Python Software Foundation (2026). fractions — Rational numbers. *The Python Standard Library*. https://docs.python.org/3/library/fractions.html
 - <a id="ref-pysqlite3"></a>Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager
 - <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html

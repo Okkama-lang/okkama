@@ -358,7 +358,61 @@ declaration, and its accuracy is the program's job, with the old remedies:
 compensated sums, formulas rearranged to avoid cancellation, and
 comparisons with a tolerance.
 
-## 5.13 Limits
+## 5.13 Randomness is a capability
+
+A random number is an effect: two calls with the same arguments give
+different answers. In most languages it hides behind a global function, and
+a test that wants to repeat a run must find and reset that hidden state.
+Okkama's library makes it an object that a program receives, like a clock or
+a file.
+
+{{example:05-random}}
+
+- **The source is passed in.** `Table` takes a `Randomizing` and never asks
+  where it came from. In production it gets `SecureRandom()`, and in a test
+  it gets `PcgRandom(seed: 2026)`. The code that rolls the dice is the same
+  in both.
+- **A seed repeats the sequence exactly.** Two tables built with seed 2026
+  produce equal counts, and seed 7 produces others. The sequence is part of
+  the library's published contract: the generator is PCG-XSH-RR 64/32
+  [@oneill2014], with its constants and the order in which it consumes
+  outputs written down, so a recorded test keeps its numbers across
+  versions.
+- **Ranges are half-open and unbiased.** `integer(1, 7)` gives 1 to 6.
+  Reducing a 32-bit output modulo 6 would favour the small values slightly,
+  so the source draws again until a sample falls in an exact multiple of the
+  range (rejection sampling). The counts above sit around the expected 600
+  sevens and fall off symmetrically to the ends, as two dice should.
+- **A secure source has no seed.** `SecureRandom` reads the operating
+  system's cryptographic generator and offers no way to make it repeat. A
+  token cannot be made predictable by a constructor argument passed by
+  mistake.
+
+Other languages put the same pieces in other places.
+
+- **Python.** The module-level functions of `random` are "bound methods of
+  a hidden instance" of a Mersenne Twister, shared by the whole program, and
+  the documentation warns that they "should not be used for security
+  purposes"; `secrets` is the other module [@pyrandom].
+- **Go.** `math/rand` once behaved "as if `Seed(1)` is called at startup",
+  so every run repeated the same numbers. Go 1.20 seeded it automatically,
+  and Go 1.22's `math/rand/v2` made ChaCha8 the default behind its global
+  functions [@cox2024rand].
+- **Java.** `java.util.Random` is a 48-bit linear congruential generator, and
+  `SecureRandom` is a separate class with the same interface, so it is easy
+  to reach for the wrong one.
+- **Rust.** The standard library has no generator at all; the `rand` crate
+  supplies them, seeded or from the operating system.
+
+Okkama's choice follows from the rule against module-level state (Section 19.6): a
+generator the program can reach without being given it would be a global
+variable with a mutable stream. The cost is one more constructor argument
+for every object that draws numbers. What it buys is a test that repeats,
+and a security boundary that is visible in the types: a function that takes
+a `Randomizing` says that it draws, and only `SecureRandom` is safe for
+tokens.
+
+## 5.14 Limits
 
 - **No non-finite floats.** Code that relies on IEEE infinities and NaN must
   be restructured (Section 5.5).

@@ -70,7 +70,8 @@
   - [5.10 Разобранный пример: дрейф и точные деньги](#510-разобранный-пример-дрейф-и-точные-деньги)
   - [5.11 Чего стоит точность, в цифрах](#511-чего-стоит-точность-в-цифрах)
   - [5.12 Плавающая точка на практике: потеря цифр и компенсированные суммы](#512-плавающая-точка-на-практике-потеря-цифр-и-компенсированные-суммы)
-  - [5.13 Ограничения](#513-ограничения)
+  - [5.13 Случайность — это способность](#513-случайность--это-способность)
+  - [5.14 Ограничения](#514-ограничения)
 - [Глава 6. Текст](#глава-6-текст)
   - [6.1 Три слоя текста](#61-три-слоя-текста)
   - [6.2 Выбор Okkama: неизменяемые кодовые точки](#62-выбор-okkama-неизменяемые-кодовые-точки)
@@ -3198,7 +3199,105 @@ small root, stable: 1e-08
 суммами, формулами, переставленными так, чтобы избежать потери цифр, и
 сравнениями с допуском.
 
-## 5.13 Ограничения
+## 5.13 Случайность — это способность
+
+Случайное число — это эффект: два вызова с одинаковыми аргументами дают
+разные ответы. В большинстве языков он прячется за глобальной функцией, и
+тесту, который хочет повторить прогон, приходится искать и сбрасывать это
+скрытое состояние. Библиотека Okkama делает его объектом, который программа
+получает, как часы или файл.
+
+```okkama
+module bible/random v1.0.0;
+
+// Randomness is a capability passed in, not a global. A seeded source repeats
+// its sequence exactly, so a program that draws numbers can be tested; a
+// secure source has no seed at all.
+import "io/stdout" take Stdout;
+import "random/source" take Randomizing, PcgRandom, SecureRandom;
+
+// Rolls two dice with whatever source it is given.
+object Table {
+    has dice is Randomizing;
+    Table(:dice);
+
+    // How often each sum from 2 to 12 comes up in `rolls` throws.
+    counts(rolls is int) is @int {
+        (1..=rolls).reduce([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) -> seen, roll {
+            let sum = dice.integer(1, 7) + dice.integer(1, 7);
+            seen.replaced(sum - 2, seen[sum - 2] + 1);
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let first = Table(dice: PcgRandom(seed: 2026)).counts(3600);
+    let again = Table(dice: PcgRandom(seed: 2026)).counts(3600);
+    let other = Table(dice: PcgRandom(seed: 7)).counts(3600);
+    out.writeln("seed 2026: " + first.map() -> n { n.string(); }.join(" "));
+    out.writeln("same seed: " + (first == again).string());
+    out.writeln("seed 7:    " + other.map() -> n { n.string(); }.join(" "));
+    out.writeln("sevens expected: " + (3600 / 6).string());
+    out.writeln("secure token: " + SecureRandom().bytes(16).size().string() + " bytes, never the same twice");
+    0;
+}
+```
+
+Вывод:
+
+```text
+seed 2026: 100 189 297 428 532 568 491 389 313 185 108
+same seed: true
+seed 7:    76 201 327 369 481 569 556 421 305 201 94
+sevens expected: 600
+secure token: 16 bytes, never the same twice
+```
+
+- **Источник передают.** `Table` получает `Randomizing` и не спрашивает,
+  откуда он взялся. В работе ему дают `SecureRandom()`, в тесте —
+  `PcgRandom(seed: 2026)`. Код, бросающий кости, в обоих случаях один.
+- **Seed повторяет последовательность в точности.** Два стола с seed 2026
+  дают равные счёты, seed 7 — другие. Последовательность — часть
+  опубликованного контракта библиотеки: генератор — PCG-XSH-RR 64/32
+  [[O'Neill 2014](#ref-oneill2014)], его константы и порядок расхода выходов записаны, так что
+  записанный тест сохраняет свои числа между версиями.
+- **Диапазоны полуоткрыты и без смещения.** `integer(1, 7)` даёт от 1 до 6.
+  Остаток от деления 32-битного выхода на 6 чуть предпочитал бы малые
+  значения, поэтому источник тянет заново, пока выборка не попадёт в точное
+  кратное диапазону (выборка с отклонением). Счёты выше держатся около
+  ожидаемых 600 семёрок и симметрично спадают к краям, как и положено двум
+  костям.
+- **У надёжного источника нет seed.** `SecureRandom` читает
+  криптографический генератор операционной системы и не даёт способа
+  заставить его повториться. Токен нельзя сделать предсказуемым аргументом
+  конструктора, переданным по ошибке.
+
+Другие языки кладут те же части в другие места.
+
+- **Python.** Функции модуля `random` — «связанные методы скрытого
+  экземпляра» Mersenne Twister, общего на всю программу, и документация
+  предупреждает, что их «не следует использовать в целях безопасности»;
+  для этого есть отдельный модуль `secrets` [[Python documentation](#ref-pyrandom)].
+- **Go.** `math/rand` когда-то вёл себя «так, будто при старте вызван
+  `Seed(1)`», и каждый запуск повторял одни и те же числа. Go 1.20 стал
+  сидировать его автоматически, а `math/rand/v2` из Go 1.22 сделал ChaCha8
+  генератором по умолчанию за глобальными функциями [[Cox 2024](#ref-cox2024rand)].
+- **Java.** `java.util.Random` — 48-битный линейный конгруэнтный генератор,
+  а `SecureRandom` — отдельный класс с тем же интерфейсом, так что легко
+  взять не тот.
+- **Rust.** В стандартной библиотеке генератора нет вовсе; их даёт крейт
+  `rand`, с seed или от операционной системы.
+
+Выбор Okkama следует из правила против состояния уровня модуля (раздел 19.6):
+генератор, до которого программа может дотянуться, не получив его, был бы
+глобальной переменной с изменяемым потоком. Цена — ещё один аргумент
+конструктора у каждого объекта, который тянет числа. Взамен — тест, который
+повторяется, и граница безопасности, видимая в типах: функция, принимающая
+`Randomizing`, говорит, что тянет числа, и для токенов годится только
+`SecureRandom`.
+
+## 5.14 Ограничения
 
 - **Нет неконечных float.** Код, полагающийся на бесконечности и NaN IEEE,
   придётся перестроить (раздел 5.5).
@@ -22643,6 +22742,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - <a id="ref-cox2007"></a>Russ Cox (2007). Regular Expression Matching Can Be Simple And Fast (but is slow in Java, Perl, PHP, Python, Ruby, ...). January 2007. https://swtch.com/~rsc/regexp/regexp1.html
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
+- <a id="ref-cox2024rand"></a>Russ Cox (2024). Evolving the Go Standard Library with math/rand/v2. *The Go Blog*, 1 May 2024. https://go.dev/blog/randv2
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - <a id="ref-dscope"></a>D Language Foundation (2026). Scope Guard Statement. *D Language Specification*, Statements. https://dlang.org/spec/statement.html#scope-guard-statement
 - <a id="ref-dunittest"></a>D Language Foundation (2026). Unit Tests. *D Language Specification*. https://dlang.org/spec/unittest.html
@@ -22740,6 +22840,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
+- <a id="ref-oneill2014"></a>Melissa E. O'Neill (2014). *PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random Number Generation*. Technical report HMC-CS-2014-0905, Harvey Mudd College. https://www.pcg-random.org/paper.html
 - <a id="ref-ocamlfun"></a>The OCaml Development Team (2024). Module Fun. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Fun.html
 - <a id="ref-ocamlint"></a>The OCaml Development Team (2024). Module Int. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/api/Int.html
 - <a id="ref-ocamlmanual"></a>The OCaml Development Team (2024). *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/index.html
@@ -22765,6 +22866,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-pyfunctions"></a>Python Software Foundation (2026). Built-in Functions: map. *The Python Standard Library*. https://docs.python.org/3/library/functions.html#map
 - <a id="ref-pystdtypes"></a>Python Software Foundation (2026). Built-in Types: Mapping Types — dict. *The Python Standard Library*. https://docs.python.org/3/library/stdtypes.html#mapping-types-dict
 - <a id="ref-pydoctest"></a>Python Software Foundation (2026). doctest — Test interactive Python examples. *The Python Standard Library*. https://docs.python.org/3/library/doctest.html
+- <a id="ref-pyrandom"></a>Python Software Foundation (2026). random — Generate pseudo-random numbers. *The Python Standard Library*. https://docs.python.org/3/library/random.html
 - <a id="ref-pyfractions"></a>Python Software Foundation (2026). fractions — Rational numbers. *The Python Standard Library*. https://docs.python.org/3/library/fractions.html
 - <a id="ref-pysqlite3"></a>Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager
 - <a id="ref-pymock"></a>Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html

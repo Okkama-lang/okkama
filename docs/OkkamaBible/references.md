@@ -40,6 +40,7 @@ bibliographic data were checked are listed.
 - [@cook2009] William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
 - [@cox2007] Russ Cox (2007). Regular Expression Matching Can Be Simple And Fast (but is slow in Java, Perl, PHP, Python, Ruby, ...). January 2007. https://swtch.com/~rsc/regexp/regexp1.html
 - [@cox2018] Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
+- [@cox2024rand] Russ Cox (2024). Evolving the Go Standard Library with math/rand/v2. *The Go Blog*, 1 May 2024. https://go.dev/blog/randv2
 - [@csrecords] Microsoft (2026). Records (C# reference). *C# language reference*. https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record {label: C# language reference}
 - [@csversions] Microsoft (2026). The history of C#. *C# documentation*. https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history {label: C# documentation}
 - [@cwe] The MITRE Corporation (2026). *Common Weakness Enumeration (CWE)*, version 5.0. https://cwe.mitre.org/ {label: MITRE CWE}
@@ -153,6 +154,7 @@ bibliographic data were checked are listed.
 - [@ocamlmanual] The OCaml Development Team (2024). *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/index.html {label: OCaml Manual}
 - [@ocamlparallel] The OCaml Development Team (2024). Parallel programming. *The OCaml Manual*, version 5.2. https://ocaml.org/manual/5.2/parallelism.html {label: OCaml Manual}
 - [@okasaki1998] Chris Okasaki (1998). *Purely Functional Data Structures*. Cambridge University Press. https://doi.org/10.1017/CBO9780511530104
+- [@oneill2014] Melissa E. O'Neill (2014). *PCG: A Family of Simple Fast Space-Efficient Statistically Good Algorithms for Random Number Generation*. Technical report HMC-CS-2014-0905, Harvey Mudd College. https://www.pcg-random.org/paper.html
 - [@ousterhout2018] John Ousterhout (2018). *A Philosophy of Software Design*. Yaknyam Press.
 - [@parnas1972] David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - [@pep237] Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/ {label: PEP 237}
@@ -173,6 +175,7 @@ bibliographic data were checked are listed.
 - [@pyfractions] Python Software Foundation (2026). fractions — Rational numbers. *The Python Standard Library*. https://docs.python.org/3/library/fractions.html {label: Python fractions}
 - [@pyfunctions] Python Software Foundation (2026). Built-in Functions: map. *The Python Standard Library*. https://docs.python.org/3/library/functions.html#map {label: Python built-in functions}
 - [@pymock] Python Software Foundation (2026). unittest.mock — mock object library. *The Python Standard Library*. https://docs.python.org/3/library/unittest.mock.html {label: Python unittest.mock}
+- [@pyrandom] Python Software Foundation (2026). random — Generate pseudo-random numbers. *The Python Standard Library*. https://docs.python.org/3/library/random.html {label: Python documentation}
 - [@pysqlite3] Python Software Foundation (2026). sqlite3 — DB-API 2.0 interface for SQLite databases: How to use the connection context manager. *The Python Standard Library*. https://docs.python.org/3/library/sqlite3.html#sqlite3-connection-context-manager {label: Python sqlite3}
 - [@pystdtypes] Python Software Foundation (2026). Built-in Types: Mapping Types — dict. *The Python Standard Library*. https://docs.python.org/3/library/stdtypes.html#mapping-types-dict {label: Python built-in types}
 - [@r7rs2013] Alex Shinn, John Cowan, Arthur A. Gleckler (eds.) (2013). *Revised⁷ Report on the Algorithmic Language Scheme*. https://small.r7rs.org/attachment/r7rs.pdf {label: R7RS}
