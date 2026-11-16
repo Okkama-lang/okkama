@@ -375,3 +375,24 @@ func @main(%input: own) -> (Res, own) [ctor Res] summary(M0) {
     assert!(main.blocks.iter().any(|(_, block)| matches!(block.term.kind,
         TermKind::ExitDispatch { success: None, pending: None, failed: Some(_), .. })));
 }
+/// PR-F (#775): a synchronous body and a synchronous call that may throw Cancelled (`Cancelling.check`) lower like
+/// any fallible ones; low refuses only `suspends` and async destroy.
+#[test]
+fn a_thrown_cancelled_is_an_ordinary_failure_of_a_synchronous_body() {
+    let source = include_str!("fixtures/fresh-call.own.oir").replace(
+        "results=[Res], failures=[thrown, program, panic, native]",
+        "results=[Res], failures=[thrown, program, panic, native, cancelled]");
+    let module = parsed(&source);
+    let cancelling = module.summaries.iter()
+        .filter(|(_, summary)| summary.contract.failures.contains(&FailureKind::Cancelled)).count();
+    assert_eq!(cancelling, 2, "the caller's and the callee's summaries may throw Cancelled");
+    let output = lower_cleanup(module, &LowOptions::default());
+    assert!(output.is_ok(), "{output:?}");
+    // Suspension stays refused, in the body's summary (M0, Mf) and at the call of @fresh (Mf).
+    for summary in [1, 2] {
+        let mut module = parsed(&source);
+        module.summaries.get_mut(SummaryId::from_u32(summary)).unwrap().contract.suspends = true;
+        let refused = lower_cleanup(module, &LowOptions::default());
+        assert!(matches!(refused, Err(LowError::Unsupported { .. })), "summary {summary}: {refused:?}");
+    }
+}

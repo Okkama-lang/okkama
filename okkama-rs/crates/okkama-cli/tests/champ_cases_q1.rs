@@ -440,3 +440,36 @@ async main() is int {
 res closed
 ", 0);
 }
+
+/// PR-F (#775): a synchronous action that calls `check()` through `Cancelling` passes the thrown Cancelled to its
+/// caller, which catches it as on Tomato (okkama 0.5.8: `2`, `cancelled`, exit 0). The direct call of `step` and
+/// the role call of `check` both lower as ordinary fallible calls.
+#[test]
+fn q1_a_synchronous_action_passes_a_thrown_cancelled() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/cancellation" take Cancellation, Cancelling;
+object Worker {
+    has token is Cancelling;
+    Worker(:token);
+    step(n is int) is int {
+        token.check();
+        n + 1;
+    }
+}
+async main() is int {
+    let cancellation = Cancellation();
+    let w = Worker(token: cancellation.cancelling());
+    Stdout().writeln(w.step(1).string());
+    cancellation.cancel();
+    let r = try {
+        w.step(2).string();
+    }
+    catch e is Cancelled {
+        "cancelled";
+    };
+    Stdout().writeln(r);
+    0;
+}
+"#, "2\ncancelled\n", 0);
+}

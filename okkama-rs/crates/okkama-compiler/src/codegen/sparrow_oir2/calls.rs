@@ -272,9 +272,6 @@ impl Emitter<'_> {
         if !defer && shielded && !self.function.attrs.contains(&o::FunctionAttr::Cleanup) {
             return Err(error("cleanup shielded outside cleanup function"));
         }
-        if !shielded && summary.contract.failures.contains(&o::FailureKind::Cancelled) {
-            return Err(later("delivered cancellation"));
-        }
         // An async defer entry takes its frame; its captures arrive through its start continuation (C-2).
         let inputs = match declaration.body.as_ref().and_then(|body| body.frame_layout.as_ref()) {
             Some(layout) if async_defer => {
@@ -478,9 +475,6 @@ impl Emitter<'_> {
         let shielded = call.cleanup == o::CallCleanupMode::Shielded;
         if shielded && !self.function.attrs.contains(&o::FunctionAttr::Cleanup) {
             return Err(error("cleanup shielded outside cleanup function"));
-        }
-        if !shielded && summary.contract.failures.contains(&o::FailureKind::Cancelled) {
-            return Err(later("delivered cancellation"));
         }
         let declaration = self.objects.get(role as usize).and_then(|object| object.role.as_ref())
             .ok_or_else(|| error("dynamic call of a non-role"))?;

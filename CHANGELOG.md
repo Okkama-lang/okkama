@@ -20,6 +20,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A synchronous action may pass a thrown Cancelled on Champ (#775, PR-F).**
+  An action that calls `check()` on a `Cancelling` throws `Cancelled` once
+  stopping is requested, and its caller catches it as on Tomato. OIR-2 low
+  and SPB 17 code generation refused every synchronous body or call whose
+  failures included Cancelled, confusing a thrown Cancelled with a delivered
+  cancellation. Now they refuse only a body or call that suspends or runs an
+  async destroy; delivery of a cancellation still needs a suspending
+  operation, which a synchronous body cannot hold.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own

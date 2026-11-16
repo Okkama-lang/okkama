@@ -1009,3 +1009,18 @@ fn handle_collections_translate_to_handle_leaves_and_composites() {
     let s::Type::Map(index) = map else { panic!("{map:?}") };
     assert_eq!(table.entries()[index as usize], s::Composite::Map { key: s::Type::Str, value: s::Type::Handle(node) });
 }
+
+/// PR-F (#775): a synchronous call that may throw Cancelled (`Cancelling.check`) is an ordinary fallible call. SPB 17
+/// gives cancellation no bit in the failure mask, so the program is the one of the same call without it.
+#[test]
+fn s2_a_synchronous_call_that_may_throw_cancelled_is_an_ordinary_call() {
+    let source = include_str!("fixtures/owned-call.oir");
+    let cancelling = source.replace("results=[int], failures=[thrown]", "results=[int], failures=[thrown, cancelled]");
+    assert_ne!(cancelling, source);
+    let expected = generate(&parse(source), &layouts()).unwrap();
+    let program = generate(&parse(&cancelling), &layouts()).unwrap();
+    assert_eq!(program, expected);
+    let s::Instruction::Champ { op: s::Opcode::InvokeCallOwn, flow: s::Flow::Outcomes(outcomes), .. }
+        = &program.functions[0].code[0] else { panic!("owned call") };
+    assert_eq!(outcomes.iter().map(|outcome| outcome.tag).collect::<Vec<_>>(), [s::Tag::Normal, s::Tag::Unwind]);
+}
