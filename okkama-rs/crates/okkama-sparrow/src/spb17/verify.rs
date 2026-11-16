@@ -494,6 +494,13 @@ pub fn verify(p: &Program) -> Check {
     check_globals(p)?;
     let mut handles = BTreeSet::new();
     for object in &p.objects {
+        // An Atomic over a role value holds a reference the runtime never releases or destroys: every
+        // implementation of the role must be closed plain data, by the witness tables (P2.4 §4.8, #764).
+        if object.name.starts_with("async.atomic.Atomic_role_")
+            && let Some(&Type::Role(role)) = object.layout.storage_fields.first() {
+            enforce(closed_plain(p, Type::Role(role)), "ATOMIC_ROLE",
+                "an Atomic holds a role whose implementations are not closed plain data")?;
+        }
         // Natives name their handles by declaring module and name: one name, one declaration.
         enforce(!object.handle || handles.insert(object.name.as_str()), "HANDLE_NAME",
             "two native handle declarations share one name")?;

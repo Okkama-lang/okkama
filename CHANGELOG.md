@@ -20,6 +20,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Cell and Atomic over a plain role run on Champ (#764).** The OIR-2
+  specializer registered Atomic/Cell only for plain scalars and arrays, so
+  `std/config/ini.ok`'s `Cell<List<string>>` stopped `L09.ini.native-
+  equivalence` ("std object cell.Cell<[Role(..)]>"). Per the decision in
+  P2.4 §4.8, a role value is admitted when the role is plain: every
+  implementation in the program (object witnesses and the builtin adapters
+  of #757) is closed plain data without destroy and without a resource in
+  its graph. The registered `async.atomic.Atomic_role_<role>` holds a traced
+  role reference and its closed flag; its operations are the registered P1
+  entries, with the role value's deps as for an object. The SPB 17 loader
+  checks the closure by the witness tables (`ATOMIC_ROLE`); the producer
+  refuses a role with a resource implementation by name ("Atomic/Cell over
+  the role … plain roles only"). The case runs (220 cases, 0 mismatches).
 - **A loop scope of a resource holder closes on Champ (#753).** The SPB 17
   loader (`D18_EXECUTOR`) checks a merge close's envelope against the
   destroys its inventory may see. When it cannot reconstruct the inventory

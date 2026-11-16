@@ -70,3 +70,35 @@ fn oir2_w1_order_lazy_branches_builds_under_the_full_gate() {
     assert!(o::verify::GATE_STEPS > o::verify::VerifyLimits::default().steps);
     spb17("L08.order.lazy-branches", o::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// A Cell over a plain role (P2.4 §4.8, #764): the registered Atomic keeps its dotted name with the role's
+/// declaration in its suffix, holds a role reference and its closed flag, and the program loads.
+#[test]
+fn oir2_pipeline_registers_an_atomic_over_a_plain_role() {
+    let high = super::super::tests::lower_std(concat!("module app; import \"cell\" take Cell; ",
+        "role Shape { area() is int; } object Square does Shape { has side is int; Square(:side); ",
+        "area() is int { side * side; } } ",
+        "main() is int { let first is Shape = Square(side: 3); let held = Cell(first); held.value().area(); }"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let bytes = compile_high_with(high, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let program = s::decode(&bytes).unwrap();
+    let role = program.objects.iter().position(|object| object.name == "app.Shape").unwrap() as u32;
+    let atomic = program.objects.iter().find(|object| object.name == "async.atomic.Atomic_role_app.Shape")
+        .expect("the registered Atomic over the role");
+    assert_eq!(atomic.layout.storage_fields, [s::Type::Role(role), s::Type::Bool]);
+    assert_eq!(atomic.layout.trace_layout, [0]);
+    assert!(!atomic.layout.may_reach_resource);
+}
+
+/// A Cell over a role one of whose implementations is a resource is the slice P2.4 §4.8 leaves out: refused by
+/// name before SPB 17.
+#[test]
+fn oir2_pipeline_refuses_an_atomic_over_a_role_with_a_resource() {
+    let high = super::super::tests::lower_std(concat!("module app; import \"cell\" take Cell; ",
+        "role Named { name() is string; } object Res does Named { has n is string; Res(:n); ",
+        "name() is string { n; } destroy { n; } } ",
+        "main() is int { let first is Named = Res(n: \"a\"); let held = Cell(first); held.value().name().length(); }"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let error = compile_high_with(high, o::VerifyMode::Structural).unwrap_err().to_string();
+    assert!(error.contains("Atomic/Cell over the role app.Named") && error.contains("plain roles only"), "{error}");
+}

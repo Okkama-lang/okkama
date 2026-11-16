@@ -579,3 +579,48 @@ fn managed_role_fields_are_selected() {
     // A role whose implementations are all plain needs no selection.
     accept(&holder(false, vec![]));
 }
+
+/// The program of `plain_main` with an Atomic over the role `Named` (P2.4 §4.8, #764):
+/// `async.atomic.Atomic_role_Named` holding a role reference and its closed flag.
+fn atomic_over_named() -> Program {
+    let mut p = plain_main(vec![Type::Int], vec![], 0);
+    p.objects.push(Object { name: "async.atomic.Atomic_role_Named".into(), fields: vec![],
+        ..object("async.atomic.Atomic_role_Named", vec![Type::Role(0), Type::Bool], vec![]) });
+    p
+}
+
+/// ATOMIC_ROLE: an Atomic holds a role value only when every implementation of the role is closed plain data, by
+/// the witness tables (#764).
+#[test]
+fn an_atomic_holds_a_plain_role() {
+    accept(&atomic_over_named());
+    let p = super::p1::P1Contracts::new(&atomic_over_named().objects).unwrap();
+    let names = p.entries().iter().map(|f| f.symbol.clone()).collect::<Vec<_>>();
+    // The failing operations need AtomicClosed, which this program does not declare.
+    assert!(names.contains(&"okkama.atomic.Atomic.closed$role_Named".to_string()), "{names:?}");
+    let value = p.entries().iter().find(|f| f.symbol == "okkama.atomic.Atomic.new_value$role_Named").unwrap();
+    // The role value carries its deps into the publication, as an object does.
+    assert_eq!(value.registers, [Type::Role(0)]);
+    assert_eq!(value.services, [ServiceKind::Deps, ServiceKind::Packet]);
+}
+
+#[test]
+fn an_atomic_refuses_a_role_with_a_resource_implementation() {
+    let mut p = atomic_over_named();
+    let resource = with_resource(&mut p);
+    let mut name = p.functions[2].clone();
+    name.registers[0] = Type::Object(resource);
+    seal(&mut name);
+    p.objects[resource as usize].implements = vec![RoleImpl { role: 0, slots: vec![p.functions.len() as u32] }];
+    p.functions.push(name);
+    reject(&p, "ATOMIC_ROLE");
+}
+
+#[test]
+fn an_atomic_refuses_a_role_with_an_implementation_that_is_not_plain_data() {
+    let mut p = atomic_over_named();
+    p.objects[1].layout = layout(vec![Type::Failure]);
+    p.objects[1].layout.trace_layout = vec![0];
+    p.objects[1].fields = vec![Field { name: "f0".into(), storage: 0, once: false }];
+    reject(&p, "ATOMIC_ROLE");
+}

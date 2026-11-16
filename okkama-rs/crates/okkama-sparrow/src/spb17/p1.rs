@@ -47,7 +47,7 @@ impl P1Contracts {
             let Some(suffix) = object.name.strip_prefix("async.atomic.Atomic_") else {
                 continue;
             };
-            let Some(value) = atomic_value(suffix) else {
+            let Some(value) = atomic_value(suffix).or_else(|| atomic_role(objects, suffix)) else {
                 continue;
             };
             let expected = vec![value, Type::Bool];
@@ -290,6 +290,14 @@ fn shown(objects: &[Object], ty: Type, visiting: &mut BTreeSet<u32>) -> bool {
     }
 }
 
+/// The role type of a role-valued Atomic suffix (`role_` and the role descriptor's name, P2.4 §4.8, #764). The
+/// loader admits the specialization only for a plain role (`ATOMIC_ROLE`); a role whose implementations may
+/// reach a resource also fails the layout check here.
+pub fn atomic_role(objects: &[Object], suffix: &str) -> Option<Type> {
+    let name = suffix.strip_prefix("role_")?;
+    objects.iter().position(|object| object.role.is_some() && object.name == name).map(|id| Type::Role(id as u32))
+}
+
 /// The runtime word type held by a registered plain Atomic specialization (P2.4 §4.8): a scalar, or
 /// `array_` and a plain element suffix that SPB 17 can carry.
 pub fn atomic_value(suffix: &str) -> Option<Type> {
@@ -387,7 +395,8 @@ fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, fail
     if owned {
         params.push(Location::Service(0));
     }
-    let deps = registers.iter().filter(|ty| matches!(ty, Type::Object(_) | Type::Error)).count();
+    // A role value (an Atomic over a role, #764) carries its deps like an object.
+    let deps = registers.iter().filter(|ty| matches!(ty, Type::Object(_) | Type::Error | Type::Role(_))).count();
     let mut services = vec![ServiceKind::Deps; deps];
     // Proof parameters precede the owning packet, as in elaborated OIR signatures.
     if owned {

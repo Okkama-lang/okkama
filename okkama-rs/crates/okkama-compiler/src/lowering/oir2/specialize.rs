@@ -347,9 +347,14 @@ impl Specializer<'_, '_> {
         let ordinary = matches!((module, source.name.as_str()),
             ("io/stdout", "Stdout") | ("encoding/utf", "Utf8Encoded"));
         let imported = source.module < self.registry.root_start;
-        // Registered Atomic/Cell specializations (P2.4 §4.8): plain scalars and arrays of them only. A
-        // managed value needs the storage protocol of the registered service and stays unsupported.
-        let plain_value = matches!(args, [value] if atomic_suffix(value).is_some());
+        // Registered Atomic/Cell specializations (P2.4 §4.8): plain scalars and arrays of them, and role values
+        // (#764), which the SPB 17 loader admits only for plain roles. Any other managed value needs the storage
+        // protocol of the registered service and stays unsupported.
+        let suffix = match args {
+            [value] if generic => self.atomic_suffix_of(value, span)?,
+            _ => None,
+        };
+        let plain_value = suffix.is_some();
         if imported && (source.decl.is_none() || generic && !plain_value) {
             return Err(LowerError::unsupported(span, format!("std object {module}.{}<{args:?}>", source.name)));
         }
@@ -363,7 +368,7 @@ impl Specializer<'_, '_> {
         let specialized = !source.params.is_empty();
         let instance = if specialized { ty::ObjectId(self.registry.objects.len()) } else { object };
         let type_names = args.iter().map(|ty| self.encode(ty)).collect::<Result<Vec<_>>>()?;
-        let name = if imported && generic && let [value] = args && let Some(suffix) = atomic_suffix(value) {
+        let name = if imported && generic && let Some(suffix) = &suffix {
             format!("{}_{suffix}", source.name)
         } else if imported && ordinary {
             source.name.clone()
@@ -429,6 +434,21 @@ impl Specializer<'_, '_> {
         }
         self.chain.pop();
         Ok(instance)
+    }
+
+    /// The registered Atomic suffix of `value` (P2.4 §4.8): a plain scalar or array suffix, or for a role value
+    /// `role_` and the role's declaration name in the module (#764).
+    fn atomic_suffix_of(&mut self, value: &ty::Ty, span: Span) -> Result<Option<String>> {
+        let ty::Ty::Role(role, args) = value else {
+            return Ok(atomic_suffix(value));
+        };
+        let id = self.role(*role, args, span)?;
+        let info = &self.registry.roles[id.0];
+        if info.decl.is_none() {
+            return Ok(None);
+        }
+        let module = &self.registry.modules[info.module].name;
+        Ok(Some(format!("role_{}", role_declaration_name(module, &info.name))))
     }
 
     fn role(&mut self, role: ty::RoleId, args: &[ty::Ty], span: Span) -> Result<ty::RoleId> {
@@ -926,6 +946,15 @@ impl Specializer<'_, '_> {
 /// Structural spelling shared by concrete signatures and specialization arguments.
 /// The name suffix of a registered plain Atomic/Cell value (P2.4 §4.8): `int`, `string`, `bool`, `byte`,
 /// `char`, `float`, `rat`, or `array_` and the suffix of a plain element. Other values have none.
+/// A role's declaration name in the OIR-2 module, as `Declarations::new` gives it.
+pub(super) fn role_declaration_name(module: &str, name: &str) -> String {
+    if name.contains('<') {
+        format!("{module}::{name}")
+    } else {
+        format!("{}.{name}", module.replace('/', "."))
+    }
+}
+
 pub(super) fn atomic_suffix(value: &ty::Ty) -> Option<String> {
     use ty::Ty as T;
     Some(match value {

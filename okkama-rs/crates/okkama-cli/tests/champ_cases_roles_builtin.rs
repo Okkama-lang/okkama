@@ -150,3 +150,45 @@ main() is int {
     0;
 }"#, "x\ny\n7\n");
 }
+
+/// A Cell over a plain role (P2.4 §4.8, #764): the registered Atomic holds the role reference; `replace`
+/// publishes another implementation and `value` reads it back. Tomato prints the same.
+#[test]
+fn a_cell_holds_a_plain_role_value() {
+    expect_output(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Shape { area() is int; }
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+object Rect does Shape {
+    has w is int;
+    has h is int;
+    Rect(:w, :h);
+    area() is int { w * h; }
+}
+
+main() is int {
+    let first is Shape = Square(side: 3);
+    let held = Cell(first);
+    Stdout().writeln(held.value().area().string());
+    let second is Shape = Rect(w: 2, h: 5);
+    held.replace(second);
+    Stdout().writeln(held.value().area().string());
+    let parts = Cell(0);
+    for 1..4 -> n {
+        let square is Shape = Square(side: n);
+        held.replace(square);
+        parts.replace(parts.value() + held.value().area());
+    }
+    Stdout().writeln(parts.value().string());
+    0;
+}"#, "9\n10\n14\n");
+}

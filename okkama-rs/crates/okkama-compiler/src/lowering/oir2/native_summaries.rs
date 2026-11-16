@@ -306,9 +306,18 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
     })
 }
 
-/// The interned plain value type of a registered Atomic specialization suffix (P2.4 §4.8): a scalar
-/// or `array_` and a plain element suffix; `None` for any other suffix or a type the module lacks.
+/// The interned value type of a registered Atomic specialization suffix (P2.4 §4.8): a scalar, `array_` and a
+/// plain element suffix, or `role_` and a role declaration (#764); `None` for any other suffix or a type the
+/// module lacks.
 pub(super) fn atomic_value(module: &ir::Module, suffix: &str) -> Option<ir::TypeId> {
+    // A role value (#764): the role declared under that name; the loader admits only a plain one.
+    if let Some(name) = suffix.strip_prefix("role_") {
+        return module.types.iter().find_map(|(id, ty)| match ty {
+            ir::Type::Role { decl, args } if args.is_empty() => module.declarations.get(*decl).ok()
+                .filter(|declaration| declaration.name == name).map(|_| id),
+            _ => None,
+        });
+    }
     let ty = match suffix {
         "int" => ir::Type::Int,
         "string" => ir::Type::Str,

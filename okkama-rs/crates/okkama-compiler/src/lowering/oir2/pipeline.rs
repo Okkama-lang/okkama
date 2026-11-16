@@ -187,6 +187,14 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     s::encode(&output.program).map_err(|error| phase("encode", error))
 }
 
+/// The SPB 17 role type of a role-valued Atomic suffix (`role_` and a role declaration, #764): its descriptor
+/// is the role's declaration.
+fn atomic_role(module: &o::Module, suffix: &str) -> Option<s::Type> {
+    let name = suffix.strip_prefix("role_")?;
+    module.declarations.iter().find(|(_, declaration)| declaration.name == name
+        && matches!(declaration.kind, o::DeclarationKind::Role { .. })).map(|(id, _)| s::Type::Role(id.as_u32()))
+}
+
 fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayout>, PipelineError> {
     let mut layouts = BTreeMap::new();
     for (id, declaration) in module.declarations.iter() {
@@ -202,7 +210,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         };
         let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
             .filter(|_| builtin && fields.is_empty() && destroy.is_none())
-            .and_then(s::p1::atomic_value);
+            .and_then(|suffix| atomic_role(module, suffix).or_else(|| s::p1::atomic_value(suffix)));
         // A once slot is an ordinary Maybe field: the producer stores Maybe.none at construction and
         // once.load/once.store read and fill it (SPB 17 `Field::once` keeps it out of equality and keys).
         if builtin && atomic.is_none() {
@@ -308,6 +316,18 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
         if !changed {
             break;
+        }
+    }
+    // The registered Atomic over a role value is the plain-role slice of P2.4 §4.8 (#764): a role one of whose
+    // implementations reaches a resource is refused here by name (the loader checks it again, ATOMIC_ROLE).
+    for (id, declaration) in module.declarations.iter() {
+        if let Some(suffix) = declaration.name.strip_prefix("async.atomic.Atomic_")
+            && suffix.starts_with("role_")
+            && layouts.get(&id.as_u32()).is_some_and(|layout| layout.runtime.may_reach_resource)
+        {
+            return Err(PipelineError::Phase { phase: "layout", message: format!("unsupported: Atomic/Cell over the \
+                role {} whose implementations reach a resource (P2.4 §4.8: plain roles only)",
+                &suffix["role_".len()..]) });
         }
     }
     Ok(layouts)
