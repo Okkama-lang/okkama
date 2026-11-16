@@ -158,15 +158,15 @@ fn oir2_p2_5_manifest_covers_every_async_case() {
         assert_eq!(&listed[id], path, "{id}");
     }
     let level = |prefix: &str| listed.keys().filter(|id| id.starts_with(prefix)).count();
-    // #739 adds the four K2 probes as L08 cases (three Q1, one D1).
-    assert_eq!((listed.len(), level("L08.")), (105, 62));
+    // #739 adds the four K2 probes as L08 cases (three Q1, one D1); #768 a P1 case, #754 a frontend one.
+    assert_eq!((listed.len(), level("L08.")), (107, 63));
     let mut slices = BTreeMap::new();
     for row in rows() {
         *slices.entry(row[2]).or_insert(0) += 1;
     }
     assert_eq!(slices, BTreeMap::from([
-        ("D1", 6), ("F1", 3), ("G1", 11), ("K2", 1), ("N1", 24), ("P1", 3), ("Q1", 18), ("Q2", 8),
-        ("R3", 2), ("V5", 10), ("X1", 1), ("frontend", 14), ("parse", 3), ("pruned", 1),
+        ("D1", 6), ("F1", 3), ("G1", 11), ("K2", 1), ("N1", 24), ("P1", 4), ("Q1", 18), ("Q2", 8),
+        ("R3", 2), ("V5", 10), ("X1", 1), ("frontend", 15), ("parse", 3), ("pruned", 1),
     ]));
 }
 
