@@ -199,9 +199,9 @@ integers gives an exact rational number, not a truncated integer, so turning
 it back into cents is a decision the program must write down. Chapter 5
 explains why.
 
-## 2.9 Roads not taken: prototypes and actors
+## 2.9 Roads not taken: prototypes, actors and generic functions
 
-Classes were not the only way objects could have gone. Two other lines came
+Classes were not the only way objects could have gone. Three other lines came
 out of the same decades, and each answers a question Okkama also had to
 answer.
 
@@ -237,6 +237,30 @@ successors, and is reached by others through a channel (Section 20.6). An
 actor is therefore a pattern in Okkama, not a kind of object: most objects
 are plain values that need no mailbox, and only the few that carry a state
 through time are wrapped in a task.
+
+**Generic functions.** Smalltalk sends a message to one receiver, and the
+receiver alone chooses the method. The Common Lisp Object System, specified
+in 1988, turned this around [@bobrow1988]. A method belongs to a *generic
+function*, not to a class, and the generic function chooses among its
+methods by the classes of all its arguments: multiple dispatch. Methods can
+also be combined. `:before`, `:after` and `:around` methods wrap a primary
+method, and new ones can be added to a generic function from anywhere, for
+classes the author of the function never saw. Julia made multiple dispatch
+the centre of a numerical language, where `+` on an integer and a rational,
+or on a matrix and a vector, is just another method chosen by both argument
+types [@bezanson2017].
+
+The model is strong where Okkama is weak. A binary operation is symmetric
+in CLOS and Julia, while an Okkama operator looks only to its left operand
+(Section 14.7). And an operation can be added to existing types, which is
+one half of the expression problem (Section 16.5). Okkama declined both
+halves of the price. A method added from anywhere is retroactive
+conformance, which roles refuse (Section 14.2), because a reader can no
+longer find an object's behaviour in its declaration. Method combination is
+inheritance of behaviour by another name, which the language removed
+(Section 1.9). What Okkama keeps is the closed form of the same idea. A
+`match` over a variant (Chapter 16) chooses by the case of a value from a set
+the declaration fixes, and all the choices sit in one place.
 
 ## 2.10 The harbour, once more
 

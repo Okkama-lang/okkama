@@ -24,7 +24,7 @@
   - [2.6 Объекты как поведение](#26-объекты-как-поведение)
   - [2.7 Elegant Objects: дисциплина](#27-elegant-objects-дисциплина)
   - [2.8 Композиция на практике](#28-композиция-на-практике)
-  - [2.9 Дороги, по которым не пошли: прототипы и акторы](#29-дороги-по-которым-не-пошли-прототипы-и-акторы)
+  - [2.9 Дороги, по которым не пошли: прототипы, акторы и обобщённые функции](#29-дороги-по-которым-не-пошли-прототипы-акторы-и-обобщённые-функции)
   - [2.10 Ещё раз о гавани](#210-ещё-раз-о-гавани)
   - [2.11 Значения возвращаются](#211-значения-возвращаются)
   - [2.12 Что потеряно](#212-что-потеряно)
@@ -1019,10 +1019,10 @@ percent: 10)`. А скидка вычисляется с явным `int(...)`: 
 превращение его обратно в центы — решение, которое программа должна
 записать. Почему так — в главе 5.
 
-## 2.9 Дороги, по которым не пошли: прототипы и акторы
+## 2.9 Дороги, по которым не пошли: прототипы, акторы и обобщённые функции
 
 Классы не были единственным путём, которым могли пойти объекты. В те же
-десятилетия появились ещё две линии, и каждая отвечает на вопрос, на который
+десятилетия появились ещё три линии, и каждая отвечает на вопрос, на который
 пришлось ответить и Okkama.
 
 **Прототипы.** В языке Self, который придумали Дэвид Ангар и Рэндалл Смит,
@@ -1058,6 +1058,29 @@ Okkama приходит туда же с другой стороны. Её об�
 (раздел 20.6). Поэтому актор в Okkama — паттерн, а не вид объекта:
 большинство объектов — простые значения, которым почтовый ящик не нужен, и
 только немногие, несущие состояние сквозь время, оборачиваются в задачу.
+
+**Обобщённые функции.** Smalltalk посылает сообщение одному получателю, и
+метод выбирает только он. Объектная система Common Lisp, описанная в 1988
+году, перевернула это [[Bobrow 1988](#ref-bobrow1988)]. Метод принадлежит *обобщённой функции*,
+а не классу, и обобщённая функция выбирает метод по классам всех своих
+аргументов: множественная диспетчеризация. Методы можно и комбинировать:
+методы `:before`, `:after` и `:around` оборачивают основной, а новые можно
+добавить к обобщённой функции откуда угодно — для классов, которых автор
+функции не видел. Julia сделала множественную диспетчеризацию центром
+численного языка: `+` над целым и рациональным, над матрицей и вектором —
+просто ещё один метод, выбранный по типам обоих аргументов [[Bezanson 2017](#ref-bezanson2017)].
+
+Модель сильна там, где Okkama слаба. Бинарная операция в CLOS и Julia
+симметрична, а оператор Okkama смотрит только на левый операнд (раздел
+14.7). И операцию можно добавить к существующим типам — это одна половина
+проблемы выражений (раздел 16.5). Okkama отказалась платить обе части цены.
+Метод, добавленный откуда угодно, — это ретроактивное соответствие, от
+которого роли отказываются (раздел 14.2): читатель больше не найдёт
+поведение объекта в его объявлении. Комбинация методов — наследование
+поведения под другим именем, а его язык убрал (раздел 1.9). Okkama
+сохраняет закрытую форму той же идеи: `match` по варианту (глава 16)
+выбирает по случаю значения из набора, который фиксирует объявление, и все
+варианты выбора стоят в одном месте.
 
 ## 2.10 Ещё раз о гавани
 
@@ -22452,6 +22475,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-bentley2000"></a>Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
+- <a id="ref-bezanson2017"></a>Jeff Bezanson, Alan Edelman, Stefan Karpinski, Viral B. Shah (2017). Julia: A Fresh Approach to Numerical Computing. *SIAM Review* 59(1): 65–98. https://doi.org/10.1137/141000671
 - <a id="ref-jep361"></a>Gavin Bierman (2020). JEP 361: Switch Expressions. OpenJDK. https://openjdk.org/jeps/361
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
@@ -22459,6 +22483,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-bloch2006"></a>Joshua Bloch (2006). Extra, Extra — Read All About It: Nearly All Binary Searches and Mergesorts are Broken. Google Research Blog, 2 June 2006. https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-nasa1999mco"></a>Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
+- <a id="ref-bobrow1988"></a>Daniel G. Bobrow, Linda G. DeMichiel, Richard P. Gabriel, Sonya E. Keene, Gregor Kiczales, David A. Moon (1988). Common Lisp Object System Specification. X3J13 Document 88-002R. *ACM SIGPLAN Notices* 23 (special issue), September 1988.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-bracha1998"></a>Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6

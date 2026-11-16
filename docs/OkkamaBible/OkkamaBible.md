@@ -24,7 +24,7 @@
   - [2.6 Objects as behaviour](#26-objects-as-behaviour)
   - [2.7 Elegant Objects: the discipline](#27-elegant-objects-the-discipline)
   - [2.8 Composition in practice](#28-composition-in-practice)
-  - [2.9 Roads not taken: prototypes and actors](#29-roads-not-taken-prototypes-and-actors)
+  - [2.9 Roads not taken: prototypes, actors and generic functions](#29-roads-not-taken-prototypes-actors-and-generic-functions)
   - [2.10 The harbour, once more](#210-the-harbour-once-more)
   - [2.11 Values come back](#211-values-come-back)
   - [2.12 What was lost](#212-what-was-lost)
@@ -1008,9 +1008,9 @@ integers gives an exact rational number, not a truncated integer, so turning
 it back into cents is a decision the program must write down. Chapter 5
 explains why.
 
-## 2.9 Roads not taken: prototypes and actors
+## 2.9 Roads not taken: prototypes, actors and generic functions
 
-Classes were not the only way objects could have gone. Two other lines came
+Classes were not the only way objects could have gone. Three other lines came
 out of the same decades, and each answers a question Okkama also had to
 answer.
 
@@ -1046,6 +1046,30 @@ successors, and is reached by others through a channel (Section 20.6). An
 actor is therefore a pattern in Okkama, not a kind of object: most objects
 are plain values that need no mailbox, and only the few that carry a state
 through time are wrapped in a task.
+
+**Generic functions.** Smalltalk sends a message to one receiver, and the
+receiver alone chooses the method. The Common Lisp Object System, specified
+in 1988, turned this around [[Bobrow 1988](#ref-bobrow1988)]. A method belongs to a *generic
+function*, not to a class, and the generic function chooses among its
+methods by the classes of all its arguments: multiple dispatch. Methods can
+also be combined. `:before`, `:after` and `:around` methods wrap a primary
+method, and new ones can be added to a generic function from anywhere, for
+classes the author of the function never saw. Julia made multiple dispatch
+the centre of a numerical language, where `+` on an integer and a rational,
+or on a matrix and a vector, is just another method chosen by both argument
+types [[Bezanson 2017](#ref-bezanson2017)].
+
+The model is strong where Okkama is weak. A binary operation is symmetric
+in CLOS and Julia, while an Okkama operator looks only to its left operand
+(Section 14.7). And an operation can be added to existing types, which is
+one half of the expression problem (Section 16.5). Okkama declined both
+halves of the price. A method added from anywhere is retroactive
+conformance, which roles refuse (Section 14.2), because a reader can no
+longer find an object's behaviour in its declaration. Method combination is
+inheritance of behaviour by another name, which the language removed
+(Section 1.9). What Okkama keeps is the closed form of the same idea. A
+`match` over a variant (Chapter 16) chooses by the case of a value from a set
+the declaration fixes, and all the choices sit in one place.
 
 ## 2.10 The harbour, once more
 
@@ -22220,6 +22244,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-baker-sep"></a>Alan Baker (2022). Simplicity. In *The Stanford Encyclopedia of Philosophy* (Summer 2022 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/simplicity/
 - <a id="ref-bentley2000"></a>Jon Bentley (2000). *Programming Pearls*, 2nd edition. Addison-Wesley. Column 4: Writing Correct Programs.
 - <a id="ref-bernhardt2012"></a>Gary Bernhardt (2012). Boundaries. Talk at SCNA 2012. https://www.destroyallsoftware.com/talks/boundaries
+- <a id="ref-bezanson2017"></a>Jeff Bezanson, Alan Edelman, Stefan Karpinski, Viral B. Shah (2017). Julia: A Fresh Approach to Numerical Computing. *SIAM Review* 59(1): 65–98. https://doi.org/10.1137/141000671
 - <a id="ref-jep361"></a>Gavin Bierman (2020). JEP 361: Switch Expressions. OpenJDK. https://openjdk.org/jeps/361
 - <a id="ref-jep395"></a>Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - <a id="ref-jep409"></a>Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
@@ -22227,6 +22252,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-bloch2006"></a>Joshua Bloch (2006). Extra, Extra — Read All About It: Nearly All Binary Searches and Mergesorts are Broken. Google Research Blog, 2 June 2006. https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/
 - <a id="ref-bloch2018"></a>Joshua Bloch (2018). *Effective Java*, 3rd edition. Addison-Wesley.
 - <a id="ref-nasa1999mco"></a>Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
+- <a id="ref-bobrow1988"></a>Daniel G. Bobrow, Linda G. DeMichiel, Richard P. Gabriel, Sonya E. Keene, Gregor Kiczales, David A. Moon (1988). Common Lisp Object System Specification. X3J13 Document 88-002R. *ACM SIGPLAN Notices* 23 (special issue), September 1988.
 - <a id="ref-boehm2003"></a>Hans-J. Boehm (2003). Destructors, Finalizers, and Synchronization. In *Proceedings of POPL 2003*: 262–272. ACM. https://doi.org/10.1145/604131.604153
 - <a id="ref-bracha1998"></a>Gilad Bracha, Martin Odersky, David Stoutamire, Philip Wadler (1998). Making the Future Safe for the Past: Adding Genericity to the Java Programming Language. In *Proceedings of OOPSLA 1998*: 183–200. ACM. https://doi.org/10.1145/286936.286957
 - <a id="ref-braun2013"></a>Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leißa, Christoph Mallon, Andreas Zwinkau (2013). Simple and Efficient Construction of Static Single Assignment Form. In *Compiler Construction (CC 2013)*, LNCS 7791: 102–122. Springer. https://doi.org/10.1007/978-3-642-37051-9_6
