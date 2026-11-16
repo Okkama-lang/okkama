@@ -434,3 +434,255 @@ fn diamond_chain_agrees_with_the_reference_where_the_reference_fits() {
     assert_eq!(verdict(check_allocation(&f, &allocation)), Ok(()));
     assert_eq!(verdict(reference::check_allocation(&f, &allocation)), Ok(()));
 }
+
+// ---- #755: the worklist liveness, the shared allocation and their reference ----
+
+use super::allocation::{Liveness as Live, Obligations, Parts, liveness, reference as before_755};
+
+const VARIANTS: [Parts; 3] = [Parts::ALL, Parts::REQUIRED, Parts::USES];
+
+/// `f` with services and random proof records: dependencies over registers and services (cycles and repeated
+/// values included), root and state maps at any PC, post roots after straight-line instructions (their own
+/// definitions among them), and produced sources on some edge assignments.
+fn with_proofs(random: &mut Random, mut f: Function) -> Function {
+    let kinds = [ServiceKind::Deps, ServiceKind::Packet, ServiceKind::StableKey];
+    f.services = (0..random.below(4)).map(|_| kinds[random.below(kinds.len())]).collect();
+    let locations = (0..f.registers.len() as u32).map(Location::Register)
+        .chain((0..f.services.len() as u32).map(Location::Service)).collect::<Vec<_>>();
+    let some = |random: &mut Random, most: usize| {
+        (0..random.below(most + 1)).map(|_| locations[random.below(locations.len())]).collect::<Vec<_>>()
+    };
+    for _ in 0..random.below(7) {
+        let value = locations[random.below(locations.len())];
+        let obligations = some(random, 3);
+        f.proofs.dependencies.push(Dependency { value, obligations });
+    }
+    for _ in 0..random.below(4) {
+        let pc = random.below(f.code.len()) as u32;
+        let locations = some(random, 3);
+        f.proofs.roots.push(RootRequirement { pc, locations });
+    }
+    for _ in 0..random.below(4) {
+        let pc = random.below(f.code.len()) as u32;
+        let locations = some(random, 3);
+        f.proofs.states.push(StateRecord { pc, locations });
+    }
+    for pc in 0..f.code.len() {
+        if !terminal(&f.code[pc]) && random.below(3) == 0 {
+            let mut locations = some(random, 2);
+            if random.below(2) == 0 {
+                locations.extend(definitions(&f.code[pc]));
+            }
+            f.proofs.post_roots.push(RootRequirement { pc: pc as u32, locations });
+        }
+    }
+    for instruction in &mut f.code {
+        let edges = match instruction {
+            Instruction::Br(edge) => vec![edge],
+            Instruction::Cond { yes, no, .. } => vec![yes, no],
+            _ => vec![],
+        };
+        for edge in edges {
+            for assignment in &mut edge.assignments {
+                if random.below(8) == 0 {
+                    assignment.source = Source::ProducedSlot(random.below(2) as u32);
+                }
+            }
+        }
+    }
+    f
+}
+
+/// Every liveness variant, the liveness with roots taken from the one without them, and the allocation equal
+/// the algorithms before #755, called directly here (not only through the checks every call makes in tests).
+fn agrees_with_the_reference(f: &Function) {
+    for parts in VARIANTS {
+        let expected = before_755::live_locations(&before_755::restricted(f, parts)).unwrap();
+        assert_eq!(liveness(f, parts).unwrap().sets(), expected, "{parts:?} of {f:?}");
+    }
+    let required = liveness(f, Parts::REQUIRED).unwrap();
+    assert_eq!(required.with_roots(f).unwrap(), liveness(f, Parts::ALL).unwrap(), "{f:?}");
+    assert_eq!(allocate(f), before_755::allocate(f), "{f:?}");
+}
+
+#[test]
+fn liveness_and_allocation_of_generated_functions_with_proofs_agree_with_the_reference() {
+    let mut random = Random(0x7575_7575_0755_0755);
+    let (mut reused, mut solved_again) = (0, 0);
+    for _ in 0..3000 {
+        let plain = generated(&mut random);
+        let f = with_proofs(&mut random, plain);
+        agrees_with_the_reference(&f);
+        if liveness(&f, Parts::REQUIRED).unwrap().sets() == liveness(&f, Parts::ALL).unwrap().sets() {
+            reused += 1;
+        } else {
+            solved_again += 1;
+        }
+    }
+    // Roots both within and beyond the live sets occur often enough for `with_roots` to be tested both ways.
+    assert!(reused > 300 && solved_again > 300, "reused {reused}, solved again {solved_again}");
+}
+
+/// The SPB 17 fixtures of the compiler and of this crate, every function in every liveness variant.
+#[test]
+fn liveness_and_allocation_of_every_fixture_function_agree_with_the_reference() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut functions = 0;
+    for directory in ["../okkama-compiler/src/codegen/sparrow_oir2/fixtures", "src/spb17/fixtures"] {
+        let mut paths = std::fs::read_dir(root.join(directory)).unwrap().map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "spb17")).collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            let program = assemble(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for f in &program.functions {
+                agrees_with_the_reference(f);
+                functions += 1;
+            }
+        }
+    }
+    assert!(functions > 40, "{functions} fixture functions");
+}
+
+#[test]
+fn obligations_close_sets_as_close_dependencies_does() {
+    let mut random = Random(0x0b11_9a71_0b11_9a71);
+    for _ in 0..2000 {
+        let plain = generated(&mut random);
+        let f = with_proofs(&mut random, plain);
+        let obligations = Obligations::new(&f).unwrap();
+        let locations = (0..f.registers.len() as u32).map(Location::Register)
+            .chain((0..f.services.len() as u32).map(Location::Service)).collect::<Vec<_>>();
+        let mut set = (0..random.below(4)).map(|_| locations[random.below(locations.len())]).collect::<BTreeSet<_>>();
+        let mut expected = set.clone();
+        close_dependencies(&f, &mut expected);
+        obligations.close(&mut set);
+        assert_eq!(set, expected, "{f:?}");
+    }
+}
+
+/// A chain of obligations through a cycle: a dependency reached only through another one is kept.
+#[test]
+fn obligations_are_transitive_through_cycles() {
+    let mut f = empty_function();
+    f.registers = vec![Type::Int; 4];
+    let dependency = |value: u32, obligations: &[u32]| Dependency {
+        value: Location::Register(value), obligations: obligations.iter().copied().map(Location::Register).collect(),
+    };
+    f.proofs.dependencies = vec![dependency(0, &[1]), dependency(1, &[2]), dependency(2, &[0]), dependency(0, &[])];
+    let obligations = Obligations::new(&f).unwrap();
+    let mut set = BTreeSet::from([Location::Register(1)]);
+    obligations.close(&mut set);
+    assert_eq!(set, (0..3).map(Location::Register).collect());
+    let mut set = BTreeSet::from([Location::Register(3)]);
+    obligations.close(&mut set);
+    assert_eq!(set, BTreeSet::from([Location::Register(3)]));
+}
+
+#[test]
+fn obligations_reject_a_location_outside_the_function() {
+    let mut f = empty_function();
+    f.registers = vec![Type::Int];
+    f.proofs.dependencies = vec![Dependency { value: Location::Register(0), obligations: vec![Location::Service(0)] }];
+    assert!(Obligations::new(&f).unwrap_err().message.contains("invalid location"));
+}
+
+/// r1 is read at the ret; r0 is a register no instruction reads.
+fn one_read() -> Function {
+    let mut f = empty_function();
+    f.registers = vec![Type::Int; 2];
+    f.code = vec![constant_with(1, vec![]), Instruction::Ret(vec![1])];
+    f
+}
+
+#[test]
+fn liveness_lists_each_pcs_locations_in_location_order() {
+    let mut f = one_read();
+    f.services = vec![ServiceKind::Deps];
+    f.proofs.states = vec![StateRecord { pc: 1, locations: vec![Location::Service(0)] }];
+    let live = liveness(&f, Parts::ALL).unwrap();
+    assert_eq!(live.len(), 2);
+    // The state record keeps s0 live before PC 1 and so before PC 0, which does not define it.
+    assert!(live.at(0).eq([Location::Service(0)]));
+    assert_eq!(live.at(1).collect::<Vec<_>>(), vec![Location::Register(1), Location::Service(0)]);
+    assert!(live.contains(1, Location::Service(0)) && !live.contains(1, Location::Register(0)));
+    assert!(!live.contains(2, Location::Register(1)) && !live.contains(1, Location::Service(5)));
+    assert!(liveness(&f, Parts::USES).unwrap().at(1).eq([Location::Register(1)]));
+}
+
+#[test]
+fn liveness_with_roots_adds_a_root_beyond_the_required_sets() {
+    let mut f = one_read();
+    f.proofs.roots = vec![RootRequirement { pc: 1, locations: vec![Location::Register(0)] }];
+    let required = liveness(&f, Parts::REQUIRED).unwrap();
+    assert!(!required.contains(1, Location::Register(0)));
+    let all = required.with_roots(&f).unwrap();
+    assert!(all.contains(1, Location::Register(0)) && all.contains(0, Location::Register(0)));
+    assert_eq!(all, liveness(&f, Parts::ALL).unwrap());
+}
+
+#[test]
+fn liveness_with_roots_keeps_a_post_root_the_pc_defines_out_of_the_pc() {
+    // Post roots are live after the PC: r1, defined at PC 0, is not live before it.
+    let mut f = one_read();
+    f.proofs.post_roots = vec![RootRequirement { pc: 0, locations: vec![Location::Register(1)] }];
+    let all = liveness(&f, Parts::REQUIRED).unwrap().with_roots(&f).unwrap();
+    assert!(!all.contains(0, Location::Register(1)));
+    assert_eq!(all, liveness(&f, Parts::ALL).unwrap());
+}
+
+#[test]
+fn liveness_with_roots_takes_only_the_liveness_without_roots() {
+    let f = one_read();
+    let all = liveness(&f, Parts::ALL).unwrap();
+    assert!(all.with_roots(&f).unwrap_err().message.contains("liveness of another function"));
+}
+
+#[test]
+fn allocation_takes_only_the_liveness_of_its_own_function() {
+    let f = one_read();
+    let mut other = one_read();
+    other.registers.push(Type::Int);
+    assert!(allocate_with(&f, &Live::of(&other).unwrap()).unwrap_err().message.contains("another function"));
+    let required = liveness(&f, Parts::REQUIRED).unwrap();
+    assert!(allocate_with(&f, &required).unwrap_err().message.contains("another function"));
+    assert_eq!(allocate_with(&f, &Live::of(&f).unwrap()).unwrap(), allocate(&f).unwrap());
+}
+
+#[test]
+fn liveness_rejects_an_edge_to_a_missing_pc() {
+    let mut f = empty_function();
+    f.code = vec![Instruction::Br(edge(7, vec![]))];
+    assert!(liveness(&f, Parts::ALL).unwrap_err().message.contains("invalid edge PC"));
+}
+
+/// Unreachable PCs are solved too: the chain 1100 → … → 1 leads into the ret at PC 0 that nothing reaches.
+#[test]
+fn liveness_covers_pcs_unreachable_from_the_entry() {
+    let mut f = empty_function();
+    f.registers = vec![Type::Int; 3];
+    f.code = vec![Instruction::Ret(vec![0, 2])];
+    f.code.extend((1..=50u32).map(|pc| Instruction::Br(edge(pc - 1, vec![]))));
+    let live = liveness(&f, Parts::ALL).unwrap();
+    assert!((0..live.len()).all(|pc| live.at(pc).eq([Location::Register(0), Location::Register(2)])));
+}
+
+/// The checker over flat states and the obligation table (#755) accepts and rejects what the checker before
+/// #701 does, on functions with dependencies, roots, states and post roots, and on faulty allocations of them.
+#[test]
+fn checker_agrees_with_the_reference_on_generated_allocations_with_proofs() {
+    let mut random = Random(0x0755_c4ec_0755_c4ec);
+    let (mut accepted, mut rejected) = (0, 0);
+    for _ in 0..2000 {
+        let plain = generated(&mut random);
+        let f = with_proofs(&mut random, plain);
+        let Ok(allocation) = allocate(&f) else { continue };
+        let candidates = std::iter::once(allocation.clone())
+            .chain((0..4).map(|_| mutated(&mut random, &allocation)));
+        for candidate in candidates {
+            let expected = verdict(reference::check_allocation(&f, &candidate));
+            assert_eq!(verdict(check_allocation(&f, &candidate)), expected, "{f:?}\n{candidate:?}");
+            if expected.is_ok() { accepted += 1 } else { rejected += 1 }
+        }
+    }
+    assert!(accepted > 1000 && rejected > 1000, "accepted {accepted}, rejected {rejected}");
+}
