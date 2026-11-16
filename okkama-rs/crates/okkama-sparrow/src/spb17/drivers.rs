@@ -289,3 +289,261 @@ pub(super) fn check_native_inputs(p: &Program, f: &Function) -> Result<(), Error
 pub(super) fn arguments(callee: &Function) -> Vec<ProducedType> {
     callee.registers.iter().map(|&ty| ProducedType::Value(ty)).collect()
 }
+
+// --- D23 holders: the catalogue rows of Q2 (channels) and G1 (groups, collectors, timeouts) ---------------------
+//
+// Async ABI D23, memo `OIR-2-async-remaining.md` §§5.2, 6.2 (rulings PR-C, PR-G … PR-J). Each row is a template,
+// instantiated once per specialization of its objects, as the Atomic entries are: the declaration
+// `async.<family>.<Object>_<suffix>` and the entry `okkama.<family>.<Object>.<member>$<suffix>` (two suffixes for
+// FutureScope<T, R>). A suffix is the Atomic one: a scalar or array suffix, `role_<declaration>`, or `t_<encoded>`.
+//
+// The rows exist before the runtime does (lane A, slices A3 and A4): the producer keeps its named refusal of these
+// members, and the loader does not admit them yet ([`HOLDERS_READY`]), so no program changes behaviour. The runtime
+// slices wire [`instantiate`] into the trusted entries, with the loader rule `CHANNEL_MESSAGE` for a `t_` message.
+
+/// Whether the runtime runs the holders' rows. False until slices A3 (Q2) and A4 (G1) land.
+pub const HOLDERS_READY: bool = false;
+
+/// The hidden runtime word of a holder (ruling PR-C): its one storage word, a traced `RuntimeCell` that refers to the
+/// runtime payload (`ChannelHolder`, `GroupHolder`). Channel, its endpoints and FutureGroup have no source field.
+pub const HOLDER_STORAGE: [Type; 1] = [Type::RuntimeCell];
+
+pub const CHANNEL: &str = "async.channel.Channel";
+pub const SENDING: &str = "async.channel.Sending";
+pub const RECEIVING: &str = "async.channel.Receiving";
+pub const FUTURE_GROUP: &str = "async.scope.FutureGroup";
+pub const FUTURE_SCOPE: &str = "async.scope.FutureScope";
+pub const ALL_FUTURES: &str = "async.collect.AllFutures";
+pub const RACED: &str = "async.collect.Raced";
+pub const FIRST_SUCCESSFUL: &str = "async.collect.FirstSuccessful";
+pub const FUTURE_COMPLETIONS: &str = "async.collect.FutureCompletions";
+pub const WITHIN: &str = "async.timeout.Within";
+pub const BEFORE: &str = "async.timeout.Before";
+const INVALID_CAPACITY: &str = "async.channel.InvalidChannelCapacity";
+const CHANNEL_CLOSED: &str = "async.channel.ChannelClosed";
+const FINISHED_GROUP: &str = "async.scope.FinishedFutureGroup";
+const NO_FUTURES: &str = "async.collect.NoFutures";
+const TIMED_OUT: &str = "async.timeout.TimedOut";
+
+/// The slice that brings a row's runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slice {
+    Q2,
+    G1,
+}
+
+/// A parameter or result of a holder row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    Int,
+    /// A specialization of this declaration, by the row's suffix.
+    Holder(&'static str),
+    /// The value type T: a channel's message, a group's or collector's outcome.
+    Value,
+    /// FutureScope's result type R.
+    Outcome,
+    /// `Future<T>`.
+    Future,
+    /// `Sequencing<T>`, AllFutures' result.
+    Sequence,
+}
+
+/// What a row's call does to ownership (the summary own builds for it in A3 and A4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effect {
+    /// Nothing moves: plain data or a view.
+    Plain,
+    /// A plain result that depends on parameter 0 (`external_deps = [0]`): an endpoint, AllFutures' wrapper.
+    DependsOnReceiver,
+    /// A fresh result whose packet holds `ServiceOf{result, Channel}` or `{result, Group}`.
+    FreshHolder,
+    /// Parameter 1 is offered to the holder's protocol (`destination = Protocol`): `send` accepts it, `start`
+    /// registers a fresh Future or retains a bound one (PR-B); the result, if any, aliases parameter 0.
+    Offer,
+    /// The result aliases parameter 0 (`aliases = [param 0]`, #774 A6).
+    AliasesReceiver,
+    /// The result is delivered from the holder's protocol, provenance cache-owned (`Deliver`).
+    Delivered,
+    /// The result is a view of the receiver's graph (`aliases`, `opaque`): a race's winner, a timeout's outcome.
+    View,
+    /// The result is a borrowed origin Future, no fresh family (`completion`).
+    BorrowedFuture,
+}
+
+/// One row of a holder family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Template {
+    /// The intrinsic's name, as Tomato names it; the entry adds `$<suffix>`.
+    pub name: &'static str,
+    pub params: &'static [Slot],
+    pub results: &'static [Slot],
+    pub abi: Abi,
+    /// The failure mask: [`THROWN`], [`PROGRAM`]; a driver can also be cancelled.
+    pub failures: u32,
+    pub effect: Effect,
+    /// The declarations the runtime creates or throws: a holder by its family (specialized), an error as named.
+    pub related: &'static [&'static str],
+    /// Whether the driver calls the program's helpers (`Within`, `Before`: the clock, PR-D thunks).
+    pub helpers: bool,
+    pub slice: Slice,
+}
+
+const fn holder(name: &'static str, params: &'static [Slot], results: &'static [Slot], abi: Abi, failures: u32,
+    effect: Effect, related: &'static [&'static str], slice: Slice) -> Template
+{
+    Template { name, params, results, abi, failures, effect, related, helpers: false, slice }
+}
+
+use Slot::{Future as FUT, Holder as H, Int as INT, Outcome as OUT, Sequence as SEQ, Value as VAL};
+
+/// The rows of memo §5.2 (Q2) and §6.2 (G1), in their order. `Receiving.next` is an ordinary std body.
+pub const HOLDERS: &[Template] = &[
+    holder("okkama.channel.Channel.new_capacity", &[INT], &[H(CHANNEL)], Abi::Owned, THROWN | PROGRAM,
+        Effect::FreshHolder, &[CHANNEL, INVALID_CAPACITY], Slice::Q2),
+    holder("okkama.channel.Channel.sending", &[H(CHANNEL)], &[H(SENDING)], Abi::Owned, PROGRAM,
+        Effect::DependsOnReceiver, &[SENDING], Slice::Q2),
+    holder("okkama.channel.Channel.receiving", &[H(CHANNEL)], &[H(RECEIVING)], Abi::Owned, PROGRAM,
+        Effect::DependsOnReceiver, &[RECEIVING], Slice::Q2),
+    holder("okkama.channel.Sending.new", &[], &[H(SENDING)], Abi::Owned, 0, Effect::Plain, &[SENDING], Slice::Q2),
+    holder("okkama.channel.Receiving.new", &[], &[H(RECEIVING)], Abi::Owned, 0, Effect::Plain, &[RECEIVING],
+        Slice::Q2),
+    holder("okkama.channel.Sending.send", &[H(SENDING), VAL], &[H(SENDING)], Abi::Driver, THROWN | PROGRAM,
+        Effect::Offer, &[CHANNEL_CLOSED], Slice::Q2),
+    holder("okkama.channel.Receiving.item", &[H(RECEIVING)], &[VAL], Abi::Driver, THROWN | PROGRAM,
+        Effect::Delivered, &[CHANNEL_CLOSED], Slice::Q2),
+    holder("okkama.channel.Sending.close", &[H(SENDING)], &[], Abi::Observation, PROGRAM, Effect::Plain, &[],
+        Slice::Q2),
+    holder("okkama.channel.Receiving.close", &[H(RECEIVING)], &[], Abi::Observation, PROGRAM, Effect::Plain, &[],
+        Slice::Q2),
+    holder("okkama.scope.FutureGroup.new", &[], &[H(FUTURE_GROUP)], Abi::Owned, 0, Effect::FreshHolder,
+        &[FUTURE_GROUP], Slice::G1),
+    holder("okkama.scope.FutureGroup.start", &[H(FUTURE_GROUP), FUT], &[], Abi::Owned, THROWN | PROGRAM,
+        Effect::Offer, &[FINISHED_GROUP], Slice::G1),
+    holder("okkama.scope.FutureGroup.active", &[H(FUTURE_GROUP)], &[INT], Abi::Observation, PROGRAM, Effect::Plain,
+        &[], Slice::G1),
+    holder("okkama.scope.FutureGroup.cancel", &[H(FUTURE_GROUP)], &[], Abi::Observation, PROGRAM, Effect::Plain,
+        &[], Slice::G1),
+    holder("okkama.scope.FutureGroup.wait", &[H(FUTURE_GROUP)], &[H(FUTURE_GROUP)], Abi::Driver, THROWN | PROGRAM,
+        Effect::AliasesReceiver, &[], Slice::G1),
+    holder("okkama.scope.FutureScope.outcome", &[H(FUTURE_SCOPE)], &[OUT], Abi::Driver, THROWN | PROGRAM,
+        Effect::Delivered, &[FUTURE_GROUP], Slice::G1),
+    holder("okkama.collect.AllFutures.results", &[H(ALL_FUTURES)], &[SEQ], Abi::Driver, THROWN | PROGRAM,
+        Effect::DependsOnReceiver, &[], Slice::G1),
+    holder("okkama.collect.Raced.winner", &[H(RACED)], &[VAL], Abi::Driver, THROWN | PROGRAM, Effect::View,
+        &[NO_FUTURES], Slice::G1),
+    holder("okkama.collect.FirstSuccessful.outcome", &[H(FIRST_SUCCESSFUL)], &[VAL], Abi::Driver, THROWN | PROGRAM,
+        Effect::View, &[NO_FUTURES], Slice::G1),
+    holder("okkama.collect.FutureCompletions.remaining_count", &[H(FUTURE_COMPLETIONS)], &[INT], Abi::Observation,
+        PROGRAM, Effect::Plain, &[], Slice::G1),
+    holder("okkama.collect.FutureCompletions.completion", &[H(FUTURE_COMPLETIONS)], &[FUT], Abi::Driver,
+        THROWN | PROGRAM, Effect::BorrowedFuture, &[NO_FUTURES], Slice::G1),
+    Template { helpers: true, ..holder("okkama.timeout.Within.outcome", &[H(WITHIN)], &[VAL], Abi::Driver,
+        THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) },
+    Template { helpers: true, ..holder("okkama.timeout.Before.outcome", &[H(BEFORE)], &[VAL], Abi::Driver,
+        THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) },
+];
+
+/// The holder row named `name` (without its suffix).
+pub fn holder_named(name: &str) -> Option<&'static Template> {
+    HOLDERS.iter().find(|template| template.name == name)
+}
+
+/// The std declaration whose member a holder row is: `okkama.<family>.<Object>.<member>` of
+/// `async.<family>.<Object>` (before its specialization).
+pub fn member_of_holder(template: &Template) -> String {
+    let mut parts = template.name.split('.').skip(1);
+    format!("async.{}.{}", parts.next().unwrap_or(""), parts.next().unwrap_or(""))
+}
+
+/// The entry of `template` for a specialization: `name$suffix`, and `name$T$R` for FutureScope.
+pub fn specialized(template: &Template, suffixes: &[&str]) -> String {
+    std::iter::once(template.name).chain(suffixes.iter().copied()).collect::<Vec<_>>().join("$")
+}
+
+/// The declaration of a holder family's specialization: `async.channel.Channel_<suffix>`.
+pub fn specialization(family: &str, suffixes: &[&str]) -> String {
+    format!("{family}_{}", suffixes.join("_"))
+}
+
+/// The types a specialization binds: T (the suffix's value), R (FutureScope), `Future<T>`, `Sequencing<T>`. The
+/// caller resolves them: a scalar or role suffix by [`suffix_value`], a `t_` one by the loader rule
+/// `CHANNEL_MESSAGE` (slice A3), the Future and Sequencing types from the program's tables.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bindings {
+    pub value: Option<Type>,
+    pub outcome: Option<Type>,
+    pub future: Option<Type>,
+    pub sequence: Option<Type>,
+}
+
+/// The value type a scalar, array or role suffix names, as for the Atomic entries; None for a `t_` suffix.
+pub fn suffix_value(objects: &[Object], suffix: &str) -> Option<Type> {
+    super::p1::atomic_value(suffix).or_else(|| super::p1::atomic_role(objects, suffix))
+}
+
+/// A holder declaration with the runtime word of ruling PR-C: no source field, the one storage word a
+/// `RuntimeCell`, no destroy or identity. A Channel and a FutureGroup hold duties (`may_reach_resource`, PR-C item
+/// 5); their endpoints are plain.
+fn holder_layout(object: &Object, duties: bool) -> bool {
+    let layout = &object.layout;
+    object.fields.is_empty() && layout.storage_fields == HOLDER_STORAGE && !layout.has_destroy
+        && layout.identity_offset.is_none() && layout.may_reach_resource == duties && !object.handle
+        && object.role.is_none() && object.error_cases.is_empty() && object.enum_cases == 0
+}
+
+/// The specialization of `family` in `objects`, with its runtime layout, or None.
+fn holder_declaration(objects: &[Object], family: &str, suffixes: &[&str]) -> Option<u32> {
+    let name = specialization(family, suffixes);
+    let id = objects.iter().position(|object| object.name == name)?;
+    let object = &objects[id];
+    let valid = match family {
+        CHANNEL | FUTURE_GROUP => holder_layout(object, true),
+        SENDING | RECEIVING => holder_layout(object, false),
+        // The collectors, the scope and the timeouts keep their source fields; FutureCompletions adds its stream's
+        // runtime word after them (PR-C item 1).
+        FUTURE_COMPLETIONS => object.layout.storage_fields.last() == Some(&Type::RuntimeCell),
+        _ => !object.layout.storage_fields.contains(&Type::RuntimeCell),
+    };
+    valid.then_some(id as u32)
+}
+
+/// A value type a holder can carry (part of `CHANNEL_MESSAGE`): never a builder, `never` or a runtime word.
+fn carried(ty: Type) -> bool {
+    !matches!(ty, Type::Builder(_) | Type::MapBuilder(_) | Type::Never | Type::RuntimeCell)
+}
+
+/// The trusted entry of `template` for the specialization `suffixes` (one, or T and R for FutureScope), or None when
+/// a declaration it names lacks its runtime layout or a binding is missing or not carried.
+pub fn instantiate(template: &Template, objects: &[Object], suffixes: &[&str], bindings: Bindings)
+    -> Option<(Function, Vec<u32>)>
+{
+    let family_suffixes = |family: &str| if family == FUTURE_SCOPE { suffixes.to_vec() } else { vec![suffixes[0]] };
+    let ty = |slot: &Slot| -> Option<Type> {
+        let ty = match *slot {
+            Slot::Int => Type::Int,
+            Slot::Holder(family) => Type::Object(holder_declaration(objects, family, &family_suffixes(family))?),
+            Slot::Value => bindings.value?,
+            Slot::Outcome => bindings.outcome?,
+            Slot::Future => bindings.future?,
+            Slot::Sequence => bindings.sequence?,
+        };
+        carried(ty).then_some(ty)
+    };
+    let registers = template.params.iter().map(ty).collect::<Option<Vec<_>>>()?;
+    let results = template.results.iter().map(ty).collect::<Option<Vec<_>>>()?;
+    let related = template.related.iter().map(|name| {
+        let holder = [CHANNEL, SENDING, RECEIVING, FUTURE_GROUP].contains(name);
+        if holder {
+            holder_declaration(objects, name, &[suffixes[0]])
+        } else {
+            objects.iter().position(|object| object.name == *name && !object.error_cases.is_empty()).map(|id| id as u32)
+        }
+    }).collect::<Option<Vec<_>>>()?;
+    let name = specialized(template, suffixes);
+    let function = match template.abi {
+        Abi::Observation => entry(&name, registers, 0, results, false, template.failures),
+        Abi::Owned => entry(&name, registers, 0, results, true, template.failures),
+        Abi::Driver => driver(&name, registers, results, template.failures),
+    };
+    Some((function, related))
+}

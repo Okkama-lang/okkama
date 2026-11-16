@@ -350,3 +350,141 @@ fn the_rows_name_the_declarations_of_their_members() {
         assert!(!super::drivers::has_members(name), "{name}");
     }
 }
+
+// --- D23 holders: the rows of Q2 and G1 (memo §§5.2, 6.2) ------------------------------------------------------
+
+use super::drivers::{self as d, Bindings, Slice, Template};
+
+/// A declaration named `name` with `storage`, plain unless `duties`.
+fn declared(name: &str, storage: Vec<Type>, duties: bool) -> Object {
+    Object {
+        name: name.into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, role: None,
+        implements: vec![], any_box: false, enum_names: vec![], fields: vec![],
+        layout: ObjectRuntimeLayout { allocation_words: 1 + storage.len().max(1) as u32, identity_offset: None,
+            has_destroy: false, may_reach_resource: duties, may_async_destroy: false,
+            trace_layout: storage.iter().enumerate().filter_map(|(i, ty)| ty.traced().then_some(i as u32)).collect(),
+            selection_layout: vec![], storage_fields: storage },
+    }
+}
+
+/// A one-case Error enum the runtime throws.
+fn thrown(name: &str, case: &str) -> Object {
+    Object { error_cases: vec![format!("{}.{case}", name.rsplit('.').next().unwrap())],
+        ..declared(name, vec![Type::Int], false) }
+}
+
+/// The int specializations of every holder family with their runtime layouts (PR-C), and the errors they throw.
+fn holders() -> Vec<Object> {
+    let cell = || d::HOLDER_STORAGE.to_vec();
+    vec![
+        declared("async.channel.Channel_int", cell(), true),
+        declared("async.channel.Sending_int", cell(), false),
+        declared("async.channel.Receiving_int", cell(), false),
+        declared("async.scope.FutureGroup_int", cell(), true),
+        declared("async.scope.FutureScope_int_string", vec![Type::Int], false),
+        declared("async.collect.AllFutures_int", vec![Type::Int], false),
+        declared("async.collect.Raced_int", vec![Type::Int], false),
+        declared("async.collect.FirstSuccessful_int", vec![Type::Int], false),
+        declared("async.collect.FutureCompletions_int", vec![Type::Int, Type::RuntimeCell], false),
+        declared("async.timeout.Within_int", vec![Type::Int], false),
+        declared("async.timeout.Before_int", vec![Type::Int], false),
+        thrown("async.channel.InvalidChannelCapacity", "capacity"),
+        thrown("async.channel.ChannelClosed", "closed"),
+        thrown("async.scope.FinishedFutureGroup", "finished"),
+        thrown("async.collect.NoFutures", "none"),
+        thrown("async.timeout.TimedOut", "elapsed"),
+    ]
+}
+
+fn bindings() -> Bindings {
+    Bindings { value: Some(Type::Int), outcome: Some(Type::Str), future: Some(Type::Future(0)),
+        sequence: Some(Type::Role(0)) }
+}
+
+fn suffixes(template: &Template) -> Vec<&'static str> {
+    if template.name.starts_with("okkama.scope.FutureScope.") { vec!["int", "string"] } else { vec!["int"] }
+}
+
+/// The rows follow memo §§5.2 and 6.2: one per member Tomato runs as an intrinsic, a driver for each async member
+/// (thrown, program and cancelled), none of them in the Q1 catalogue, and none admitted before their runtime.
+#[test]
+fn holder_rows_are_the_q2_and_g1_members() {
+    assert!(!d::HOLDERS_READY);
+    let q2 = d::HOLDERS.iter().filter(|template| template.slice == Slice::Q2).count();
+    assert_eq!((q2, d::HOLDERS.len() - q2), (9, 13));
+    let mut names = std::collections::BTreeSet::new();
+    for template in d::HOLDERS {
+        assert!(names.insert(template.name), "{} twice", template.name);
+        assert!(d::row_named(template.name).is_none(), "{}", template.name);
+        let family = template.name.split('.').nth(1).unwrap();
+        let expected = if template.slice == Slice::Q2 { family == "channel" } else { family != "channel" };
+        assert!(expected, "{}", template.name);
+        if template.abi == d::Abi::Driver {
+            assert_eq!(template.failures, d::THROWN | d::PROGRAM, "{}", template.name);
+        }
+        assert_eq!(template.helpers, template.name.starts_with("okkama.timeout."), "{}", template.name);
+    }
+    for family in [d::CHANNEL, d::SENDING, d::RECEIVING, d::FUTURE_GROUP, d::FUTURE_COMPLETIONS] {
+        assert!(!d::has_members(family), "{family}: the producer keeps its refusal until the runtime");
+    }
+}
+
+/// Every row instantiates for an int specialization (FutureScope<int, string>): its name carries the suffixes, its
+/// registers and results are the specialization's, and a driver is a well-formed async external.
+#[test]
+fn every_holder_row_instantiates_for_a_specialization() {
+    let objects = holders();
+    let id = |name: &str| Type::Object(objects.iter().position(|object| object.name == name).unwrap() as u32);
+    for template in d::HOLDERS {
+        let suffixes = suffixes(template);
+        let (function, related) = d::instantiate(template, &objects, &suffixes, bindings())
+            .unwrap_or_else(|| panic!("{}", template.name));
+        assert_eq!(function.symbol, format!("{}${}", template.name, suffixes.join("$")));
+        assert_eq!(related.len(), template.related.len(), "{}", template.name);
+        super::drivers::check_declaration(&function).unwrap_or_else(|error| panic!("{}: {error}", template.name));
+        let abi = match template.abi {
+            d::Abi::Observation => EntryAbi::Observation,
+            d::Abi::Owned => EntryAbi::Owned,
+            d::Abi::Driver => EntryAbi::AsyncExternal,
+        };
+        assert_eq!(function.entry_abi, abi, "{}", template.name);
+    }
+    let send = d::holder_named("okkama.channel.Sending.send").unwrap();
+    let (send, related) = d::instantiate(send, &objects, &["int"], bindings()).unwrap();
+    let sending = id("async.channel.Sending_int");
+    assert_eq!((send.registers.as_slice(), send.results.as_slice()), (&[sending, Type::Int][..], &[sending][..]));
+    assert_eq!(related, [match id("async.channel.ChannelClosed") { Type::Object(id) => id, _ => unreachable!() }]);
+    let start = d::holder_named("okkama.scope.FutureGroup.start").unwrap();
+    let (start, _) = d::instantiate(start, &objects, &["int"], bindings()).unwrap();
+    assert_eq!(start.registers, [id("async.scope.FutureGroup_int"), Type::Future(0)]);
+}
+
+/// Each declaration a row names needs its runtime layout (PR-C), and the value a holder carries is a value type.
+#[test]
+fn a_holder_row_needs_its_runtime_layout_and_a_carried_value() {
+    let new = d::holder_named("okkama.channel.Channel.new_capacity").unwrap();
+    let send = d::holder_named("okkama.channel.Sending.send").unwrap();
+    assert!(d::instantiate(new, &holders(), &["int"], bindings()).is_some());
+    // A Channel whose word is not a runtime cell, or that is declared plain (it holds duties, PR-C item 5).
+    for broken in [declared("async.channel.Channel_int", vec![Type::Int], true),
+        declared("async.channel.Channel_int", d::HOLDER_STORAGE.to_vec(), false)]
+    {
+        let mut objects = holders();
+        objects[0] = broken;
+        assert!(d::instantiate(new, &objects, &["int"], bindings()).is_none());
+    }
+    // An endpoint with the duties flag, or without its cell.
+    let mut objects = holders();
+    objects[1] = declared("async.channel.Sending_int", d::HOLDER_STORAGE.to_vec(), true);
+    assert!(d::instantiate(send, &objects, &["int"], bindings()).is_none());
+    // Another specialization's declarations, a builder message, a missing error declaration.
+    assert!(d::instantiate(send, &holders(), &["string"], bindings()).is_none());
+    let builder = Bindings { value: Some(Type::Builder(0)), ..bindings() };
+    assert!(d::instantiate(send, &holders(), &["int"], builder).is_none());
+    let mut objects = holders();
+    objects.retain(|object| object.name != "async.channel.ChannelClosed");
+    assert!(d::instantiate(send, &objects, &["int"], bindings()).is_none());
+    // A scalar or role suffix names its value; a `t_` one waits for CHANNEL_MESSAGE.
+    assert_eq!(d::suffix_value(&holders(), "int"), Some(Type::Int));
+    assert_eq!(d::suffix_value(&holders(), "t_object(app::Res)"), None);
+}
