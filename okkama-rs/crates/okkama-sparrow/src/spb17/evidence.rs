@@ -47,20 +47,44 @@ enum Resumed {
 /// The returned packet is empty: no result reaches a resource, nor a Future whose duty's entry it may carry
 /// (ABI D25.1).
 pub fn plain_results(p: &Program, f: &Function) -> bool {
-    f.results.iter().all(|ty| !super::services::reaches_holder(p, *ty) && match ty {
+    f.results.iter().all(|ty| plain_value(p, *ty))
+}
+
+/// A value of `ty` carries no obligation in a packet: it reaches no resource, nor a Future whose duty's entry it
+/// may carry (ABI D25.1).
+fn plain_value(p: &Program, ty: Type) -> bool {
+    !super::services::reaches_holder(p, ty) && match ty {
         Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_) | Type::Variant(_) => {
-            !verify::reaches_resource(p, *ty)
+            !verify::reaches_resource(p, ty)
         }
         Type::Error => p.objects.iter().filter(|object| !object.error_cases.is_empty())
             .all(|object| !object.layout.may_reach_resource),
-        Type::Role(id) | Type::RoleSuccessor(id) => !verify::role_reaches_resource(p, *id),
+        Type::Role(id) | Type::RoleSuccessor(id) => !verify::role_reaches_resource(p, id),
         Type::Any => !verify::any_reaches_resource(p),
         _ => true,
-    })
+    }
+}
+
+/// `await.take` moves the outcome packet of the awaited Future into this function: plain only when its outcome
+/// type is plain (#825).
+fn awaited_plain(p: &Program, f: &Function, arguments: &[Argument]) -> bool {
+    let future = arguments.iter().find_map(|argument| match argument {
+        Argument::Location(location) => Some(*location),
+        _ => None,
+    });
+    match future.map(|location| verify::loc_type(f, location)) {
+        Some(Ok(ProducedType::Value(Type::Future(id)))) => match p.tables.future_results.get(id as usize) {
+            Some(None) => true,
+            Some(Some(outcome)) => plain_value(p, *outcome),
+            None => false,
+        },
+        _ => false,
+    }
 }
 
 /// Closed empty-inventory proof, including CFG cycles: no input or producer can introduce a key.
-/// Calls may create and destroy their own locals; only their outgoing packets enter this function.
+/// Calls may create and destroy their own locals; only their outgoing packets enter this function, and so does the
+/// outcome packet of an `await.take`.
 fn resource_free(p: &Program, f: &Function) -> bool {
     plain_inputs(p, f) && f.code.iter().all(|instruction| match instruction {
         Instruction::Champ { op: Opcode::OwnCreateCommit, arguments, .. } => arguments.iter().any(|arg| {
@@ -70,6 +94,7 @@ fn resource_free(p: &Program, f: &Function) -> bool {
             matches!(arg, Argument::Entry(id) if plain_results(p, &p.functions[*id as usize]))
         }),
         Instruction::Champ { op: Opcode::InvokeDispatchOwn, arguments, .. } => dispatch_plain_results(p, arguments),
+        Instruction::Champ { op: Opcode::AwaitTake, arguments, .. } => awaited_plain(p, f, arguments),
         Instruction::Champ { op: Opcode::InvokeDefer, .. } => false,
         _ => true,
     })
