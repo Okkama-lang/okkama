@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [oir, compiler, sparrow, champ, cli, clippy, differential]
+        part: [oir, compiler, sparrow, champ, cli, clippy, differential-oir, differential-compiler]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -77,8 +77,10 @@ jobs:
               cargo clippy $gate --workspace --all-targets -- -D warnings
               cargo clippy $gate -p okkama-cli -p sparrow-core -p okkama-sparrow --features champ-abi \
                 --all-targets -- -D warnings ;;
-            differential)
-              if [ -x tools/verifier-differential.sh ]; then tools/verifier-differential.sh; else echo "no differential"; fi ;;
+            # The #634 differential in two parallel parts, on the gate profile like the other parts.
+            differential-oir|differential-compiler)
+              part="${{ matrix.part }}"
+              OKKAMA_DIFFERENTIAL_CARGO="$gate" tools/verifier-differential.sh "${part#differential-}" ;;
           esac
 
   conformance:
