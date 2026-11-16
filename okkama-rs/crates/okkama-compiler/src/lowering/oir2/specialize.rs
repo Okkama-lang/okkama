@@ -332,6 +332,14 @@ impl Specializer<'_, '_> {
         type_name(&self.input.registry, value)
     }
 
+    /// A std object with the registered direct-call ABI of P1 (#566): its witnesses are requested on demand.
+    fn finite_boundary(&self, object: ty::ObjectId) -> bool {
+        let source = &self.input.registry.objects[object.0];
+        let module = self.input.registry.modules[source.module].name.as_str();
+        source.module < self.registry.root_start
+            && matches!((module, source.name.as_str()), ("io/stdout", "Stdout") | ("encoding/utf", "Utf8Encoded"))
+    }
+
     fn instance(&mut self, object: ty::ObjectId, args: &[ty::Ty], span: Span) -> Result<ty::ObjectId> {
         let key = (object, args.to_vec());
         if let Some(&instance) = self.instances.get(&key) {
@@ -344,8 +352,7 @@ impl Specializer<'_, '_> {
         }
         let module = self.input.registry.modules[source.module].name.as_str();
         let generic = matches!((module, source.name.as_str()), ("async/atomic", "Atomic") | ("cell", "Cell"));
-        let ordinary = matches!((module, source.name.as_str()),
-            ("io/stdout", "Stdout") | ("encoding/utf", "Utf8Encoded"));
+        let ordinary = self.finite_boundary(object);
         let imported = source.module < self.registry.root_start;
         // Registered Atomic/Cell specializations (P2.4 §4.8): plain scalars and arrays of them, and role values
         // (#764), which the SPB 17 loader admits only for plain roles. Any other managed value needs the storage
@@ -836,6 +843,19 @@ impl Specializer<'_, '_> {
                 }
                 for arg in args {
                     self.expr(arg, env)?;
+                }
+            }
+            // A finite P1 boundary (Stdout, Utf8Encoded) gets its witnesses only when a value of it becomes a role
+            // value: std wraps them too (`fs/temp.ok` writes text as a ByteSource), not only roots.
+            E::Coerce { coercion: thir::Coercion::RoleWrap, value } => {
+                self.expr(value, env)?;
+                if let Some(ty::Ty::Object(object, args)) = value.ty.as_ref().map(|ty| ty.taken().subst(env))
+                    && args.is_empty()
+                    && self.registry.objects[object.0].does.is_empty()
+                    && self.finite_boundary(object)
+                {
+                    self.registry.objects[object.0].does = self.input.registry.objects[object.0].does.clone();
+                    self.witnesses(object, object, &[], expr.span)?;
                 }
             }
             E::Unary { operand: value, .. } | E::Coerce { value, .. } | E::Cast { value, .. }

@@ -636,6 +636,15 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
 
+- **Variadic role slots on Champ (#601 F1, ruling PR-D item 5).** A role
+  action with a variadic tail (`WritingText.write(values is ...string)`) is an
+  ordinary slot whose last parameter is the array the checker packs at every
+  call site; the producer refused it ("async or variadic role slot"). Std's
+  P1 direct-call objects (Stdout, Utf8Encoded) now get their witnesses when a
+  value of them becomes a role value, as `fs/temp` does with `ByteSource`.
+  `L00.stderr.basic` and five `L10.fs` cases run; the two temporary-directory
+  cases stop next on #785.
+
 - **Champ runs the std async primitives (#601 Q1, OIR-2 async ABI D22).**
   Event, Lock, Semaphore, Barrier and the cancellation token are a trusted
   catalogue of the producer (`lowering/oir2/drivers`) and of SPB 17

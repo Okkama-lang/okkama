@@ -248,3 +248,59 @@ fn oir2_c3_growing_role_uses_specializer_limits() {
         assert!(error.to_string().contains("app::R<int> -> app::R<array<int>>"), "{error}");
     });
 }
+
+/// F1, ruling PR-D item 5: a variadic role slot is an ordinary slot whose last parameter is the array the checker packs
+/// at every call site (§11.8.1); its witness is the object's variadic action.
+#[test]
+fn oir2_f1_a_variadic_role_slot_is_an_array_slot() {
+    let source = r#"module app v1.0.0;
+role Joining { join(parts is ...string) is string; }
+object Glue does Joining {
+    Glue();
+    join(parts is ...string) is string { let all is @string = parts...; all.join("+"); }
+}
+main() is int {
+    let j is Joining = Glue();
+    j.join("a", "b").length();
+}
+"#;
+    with_analysis(source, |analysis| {
+        let module = super::lower_to_oir2(analysis).unwrap_or_else(|error| panic!("{error}"));
+        ir::verify::verify_high(&module).unwrap_or_else(|error| panic!("{error:?}"));
+        let methods = module.declarations.iter().find_map(|(_, decl)| match &decl.kind {
+            ir::DeclarationKind::Role { methods, .. } if decl.name.ends_with("Joining") => Some(methods.clone()),
+            _ => None,
+        }).unwrap();
+        let [join] = methods.as_slice() else { panic!("one slot: {methods:?}") };
+        let [parts] = join.signature.params.as_slice() else { panic!("one parameter") };
+        let ir::Type::Array(element) = *module.types.get(*parts).unwrap() else { panic!("an array parameter") };
+        assert_eq!(*module.types.get(element).unwrap(), ir::Type::Str);
+    });
+}
+
+/// F1: a std object of the P1 direct-call ABI (Utf8Encoded) gets its witnesses when std wraps it as a role value
+/// (`fs/temp.ok` writes text through `ByteSource`), and not otherwise.
+#[test]
+fn oir2_f1_a_finite_boundary_gets_its_witnesses_when_wrapped() {
+    let witnesses = |text: &str| {
+        let module = super::case_tests::source_high("f1-boundary", text.to_string(), std::env::temp_dir())
+            .unwrap_or_else(|error| panic!("{error}"));
+        module.declarations.iter().find_map(|(_, decl)| match &decl.kind {
+            ir::DeclarationKind::Object { witnesses, .. } if decl.name == "encoding.utf.Utf8Encoded" => {
+                Some(witnesses.len())
+            }
+            _ => None,
+        }).unwrap()
+    };
+    let direct = r#"module app v1.0.0;
+import "encoding/utf" take Utf8Encoded;
+main() is int { Utf8Encoded("ab").bytes().size(); }
+"#;
+    assert_eq!(witnesses(direct), 0);
+    let wrapped = r#"module app v1.0.0;
+import "encoding/utf" take Utf8Encoded;
+import "io/stream" take ByteSource;
+main() is int { let source is ByteSource = Utf8Encoded("ab"); source.bytes().size(); }
+"#;
+    assert_eq!(witnesses(wrapped), 1);
+}

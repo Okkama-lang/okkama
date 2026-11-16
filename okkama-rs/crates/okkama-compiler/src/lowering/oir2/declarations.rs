@@ -252,9 +252,8 @@ impl Declarations {
                 if method.is_async {
                     return Err(super::asynchronous::async_role_slot(&role.name, &method.name, span));
                 }
-                if method.variadic {
-                    return Err(LowerError::unsupported(span, "async or variadic role slot"));
-                }
+                // A variadic tail is an array parameter (`@T`, §11.8.1): the checker packs it at every call site
+                // (`Pack`), so the slot is ordinary (ruling PR-D, item 5).
                 let overloaded = role.methods.iter().filter(|other| other.name == method.name).count() > 1;
                 let name = if overloaded { format!("{}#slot{slot}", method.name) } else { method.name.clone() };
                 Ok(ir::RoleMethod {
