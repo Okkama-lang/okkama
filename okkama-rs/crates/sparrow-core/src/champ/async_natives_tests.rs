@@ -401,3 +401,81 @@ fn champ_n1_a_host_refusal_is_the_drivers_failure() {
         assert!(runtime.champ_cache(future).unwrap().packet == 0);
     }
 }
+
+/// Function indices of [`smuggling`]: `work`, the body that smuggles its duty, and the `sleep_nanoseconds` driver.
+const SMUGGLER: u32 = 1;
+const SMUGGLED_SLEEP: u32 = 2;
+/// The sleep driver's Future type: `future_results[1]` is its bool.
+const FUTURE_BOOL: s::Type = s::Type::Future(1);
+
+/// `async smuggler() { let f = work(7); let g = sleep_nanoseconds("1") with f's cache duty; }`: the cache duty
+/// of `f` is absorbed into the packet that `fut.new` offers the native driver, and `g`'s duty settles at the
+/// close. PR-N's loader check counts resource keys, not service entries; the D25 rule `SPB_FUTURE_INPUT` refuses
+/// the packet statically, and the machine refuses it when `fut.new` runs, whichever loader the program met.
+fn smuggler() -> (s::Function, s::FrameLayout) {
+    let slots = vec![service(K::Packet)];
+    let (mut b, frame) = Body::asynchronous("smuggler", SMUGGLER, vec![]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(SMUGGLER), A::Boundary(SMUGGLER)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let seven = b.constant(s::Constant::Int("7".into()), s::Type::Int);
+    let (_, cache, q2) = future_new(&mut b, SMUGGLER, WORK, &[seven], q1);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let offered = b.emit(O::ServiceAbsorb, vec![l(empty), l(cache)], K::Packet);
+    let duration = b.constant(s::Constant::Str("1".into()), s::Type::Str);
+    let [sleep, sleep_cache, q3] = [b.register(FUTURE_BOOL), b.service(K::CacheState), b.service(K::ScopeState)];
+    b.next(O::FutureNew, vec![A::Entry(SMUGGLED_SLEEP), A::Scope(SMUGGLER), A::Result(Some(FUTURE_BOOL)),
+        l(duration), l(offered), l(q2)], vec![sleep, sleep_cache, q3]);
+    b.return_value(body, q3, SMUGGLER, None, &[sleep_cache], "done");
+    let layout = b.layout(slots, vec![(vec![0], vec![])]);
+    (b.finish(), layout)
+}
+
+fn smuggling() -> s::Program {
+    let contracts = s::p1::P1Contracts::new(&[]).unwrap();
+    let mut functions = Vec::new();
+    let mut frames = Vec::new();
+    for (function, layout) in [work(), smuggler()] {
+        functions.push(function);
+        frames.push(layout);
+    }
+    functions.push(contracts.native(SLEEP).unwrap().clone());
+    s::Program {
+        module: "smuggling".into(),
+        functions,
+        tables: s::ChampTables {
+            scopes: (0..=SMUGGLER).map(|index| s::Scope { function: index, parent: None, boundary: index }).collect(),
+            boundaries: (0..=SMUGGLER).map(|scope| s::Boundary { scope }).collect(),
+            frames,
+            future_results: vec![Some(s::Type::Int), Some(s::Type::Bool), None],
+            ..s::ChampTables::default()
+        },
+        ..s::Program::default()
+    }
+}
+
+#[test]
+fn champ_n1_a_native_driver_refuses_an_absorbed_duty_in_its_inputs() {
+    // Ruling PR-N at run time: a native driver's inputs packet is empty, service entries included. The machine
+    // stops at the `fut.new`, as the synchronous P1 boundary does, on both engines and under collections.
+    // The guard is the backstop of the loader rules, so the program reaches the machine without them.
+    let built = smuggling();
+    let assembled = s::assemble(&s::disassemble(&built).unwrap()).unwrap();
+    assert_eq!(assembled, built);
+    let verified = crate::champ::machine::Verified::unchecked(assembled);
+    for (stress, engine) in configurations() {
+        let mut runtime = Runtime::new_champ_verified(&verified).unwrap();
+        runtime.heap.set_stress(stress);
+        if engine == Engine::Reference {
+            for function in 0..=SMUGGLER as usize {
+                runtime.invocations[function].code = reference as *const () as u64;
+            }
+        }
+        let report = runtime.run_function(SMUGGLER as usize, crate::STACK_BYTES).unwrap_err().0;
+        assert!(report.contains("a native driver's inputs packet received obligations (PR-N)"),
+            "{stress} {engine:?}: {report}");
+        // Nothing was created: the smuggled Future never ran, and no sleep was started.
+        assert_eq!(count(&runtime, WORK, FutureStep::Start), 0, "{stress} {engine:?}");
+        assert!(runtime.timers.is_empty(), "{stress} {engine:?}");
+    }
+}

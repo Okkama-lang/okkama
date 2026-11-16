@@ -236,8 +236,9 @@ pub(super) fn check_declaration(f: &Function) -> Result<(), Error> {
 /// inventory that does not resolve is refused too, under `LOAD_WORK_BUDGET` when the evidence ran out of budget.
 ///
 /// What is not: the inventory counts resource keys, not service entries (ABI D25). A cache duty absorbed into the
-/// packet leaves it empty here; the D25 rule `SPB_FUTURE_INPUT` refuses such a packet. The std async primitives'
-/// drivers are not natives; Q2 lifts the rule for `send` (PR-I).
+/// packet leaves it empty here; the D25 rule `SPB_FUTURE_INPUT` refuses such a packet, and Champ's `fut.new` stops
+/// on a native driver's packet that holds a key or a service entry. The std async primitives' drivers are not
+/// natives; Q2 lifts the rule for `send` (PR-I).
 pub(super) fn check_native_inputs(p: &Program, f: &Function) -> Result<(), Error> {
     let mut evidence = None;
     for instruction in &f.code {

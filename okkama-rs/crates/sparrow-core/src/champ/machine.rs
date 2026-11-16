@@ -103,6 +103,14 @@ impl Verified {
     pub(crate) fn source(&self) -> &s::Program {
         &self.source
     }
+
+    /// A program the loader is not asked about: a test of a runtime guard that backs a loader rule, which must
+    /// hold whether or not the program is one the loader refuses.
+    #[cfg(test)]
+    pub(crate) fn unchecked(source: s::Program) -> Self {
+        let p1 = s::p1::P1Contracts::new(&source.objects).unwrap();
+        Self { source: Arc::new(source), external: Vec::new(), p1 }
+    }
 }
 
 /// A native symbol (`module@major::name/arity`), as opposed to a runtime intrinsic name.
