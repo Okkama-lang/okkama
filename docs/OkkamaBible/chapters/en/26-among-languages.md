@@ -25,6 +25,7 @@ and what is missing.
 | Change | mutable fields; immutable records | `val`/`var`; `copy` on data classes [@kotlindata] | mutable | immutable bindings, `mut` | immutable; `IORef`, `ST` | immutable bindings; mutable fields and `ref` | successors; `Cell` in synchronous code (Chapter 13) |
 | Implementation inheritance | classes, single | classes, final unless `open` [@kotlininheritance] | none; embedding | none | none | classes, rarely used | none (Chapter 2) |
 | Contracts | interfaces, with default methods | interfaces | interfaces, structural | traits | type classes | module signatures | roles, nominal, no bodies (Chapter 14) |
+| Showing state | getters; record accessors [@jep395] | properties | exported fields and methods | `pub` fields, methods | record fields, export lists | record fields, abstract types | caps the object grants (Section 12.8) |
 | Failures | checked and unchecked exceptions | unchecked exceptions [@kotlinexceptions] | error values, `panic` | `Result`, `panic` | `Maybe`, `Either`; exceptions in `IO` | exceptions, `result` | typed errors and panics (Chapter 10) |
 | Resource release | `try`-with-resources | `use` [@kotlinuse] | `defer` | `Drop` | `bracket` [@hsexception] | `Fun.protect` [@ocamlfun] | `destroy`, `defer` (Chapter 11) |
 | Integers | fixed width, wrap | fixed width, wrap | fixed width, wrap | panic in debug builds, wrap in release | `Int` bounded, `Integer` unbounded | fixed width, wrap [@ocamlint] | unbounded (Chapter 5) |
@@ -404,7 +405,7 @@ Each change in the port is a decision that the Java version left implicit.
   a negative balance.
 
 What the port did not need: getters (`shown()` is the one question the
-program asks), a `final` keyword (every field is final), and a check that
+program asks; a caller that needed a few facts would get a cap, Section 12.8), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 

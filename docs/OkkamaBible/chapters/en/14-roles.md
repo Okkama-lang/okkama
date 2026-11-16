@@ -140,6 +140,10 @@ Miller's term for building least authority into a program
 a label. It cannot learn the balance, even with a cast, because the
 language has no cast to try.
 
+A role limits what a holder may *do*. To let a holder only *see* part of
+an object's state, the object grants a cap instead (Section 12.8): a named
+view of computed fields, with no actions at all.
+
 Exceptions do not reopen the restriction either. Objects cannot do `Error`:
 
 {{example:14-error-rejected}}

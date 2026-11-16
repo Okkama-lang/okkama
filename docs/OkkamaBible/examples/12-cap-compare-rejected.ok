@@ -1,0 +1,13 @@
+module bible/cap_compare v1.0.0;
+
+// A cap has no equality: two views are not values to compare.
+object Point {
+    has x, y is int;
+    Point(:x, :y);
+    cap Shown { text is string { x.string() + "," + y.string(); } }
+}
+
+main() is int {
+    let p = Point(x: 1, y: 2);
+    if p::Shown == p::Shown { 1; } else { 0; }
+}

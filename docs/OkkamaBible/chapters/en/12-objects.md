@@ -250,12 +250,139 @@ explicitly:
   `Printer.print`, can read `card::full_name` and `card::initials`. It cannot
   call `charge`, read `card_number`, or turn the view back into a
   `Customer`.
-- A cap is computed on every read; nothing is cached. It cannot hold state,
-  declare constructors or actions, or be awaited.
 
 Caps are the object-oriented answer to "I need a getter for this one
 caller". The answer is not to open the field to everyone, but to grant a
 named, typed view to whoever is handed it.
+
+### Inside the object or beside it
+
+A cap is usually declared inside its object, as above. It can also be
+declared at module scope, beside an object of the same module. Its body
+then names the owner's fields through the owner type, `Box::label`:
+
+{{example:12-cap-outside}}
+
+Both forms share one namespace, so an object cannot have two caps of the
+same name. An imported object cannot be given a cap: only the module that
+owns an object decides what it shows. A cap of a generic object takes the
+object's type parameters. It is written `Box::Tag` where it is declared and
+`Box<int>::Tag` where it is used.
+
+### What a cap field may do
+
+A cap field's body is an ordinary Okkama block, with local bindings,
+`if`, `match`, `confirm` and errors. It reads the owner's private fields by
+name. Three things are missing on purpose.
+
+- There is no `self`, not even inside a nested anonymous action, so the
+  body cannot call the owner's actions. Writing `self.norm()` in a cap is
+  an error:
+
+  {{example:12-cap-self-rejected}}
+
+- A field cannot name the cap's other fields. Each field stands on the
+  owner alone.
+- A field is synchronous: there is no `await`. It may still return a
+  Future it makes explicitly.
+
+A cap cannot write fields or stage a successor. It may call actions of the
+objects its owner holds, as `Report` below calls `hits.value()`.
+
+### Every read computes
+
+Acquiring a cap evaluates the owner expression once. Every read of a field
+runs its body again, and nothing is cached, neither a value nor an error:
+
+{{example:12-cap-reads}}
+
+The first read of `share` throws `NoHits.none`, and the read after two hits
+returns 50. A cap is a view, not a copy. A field whose answer is expensive
+belongs in an action, where `once let` (Section 13.13) can keep it.
+
+### A cap keeps its owner whole
+
+A cap holds its owner, the whole object with everything it owns,
+including resources in its fields. For ownership (Section 11.5) a cap is
+its owner. A cap of a fresh object that an action returns moves the object
+to the caller. A cap of an object that a scope already owns borrows it,
+like an alias:
+
+{{example:12-cap-owner}}
+
+`ada`'s log is closed when `main` ends, because her account came to `main`
+inside the cap. `bob`'s log is closed when the inner block that owns his
+account ends.
+
+A cap is also bound to the version it was taken from. A successor
+(Chapter 13) is a new version, with caps of its own:
+
+{{example:12-cap-snapshot}}
+
+`before` still reads the open order after `settled()` made the paid one.
+
+### What a cap is not
+
+A cap's type is exact. Locals, parameters, results, fields, collections,
+generics, closures and Futures keep `Customer::BusinessCard` as it is. Inside
+`any` it is opaque. Nothing turns a cap back into its owner: there is no
+conversion, and no pattern or reflection reaches the owner through it.
+
+A cap has no equality, no ordering and no hashing, so it cannot be a map
+key. It is not formatted or serialized automatically:
+
+{{example:12-cap-compare-rejected}}
+
+A cap cannot become a role, have constructors, actions, `has` fields or
+nested caps, or be constructed by hand. It is an interface boundary and
+nothing more. It promises no secrecy against code that holds the full
+object, no purity, since a field may call actions of objects the owner
+holds, and no revocation: a cap handed out stays readable as long as it
+lives.
+
+### Cap, role or hidden action
+
+Three tools look alike.
+
+| Tool | Question it answers | Who decides |
+|---|---|---|
+| hidden action | what the object does inside | the object, for itself |
+| role (Chapter 14) | what any object of the role can do | the role, for every implementation |
+| cap | what this object shows to whoever it hands it | the object, for one view |
+
+A role is behaviour that many objects provide; a caller holding a role does
+not know which object it holds. A cap belongs to one object and shows its
+state; the caller knows exactly whose view it reads. A hidden action is not
+seen at all.
+
+The standard library follows one rule (Chapter 22): **an object reveals
+itself through a cap**. It declares about 130 caps, named for the part they
+show: `page::Head::status`, `date::Calendar::year`, `range::Bounds::start`,
+`duration::Span::seconds`. A cap holds facts that are already computed, or
+that are trivial to compute, such as a parsed part of a URL or a date's
+year. Anything that is work stays an action: `file.text()` reads a file and
+`response.body()` reads a body, so neither is a cap.
+
+### Caps elsewhere
+
+Most languages answer "show this caller a few facts" with accessors that
+everyone can call. A Java record gives every component a public accessor
+[@jep395]. A Kotlin data class and a C# record do the same with
+properties [@kotlindata; @csrecords]. Narrowing the view takes an
+interface. Then the caller can cast it back to the full class, unless the
+designer hides the class.
+
+TypeScript's `Pick<T, K>` and `Readonly<T>` name a narrower shape. They
+are structural and erased, so any object of that shape fits, and a cast
+gets the rest [@tscompat].
+
+Object-capability languages take another view of what a reference
+means: holding one *is* the authority to use it, and a narrower facet is a
+separate object that forwards only some requests [@miller2006]. An Okkama
+cap is closer to such a facet than to a getter. It is a separate,
+nominal type, the holder cannot widen it, and the owner chooses what it
+shows. It is not an authority boundary, though: a cap shows state and
+grants no actions.
 
 ## 12.9 Objects are values
 

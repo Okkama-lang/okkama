@@ -86,8 +86,8 @@ Five rules follow from it.
   `instant.string()`; a date answers `date.days_until(other)`. Decoders and
   formatters still exist for the rare explicit case, and the object uses
   them inside its own actions.
-- **An object reveals itself through a cap.** What callers may see of an
-  object is a cap of computed fields, named for the part it shows:
+- **An object reveals itself through a cap** (Section 12.8). What callers
+  may see of an object is a cap of computed fields, named for the part it shows:
   `page::Head::status`, `date::Calendar::year`, `range::Bounds::start`. A
   cap holds only what is already computed or trivially computable; work —
   opening a stream, parsing a body — stays an action: `file.text()`,

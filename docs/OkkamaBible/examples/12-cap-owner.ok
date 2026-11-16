@@ -1,0 +1,40 @@
+module bible/cap_owner v1.0.0;
+
+// For ownership a cap is its owner: a cap of a fresh object moves the
+// object, resources and all, to whoever receives it; a cap of an object a
+// scope already owns borrows it.
+
+import "io/stdout" take Stdout;
+
+object Log {
+    has name is string;
+    Log(:name);
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Account {
+    has log is Log;
+    has owner is string;
+    Account(:owner) { log = Log(name: owner); }
+    cap Label { text is string { "account of " + owner; } }
+}
+
+object Bank {
+    Bank();
+    label(owner is string) is Account::Label {
+        Account(owner: owner)::Label;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let label = Bank().label("ada");
+    out.writeln("got " + label::text);
+    {
+        let account = Account(owner: "bob");
+        let view = account::Label;
+        out.writeln("inner " + view::text);
+    }
+    out.writeln("after inner");
+    0;
+}

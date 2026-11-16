@@ -168,6 +168,20 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
 
 ## Progress
 
+- 2026-11-17: caps, after the owner's reading («ты не упоминаешь cap нигде»).
+  12.8 grew from a page to a full section (EN and RU): declaring a cap inside
+  or beside its object, generic owners (`12-cap-outside`); what a field may
+  do (`12-cap-self-rejected`); every read recomputes (`12-cap-reads`); for
+  ownership a cap is its owner (`12-cap-owner`, checked on 0.5.8 and tree
+  Tomato: a returned cap moves the owner and its resources, a cap of an owned
+  object borrows); a cap stays on its version after a successor
+  (`12-cap-snapshot`); no equality (`12-cap-compare-rejected`); cap, role or
+  hidden action; the std's ~130 caps; caps elsewhere (Java records, Kotlin,
+  C#, TypeScript, object capabilities). Cross references: 11.5 (a cap is
+  its owner), 14.3 (a role limits doing, a cap shows state), 22.3 (the std
+  rule), 26.1 (a "Showing state" row) and 26.14. Chapter 22 RU now writes
+  `cap` like the rest of the book instead of «капа».
+
 - 2026-11-15, evening: 5.11 "What exactness costs, in digits" (`05-growth`:
   harmonic numbers as rat and float, a year of daily interest exact or
   booked to the cent); a pass over the 70 closed issues the chapters cite

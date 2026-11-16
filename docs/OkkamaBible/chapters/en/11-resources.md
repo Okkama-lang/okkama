@@ -156,6 +156,9 @@ identities, not names.
   and an `any` box hold the identities they contain. A fresh resource put
   into a fresh array is owned by whoever owns the array, and repeated
   references never duplicate ownership.
+- **A cap is its owner.** A cap (Section 12.8) carries the object it was
+  taken from. Returned from an action, it moves the object and its
+  resources to the caller; taken from an object a scope owns, it borrows.
 - **Successors are independent.** A successor action returns a new object
   with a new identity and its own lifetime (Chapter 13).
 - **Loop iterations are scopes.** What an iteration owns is destroyed when

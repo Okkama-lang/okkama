@@ -7444,6 +7444,9 @@ identities, not names.
   and an `any` box hold the identities they contain. A fresh resource put
   into a fresh array is owned by whoever owns the array, and repeated
   references never duplicate ownership.
+- **A cap is its owner.** A cap (Section 12.8) carries the object it was
+  taken from. Returned from an action, it moves the object and its
+  resources to the caller; taken from an object a scope owns, it borrows.
 - **Successors are independent.** A successor action returns a new object
   with a new identity and its own lifetime (Chapter 13).
 - **Loop iterations are scopes.** What an iteration owns is destroyed when
@@ -8705,12 +8708,343 @@ charged 10 to 1234
   `Printer.print`, can read `card::full_name` and `card::initials`. It cannot
   call `charge`, read `card_number`, or turn the view back into a
   `Customer`.
-- A cap is computed on every read; nothing is cached. It cannot hold state,
-  declare constructors or actions, or be awaited.
 
 Caps are the object-oriented answer to "I need a getter for this one
 caller". The answer is not to open the field to everyone, but to grant a
 named, typed view to whoever is handed it.
+
+### Inside the object or beside it
+
+A cap is usually declared inside its object, as above. It can also be
+declared at module scope, beside an object of the same module. Its body
+then names the owner's fields through the owner type, `Box::label`:
+
+```okkama
+module bible/cap_outside v1.0.0;
+
+// A cap declared beside its object, in the object's module: the body names
+// the owner's fields through the owner type. A generic owner's cap takes the
+// owner's type arguments.
+import "io/stdout" take Stdout;
+
+object Box<T> {
+    has item is T;
+    has label is string;
+    Box(:item, :label);
+}
+
+cap Box::Tag {
+    text is string { "[" + Box::label + "]"; }
+}
+
+object Shelf {
+    Shelf();
+    show(tag is Box<int>::Tag) is string { tag::text; }
+}
+
+main() is int {
+    let box = Box(item: 42, label: "answer");
+    Stdout().writeln(Shelf().show(box::Tag));
+    0;
+}
+```
+
+Output:
+
+```text
+[answer]
+```
+
+Both forms share one namespace, so an object cannot have two caps of the
+same name. An imported object cannot be given a cap: only the module that
+owns an object decides what it shows. A cap of a generic object takes the
+object's type parameters. It is written `Box::Tag` where it is declared and
+`Box<int>::Tag` where it is used.
+
+### What a cap field may do
+
+A cap field's body is an ordinary Okkama block, with local bindings,
+`if`, `match`, `confirm` and errors. It reads the owner's private fields by
+name. Three things are missing on purpose.
+
+- There is no `self`, not even inside a nested anonymous action, so the
+  body cannot call the owner's actions. Writing `self.norm()` in a cap is
+  an error:
+
+  ```okkama
+module bible/cap_self v1.0.0;
+
+// A cap body has no `self` and cannot call the owner's actions.
+object Point {
+    has x, y is int;
+    Point(:x, :y);
+    norm() is int { x * x + y * y; }
+    cap Shown { norm is int { self.norm(); } }
+}
+
+main() is int { Point(x: 1, y: 2)::Shown::norm; }
+```
+
+The compiler answers:
+
+```text
+12-cap-self-rejected.ok:8:31: semantic error: self is not available inside a cap field
+```
+
+- A field cannot name the cap's other fields. Each field stands on the
+  owner alone.
+- A field is synchronous: there is no `await`. It may still return a
+  Future it makes explicitly.
+
+A cap cannot write fields or stage a successor. It may call actions of the
+objects its owner holds, as `Report` below calls `hits.value()`.
+
+### Every read computes
+
+Acquiring a cap evaluates the owner expression once. Every read of a field
+runs its body again, and nothing is cached, neither a value nor an error:
+
+```okkama
+module bible/cap_reads v1.0.0;
+
+// A cap computes on every read: nothing is cached, neither a value nor an
+// error.
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+
+enum NoHits is Error = (none);
+
+object Counter {
+    has hits is Atomic<int>;
+    Counter() { hits = Atomic(0); }
+
+    hit() is void { hits.replace(hits.value() + 1); }
+
+    cap Report {
+        seen is string { hits.value().string() + " hits"; }
+        share is rat {
+            confirm hits.value() > 0 else throw NoHits.none;
+            100 / hits.value();
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let counter = Counter();
+    let report = counter::Report;
+    out.writeln(report::seen);
+    out.writeln(try { report::share.string(); } catch e is NoHits { "no share yet"; });
+    counter.hit();
+    counter.hit();
+    out.writeln(report::seen);
+    out.writeln(report::share.string());
+    0;
+}
+```
+
+Output:
+
+```text
+0 hits
+no share yet
+2 hits
+50
+```
+
+The first read of `share` throws `NoHits.none`, and the read after two hits
+returns 50. A cap is a view, not a copy. A field whose answer is expensive
+belongs in an action, where `once let` (Section 13.13) can keep it.
+
+### A cap keeps its owner whole
+
+A cap holds its owner, the whole object with everything it owns,
+including resources in its fields. For ownership (Section 11.5) a cap is
+its owner. A cap of a fresh object that an action returns moves the object
+to the caller. A cap of an object that a scope already owns borrows it,
+like an alias:
+
+```okkama
+module bible/cap_owner v1.0.0;
+
+// For ownership a cap is its owner: a cap of a fresh object moves the
+// object, resources and all, to whoever receives it; a cap of an object a
+// scope already owns borrows it.
+
+import "io/stdout" take Stdout;
+
+object Log {
+    has name is string;
+    Log(:name);
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Account {
+    has log is Log;
+    has owner is string;
+    Account(:owner) { log = Log(name: owner); }
+    cap Label { text is string { "account of " + owner; } }
+}
+
+object Bank {
+    Bank();
+    label(owner is string) is Account::Label {
+        Account(owner: owner)::Label;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let label = Bank().label("ada");
+    out.writeln("got " + label::text);
+    {
+        let account = Account(owner: "bob");
+        let view = account::Label;
+        out.writeln("inner " + view::text);
+    }
+    out.writeln("after inner");
+    0;
+}
+```
+
+Output:
+
+```text
+got account of ada
+inner account of bob
+close bob
+after inner
+close ada
+```
+
+`ada`'s log is closed when `main` ends, because her account came to `main`
+inside the cap. `bob`'s log is closed when the inner block that owns his
+account ends.
+
+A cap is also bound to the version it was taken from. A successor
+(Chapter 13) is a new version, with caps of its own:
+
+```okkama
+module bible/cap_snapshot v1.0.0;
+
+// A cap stays bound to the version of the object it was taken from; a
+// successor has caps of its own.
+import "io/stdout" take Stdout;
+
+object Order {
+    has number is int;
+    has paid is bool = false;
+    Order(:number);
+
+    settled() is ^Order { ^paid = true; }
+
+    cap Status {
+        line is string { "#" + number.string() + (if paid { " paid"; } else { " open"; }); }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = Order(number: 7);
+    let before = order::Status;
+    let after = order.settled();
+    out.writeln(before::line);
+    out.writeln(after::Status::line);
+    0;
+}
+```
+
+Output:
+
+```text
+#7 open
+#7 paid
+```
+
+`before` still reads the open order after `settled()` made the paid one.
+
+### What a cap is not
+
+A cap's type is exact. Locals, parameters, results, fields, collections,
+generics, closures and Futures keep `Customer::BusinessCard` as it is. Inside
+`any` it is opaque. Nothing turns a cap back into its owner: there is no
+conversion, and no pattern or reflection reaches the owner through it.
+
+A cap has no equality, no ordering and no hashing, so it cannot be a map
+key. It is not formatted or serialized automatically:
+
+```okkama
+module bible/cap_compare v1.0.0;
+
+// A cap has no equality: two views are not values to compare.
+object Point {
+    has x, y is int;
+    Point(:x, :y);
+    cap Shown { text is string { x.string() + "," + y.string(); } }
+}
+
+main() is int {
+    let p = Point(x: 1, y: 2);
+    if p::Shown == p::Shown { 1; } else { 0; }
+}
+```
+
+The compiler answers:
+
+```text
+12-cap-compare-rejected.ok:12:8: semantic error: Cannot compare Point::Shown and Point::Shown
+```
+
+A cap cannot become a role, have constructors, actions, `has` fields or
+nested caps, or be constructed by hand. It is an interface boundary and
+nothing more. It promises no secrecy against code that holds the full
+object, no purity, since a field may call actions of objects the owner
+holds, and no revocation: a cap handed out stays readable as long as it
+lives.
+
+### Cap, role or hidden action
+
+Three tools look alike.
+
+| Tool | Question it answers | Who decides |
+|---|---|---|
+| hidden action | what the object does inside | the object, for itself |
+| role (Chapter 14) | what any object of the role can do | the role, for every implementation |
+| cap | what this object shows to whoever it hands it | the object, for one view |
+
+A role is behaviour that many objects provide; a caller holding a role does
+not know which object it holds. A cap belongs to one object and shows its
+state; the caller knows exactly whose view it reads. A hidden action is not
+seen at all.
+
+The standard library follows one rule (Chapter 22): **an object reveals
+itself through a cap**. It declares about 130 caps, named for the part they
+show: `page::Head::status`, `date::Calendar::year`, `range::Bounds::start`,
+`duration::Span::seconds`. A cap holds facts that are already computed, or
+that are trivial to compute, such as a parsed part of a URL or a date's
+year. Anything that is work stays an action: `file.text()` reads a file and
+`response.body()` reads a body, so neither is a cap.
+
+### Caps elsewhere
+
+Most languages answer "show this caller a few facts" with accessors that
+everyone can call. A Java record gives every component a public accessor
+[[Bierman 2021](#ref-jep395)]. A Kotlin data class and a C# record do the same with
+properties [[Kotlin documentation](#ref-kotlindata); [C# language reference](#ref-csrecords)]. Narrowing the view takes an
+interface. Then the caller can cast it back to the full class, unless the
+designer hides the class.
+
+TypeScript's `Pick<T, K>` and `Readonly<T>` name a narrower shape. They
+are structural and erased, so any object of that shape fits, and a cast
+gets the rest [[TypeScript Handbook](#ref-tscompat)].
+
+Object-capability languages take another view of what a reference
+means: holding one *is* the authority to use it, and a narrower facet is a
+separate object that forwards only some requests [[Miller 2006](#ref-miller2006)]. An Okkama
+cap is closer to such a facet than to a getter. It is a separate,
+nominal type, the holder cannot widen it, and the owner chooses what it
+shows. It is not an authority boundary, though: a cap shows state and
+grants no actions.
 
 ## 12.9 Objects are values
 
@@ -10493,6 +10827,10 @@ Miller's term for building least authority into a program
 [[Miller 2006](#ref-miller2006); [Saltzer 1975](#ref-saltzer1975)]. A function that receives a `Labelled` can print
 a label. It cannot learn the balance, even with a cast, because the
 language has no cast to try.
+
+A role limits what a holder may *do*. To let a holder only *see* part of
+an object's state, the object grants a cap instead (Section 12.8): a named
+view of computed fields, with no actions at all.
 
 Exceptions do not reopen the restriction either. Objects cannot do `Error`:
 
@@ -17954,8 +18292,8 @@ Five rules follow from it.
   `instant.string()`; a date answers `date.days_until(other)`. Decoders and
   formatters still exist for the rare explicit case, and the object uses
   them inside its own actions.
-- **An object reveals itself through a cap.** What callers may see of an
-  object is a cap of computed fields, named for the part it shows:
+- **An object reveals itself through a cap** (Section 12.8). What callers
+  may see of an object is a cap of computed fields, named for the part it shows:
   `page::Head::status`, `date::Calendar::year`, `range::Bounds::start`. A
   cap holds only what is already computed or trivially computable; work —
   opening a stream, parsing a body — stays an action: `file.text()`,
@@ -22222,6 +22560,7 @@ and what is missing.
 | Change | mutable fields; immutable records | `val`/`var`; `copy` on data classes [[Kotlin documentation](#ref-kotlindata)] | mutable | immutable bindings, `mut` | immutable; `IORef`, `ST` | immutable bindings; mutable fields and `ref` | successors; `Cell` in synchronous code (Chapter 13) |
 | Implementation inheritance | classes, single | classes, final unless `open` [[Kotlin documentation](#ref-kotlininheritance)] | none; embedding | none | none | classes, rarely used | none (Chapter 2) |
 | Contracts | interfaces, with default methods | interfaces | interfaces, structural | traits | type classes | module signatures | roles, nominal, no bodies (Chapter 14) |
+| Showing state | getters; record accessors [[Bierman 2021](#ref-jep395)] | properties | exported fields and methods | `pub` fields, methods | record fields, export lists | record fields, abstract types | caps the object grants (Section 12.8) |
 | Failures | checked and unchecked exceptions | unchecked exceptions [[Kotlin documentation](#ref-kotlinexceptions)] | error values, `panic` | `Result`, `panic` | `Maybe`, `Either`; exceptions in `IO` | exceptions, `result` | typed errors and panics (Chapter 10) |
 | Resource release | `try`-with-resources | `use` [[Kotlin standard library](#ref-kotlinuse)] | `defer` | `Drop` | `bracket` [[Haskell base library](#ref-hsexception)] | `Fun.protect` [[OCaml Manual](#ref-ocamlfun)] | `destroy`, `defer` (Chapter 11) |
 | Integers | fixed width, wrap | fixed width, wrap | fixed width, wrap | panic in debug builds, wrap in release | `Int` bounded, `Integer` unbounded | fixed width, wrap [[OCaml Manual](#ref-ocamlint)] | unbounded (Chapter 5) |
@@ -22647,7 +22986,7 @@ Each change in the port is a decision that the Java version left implicit.
   a negative balance.
 
 What the port did not need: getters (`shown()` is the one question the
-program asks), a `final` keyword (every field is final), and a check that
+program asks; a caller that needed a few facts would get a cap, Section 12.8), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 

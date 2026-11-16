@@ -1,0 +1,1 @@
+12-cap-self-rejected.ok:8:31: semantic error: self is not available inside a cap field
