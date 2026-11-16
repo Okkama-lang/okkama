@@ -816,13 +816,14 @@ fn c6_own_runs_an_async_defer_entry_with_its_input_packet() {
 }
 
 /// #601 Q1, D22: async-plain-await with `@work` a bodyless async intrinsic (`external`) called through
-/// `call.intrinsic`, or an async native when `native`. The catalogue gives the external its body summary.
+/// `call.intrinsic`, or, when `native`, an async native (N1) called as any async action. The catalogue gives the
+/// external its body summary.
 fn driver_source(native: bool) -> String {
     let work = input("async-plain-await");
     let start = work.find("func @work(").unwrap();
     let end = work.find("func @main(").unwrap();
     let (attr, call) = if native {
-        ("[async, extern \"q1.work\"]", "call.native @work(%seven)")
+        ("[async, extern \"q1.work\"]", "call @work(%seven)")
     } else {
         ("[async, intrinsic \"q1.work\"]", "call.intrinsic @work(%seven)")
     };
@@ -899,12 +900,41 @@ fn q1_an_async_intrinsic_call_creates_an_external_future() {
 }
 
 #[test]
-fn q1_an_async_native_is_still_refused() {
-    // Async natives are slice N1: own refuses them by name before any rewrite.
-    let error = rewrite_driver(&driver_source(true)).unwrap_err();
+fn n1_an_async_native_call_creates_an_external_future_with_an_empty_packet() {
+    // #601 N1, async ABI §4.2: own treats an async native's `external` environment as `deferred`, as for an
+    // async intrinsic. Its plain argument offers nothing, so the inputs packet is `own.empty` (ruling PR-N).
+    let output = rewrite_driver(&driver_source(true)).unwrap();
+    let (work, data) = function(&output.module, "work");
+    assert!(data.body.is_none() && data.async_creation_summary.is_some() && data.async_body_summary.is_some());
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let packets: Vec<_> = operations(body).into_iter().filter_map(|op| match op {
+        Operation::Async(AsyncOp::FutureNew { environment: FutureEnvironment::External { function, .. }, packet, .. })
+            if *function == work => Some(*packet),
+        _ => None,
+    }).collect();
+    let [packet] = packets.as_slice() else { panic!("one external fut.new: {packets:?}") };
+    let definition = body.values.get(*packet).unwrap().def.clone();
+    let Definition::InstResult { inst, .. } = definition else { panic!("{definition:?}") };
+    assert!(matches!(body.insts.get(inst).unwrap().op, Operation::Ownership(OwnershipOp::Empty {})));
+    assert_eq!(body.service_schedules.len(), 1, "the owner settles the driver Future's cache duty");
+}
+
+#[test]
+fn n1_a_bodyless_async_function_needs_an_external_driver() {
+    // D22: only an async intrinsic or native has no body; any other bodyless async entry has nothing to run. The
+    // structural verifier refuses such a declaration first (S1); own's boundary does not rely on it.
+    let module = crate::text::parse(&driver_source(true)).unwrap();
+    let contracts = driver_contracts(&module);
+    let mut natives = catalog(&module);
+    natives.named.insert("q1.work".into(), contracts.1.clone());
+    let mut module = module;
+    let (work, _) = function(&module, "work");
+    module.functions.get_mut(work).unwrap().attrs.retain(|attr| !matches!(attr, FunctionAttr::Extern(_)));
+    let error = elaborate_ownership(module, &natives, &OwnOptions::default()).unwrap_err();
     let OwnError::Diagnostics { diagnostics, .. } = error else { panic!("{error:?}") };
     assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::UnsupportedAsync);
-    assert!(diagnostics[0].message.contains("slice N1"), "{diagnostics:?}");
+    assert!(diagnostics[0].message.contains("neither a body nor an external driver"), "{diagnostics:?}");
 }
 
 #[test]

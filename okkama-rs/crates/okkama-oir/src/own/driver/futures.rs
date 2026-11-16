@@ -88,9 +88,9 @@ impl Driver<'_, '_> {
         }
         let arguments = call.args.iter().map(|argument| argument.value).collect();
         let descriptors = call.descriptors.clone();
-        // D22 (#601 Q1): an async intrinsic's Future is run by its runtime driver; own treats the environment as
-        // `deferred`, and coro keeps it unchanged.
-        let environment = if crate::own::futures::is_async_intrinsic(self.module, function) {
+        // D22 (#601 Q1, N1): an async intrinsic's or native's Future is run by its runtime driver; own treats the
+        // environment as `deferred`, and coro keeps it unchanged.
+        let environment = if crate::own::futures::is_async_external(self.module, function) {
             FutureEnvironment::External { function, arguments, descriptors }
         } else {
             FutureEnvironment::Deferred { function, arguments, descriptors }
