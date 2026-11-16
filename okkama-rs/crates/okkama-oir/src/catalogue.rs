@@ -78,11 +78,12 @@ pub fn open_callable_protocol() -> ProtocolDecl {
 /// - a cache duty settles into its owner scope, or detaches a running Future to
 ///   the root registry (D24.2, parity);
 /// - an await receipt settles into the awaiting scope (C-3);
+/// - a spawned task's duty settles by detaching a running task, with its
+///   cache duty, to the root registry (`frame → root`, D24.2, slice P1);
 /// - `cache.rehome` moves a cache duty from its owner scope into the pending
 ///   reserve of the scope's exit (C-4).
 ///
-/// Spawned-task duties (`frame → root`, P1) and the D23 families arrive with
-/// their slices.
+/// The D23 families arrive with their slices.
 pub fn services_protocol() -> ProtocolDecl {
     let checks = vec![ProtocolCheck::Owner, ProtocolCheck::LiveDependencies];
     let settle = |from: HolderKind, holder: HolderKind, state: HolderState| ProtocolRule {
@@ -102,6 +103,8 @@ pub fn services_protocol() -> ProtocolDecl {
             settle(HolderKind::Cache, HolderKind::Scope, HolderState::Settled),
             settle(HolderKind::Receipt, HolderKind::Scope, HolderState::Settled),
             settle(HolderKind::Cache, HolderKind::RootRegistry, HolderState::Running),
+            // D24.2, §6.4: a running spawned task detaches with its cache duty to the root registry.
+            settle(HolderKind::Frame, HolderKind::RootRegistry, HolderState::Running),
             ProtocolRule {
                 transition: ProtocolTransition::Rehome,
                 from: HolderKind::Scope,

@@ -221,6 +221,10 @@ impl Engine<'_, '_> {
                 if schedule.is_none() {
                     self.error(R::B106, "abstract close needs complete, unique service schedule coverage");
                 }
+                if let Some(duties) = schedule.map(|schedule| schedule.duties.iter().filter_map(|duty| duty.value())
+                    .collect::<Vec<_>>()) {
+                    self.task_first(before, &duties);
+                }
                 for value in available {
                     if self.await_handle(before, value) {
                         self.error(R::B91, "a close settles an await task or receipt instead of await.unwind (C-3)");

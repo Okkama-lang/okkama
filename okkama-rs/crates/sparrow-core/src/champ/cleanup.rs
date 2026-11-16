@@ -266,17 +266,18 @@ pub extern "C" fn rt_cleanup_settle_packet(ctx: *mut Ctx, input: *mut CleanupSlo
 /// the first duty opens the settlement and the last completes it. `this` is the settling body's frame, or 0 in a
 /// synchronous owner. A cache duty releases a never-started Future's inputs and a success's outcome packet into
 /// the settled run, detaches a running Future to the root, and settles a cold one as Cancelled; a cache of
-/// another owner settles to nothing.
+/// another owner settles to nothing. A spawned task's duty, which the schedule lists before its cache duty,
+/// detaches a running task with its cache to the root registry and closes a settled one (D24.2, #601 P1); the
+/// schedule's registered kinds say which duty each step settles.
 pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot, schedule: u64, index: u64,
     duty: Word, post: *mut CleanupSlot) -> Outcome
 {
     let _ = this;
     leaf(ctx, |runtime| {
-        let count = *runtime.champ.schedules.get(schedule.wrapping_sub(1) as usize)
+        let kinds = runtime.champ.schedules.get(schedule.wrapping_sub(1) as usize)
             .ok_or_else(|| error("unknown service schedule"))?;
-        if index >= count {
-            return Err(error("duty outside its schedule"));
-        }
+        let count = kinds.len() as u64;
+        let kind = *kinds.get(index as usize).ok_or_else(|| error("duty outside its schedule"))?;
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
             ready(cleanup)?;
@@ -295,11 +296,15 @@ pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut Clean
             if runtime.champ_cache(duty)?.flags & super::REHOMED != 0 {
                 return Err(error("a cache duty in an exit reserve settles with the reserve"));
             }
-            let settle = runtime.champ_cache_settlement(duty, cleanup.owner)?;
+            let settle = if kind == SERVICE_TASK {
+                runtime.champ_task_settlement(duty, cleanup.owner)?
+            } else {
+                runtime.champ_cache_settlement(duty, cleanup.owner)?
+            };
             // The released packets' own entries settle first (draft 3 §6.3); their identities join the run.
             let mut plan = Vec::new();
             let mut released = Packet::default();
-            let service = Service { holder: duty, kind: SERVICE_CACHE, target: None };
+            let service = Service { holder: duty, kind, target: None };
             runtime.champ_plan_duty(service, settle, cleanup.owner, &mut plan, &mut released)?;
             let mut all = inventory(cleanup);
             all.append(released.clone());

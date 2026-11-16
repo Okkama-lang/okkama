@@ -80,9 +80,43 @@ impl Engine<'_, '_> {
     /// C-3: the task and the receipt of an await unwind edge reach only `await.unwind`; neither is a service duty
     /// that a close or a settle step may take.
     pub(super) fn await_handle(&self, before: &Flow, value: ValueId) -> bool {
-        before.tokens[value.as_u32() as usize].cache.is_some()
+        let token = &before.tokens[value.as_u32() as usize];
+        token.cache.is_some() && !token.service.is_some_and(|service| self.spawn_task(service))
             && matches!(super::super::later::value_type(self.module, self.body, value),
                 Some(Type::Service(ServiceType::TaskState | ServiceType::Receipt)))
+    }
+
+    /// D24.1: whether a service token is the task-state result of a `fut.spawn`, the spawned task's duty. It is
+    /// a duty of its Future's owner, settled before the Future's cache duty, never an await handle (C-3).
+    pub(super) fn spawn_task(&self, service: Origin) -> bool {
+        let (Origin::Instruction(inst, index) | Origin::RetiredInstruction(inst, index)) = service else {
+            return false;
+        };
+        self.body.insts.get(inst).is_ok_and(|instruction| {
+            matches!(instruction.op, Operation::Async(AsyncOp::FutureSpawn { state: Some(_), .. }))
+                && index.checked_sub(0x8000_0000) == Some(1)
+        })
+    }
+
+    /// D24.2, ABI §6.3 (`d24-schedule-task-first`): in the duties `values` of a close, in settle order, a spawned
+    /// Future's task duty comes before its cache duty.
+    pub(super) fn task_first(&mut self, before: &Flow, values: &[ValueId]) {
+        for (position, &value) in values.iter().enumerate() {
+            let token = &before.tokens[value.as_u32() as usize];
+            let cache = matches!(super::super::later::value_type(self.module, self.body, value),
+                Some(Type::Service(ServiceType::CacheState)));
+            let Some(key) = token.cache.filter(|_| cache) else {
+                continue;
+            };
+            let late = values[position + 1..].iter().any(|later| {
+                let later = &before.tokens[later.as_u32() as usize];
+                later.cache == Some(key) && later.service.is_some_and(|service| self.spawn_task(service))
+            });
+            if late {
+                self.error(R::D24ScheduleTaskFirst,
+                    "a spawned Future's task duty settles before its cache duty (D24.2)");
+            }
+        }
     }
 
     /// Entry values of the function. The receiver, arguments, descriptors and input packet of a D21 async
@@ -193,6 +227,28 @@ impl Engine<'_, '_> {
             self.error(R::B95, "occupied frame families need producer layout/continuation metadata");
         }
         match op {
+            // D24.1: the cache duty of the Future its `fut.new` gave comes back unchanged, and the spawned task's
+            // duty is new, owned by the same scope; own forwards the owner state, whose duty the task joins.
+            AsyncOp::FutureSpawn { future, state: Some(cache) }
+                if matches!(self.module.profile, Profile::Coro | Profile::Low) => {
+                let key = self.identity(before, *future);
+                let duty = before.tokens[cache.as_u32() as usize].clone();
+                if duty.cache != Some(key) {
+                    self.error(R::D24SpawnNotFresh,
+                        "fut.spawn forwards the cache duty of the Future it starts (D24.1)");
+                }
+                for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    match info.name {
+                        SlotName::State => slot.token = duty.clone(),
+                        SlotName::Task => {
+                            slot.token = Token {
+                                private: true, cache: Some(key), scope: duty.scope, ..Token::default()
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
             AsyncOp::Pin { deps, owner, .. } => {
                 for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
                     if info.name == SlotName::State {

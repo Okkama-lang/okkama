@@ -127,12 +127,19 @@ pub struct CapturedRun {
 
 #[cfg(feature = "champ-abi")]
 pub fn run_captured(bytes: Vec<u8>, limits: budget::Limits) -> Result<CapturedRun, Error> {
+    run_captured_with_arguments(bytes, Vec::new(), limits)
+}
+
+/// [`run_captured`] with program arguments, as the CLI passes them after the program (#757).
+#[cfg(feature = "champ-abi")]
+pub fn run_captured_with_arguments(bytes: Vec<u8>, arguments: Vec<Vec<u8>>, limits: budget::Limits)
+    -> Result<CapturedRun, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|error| Error(error.to_string()))?;
         if !matches!(program, DecodedProgram::Champ(_)) {
             return Err(Error("P1 capture requires SPB 17".into()));
         }
-        let mut runtime = configured_runtime(program, Vec::new(), false, Vec::new(), limits)?;
+        let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
         runtime.champ.captured_trace = Some(Vec::new());
         let (result, stdout) = stdout::capture(|| runtime.run_entry(STACK_BYTES));
         let destroy_trace = runtime.champ.captured_trace.take().unwrap_or_default();

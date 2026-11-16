@@ -162,7 +162,7 @@ operation_group! { AsyncOp {
                 .requires(Postcondition::CacheRehome(*target)),
             _ => Rule::Rehome { form: form.clone(), target: *target, protocol: *protocol },
         });
-    FutureSpawn { future: ValueId, state: ValueId }
+    FutureSpawn { future: ValueId, state: Option<ValueId> }
         => ("fut.spawn", [future: Borrow, state: Consume], Rule::Spawn { state: *state });
     FutureCancel { future: ValueId }
         => ("fut.cancel", [future: Observe], Rule::Intent);

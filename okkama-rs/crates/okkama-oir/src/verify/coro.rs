@@ -69,6 +69,73 @@ fn operation(module: &Module, op: &Operation, token_profile: bool, state: &mut S
     }
 }
 
+/// The full verifier's D24.1 freshness of every `fut.spawn` (async ABI §7: a rule of the ownership verifier;
+/// the SPB 17 loader checks it again as `SPB_SPAWN`).
+pub(super) fn spawn_freshness<'a>(module: &'a Module, selected: Option<FuncId>, state: &mut State<'a>) {
+    for (function, data) in module.functions.iter() {
+        if selected.is_some_and(|id| id != function) {
+            continue;
+        }
+        if let Some(body) = &data.body {
+            spawn_fresh(module, function, body, state);
+        }
+    }
+}
+
+/// D24.1 (`d24-spawn-not-fresh`): `fut.spawn` starts a Future created earlier in the same block, by a call of an
+/// async entry in High and by `fut.new` after it. Between the creation and the spawn the Future is only observed
+/// (`deps.of`, `fut.done`, `fut.cancelled`, `fut.cancel`), so it is not awaited, does not escape and joins no
+/// group first. Outside High the spawn forwards the creation's second result, the owner state (own) or the cache
+/// duty (coro/low), so the duty it starts is the one that creation gave.
+fn spawn_fresh(module: &Module, function: FuncId, body: &Body, state: &mut State<'_>) {
+    for (_, block) in body.blocks.iter() {
+        if !state.step(block.insts.len()) {
+            return;
+        }
+        for (position, &instruction) in block.insts.iter().enumerate() {
+            let Ok(inst) = body.insts.get(instruction) else {
+                continue;
+            };
+            let Operation::Async(AsyncOp::FutureSpawn { future, state: forwarded }) = &inst.op else {
+                continue;
+            };
+            state.at(L::Instruction { function, instruction }, inst.loc);
+            let creation = block.insts[..position].iter().position(|earlier| {
+                body.insts.get(*earlier).is_ok_and(|earlier| earlier.results.first() == Some(future))
+            });
+            let fresh = creation.is_some_and(|creation| {
+                let Ok(created) = body.insts.get(block.insts[creation]) else {
+                    return false;
+                };
+                let origin = match &created.op {
+                    Operation::Async(AsyncOp::FutureNew { .. }) => {
+                        forwarded.is_some() && created.results.get(1) == forwarded.as_ref()
+                    }
+                    Operation::Call(CallOp::Direct { function, .. }) => forwarded.is_none()
+                        && module.functions.get(*function).is_ok_and(|callee| {
+                            callee.attrs.contains(&FunctionAttr::Async)
+                        }),
+                    _ => false,
+                };
+                origin && block.insts[creation + 1..position].iter().all(|between| {
+                    body.insts.get(*between).is_ok_and(|between| {
+                        matches!(between.op, Operation::Ownership(OwnershipOp::Dependencies { .. })
+                            | Operation::Async(AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. }
+                                | AsyncOp::FutureCancel { .. }))
+                            || between.op.operand_refs().iter().all(|operand| {
+                                operand.reference != OperandRef::Value(*future)
+                            })
+                    })
+                })
+            });
+            if !fresh {
+                state.error(R::D24SpawnNotFresh,
+                    "fut.spawn starts a Future just created in its block and only observed since (D24.1)");
+            }
+        }
+    }
+}
+
 /// The frame layout of an async body of coro/low in the D21 form, if `function` is one.
 pub(super) fn frame_layout<'a>(module: &Module, function: &'a Function) -> Option<&'a FrameLayout> {
     let token_profile = matches!(module.profile, Profile::Coro | Profile::Low);

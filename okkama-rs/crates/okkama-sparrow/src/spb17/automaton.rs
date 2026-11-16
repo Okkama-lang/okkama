@@ -94,10 +94,17 @@ fn settle_duty(p: &Program, f: &Function, origins: &BTreeMap<Location, Option<u3
         suspension::SCHEDULE, "a close settles the duties of one schedule, before its plan")?;
     enforce(duties.get(cleanup.settled as usize) == Some(&duty), suspension::SCHEDULE,
         "each scheduled duty is settled once, in schedule order")?;
-    let creation = origins.get(&duty).copied().flatten().map(|pc| &f.code[pc as usize]);
+    let origin = origins.get(&duty).copied().flatten();
+    let creation = origin.map(|pc| &f.code[pc as usize]);
     let Some(Instruction::Champ { op: Opcode::FutureNew, arguments, .. }) = creation else {
         return Err(violation(suspension::SCHEDULE, "a settled duty has no single fut.new"));
     };
+    // D24.2, ABI §6.3: a spawned Future's task duty settles before its cache duty, which may then detach with it.
+    let task = |location: Location| verify::loc_type(f, location) == Ok(ProducedType::Service(ServiceKind::TaskState));
+    let task_later = duties.iter().skip(cleanup.settled as usize + 1)
+        .any(|&other| task(other) && origins.get(&other).copied().flatten() == origin);
+    enforce(task(duty) || !task_later, suspension::SCHEDULE,
+        "a spawned Future's task duty is settled before its cache duty (D24.2)")?;
     let owner = arguments.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None });
     let close = &f.proofs.closes[cleanup.close as usize];
     let closing = p.tables.boundaries.get(close.boundary as usize).map(|boundary| boundary.scope);
@@ -173,7 +180,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     let Some(Fact::Pending(mut payload)) = operands[0] else {
                         return Err(violation(REHOME, "cache.rehome outside an exit's preparation"));
                     };
-                    let owner = if locations.len() == 3 {
+                    let owner = if services::rehome_state_form(f, &locations) {
                         // The state form moves an entry the owner admitted: the owner is the state's scope.
                         rehome_scopes.get(&pc).copied().flatten()
                             .ok_or_else(|| violation(REHOME, "a rehomed entry leaves the state of one scope"))?
@@ -195,7 +202,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         "one reserve takes the duties of one owner, for one destination")?;
                     payload.rehome = Some(rehome);
                     // The state form gives the state back first.
-                    if locations.len() == 3 {
+                    if services::rehome_state_form(f, &locations) {
                         vec![None, Some(Fact::Pending(payload))]
                     } else {
                         vec![Some(Fact::Pending(payload))]

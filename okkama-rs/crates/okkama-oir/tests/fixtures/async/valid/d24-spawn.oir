@@ -33,7 +33,7 @@ func @main(%frame: frame<@main>) -> void [async] summary(Mmain) {
     %q0: scope<S> = scope.begin S
     (%t: future<void>, %c: cache-state, %q1: scope<S>) = fut.new %in, %deps, %q0, environment deferred(function=@Worker.run,
         arguments=[%w], descriptors=[]), owner S
-    (%c1: cache-state, %task: task-state) = fut.spawn %t, %c
+    (%c1: cache-state, %task: task-state) = fut.spawn %t, state %c
     %closed: closed = scope.end %q1, effects scope_effects(failures=[], suspends=false, cancel=false)
     %p: own = own.empty
     fut.publish %fr0, success(packet=%p, deps=%deps)

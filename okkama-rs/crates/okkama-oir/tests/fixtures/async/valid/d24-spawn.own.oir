@@ -17,7 +17,7 @@ func @main(%in: own, %deps: deps, %w: Worker) -> void {
     %q0: scope<S> = scope.begin S
     (%t: future<void>, %q1: scope<S>) = fut.new %in, %deps, %q0, environment deferred(function=@Worker.run,
         arguments=[%w], descriptors=[]), owner S
-    %q2: scope<S> = fut.spawn %t, %q1
+    %q2: scope<S> = fut.spawn %t, state %q1
     %closed: closed = scope.end %q2, effects scope_effects(failures=[], suspends=false, cancel=false)
     ret
 }

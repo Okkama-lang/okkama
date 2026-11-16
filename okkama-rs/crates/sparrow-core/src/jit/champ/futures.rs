@@ -205,6 +205,12 @@ impl Emit<'_, '_> {
                 let inputs = self.record(&[entry, argv, argc, packet, owner]);
                 ("champ_future_new", self.checked("champ_future_new", &[ctx, inputs, post]))
             }
+            // D24.1 (#601 P1), class X: the task starts on this stack; its cache duty comes back with the task duty.
+            O::FutureSpawn => {
+                let future = self.word(locations[0]);
+                let cache = self.pointer(locations[1]);
+                ("champ_future_spawn", self.checked("champ_future_spawn", &[ctx, future, cache, post]))
+            }
             O::Await => {
                 let future = self.word(locations[0]);
                 ("champ_await_view", self.suspending("champ_await_view", &[ctx, body, future, post], locations))
@@ -241,15 +247,18 @@ impl Emit<'_, '_> {
                     None => self.iconst(c::TARGET_CALLER),
                 };
                 let pending = self.pointer(locations[0]);
-                let args = if let [_, state, future] = locations {
+                let state_form = self.kind(locations[1]) == Some(s::ServiceKind::ScopeState);
+                let args = if let ([_, state, future], true) = (locations, state_form) {
                     // The state form takes the entry the scope admitted (D25.3).
                     let state = self.pointer(*state);
                     let future = self.word(*future);
                     [ctx, pending, state, zero, zero, future, target, post]
                 } else {
+                    // The token form: the cache duty, and a spawned Future's task duty with it (D24.1).
                     let cache = self.pointer(locations[1]);
+                    let task = locations.get(2).map_or(zero, |&task| self.pointer(task));
                     let future = self.word(locations[1]);
-                    [ctx, pending, zero, cache, zero, future, target, post]
+                    [ctx, pending, zero, cache, task, future, target, post]
                 };
                 ("champ_cache_rehome", self.checked("champ_cache_rehome", &args))
             }

@@ -884,13 +884,13 @@ fn async_block_ids_follow_draft3() {
         (77, O::CleanupDeliverCancel, "cleanup.deliver_cancel"), (67, O::AwaitTake, "await.take"),
         (68, O::UniqueCacheProof, "unique_cache.proof"), (69, O::CacheRehome, "cache.rehome"),
         (84, O::CleanupSettleDynamic, "cleanup.settle.dynamic"), (85, O::ServiceMaterialize, "service.materialize"),
-        (86, O::ServiceAbsorb, "service.absorb")];
+        (86, O::ServiceAbsorb, "service.absorb"), (65, O::FutureSpawn, "fut.spawn")];
     for (id, op, name) in assigned {
         assert_eq!((op.id(), op.name()), (id, name));
         assert_eq!(Opcode::from_id(id).unwrap(), op);
     }
-    // Spawn, pins, workers and the unassigned tail stay reserved until their slices.
-    for id in [65].into_iter().chain(78..=83).chain(87..=95) {
+    // Pins, workers and the unassigned tail stay reserved until their slices (spawn is assigned by #601 P1).
+    for id in (78..=83).chain(87..=95) {
         assert!(Opcode::from_id(id).unwrap_err().message.contains("reserved"), "{id}");
     }
     assert_eq!(Opcode::CleanupSettle.id(), 21);
@@ -901,7 +901,8 @@ fn async_classes_and_suspension_sites_follow_draft3() {
     use HelperClass::*;
     let classes = [(O::FutureNew, G), (O::Await, S), (O::FuturePublish, L), (O::FutureCancel, L),
         (O::FutureDone, L), (O::FutureCancelled, L), (O::FrameSave, L), (O::FrameResume, L), (O::AwaitUnwind, S),
-        (O::CleanupDeliverCancel, L), (O::CleanupSettle, L), (O::AwaitTake, S), (O::CacheRehome, L)];
+        (O::CleanupDeliverCancel, L), (O::CleanupSettle, L), (O::AwaitTake, S), (O::CacheRehome, L),
+        (O::FutureSpawn, X)];
     for (op, class) in classes {
         assert_eq!(op.helper_class(), Some(class), "{}", op.name());
         assert_eq!(op.suspends(), class == S, "{}", op.name());
@@ -912,7 +913,7 @@ fn async_classes_and_suspension_sites_follow_draft3() {
         (O::FuturePublish, Some("champ_future_publish")), (O::FutureCancel, Some("champ_future_cancel")),
         (O::FutureDone, None), (O::FutureCancelled, Some("champ_future_cancelled")), (O::FrameSave, None),
         (O::FrameResume, None), (O::AwaitUnwind, Some("champ_await_unwind")),
-        (O::CleanupDeliverCancel, Some("champ_cleanup_deliver_cancel"))];
+        (O::CleanupDeliverCancel, Some("champ_cleanup_deliver_cancel")), (O::FutureSpawn, Some("champ_future_spawn"))];
     let class_of = |helper: Helper| if helper.effects & HELPER_SUSPENDS != 0 {
         S
     } else if helper.effects & HELPER_REENTERS != 0 {
@@ -1036,15 +1037,15 @@ fn programs_without_async_forms_keep_their_assembly() {
 fn async_codec_refuses_reserved_opcodes_and_unknown_tags() {
     let p = plain();
     let text = disassemble(&p).unwrap();
-    let reserved = text.replacen("champ fut.new", "champ fut.spawn", 1);
-    assert!(assemble(&reserved).unwrap_err().message.contains("fut.spawn"));
+    let reserved = text.replacen("champ fut.new", "champ pin", 1);
+    assert!(assemble(&reserved).unwrap_err().message.contains("pin"));
     let bytes = encode(&p).unwrap();
-    // Re-encode the first fut.new (ID 64) as the reserved spawn (65): the binary reader refuses it.
-    let mut spawned = bytes.clone();
+    // Re-encode the first fut.new (ID 64) as the reserved pin (78): the binary reader refuses it.
+    let mut pinned = bytes.clone();
     let marker = [255u8, 64];
-    let at = spawned.windows(2).position(|window| window == marker).unwrap();
-    spawned[at + 1] = 65;
-    assert!(decode(&spawned).unwrap_err().message.contains("reserved"));
+    let at = pinned.windows(2).position(|window| window == marker).unwrap();
+    pinned[at + 1] = 78;
+    assert!(decode(&pinned).unwrap_err().message.contains("reserved"));
     // Tags 0..=4 are assigned (4 is the async defer entry of #601 R4).
     let unknown = text.replacen("entry_abi 3 ", "entry_abi 5 ", 1);
     assert!(assemble(&unknown).unwrap_err().message.contains("entry ABI"));

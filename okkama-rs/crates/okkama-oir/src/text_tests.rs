@@ -1473,7 +1473,7 @@ fn coverage_modules() -> Vec<Module> {
     modules.push(build_op(Operation::Ownership(OwnershipOp::ScopeTransfer { states: TransferStates::Between { from: v, to: v }, selection: cs() }), Profile::Own));
     modules.push(build_op(Operation::Carrier(CarrierOp::Transfer { state: v, target: CarrierDestination::FailureContext(cs()), protocol: cs() }), Profile::Own));
     // Coro/low token forms of the async ABI (D24.1, C-4).
-    modules.push(build_op(Operation::Async(AsyncOp::FutureSpawn { future: v, state: v }), Profile::Coro));
+    modules.push(build_op(Operation::Async(AsyncOp::FutureSpawn { future: v, state: Some(v) }), Profile::Coro));
     for (task, target) in [(None, cs()), (Some(v), cs()), (None, RehomeTarget::Caller)] {
         let form = RehomeForm::Token { pending: v, cache: v, task };
         modules.push(build_op(Operation::Async(AsyncOp::CacheRehome { form, target, protocol: cs() }),

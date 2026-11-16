@@ -40,6 +40,12 @@ impl BodyLowerer<'_, '_> {
             let Some(value) = self.value(expr)? else {
                 return Ok(None);
             };
+            let source_ty = self.b.body().values.get(value)?.ty;
+            if matches!(self.b.module().types.get(source_ty)?, ir::Type::Role { .. }) && !self.inhabited(source_ty)? {
+                // A walk of a role no object or adapter witnesses never starts (#757).
+                self.terminate(ir::TermKind::Unreachable)?;
+                return Ok(None);
+            }
             let value = self.take(value)?;
             // As with a let, the source belongs to the enclosing traversal, not a cursor/batch.
             self.bind_internal("$source", value)?;
@@ -317,11 +323,7 @@ impl BodyLowerer<'_, '_> {
         };
         let slot = methods.iter().position(|method| method.name == name && method.signature.params.is_empty())
             .ok_or_else(|| LowerError::invalid(self.source.span, format!("missing protocol slot {name}")))?;
-        let reachable = self.b.module().declarations.iter().any(|(_, declaration)| {
-            matches!(&declaration.kind, ir::DeclarationKind::Object { witnesses, .. }
-                if witnesses.iter().any(|witness| witness.role == ty))
-        });
-        if !reachable {
+        if !self.inhabited(ty)? {
             return Err(LowerError::unsupported(self.source.span, "role has no reachable implementation"));
         }
         self.sync_failure()?;

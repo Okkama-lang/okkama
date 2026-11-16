@@ -383,7 +383,7 @@ pub(crate) enum Rule {
     Protocol { state: ValueId, owner: Option<ValueId>, packet: Option<ValueId>, protocol: ProtocolId, transition: ProtocolTransition },
     FutureNew { environment: FutureEnvironment, packet: ValueId, owner: ValueId, result: Option<TypeId> },
     Publish { frame: ValueId, packet: Option<ValueId> },
-    Spawn { state: ValueId },
+    Spawn { state: Option<ValueId> },
     AwaitUnwind { state: ValueId, task: ValueId, receipt: ValueId, protocol: ProtocolId },
     Rehome { form: RehomeForm, target: RehomeTarget, protocol: ProtocolId },
     Materialize { packet: ValueId, kind: ServiceKeyKind },
@@ -849,17 +849,21 @@ impl<'a> ContractRegistry<'a> {
                 c.roots.roots.extend([RootKind::FrameSlots, RootKind::Cache]);
             }
             Rule::Spawn { state } => {
-                // Class X (D24.1): Normal only. own adds ServiceOf{f, Frame} to the state;
+                // Class X (D24.1): Normal only; it runs machine code, so it may stop. High names only the
+                // fresh Future (`fut.spawn %f`); own adds ServiceOf{f, Frame} to the owner state it forwards;
                 // coro/low return the cache duty unchanged plus a new task-state.
+                c.effects.allocates = true;
+                c.effects.mutates = true;
+                c.roots.roots.push(RootKind::Cache);
+                let Some(state) = state else {
+                    return Ok(());
+                };
                 c.normal.results.push(ResultSlot::new(N::State, ResultType::SameAs(state)));
                 if matches!(self.module.profile, Profile::Coro | Profile::Low) {
                     c.normal.results.push(ResultSlot::service(N::Task, S::TaskState));
                 }
                 let outputs = c.normal.results.iter().map(|slot| slot.name).collect();
                 c.normal.transfers.push(TransferRule::Move { inputs: vec![state], outputs });
-                c.effects.allocates = true;
-                c.effects.mutates = true;
-                c.roots.roots.push(RootKind::Cache);
             }
             Rule::AwaitUnwind { state, task, receipt, protocol } => {
                 // C-3: Normal outcome only, shielded, suspends.

@@ -826,3 +826,57 @@ fn an_observation_call_states_the_parameters_it_retains() {
     }).expect("observation call of Holder.new");
     assert_eq!(p.tables.summaries[summary as usize].retained_params, vec![0]);
 }
+
+/// An array of objects that hold a role value (#757: TOML members holding a value role) is managed for own,
+/// which tracks the role values as references, though nothing in it reaches a resource. The backend admits it
+/// as a view of closed plain data, as it does an array of role values, and the loader checks ARRAY_PLAIN.
+#[test]
+fn an_array_of_objects_holding_role_values_is_a_view() {
+    let p = compile(r#"module app;
+role Value { text() is string; }
+object Plain does Value { has t is string; Plain(:t); text() is string { t; } }
+object Member { has value is Value; Member(:value); text() is string { value.text(); } }
+object Table { has origin is @Member; Table(:origin); first() is string { origin[0].text(); } }
+main() is int { Table(origin: [Member(value: Plain(t: "a"))]).first().length(); }
+"#);
+    load(&p).unwrap();
+}
+
+/// What counts as a view: a role, cap, action or `any` leaf, also inside the object graph of an array or map
+/// element (through fields, nested arrays and variant cases); plain scalars and objects of them do not.
+#[test]
+fn a_view_array_holds_a_reference_somewhere_in_its_element_graph() {
+    let mut module = o::text::parse(r#"oir 2 high
+module app
+
+object app.Plain {
+    field n: int
+}
+
+object app.Member {
+    field value: app.Value
+}
+
+object app.Outer {
+    field members: array<app.Member>
+}
+
+role app.Value {
+    text() -> str
+}
+"#).unwrap();
+    let mut ty = |name: &str, role: bool| {
+        let decl = module.declarations.iter().find(|(_, decl)| decl.name == name).unwrap().0;
+        let ty = if role { o::Type::Role { decl, args: vec![] } } else { o::Type::Object { decl, args: vec![] } };
+        module.types.intern(ty).unwrap()
+    };
+    let plain = ty("app.Plain", false);
+    let member = ty("app.Member", false);
+    let outer = ty("app.Outer", false);
+    let role = ty("app.Value", true);
+    assert!(!roles::view_array(&module, role).unwrap(), "not a collection");
+    for (element, view) in [(plain, false), (member, true), (outer, true), (role, true)] {
+        let array = module.types.intern(o::Type::Array(element)).unwrap();
+        assert_eq!(roles::view_array(&module, array).unwrap(), view, "{:?}", module.types.get(element).unwrap());
+    }
+}

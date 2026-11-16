@@ -108,8 +108,9 @@ fn p1_pipeline_scalar_run() {
 
 #[test]
 fn p1_pipeline_unsupported_does_not_fallback() {
-    // Plain async lowers since P2.5 V5; spawn stays outside it (plan §4 P1).
-    let source = concat!("module app; object W { W(); async run() is int { 1; } } ",
+    // Plain async lowers since P2.5 V5 and spawn of an async action since P1; spawn of a synchronous action, a
+    // process worker, stays outside the pipeline until slice X1.
+    let source = concat!("module app; object W { W(); run() is int { 1; } } ",
         "async main() is int { await spawn W().run(); }");
     let error = compile(source).unwrap_err();
     assert!(error.is_unsupported(), "{error}");

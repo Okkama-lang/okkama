@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cancel.final-defer-await-interrupted",
+  "title": "a cancellation while a final `defer await` waits interrupts the deferred work and the task ends cancelled",
+  "purpose": "Observe asynchronous behaviour through causal events.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.STRUCTURED-AWAIT",
+      "aspects": [
+        "boundary"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "body done\ncancel requested\ntask -1 cancelled true\nbody done\ncancel requested\nouter -1 cancelled true\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #739 from the #601 K2 probes; Sparrow (Tomato) is the reference behaviour",
+    "expected_basis": "#739, K2 probe `finaldefer`: the task's body has produced 7 and its `defer await` waits on an event when main cancels the task. A `defer await` is not shielded: the cancellation is delivered at the deferred await, the deferred work does not finish, and the task (or the action awaiting it) ends Cancelled."
+  },
+  "status": "mandatory"
+}

@@ -10,6 +10,7 @@
 //!   that is a call's result awaited at once is a temporary: the producer marks it `temp` in the
 //!   awaiting scope, its cleanup boundary (OIR-2 §10.3), which is how own finds the temporary take.
 //! - `f.done()`, `f.cancel()` and `f.cancelled()` are `fut.done`, `fut.cancel` and `fut.cancelled`.
+//! - `spawn R(…).a(…)` of an async action is the creating call followed by `fut.spawn %f` (D24.1, slice P1).
 //! - `defer await …`: a defer entry whose expression awaits is an async defer entry (async ABI C-6),
 //!   `[defer(), async]` with the async envelopes of H6. It has no replacement: a `return` inside it
 //!   is refused by name (`async-defer-replace`).
@@ -20,8 +21,9 @@ use crate::analysis::{registry::Registry, thir, ty::Ty};
 use crate::oir2 as ir;
 use crate::source::Span;
 
-/// `spawn` of an async action: `fut.spawn` on the created Future (D24).
-const SPAWN_ASYNC: &str = "spawn of an async action (P2.5 slice P1, fut.spawn)";
+/// `spawn` of an async action value that is not a fresh call: a bound async action value (Bible §20.11) is slice
+/// F1; the frontend admits nothing else (D24.1 `d24-spawn-not-fresh`).
+const SPAWN_ASYNC: &str = "spawn of an async action that is not a direct call (P2.5 slice F1, fut.spawn)";
 /// `spawn` of a sync action or of a sync bound action value: a process worker.
 const SPAWN_WORKER: &str = "spawn of a process worker (P2.5 slice X1, proc.spawn)";
 /// A bound async action value and its call (Bible §20.11).
@@ -190,7 +192,8 @@ pub(super) fn outside_plain(expr: &thir::Expr) -> Option<&'static str> {
     use thir::ExprKind as E;
     let async_action = |ty: &Option<Ty>| matches!(ty, Some(Ty::Action(action)) if action.is_async);
     match &expr.kind {
-        E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) => Some(SPAWN_ASYNC),
+        E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) && !temporary(target) => Some(SPAWN_ASYNC),
+        E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) => None,
         E::Spawn(_) => Some(SPAWN_WORKER),
         E::BoundAction { .. } | E::BoundRoleAction { .. } if async_action(&expr.ty) => Some(BOUND_ASYNC),
         E::CallValue { callee, .. } if async_action(&callee.ty) => Some(BOUND_ASYNC),
@@ -232,6 +235,18 @@ impl BodyLowerer<'_, '_> {
         self.sync_failure()?;
         let values = self.b.emit_schema(ir::Operation::Async(ir::AsyncOp::Await { future, result }))?;
         Ok(values.first().copied())
+    }
+
+    /// `spawn R(…).a(…)` of an async action (D24.1, slice P1): the call creates the Future and `fut.spawn %f`
+    /// starts it at once as a task of its own. Nothing comes between the creation and the spawn, which is the
+    /// freshness `d24-spawn-not-fresh` requires; own forwards the owner state and adds the task duty. The value of
+    /// the expression is the same Future, so it can be awaited, cancelled or kept.
+    pub(super) fn spawn_value(&mut self, target: &thir::Expr) -> Result<Option<ir::ValueId>> {
+        let Some(future) = self.value(target)? else {
+            return Ok(None);
+        };
+        self.b.emit_schema(ir::Operation::Async(ir::AsyncOp::FutureSpawn { future, state: None }))?;
+        Ok(Some(future))
     }
 
     /// `f.done()`, `f.cancel()` and `f.cancelled()` (Bible §20.1). None of them reads the value.

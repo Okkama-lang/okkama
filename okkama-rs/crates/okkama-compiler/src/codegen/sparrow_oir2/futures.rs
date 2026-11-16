@@ -221,6 +221,11 @@ impl Emitter<'_> {
                 operands.extend([location(*packet)?, location(*deps)?, location(*owner_state)?]);
                 (O::FutureNew, operands)
             }
+            // D24.1 (#601 P1): the Future and its cache duty; the duty comes back with the task duty.
+            X::FutureSpawn { future, state: Some(cache) } => {
+                (O::FutureSpawn, vec![location(*future)?, location(*cache)?])
+            }
+            X::FutureSpawn { state: None, .. } => return Err(error("High's fut.spawn reached codegen")),
             X::FutureCancel { future } => (O::FutureCancel, vec![location(*future)?]),
             X::FutureDone { future } => (O::FutureDone, vec![location(*future)?]),
             X::FutureCancelled { future } => (O::FutureCancelled, vec![location(*future)?]),
@@ -267,8 +272,9 @@ impl Emitter<'_> {
             // The capability is a proof position: its evidence was checked by verify_low, and the loader proves
             // it again from the code (SPB_TAKE_CAPABILITY), so only the proved Future travels.
             X::UniqueCacheProof { proof } => (O::UniqueCacheProof, vec![location(proof.future)?]),
-            // C-4, token form: the cache duty joins the pending reserve of the exit whose destination it names.
-            X::CacheRehome { form: o::RehomeForm::Token { pending, cache, task: None }, target, protocol } => {
+            // C-4, token form: the cache duty, and a spawned Future's task duty with it (D24.1), join the pending
+            // reserve of the exit whose destination it names.
+            X::CacheRehome { form: o::RehomeForm::Token { pending, cache, task }, target, protocol } => {
                 self.services(*protocol)?;
                 // The target is the exit's destination (ruling after C-4): a scope, or the caller of a returned
                 // Future (#601 R1).
@@ -276,7 +282,11 @@ impl Emitter<'_> {
                     o::RehomeTarget::Scope(scope) => s::ExitDestination::Scope(scope.as_u32()),
                     o::RehomeTarget::Caller => s::ExitDestination::Caller,
                 });
-                (O::CacheRehome, vec![destination, location(*pending)?, location(*cache)?])
+                let mut operands = vec![destination, location(*pending)?, location(*cache)?];
+                if let Some(task) = task {
+                    operands.push(location(*task)?);
+                }
+                (O::CacheRehome, operands)
             }
             // C-4, own form: the entry the owner admitted (D25.3) leaves the state for the reserve.
             X::CacheRehome { form: o::RehomeForm::Scope { state, pending, future }, target, protocol } => {
@@ -287,8 +297,8 @@ impl Emitter<'_> {
                 });
                 (O::CacheRehome, vec![destination, location(*pending)?, location(*state)?, location(*future)?])
             }
-            X::CacheRehome { .. } => {
-                return Err(later("cache.rehome of a spawned task's duty (P1)"));
+            X::CacheRehome { form: o::RehomeForm::State(_), .. } => {
+                return Err(error("the pre-C-4 cache.rehome form is not produced"));
             }
             // D25.2: a cache duty's entry out of a packet as its token, or a token into a packet.
             X::ServiceMaterialize { packet, entry } if entry.kind == o::ServiceKeyKind::Cache => {

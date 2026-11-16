@@ -102,7 +102,10 @@ pub(super) fn check(module: &ir::Module, body: &ir::Body) -> Result<()> {
             }
         }
         local_objects.extend(aliases.iter().copied());
-        check_identity(body, allocation, fields, *construction, &aliases, &undefined, pending)?;
+        let messages: Vec<_> = layout.iter().map(|field| super::objects::unbound_message(&object, &field.name))
+            .collect();
+        let identity = Identity { allocation, fields, construction: *construction, aliases: &aliases, pending };
+        check_identity(body, &identity, &undefined, &messages)?;
     }
     for (_, inst) in body.insts.iter() {
         if let ir::Operation::Core(ir::CoreOp::ObjInit { object, .. }) = inst.op
@@ -171,15 +174,40 @@ fn is_false(body: &ir::Body, value: ir::ValueId) -> bool {
     body.insts.get(inst).is_ok_and(|inst| inst.op == ir::Operation::Const(ir::Literal::Bool(false)))
 }
 
+/// One self allocation of a constructor body and the values that alias it.
+struct Identity<'a> {
+    allocation: ir::InstId,
+    fields: &'a [ir::ValueId],
+    construction: ir::ConstructionStatus,
+    aliases: &'a HashSet<ir::ValueId>,
+    pending: bool,
+}
+
+/// The fields a `Cond` edge into `target` proves initialized (#746): the `yes` edge of a bound-flag check, whose
+/// `no` target traps with `TrapCode::Unbound` and Tomato's message for the field (`messages`, in layout order).
+/// An early self reaches its completion after the producer's flag checks of the fields a path may have left
+/// unbound; behind the check, such a field is initialized on every path that goes on.
+pub(super) fn bound_behind(body: &ir::Body, term: &ir::TermKind, target: ir::BlockId, messages: &[String])
+    -> Result<Vec<usize>> {
+    let ir::TermKind::Cond { yes, no, .. } = term else {
+        return Ok(vec![]);
+    };
+    if yes.block != target || no.block == target {
+        return Ok(vec![]);
+    }
+    let ir::TermKind::Trap { code: ir::TrapCode::Unbound, message } = &body.blocks.get(no.block)?.term.kind else {
+        return Ok(vec![]);
+    };
+    Ok(messages.iter().enumerate().filter(|(_, expected)| *expected == message).map(|(index, _)| index).collect())
+}
+
 fn check_identity(
     body: &ir::Body,
-    allocation: ir::InstId,
-    fields: &[ir::ValueId],
-    construction: ir::ConstructionStatus,
-    aliases: &HashSet<ir::ValueId>,
+    identity: &Identity<'_>,
     undefined: &HashSet<ir::ValueId>,
-    pending: bool,
+    messages: &[String],
 ) -> Result<()> {
+    let Identity { allocation, fields, construction, aliases, pending } = *identity;
     // Each cell is a set: absent (0), uninitialized (1), initialized (2).
     // Union at joins makes reads and completion valid on every incoming path.
     let mut incoming = HashMap::from([(body.entry, vec![0u8; fields.len() + 1])]);
@@ -227,6 +255,12 @@ fn check_identity(
             return Err(error("return of incomplete self"));
         }
         for edge in targets(&block.term.kind) {
+            let mut state = state.clone();
+            if state[fields.len()] == 1 {
+                for index in bound_behind(body, &block.term.kind, edge.block, messages)? {
+                    state[index] = 2;
+                }
+            }
             let changed = if let Some(old) = incoming.get_mut(&edge.block) {
                 let previous = old.clone();
                 for (slot, next) in old.iter_mut().zip(&state) {

@@ -1263,16 +1263,15 @@ pub extern "C" fn rt_catch(ctx: *mut Ctx, function: u64, pc: u64, failure: Word)
             CatchKind::Role => program.roles.get(*ty as usize).is_some_and(|r| r.is_error()),
             CatchKind::Variant => false,
         };
-        if !matches {
+        // The handler's binding is a `Cancelled` value, built from the builtin object's descriptor; the compiler
+        // brings the object along with every catch of the Error role. Without it there is no value to bind (an
+        // unbound word would be dispatched on by `e.text()`, #744), so the catch does not match and the
+        // cancellation goes on unwinding.
+        let (true, Some(descriptor)) = (matches, builtin) else {
             return 0;
-        }
-        ctx.scratch = match builtin {
-            Some(descriptor) => {
-                let fields = vec![UNBOUND; program.objects[descriptor].fields.len()];
-                runtime.heap.object_new(descriptor as u32, &fields)
-            }
-            None => UNBOUND,
         };
+        let fields = vec![UNBOUND; program.objects[descriptor].fields.len()];
+        ctx.scratch = runtime.heap.object_new(descriptor as u32, &fields);
         return 1;
     }
     if let Some(FailureKind::Native(object)) = runtime.failure(failure).map(|f| &f.kind) {

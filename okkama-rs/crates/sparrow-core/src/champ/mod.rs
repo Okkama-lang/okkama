@@ -107,8 +107,9 @@ pub(crate) struct State {
     rejection_floor: Option<u64>,
     rejection_plan: Option<PlanId>,
     value_reprs: std::collections::BTreeMap<(u64, u64, bool), crate::word::Repr>,
-    /// Relocated D16 schedules: the duty count of each, by runtime id minus one.
-    schedules: Vec<u64>,
+    /// Relocated D16 schedules: the service kind of each duty in order (`SERVICE_CACHE`, or `SERVICE_TASK` for a
+    /// spawned Future's task duty, D24.2), by runtime id minus one.
+    schedules: Vec<Vec<u64>>,
     /// The owner of caches detached to the root (draft 3 §6.2).
     root_owner: Option<OwnerId>,
     #[cfg(test)]
@@ -199,8 +200,8 @@ impl Runtime {
         Ok(HolderId(self.champ.holder))
     }
 
-    /// A function-local D16 schedule relocated to a nonzero runtime id: its duties settle in order.
-    pub fn champ_register_schedule(&mut self, duties: u64) -> u64 {
+    /// A function-local D16 schedule relocated to a nonzero runtime id: its duties, by service kind, settle in order.
+    pub fn champ_register_schedule(&mut self, duties: Vec<u64>) -> u64 {
         self.champ.schedules.push(duties);
         self.champ.schedules.len() as u64
     }

@@ -66,20 +66,24 @@ pub(super) fn assign(
             return Err(invalid(function, "every schedule of an owner with admitted entries ends with dynamic"));
         }
     }
-    // C-1: every cache-state token is a version of the duty that one `fut.new` gave its owner scope.
+    // C-1: every cache-state token is a version of the duty that one `fut.new` gave its owner scope; D24.1: a
+    // spawn forwards that duty and gives its owner the task duty, a task-state token.
     let mut owners: BTreeMap<ValueId, ScopeId> = BTreeMap::new();
     for (value, data) in body.values.iter() {
         budget.step(1)?;
-        if module.types.get(data.ty)? != &Type::Service(ServiceType::CacheState) {
+        let task = match module.types.get(data.ty)? {
+            Type::Service(ServiceType::CacheState) => false,
+            Type::Service(ServiceType::TaskState) => true,
+            _ => continue,
+        };
+        let created = creation(body, value, budget)?;
+        if task && !created.is_some_and(|token| spawned_task(body, token)) {
+            // An await's task handle reaches only `await.unwind` (C-3); it is no duty. A spawned task's duty that
+            // edges merge from several spawns has no one owner, and the verifier finds it unsettled.
             continue;
         }
-        let owner = creation(body, value, budget)?.and_then(|token| match body.values.get(token).ok()?.def {
-            Definition::InstResult { inst, index: 1 } => match &body.insts.get(inst).ok()?.op {
-                Operation::Async(AsyncOp::FutureNew { owner, .. }) => Some(*owner),
-                _ => None,
-            },
-            _ => None,
-        }).ok_or_else(|| invalid(function, "a cache-state token is the duty of one fut.new (C-1)"))?;
+        let owner = created.and_then(|token| duty_owner(body, token, budget).ok().flatten())
+            .ok_or_else(|| invalid(function, "a duty token is a duty of one fut.new (C-1, D24.1)"))?;
         owners.insert(value, owner);
     }
     let mut available_at: BTreeMap<CloseKey, (ScopeId, BTreeSet<ValueId>)> = BTreeMap::new();
@@ -206,6 +210,30 @@ fn creation(body: &Body, value: ValueId, budget: &mut Budget<'_>) -> Result<Opti
         }
     }
     Ok(found)
+}
+
+/// Whether `token` is the task duty that a `fut.spawn` gave (D24.1).
+fn spawned_task(body: &Body, token: ValueId) -> bool {
+    matches!(body.values.get(token).map(|data| data.def), Ok(Definition::InstResult { inst, index: 1 })
+        if body.insts.get(inst).is_ok_and(|inst| matches!(inst.op, Operation::Async(AsyncOp::FutureSpawn { .. }))))
+}
+
+/// The owner scope of the duty `token` created: the owner of a `fut.new`'s cache duty, which a `fut.spawn` forwards
+/// (result 0) and whose Future it gives a task duty (result 1).
+fn duty_owner(body: &Body, token: ValueId, budget: &mut Budget<'_>) -> Result<Option<ScopeId>, LowError> {
+    let Definition::InstResult { inst, index } = body.values.get(token)?.def else {
+        return Ok(None);
+    };
+    match &body.insts.get(inst)?.op {
+        Operation::Async(AsyncOp::FutureNew { owner, .. }) if index == 1 => Ok(Some(*owner)),
+        Operation::Async(AsyncOp::FutureSpawn { state: Some(cache), .. }) if index <= 1 => {
+            match creation(body, *cache, budget)? {
+                Some(created) => duty_owner(body, created, budget),
+                None => Ok(None),
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 fn merge(found: Option<ValueId>, value: ValueId) -> Option<ValueId> {

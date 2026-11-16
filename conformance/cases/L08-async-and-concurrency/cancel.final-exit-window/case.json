@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cancel.final-exit-window",
+  "title": "a cancellation that arrives while a task's final await has its outcome is delivered at the next await, never at the task's exit",
+  "purpose": "Observe asynchronous behaviour through causal events.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.STRUCTURED-AWAIT",
+      "aspects": [
+        "boundary"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "main observed 42\ncancel requested\ninner observed 42\ninner cleanup\ninner cancelled false\nworker got -2\nworker cleanup\n-2\ncancelled false\nmain observed 42\ndirect observed 42\ndirect cleanup\ndirect 42 cancelled false\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #739 from the #601 K2 probes; Sparrow (Tomato) is the reference behaviour",
+    "expected_basis": "#739, K2 probe `window`: main cancels the worker after main observed the child the worker also awaits. In the first scenario the worker awaits an inner action that observes the child and completes; the cancellation is delivered at the worker's await of it, which the worker catches (-2), and the inner Future is not cancelled. In the second the worker awaits the child itself as its last await: its result stands (42) and it is not cancelled, because a cancellation still pending when the body has produced its result is not delivered at the final exit."
+  },
+  "status": "mandatory"
+}

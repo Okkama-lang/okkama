@@ -476,6 +476,11 @@ helpers! {
         this: Word,
         inputs: *const crate::champ::PublishIn) -> u64; [Stops];
     #[cfg(feature = "champ-abi")]
+    champ_future_spawn = crate::champ::rt_future_spawn as (ctx,
+        future: Word,
+        cache: *mut crate::champ::CacheSlot,
+        post: *mut crate::champ::SpawnPost) -> u64; [Allocates, Collects, Reenters, Stops];
+    #[cfg(feature = "champ-abi")]
     champ_future_cancel = crate::champ::rt_cancel_request as (ctx, future: Word) -> u64; [Stops];
     #[cfg(feature = "champ-abi")]
     champ_future_cancelled = crate::champ::rt_future_cancelled as (ctx,

@@ -1,0 +1,47 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Task {
+    has inside is Event;
+    has release is Event;
+    Task(:inside, :release);
+    async settle() is void {
+        inside.set();
+        await release.wait();
+        Stdout().writeln("defer finished");
+    }
+    async run() is int {
+        defer await self.settle();
+        Stdout().writeln("body done");
+        7;
+    }
+    async outer() is int {
+        let v = await self.run();
+        Stdout().writeln("outer got " + v.string());
+        v;
+    }
+}
+
+async main() is int {
+    let inside = Event();
+    let release = Event();
+    let t = spawn Task(inside: inside, release: release).run();
+    await inside.wait();
+    t.cancel();
+    Stdout().writeln("cancel requested");
+    release.set();
+    let r = try { await t; } catch e is Cancelled { -1; };
+    Stdout().writeln("task " + r.string() + " cancelled " + t.cancelled().string());
+    let inside2 = Event();
+    let release2 = Event();
+    let o = spawn Task(inside: inside2, release: release2).outer();
+    await inside2.wait();
+    o.cancel();
+    Stdout().writeln("cancel requested");
+    release2.set();
+    let r2 = try { await o; } catch e is Cancelled { -1; };
+    Stdout().writeln("outer " + r2.string() + " cancelled " + o.cancelled().string());
+    0;
+}

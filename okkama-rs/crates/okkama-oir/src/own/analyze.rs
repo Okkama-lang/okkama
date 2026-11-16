@@ -522,9 +522,10 @@ fn transfer(
                     }
                 }
             }
-            // A cancellation request and the Future queries observe the Future; their results are scalars.
+            // A cancellation request and the Future queries observe the Future; their results are scalars. A
+            // spawn (D24.1) has no result: the task duty it adds travels with the Future's cache duty.
             Operation::Async(AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. }
-                | AsyncOp::FutureCancelled { .. }) => {}
+                | AsyncOp::FutureCancelled { .. } | AsyncOp::FutureSpawn { state: None, .. }) => {}
             Operation::Core(_) if instruction.results.iter().all(|value| {
                 !classification.types.get(&body.values.get(*value).unwrap().ty)
                     .is_some_and(TypeClassification::may_own)
