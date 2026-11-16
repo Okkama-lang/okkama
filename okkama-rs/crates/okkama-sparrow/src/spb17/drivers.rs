@@ -135,6 +135,9 @@ pub(super) fn entries(objects: &[Object]) -> Vec<(Function, Vec<u32>)> {
 /// The deps proofs of an entry, as the producer's elaboration gives them: one for each Event cell parameter (a
 /// builtin capability: a reference with deps) and one for the receiver of a member that is a role slot of the
 /// object implementing that role. The other declarations of the catalogue are plain values without references.
+///
+/// The producer gives its declarations the same deps (`okkama-compiler`, `lowering/oir2/drivers.rs`, `deps`), as own
+/// elaborates external signatures: change both together.
 fn deps(objects: &[Object], name: &str, registers: &[Type]) -> usize {
     let event = declaration(objects, EVENT);
     let cells = registers.iter().filter(|&&ty| Some(ty) == event.map(Type::Object)).count();

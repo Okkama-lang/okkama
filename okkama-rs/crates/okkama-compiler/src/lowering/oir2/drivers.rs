@@ -221,6 +221,8 @@ pub(super) fn objects(module: &ir::Module, name: &str) -> Result<Option<Vec<ir::
 /// `params` (own's external signatures): one for each managed reference, which among these types is the Event cell
 /// (a builtin capability), and one for the receiver of a member that is a role slot of its object. The other
 /// objects of the catalogue are plain values without references.
+///
+/// The same rule builds the trusted SPB 17 entries (`okkama_sparrow::spb17::drivers::deps`): change both together.
 pub(super) fn deps(module: &ir::Module, function: ir::FuncId, params: &[ir::TypeId]) -> usize {
     let cell = params.iter().filter(|&&ty| match module.types.get(ty) {
         Ok(ir::Type::Object { decl, .. }) => module.declarations.get(*decl).is_ok_and(|declaration| {
