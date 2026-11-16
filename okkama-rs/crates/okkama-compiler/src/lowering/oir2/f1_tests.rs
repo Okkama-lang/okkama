@@ -239,3 +239,25 @@ fn f1_own_keeps_the_duty_form_only_for_a_spawn_right_after_its_creation() {
     assert_ne!(separated, text);
     assert_eq!(spawned(&separated), ["bound"]);
 }
+
+/// #791 D1 (W7): an async slot whose implementation narrows a successor result (`^Walker` for `^Stepping`, which the
+/// front end admits) would need the slot's Future of `^Stepping` from the body's Future of `^Walker`. No operation
+/// converts the outcome of a cold Future, so the producer refuses it with a named construct, not an internal error.
+#[test]
+fn f1_a_covariant_successor_result_of_an_async_slot_is_refused_by_name() {
+    let source = concat!(
+        "module app v1.0.0; ",
+        "role Stepping { async step() is ^Stepping; label() is int; } ",
+        "object Walker does Stepping { has n is int = 0; Walker() {} async step() is ^Walker { ^n = n + 1; } ",
+        "label() is int { n; } } ",
+        "async main() is int { let s is Stepping = Walker(); let t = await s.step(); t.label(); }",
+    );
+    match super::lower_std(source) {
+        Err(super::LowerError::Unsupported { message, span }) => {
+            assert!(message.contains("covariant successor result of an async role slot"), "{message}");
+            assert!(!span.is_empty());
+        }
+        Err(other) => panic!("expected the named refusal, got {other}"),
+        Ok(_) => panic!("expected the named refusal"),
+    }
+}

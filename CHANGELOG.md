@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A covariant successor result of an async role slot is a named refusal
+  (#791 D1).** An async action that narrows its role slot's successor result
+  (`async step() is ^Walker` for `async step() is ^Stepping`) made the
+  producer wrap the creation thunk's Future in `role.wrap`, which the High
+  verifier refused with an internal error. A Future's outcome type is fixed
+  at its creation, so the producer now refuses it as `unsupported`
+  ("covariant successor result of an async role slot").
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own
