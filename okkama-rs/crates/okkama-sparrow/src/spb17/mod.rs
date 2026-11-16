@@ -250,6 +250,11 @@ pub enum Type {
     /// An `any` value: a reference to an any box (`Object::any_box`), which holds the value in its one
     /// field and the value's type in its descriptor.
     Any,
+    /// A hidden runtime word of an object's storage: a reference the runtime keeps for the object (the waiters of
+    /// an Event cell, #601 Q1 audit A1). The collector traces it; it is never a source field, a value of a
+    /// register, a comparison operand, a selected field or part of a resource graph (`RUNTIME_CELL`). The hidden
+    /// words of the channel and group holders (slices Q2, G1) take this type too.
+    RuntimeCell,
 }
 
 impl Type {
@@ -257,7 +262,8 @@ impl Type {
     pub fn traced(self) -> bool {
         matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
             | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
-            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_) | Self::Any)
+            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_) | Self::Any
+            | Self::RuntimeCell)
     }
 }
 

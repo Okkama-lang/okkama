@@ -376,6 +376,8 @@ fn legacy_type(ty: s::Type, futures: &[Option<okkama_sparrow::TypeRef>]) -> okka
         // A Future is a reference to its frame (Champ draft 3 §2), with its outcome type when it has one.
         s::Type::Future(index) => T::Future(futures.get(index as usize).copied().flatten()),
         s::Type::Any => T::Any,
+        // A runtime cell is a traced reference the runtime keeps; the declaration view types it as `any`.
+        s::Type::RuntimeCell => T::Any,
     }
 }
 
@@ -880,6 +882,8 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
             s::Type::Rat => runtime.rational(a) == runtime.rational(b),
             s::Type::Handle(_) => return Err("cannot compare native handles".into()),
             s::Type::Future(_) => return Err("cannot compare Futures".into()),
+            // The loader keeps a runtime cell out of every comparison (`SPB_RUNTIME_CELL`, #601 Q1 audit A1).
+            s::Type::RuntimeCell => return Err("cannot compare a runtime cell".into()),
             s::Type::Bytes => runtime.heap.bytes(a) == runtime.heap.bytes(b),
             s::Type::Range => {
                 let x = runtime.heap.payload::<crate::ops::RangeValue>(a).expect("verified range");
@@ -898,6 +902,10 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
             // An `any` value compares as its box: one boxed type, equal values.
             s::Type::Object(_) | s::Type::Successor(_) | s::Type::Variant(_) | s::Type::Role(_)
                 | s::Type::RoleSuccessor(_) | s::Type::Any => {
+                // Only objects reach here; a payload's header names no descriptor (#601 Q1 audit A1).
+                if [a, b].iter().any(|&word| heap::kind(runtime.heap.header_of(word)) != heap::OBJECT) {
+                    return Err("cannot compare a value that is not an object".into());
+                }
                 let descriptor = heap::payload(runtime.heap.header_of(a));
                 if descriptor != heap::payload(runtime.heap.header_of(b)) {
                     return Ok(false);
@@ -908,7 +916,9 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
                         .collect::<Vec<_>>();
                     // An enum has no source fields: its tag is its value.
                     let storage = if object.fields.is_empty() {
-                        (0..object.layout.storage_fields.len() as u32).collect()
+                        (0..object.layout.storage_fields.len() as u32)
+                            .filter(|&index| object.layout.storage_fields[index as usize] != s::Type::RuntimeCell)
+                            .collect()
                     } else {
                         storage
                     };

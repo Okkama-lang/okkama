@@ -130,13 +130,16 @@ impl P1NativeSummaries {
                 _ => continue,
             };
             let decl = module.declarations.get(decl).map_err(|err| error(err.to_string()))?;
-            // The Event cell (#601 Q1) is a builtin capability of the same kind: plain, nothing to close.
+            // The Event cell (#601 Q1) is a builtin capability of the same kind: plain, nothing to close. Its one
+            // source field `initial` is a bool.
             let cell = decl.name.strip_prefix("async.atomic.Atomic_")
-                .and_then(|suffix| atomic_value(module, suffix)).is_some() || decl.name == super::drivers::EVENT;
-            let atomic = cell
-                && matches!(&decl.kind, ir::DeclarationKind::Object {
+                .and_then(|suffix| atomic_value(module, suffix)).is_some();
+            let event = decl.name == super::drivers::EVENT;
+            let bool_type = module.types.iter().find_map(|(id, ty)| (*ty == ir::Type::Bool).then_some(id));
+            let atomic = matches!(&decl.kind, ir::DeclarationKind::Object {
                     builtin: true, destroy: None, fields, witnesses,
-                } if fields.is_empty() && witnesses.is_empty());
+                } if witnesses.is_empty() && (cell && fields.is_empty() || event && matches!(fields.as_slice(),
+                    [field] if field.name == "initial" && Some(field.ty) == bool_type && !field.once)));
             let plain_error = decl.name == "Error"
                 && matches!(decl.kind, ir::DeclarationKind::Role { builtin: true, .. });
             if atomic || plain_error {

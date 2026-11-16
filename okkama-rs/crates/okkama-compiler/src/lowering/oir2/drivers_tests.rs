@@ -62,9 +62,10 @@ fn q1_members_are_bodyless_catalogue_externals() {
     assert_eq!(objects("okkama.event.Event.new"), ["async.event.Event"]);
     assert_eq!(objects("okkama.lock.Lock.guard"), ["async.lock.LockGuard"]);
     assert_eq!(objects("okkama.barrier.Barrier.wait"), ["async.barrier.BrokenBarrier"]);
-    // The Event cell is builtin: its runtime layout replaces its source field.
+    // The Event cell is builtin: its runtime layout extends its source field `initial`, which equality reads.
     let event = module.declarations.iter().find(|(_, declaration)| declaration.name == "async.event.Event").unwrap();
-    assert!(matches!(&event.1.kind, ir::DeclarationKind::Object { builtin: true, fields, .. } if fields.is_empty()));
+    assert!(matches!(&event.1.kind, ir::DeclarationKind::Object { builtin: true, fields, .. }
+        if matches!(fields.as_slice(), [field] if field.name == "initial")));
 }
 
 #[test]
@@ -132,4 +133,30 @@ fn q1_deps_follow_own_for_role_slots() {
     assert_eq!(deps("okkama.lock.LockGuard.close"), 1);
     assert_eq!(deps("okkama.event.Event.set"), 1);
     assert_eq!(deps("okkama.lock.Lock.locked"), 0);
+}
+
+/// Builds `source` through the pipeline and loads it against the trusted catalogue.
+fn loads(source: &str) -> s::Program {
+    let high = lower_std(source).unwrap_or_else(|error| panic!("{error}"));
+    let bytes = compile_high_with(high, ir::verify::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let program = s::decode(&bytes).unwrap();
+    let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
+    s::verify_load(&program, &contracts).unwrap_or_else(|error| panic!("{error}"));
+    program
+}
+
+#[test]
+fn q1_events_compare_and_their_runtime_word_reaches_nothing() {
+    // Audit A1: `==` of two Events loads and reads `initial`; the waiters are a hidden runtime cell. Audit A2: an
+    // `any` that holds a resource leaves the cell plain, so its catalogue entries stay.
+    let program = loads(concat!(
+        "module app; import \"async/event\" take Event; object Res { Res() {} destroy { } } ",
+        "async main() is int { let x is any = Res(); let a = Event(); let b = Event(ready: true); ",
+        "a.set(); await a.wait(); if a == b { 1; } else { 0; } }",
+    ));
+    let event = program.objects.iter().find(|object| object.name == s::drivers::EVENT).unwrap();
+    assert_eq!(event.layout.storage_fields, s::drivers::EVENT_STORAGE);
+    assert_eq!(event.layout.storage_fields[2], s::Type::RuntimeCell);
+    assert!(!event.layout.may_reach_resource && event.layout.selection_layout.is_empty());
+    assert!(matches!(event.fields.as_slice(), [field] if field.name == "initial" && field.storage == 0));
 }

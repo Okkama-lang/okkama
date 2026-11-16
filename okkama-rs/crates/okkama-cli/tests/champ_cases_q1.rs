@@ -362,3 +362,81 @@ async main() is int {
 }
 "#, "main observed 42\ndirect observed 42\ndirect cleanup\ndirect 42 cancelled false\n", 0);
 }
+
+/// #601 Q1 audit A1: Events compare as on Tomato, by their source field `initial`; the runtime's words are not
+/// compared.
+#[test]
+fn q1_events_compare_by_their_initial_state() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+main() is int {
+    let a = Event();
+    let b = Event();
+    let c = Event(ready: true);
+    Stdout().writeln("same " + (a == a).string());
+    Stdout().writeln("fresh " + (a == b).string());
+    Stdout().writeln("ready " + (a == c).string());
+    0;
+}
+"#, "same true
+fresh true
+ready false
+", 0);
+}
+
+/// #601 Q1 audit A1: two Events, each with a waiting task, compare by `initial` (Tomato), never by their
+/// runtime list of waiters.
+#[test]
+fn q1_events_with_waiters_compare_by_their_initial_state() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+object Waiter {
+    has e is Event;
+    Waiter(:e);
+    async run() is int { await e.wait(); 1; }
+}
+async main() is int {
+    let a = Event();
+    let b = Event();
+    let wa = spawn Waiter(e: a).run();
+    let wb = spawn Waiter(e: b).run();
+    Stdout().writeln("same " + (a == a).string());
+    Stdout().writeln("other " + (a == b).string());
+    a.set();
+    b.set();
+    await wa;
+    await wb;
+    Stdout().writeln("after " + (a == b).string());
+    0;
+}
+"#, "same true
+other true
+after true
+", 0);
+}
+
+/// #601 Q1 audit A2: an `any` that holds a resource leaves the Event cell plain (its runtime word reaches nothing),
+/// and the driver's cache survives Tomato's resource bookkeeping, which never runs on Champ.
+#[test]
+fn q1_an_event_beside_an_any_that_holds_a_resource() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+object Res {
+    Res() {}
+    destroy { Stdout().writeln("res closed"); }
+}
+async main() is int {
+    let x is any = Res();
+    let e = Event();
+    e.set();
+    await e.wait();
+    Stdout().writeln("waited " + e.ready().string());
+    0;
+}
+"#, "waited true
+res closed
+", 0);
+}

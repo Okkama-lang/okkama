@@ -582,10 +582,11 @@ impl Declarations {
         object_ids.sort_by_key(|(object, _)| *object);
         for (object, decl) in object_ids {
             let info = &reg.objects[object.0];
-            // The Event cell's runtime layout replaces its source field (#601 Q1): its constructors are intrinsics.
+            // The Event cell's runtime layout extends its source field `initial` with the runtime's words (#601 Q1):
+            // its constructors are intrinsics, and an equality reads `initial`, as Tomato's (audit A1).
             let cell = super::drivers::builtin(&reg.modules[info.module].name, &info.name);
             let mut fields = vec![];
-            for (index, field) in info.fields.iter().enumerate().filter(|_| !cell) {
+            for (index, field) in info.fields.iter().enumerate() {
                 fields.push(ir::Field {
                     name: field.name.clone(),
                     ty: this.ty(&field.ty, field.span)?,

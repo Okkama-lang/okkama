@@ -64,6 +64,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   the loader keeps checking `ARRAY_PLAIN`). Eight cases pass;
   `L08.collect.race-empty` stops next on an array of futures in an object
   field (#758). The Champ case harness passes a case's `args`.
+- **Champ: the Event cell's runtime word and Tomato's tracking (#601 Q1
+  audit A1, A2).** The waiters word of the Event cell was typed `any` in SPB
+  17: `==` of two Events read the runtime list of waiters as an any box
+  (unsound), and an `any` holding a resource made the cell reach resources,
+  which dropped every `okkama.event.*` catalogue entry. SPB 17 gains
+  `Type::RuntimeCell` (wire tag 43), a traced hidden storage word that is no
+  value type, no source field, never selected and never compared (loader
+  rule `SPB_RUNTIME_CELL`); the Event cell is `[Bool, Bool, RuntimeCell]`
+  and keeps its source field `initial`, which `==` compares, as on Tomato.
+  Champ's equality reads only objects. A Champ runtime also never runs
+  Tomato's resource tracking: in a program with a destroy, a driver
+  Future's settle took its cache record word for an outcome region.
 - **A Future creation offers only its managed inputs (#601 Q1).** Own
   offered every input of an async call when one of them was managed, a
   Future argument included, though a Future input only borrows its cache

@@ -446,7 +446,7 @@ tagged! { Type {
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
     23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
     26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32), 29 => Future(id: u32),
-    40 => Role(id: u32), 41 => RoleSuccessor(id: u32), 42 => Any,
+    40 => Role(id: u32), 41 => RoleSuccessor(id: u32), 42 => Any, 43 => RuntimeCell,
 } }
 impl Wire for Composite {
     fn put(&self, w: &mut Writer) {

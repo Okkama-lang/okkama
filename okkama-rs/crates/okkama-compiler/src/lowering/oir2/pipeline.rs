@@ -206,7 +206,8 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         // A once slot is an ordinary Maybe field: the producer stores Maybe.none at construction and
         // once.load/once.store read and fill it (SPB 17 `Field::once` keeps it out of equality and keys).
         // The Event cell of the std async primitives (#601 Q1): `[initial, set, waiters]`, as Tomato keeps it.
-        let event = builtin && fields.is_empty() && destroy.is_none() && declaration.name == s::drivers::EVENT;
+        let event = builtin && destroy.is_none() && declaration.name == s::drivers::EVENT
+            && matches!(fields, [field] if field.name == "initial" && !field.once);
         if builtin && atomic.is_none() && !event {
             return Err(phase("layout", format!("missing final runtime override for {}", declaration.name)));
         }
