@@ -70,3 +70,32 @@ fn oir2_w1_order_lazy_branches_builds_under_the_full_gate() {
     assert!(o::verify::GATE_STEPS > o::verify::VerifyLimits::default().steps);
     spb17("L08.order.lazy-branches", o::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// #772: an async body that passes its Future parameter to a nested async call. The nested creation retains the
+/// parameter for its inputs holder, so the outer body's summary retains it too; an async body's only SPB parameter
+/// is its frame, so its entry contract retains none, and the program builds and loads under both gates.
+#[test]
+fn oir2_772_an_async_body_passes_its_future_parameter_on() {
+    let source = concat!(
+        "module app; import \"io/stdout\" take Stdout; ",
+        "object Child { Child(); async run() is int { 42; } } ",
+        "object Worker { Worker(); async inner(child is Future<int>) is int { await child; } ",
+        "async run(child is Future<int>) is int { await self.inner(child); } } ",
+        "async main() is int { let child = spawn Child().run(); ",
+        "Stdout().writeln((await Worker().run(child)).string()); 0; }",
+    );
+    for mode in [o::VerifyMode::Structural, o::VerifyMode::Full] {
+        let high = super::super::tests::lower_std(source).unwrap_or_else(|error| panic!("{error}"));
+        let run = high.functions.iter().find(|(_, function)| function.symbol.contains("Worker.run")).unwrap().1;
+        let summary = high.summaries.get(run.async_body_summary.unwrap()).unwrap();
+        assert_eq!(summary.parameters.len(), 2, "the receiver and the Future");
+        let bytes = compile_high_with(high, mode).unwrap_or_else(|error| panic!("{error}"));
+        let program = s::decode(&bytes).unwrap();
+        let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
+        s::verify_load(&program, &contracts).unwrap_or_else(|error| panic!("{error}"));
+        for (symbol, _) in async_bodies(&program) {
+            let function = program.functions.iter().find(|function| function.symbol == symbol).unwrap();
+            assert_eq!(function.proofs.entry.as_ref().unwrap().retained_params, [] as [u32; 0], "{symbol}");
+        }
+    }
+}
