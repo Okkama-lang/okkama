@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: resources lent to an async action (#732, #742).** An async action with a
+  resource receiver and a resource argument, a bound resource borrowed by an awaited
+  async action, and resources that keep the caller's Atomic now compile and run on
+  Champ with Tomato's output. SPB 17 codegen emitted a static relocation for every
+  resource a split names, while the split of a lent resource moves nothing; the
+  emitted proof is now the loader's own reconstruction.
+
 - **A result may keep a lent field of a parameter (PR-P, #749, #789).** A step or
   a cursor that keeps its receiver's log (an object over an Atomic, or any value
   that reaches no obligation and no Future) declares that field as an alias of its
