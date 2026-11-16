@@ -117,3 +117,14 @@ fn variant_get_of_the_only_error_case_reads_the_case_field() {
         o::Type::Int).unwrap_err();
     assert!(wrong.0.contains("only Error case"), "{wrong:?}");
 }
+
+/// A plain variant names its cases as Tomato's texts do (`Choice.one`), so an Error payload of it can be shown
+/// (#763); an Error variant's cases carry their texts as error cases and the variant itself has no names.
+#[test]
+fn a_plain_variant_names_its_cases() {
+    let (m, _, _) = module();
+    let objects = objects(&m, &layouts(&m)).unwrap();
+    let named = |name: &str| objects.iter().find(|object| object.name == name).unwrap().enum_names.clone();
+    assert_eq!(named("Choice"), ["Choice.one", "Choice.two"]);
+    assert!(named("Fail").is_empty());
+}

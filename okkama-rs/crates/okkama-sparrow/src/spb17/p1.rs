@@ -7,7 +7,7 @@
 //! of its own module, an owning entry that can fail with a native failure, and runtime resolution.
 use super::*;
 use crate::abi::{self, catalogue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
 pub struct P1Contracts {
@@ -240,22 +240,54 @@ pub fn error_layout(objects: &[Object], object: &Object) -> bool {
         return layout.storage_fields == [Type::Int]
             || (layout.storage_fields.is_empty() && object.error_cases.len() == 1);
     }
-    let shown = |ty: &Type| match *ty {
+    object.error_cases.len() == 1 && payload_shown(objects, object, &mut BTreeSet::new())
+}
+
+/// Whether every storage word of a case object is one payload field, in declaration order, of a type its text
+/// shows (language spec, error enums: scalars, and enums whose payloads satisfy the same rule, #763): a scalar,
+/// an Error value, a plain enum that names its cases, or a variant whose cases are Error cases or the named
+/// cases of a plain variant with shown payloads. `visiting` stops a recursive variant.
+fn payload_shown(objects: &[Object], object: &Object, visiting: &mut BTreeSet<u32>) -> bool {
+    let layout = &object.layout;
+    let mut storage = object.fields.iter().map(|field| field.storage as usize).collect::<Vec<_>>();
+    storage.sort_unstable();
+    object.fields.iter().all(|field| !field.once)
+        && storage.iter().copied().eq(0..layout.storage_fields.len())
+        && layout.storage_fields.iter().all(|ty| shown(objects, *ty, visiting))
+}
+
+fn shown(objects: &[Object], ty: Type, visiting: &mut BTreeSet<u32>) -> bool {
+    match ty {
         Type::Str | Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Rat => true,
         Type::Object(id) => objects.get(id as usize).is_some_and(|payload| !payload.error_cases.is_empty()
             || (payload.enum_cases > 0 && payload.enum_names.len() == payload.enum_cases as usize
                 && payload.fields.is_empty() && payload.layout.storage_fields == [Type::Int])),
-        Type::Variant(id) => objects.get(id as usize).is_some_and(|variant| !variant.variant_cases.is_empty()
-            && variant.variant_cases.iter().all(|&case| objects.get(case as usize)
-                .is_some_and(|case| !case.error_cases.is_empty()))),
+        Type::Variant(id) => {
+            let Some(variant) = objects.get(id as usize) else { return false };
+            if variant.variant_cases.is_empty() {
+                return false;
+            }
+            if variant.variant_cases.iter().all(|&case| objects.get(case as usize)
+                .is_some_and(|case| !case.error_cases.is_empty())) {
+                return true;
+            }
+            // A plain variant names its cases; each case shows its payload. A variant met again is shown by the
+            // outer check.
+            if variant.enum_names.len() != variant.variant_cases.len() {
+                return false;
+            }
+            if !visiting.insert(id) {
+                return true;
+            }
+            let shown = variant.variant_cases.iter().all(|&case| objects.get(case as usize).is_some_and(|case| {
+                case.error_cases.is_empty() && !case.layout.has_destroy && !case.layout.may_reach_resource
+                    && payload_shown(objects, case, visiting)
+            }));
+            visiting.remove(&id);
+            shown
+        }
         _ => false,
-    };
-    // Every storage word is one payload field, shown in declaration order.
-    let mut storage = object.fields.iter().map(|field| field.storage as usize).collect::<Vec<_>>();
-    storage.sort_unstable();
-    object.error_cases.len() == 1 && object.fields.iter().all(|field| !field.once)
-        && storage.iter().copied().eq(0..layout.storage_fields.len())
-        && layout.storage_fields.iter().all(shown)
+    }
 }
 
 /// The runtime word type held by a registered plain Atomic specialization (P2.4 §4.8): a scalar, or

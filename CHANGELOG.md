@@ -20,6 +20,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An Error payload of a plain variant runs on Champ (#763).** The SPB 17
+  P1 contract admitted an Error enum's payload of a variant type only when
+  every case of the variant was an Error case, and its test refused "a plain
+  variant", so `L05.variants.case-layouts` stopped at load with "invalid P1
+  plain Error layout". The language spec admits payload enums whose payloads
+  satisfy the same rule and shows a nested variant by its own text, as
+  Tomato does: `Fault.major(1, Shape.rect(2, 3))`. A plain variant now names
+  its cases in SPB 17 (`enum_names`, one per case; `ENUM_NAMES` admits it),
+  the P1 contract admits a named plain variant whose cases show their
+  payloads (recursively, a recursive variant included), and Champ's
+  `Error.text` writes the case and its payload. A plain variant without
+  names, with names that miss a case, or with a payload the text cannot
+  show (a `char`) is still refused.
 - **The bound-flag check of a constructor field is linked to the field by
   its flag, not by its message (#770).** The verifier's construction rule
   (A2) and the producer's construction self-check took a field as

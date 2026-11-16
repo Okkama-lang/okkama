@@ -347,6 +347,27 @@ fn p1_error_text_admits_the_layouts_of_error_variants() {
     p1(vec![variant, error_case("V.one", vec![]), error_case("F.nested", vec![Type::Variant(0)])]).unwrap();
 }
 
+/// An Error payload may be a plain variant (language spec: enums whose payloads satisfy the same rule; Tomato
+/// shows `Fault.major(1, Shape.rect(2, 3))`, #763): its cases are named and their payloads shown, at any depth,
+/// a recursive variant included.
+#[test]
+fn p1_error_text_admits_a_named_plain_variant_payload() {
+    let payload = |name: &str, types: Vec<Type>| {
+        let fields = (0..types.len() as u32).map(|storage| Field { name: format!("f{storage}"), storage, once: false })
+            .collect();
+        Object { fields, ..object(name, false, types) }
+    };
+    let shape = Object { variant_cases: vec![1, 2], enum_names: vec!["Shape.dot".into(), "Shape.rect".into()],
+        ..object("Shape", false, vec![]) };
+    p1(vec![shape.clone(), object("Shape.dot", false, vec![]), payload("Shape.rect", vec![Type::Int, Type::Int]),
+        error_case("Fault.major", vec![Type::Int, Type::Variant(0)])]).unwrap();
+    // A variant whose case holds the variant itself (a list of shapes).
+    let list = Object { variant_cases: vec![1, 2], enum_names: vec!["List.end".into(), "List.cons".into()],
+        ..object("List", false, vec![]) };
+    p1(vec![list, object("List.end", false, vec![]), payload("List.cons", vec![Type::Str, Type::Variant(0)]),
+        error_case("Fault.list", vec![Type::Variant(0)])]).unwrap();
+}
+
 #[test]
 fn p1_error_text_refuses_payloads_it_cannot_show() {
     let refused = |objects: Vec<Object>| {
@@ -358,8 +379,19 @@ fn p1_error_text_refuses_payloads_it_cannot_show() {
     refused(vec![unnamed, error_case("F.kind", vec![Type::Object(0)])]);
     // Neither has an Error role value (as on Tomato), a plain variant, a plain object or a char.
     refused(vec![error_case("F.any", vec![Type::Error])]);
+    // A plain variant without case names (#763: one with names is shown).
     let plain = Object { variant_cases: vec![1], ..object("V", false, vec![]) };
     refused(vec![plain, object("V.one", false, vec![]), error_case("F.v", vec![Type::Variant(0)])]);
+    // A named plain variant whose case holds a payload the text cannot show (a char).
+    let named = Object { variant_cases: vec![1], enum_names: vec!["V.one".into()], ..object("V", false, vec![]) };
+    let char_case = Object { fields: vec![Field { name: "c".into(), storage: 0, once: false }],
+        ..object("V.one", false, vec![Type::Char]) };
+    refused(vec![named, char_case, error_case("F.v", vec![Type::Variant(0)])]);
+    // Names that do not cover every case.
+    let short = Object { variant_cases: vec![1, 2], enum_names: vec!["V.one".into()],
+        ..object("V", false, vec![]) };
+    refused(vec![short, object("V.one", false, vec![]), object("V.two", false, vec![]),
+        error_case("F.v", vec![Type::Variant(0)])]);
     refused(vec![object("P", false, vec![Type::Int]), error_case("F.p", vec![Type::Object(0)])]);
     refused(vec![error_case("F.c", vec![Type::Char])]);
     // A case without payload holds no storage; a payload case's storage words are its fields.
