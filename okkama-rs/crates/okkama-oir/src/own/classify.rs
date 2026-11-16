@@ -464,12 +464,19 @@ fn declaration_edges(
     budget: &mut Budget<'_>,
 ) -> Result<(), OwnError> {
     budget.work(1)?;
-    match &module.declarations.get(decl).map_err(arena)?.kind {
+    let declaration = module.declarations.get(decl).map_err(arena)?;
+    match &declaration.kind {
         DeclarationKind::Object { fields, destroy, builtin, .. } => {
             children.extend(fields.iter().map(|field| field.ty));
+            // A D23 holder (#810: a FutureGroup) holds its members' service duties: a service type of its own.
+            if *builtin && crate::catalogue::service_holder(&declaration.name) {
+                facts.service_types.insert(ty);
+                // Its runtime word refers to the members' Futures, whose outcomes its settle may release.
+                facts.references = true;
+                children.extend(crate::catalogue::holder_members(module, decl));
             // A builtin capability without destroy (Atomic, P2.4 section 4.8) holds no obligation of
             // its own: close is an explicit operation, a read returns a reference with deps.
-            if *builtin && destroy.is_none() {
+            } else if *builtin && destroy.is_none() {
                 facts.references = true;
                 facts.capabilities = true;
             } else if *builtin {

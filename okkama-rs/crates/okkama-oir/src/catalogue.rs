@@ -85,6 +85,29 @@ pub fn open_callable_protocol() -> ProtocolDecl {
 ///
 /// The D23 families arrive with their slices.
 pub fn services_protocol() -> ProtocolDecl {
+    services_protocol_rules()
+}
+
+/// #810 (G1): whether a builtin declaration is a D23 holder the runtime provides: the specialization of a holder
+/// family (`async.scope.FutureGroup_<suffix>`), whose runtime word holds the service duties of its members. It is a
+/// service holder of its own (its packet carries `ServiceOf{holder, Group}`), not a capability like an Atomic.
+pub fn service_holder(name: &str) -> bool {
+    name.starts_with("async.scope.FutureGroup_")
+}
+
+/// #810: the member Future types a group holder registers: the parameter its `start` intrinsic takes. The group's
+/// settle may release their outcomes, so a holder reaches what they reach.
+pub fn holder_members(module: &crate::Module, decl: crate::DeclId) -> Vec<crate::TypeId> {
+    module.functions.iter().filter_map(|(_, function)| {
+        let receiver = function.attrs.iter()
+            .any(|attr| matches!(attr, crate::FunctionAttr::Method(owner) if *owner == decl));
+        let start = function.attrs.iter().any(|attr| matches!(attr, crate::FunctionAttr::Intrinsic { name, .. }
+            if name.starts_with("okkama.scope.FutureGroup.start$")));
+        (receiver && start).then(|| function.signature.params.get(1).copied()).flatten()
+    }).collect()
+}
+
+fn services_protocol_rules() -> ProtocolDecl {
     let checks = vec![ProtocolCheck::Owner, ProtocolCheck::LiveDependencies];
     let settle = |from: HolderKind, holder: HolderKind, state: HolderState| ProtocolRule {
         transition: ProtocolTransition::Settle,

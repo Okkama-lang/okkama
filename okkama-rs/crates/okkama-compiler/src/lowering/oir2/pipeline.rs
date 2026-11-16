@@ -219,13 +219,18 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         // The Event cell of the std async primitives (#601 Q1): `[initial, set, waiters]`, as Tomato keeps it.
         let event = builtin && destroy.is_none() && declaration.name == s::drivers::EVENT
             && matches!(fields, [field] if field.name == "initial" && !field.once);
-        if builtin && atomic.is_none() && !event {
+        // #810: a D23 holder's runtime word (PR-C): no source field, one RuntimeCell, and it holds its members'
+        // duties (`holder_layout`).
+        let holder = builtin && destroy.is_none() && fields.is_empty() && o::catalogue::service_holder(&declaration.name);
+        if builtin && atomic.is_none() && !event && !holder {
             return Err(phase("layout", format!("missing final runtime override for {}", declaration.name)));
         }
         let mut storage_fields = fields.iter().map(|field| sparrow_oir2::translate_type(module, field.ty))
             .collect::<Result<Vec<_>, _>>().map_err(|error| phase("layout", error))?;
         if let Some(value) = atomic {
             storage_fields = vec![value, s::Type::Bool];
+        } else if holder {
+            storage_fields = s::drivers::HOLDER_STORAGE.to_vec();
         } else if event {
             storage_fields = s::drivers::EVENT_STORAGE.to_vec();
         } else if matches!(declaration.kind, o::DeclarationKind::Enum { .. }) {
@@ -239,7 +244,7 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
                 allocation_words: (1 + storage_fields.len() as u32 + 4 * u32::from(destroy.is_some())).max(2),
                 identity_offset: destroy.map(|_| 8 * (1 + fields.len() as u32)),
                 has_destroy: destroy.is_some(),
-                may_reach_resource: destroy.is_some(),
+                may_reach_resource: destroy.is_some() || holder,
                 may_async_destroy: false,
                 storage_fields,
                 trace_layout,

@@ -207,7 +207,9 @@ fn classify_types(module: &Module, state: &mut State<'_>, formula: Formula) -> V
             let mut next = ManagedFormula::default();
             match &declaration.kind {
                 DeclarationKind::Object { fields, destroy, builtin, .. } => {
-                    next.owned = destroy.is_some() || *builtin && (!obligations || formula == Formula::Once);
+                    // A D23 holder (#810) owns its members' duties: an obligation under every formula.
+                    let holder = *builtin && crate::catalogue::service_holder(&declaration.name);
+                    next.owned = destroy.is_some() || holder || *builtin && (!obligations || formula == Formula::Once);
                     for field in fields {
                         next.include(types.get(field.ty.as_u32() as usize).unwrap_or(&opaque));
                     }

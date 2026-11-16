@@ -591,7 +591,10 @@ pub fn verify(p: &Program) -> Check {
                 // Equality and keys read an object's source fields; a runtime cell is none of them, and an object
                 // without source fields would compare its storage words (#601 Q1 audit A1).
                 let source = object.fields.iter().any(|field| field.storage == index as u32);
-                enforce(!source && !object.fields.is_empty() && !layout.selection_layout.contains(&(index as u32))
+                // A D23 holder's runtime word (PR-C, #810) is the object's only word: no source fields.
+                let holder = super::drivers::holder_specialization(&object.name);
+                enforce(!source && (!object.fields.is_empty() || holder)
+                    && !layout.selection_layout.contains(&(index as u32))
                     && !object.any_box && object.role.is_none() && !object.handle && object.error_cases.is_empty()
                     && object.enum_cases == 0 && object.variant_cases.is_empty(),
                     RUNTIME_CELL, "a runtime cell is an unselected hidden word of an object with source fields")?;

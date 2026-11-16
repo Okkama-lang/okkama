@@ -606,6 +606,10 @@ impl Runtime {
         plan: &mut Vec<(Service, CacheSettle)>, released: &mut Packet) -> Result<(), Error>
     {
         for &service in services {
+            if service.kind == SERVICE_GROUP {
+                self.champ_plan_group(service, closing, plan, released)?;
+                continue;
+            }
             let detached = plan.iter().any(|(entry, settle)| {
                 entry.holder == service.holder && *settle == CacheSettle::Detach
             });
@@ -646,6 +650,10 @@ impl Runtime {
     /// Apply a checked plan of [`Runtime::champ_plan_services`]: L, no collection, no callback.
     pub(super) fn champ_apply_services(&mut self, plan: Vec<(Service, CacheSettle)>) -> Result<(), Error> {
         for (service, settle) in plan {
+            if service.kind == SERVICE_GROUP {
+                self.champ_group_settled(service.holder)?;
+                continue;
+            }
             self.champ_cache_settle(service.holder, settle)?;
             if let CacheSettle::Release { inputs, outcome, .. } = settle {
                 for record in [inputs, outcome].into_iter().filter(|&record| record != 0) {
@@ -1100,8 +1108,11 @@ pub extern "C" fn rt_future_publish(ctx: *mut Ctx, this: Word, inputs: *const Pu
                 let outcome = packet(runtime, record)?;
                 super::helpers::validate(runtime, &outcome)?;
                 let cache = runtime.champ_cache(this)?;
-                let foreign_duty = |service: &Service| service.kind == SERVICE_CACHE
-                    && runtime.champ_cache(service.holder).is_ok_and(|duty| duty.owner != cache.owner);
+                let foreign_duty = |service: &Service| match service.kind {
+                    SERVICE_CACHE => runtime.champ_cache(service.holder).is_ok_and(|duty| duty.owner != cache.owner),
+                    SERVICE_GROUP => runtime.champ_group(service.holder).is_ok_and(|group| group.owner != Some(cache.owner)),
+                    _ => false,
+                };
                 if outcome.runs().any(|run| run.holder != cache.holder || run.owner != cache.owner)
                     || outcome.services.iter().any(|service| service.target.is_some() || foreign_duty(service))
                 {
@@ -1150,25 +1161,33 @@ pub extern "C" fn rt_cancel_request(ctx: *mut Ctx, future: Word) -> Outcome {
         return stop(ctx, error("L helper entered with an active bridge failure"));
     }
     let runtime = unsafe { &mut *(*ctx).runtime };
-    let tail = match runtime.champ_tail(future) {
-        Ok(tail) => tail,
-        Err(failure) => return stop(ctx, failure),
-    };
-    match get(future, tasks::STATE) {
-        tasks::COLD => {
-            let failure = get(future, tail + EMERGENCY);
-            if failure == 0 {
-                return stop(ctx, error("cold Future without its emergency failure"));
-            }
-            set(future, tail + EMERGENCY, 0);
-            set(future, tasks::FAILURE, failure);
-            set(future, tasks::STATE, tasks::FAILURE_STATE);
-            set(future, tasks::FLAGS, get(future, tasks::FLAGS) | flags::OBSERVED);
-        }
-        tasks::RUNNING => runtime.champ_cancel_running(future),
-        _ => {}
+    match runtime.champ_cancel(future) {
+        Ok(()) => NORMAL,
+        Err(failure) => stop(ctx, failure),
     }
-    NORMAL
+}
+
+impl Runtime {
+    /// A cancellation request (class L): a cold Future settles Cancelled with its emergency failure, a running one
+    /// is asked; a settled one is left as it is. Shared by `fut.cancel` and the group's `cancel` (#810).
+    pub(crate) fn champ_cancel(&mut self, future: Word) -> Result<(), Error> {
+        let tail = self.champ_tail(future)?;
+        match get(future, tasks::STATE) {
+            tasks::COLD => {
+                let failure = get(future, tail + EMERGENCY);
+                if failure == 0 {
+                    return Err(error("cold Future without its emergency failure"));
+                }
+                set(future, tail + EMERGENCY, 0);
+                set(future, tasks::FAILURE, failure);
+                set(future, tasks::STATE, tasks::FAILURE_STATE);
+                set(future, tasks::FLAGS, get(future, tasks::FLAGS) | flags::OBSERVED);
+            }
+            tasks::RUNNING => self.champ_cancel_running(future),
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 /// `fut.cancelled` (SPB 73), class L: whether the Future settled as Cancelled, as Tomato's `fut cancelled`.

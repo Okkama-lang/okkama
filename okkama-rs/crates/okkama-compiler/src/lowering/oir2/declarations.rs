@@ -89,7 +89,10 @@ impl Declarations {
                 return Err(LowerError::unsupported(decl.span, "generic object"));
             }
             // A registered Atomic keeps its dotted name with a role value's name in its suffix (#764).
-            let registered = reg.modules[object.module].name == "async/atomic" && object.name.starts_with("Atomic_");
+            let registered = reg.modules[object.module].name == "async/atomic" && object.name.starts_with("Atomic_")
+                // #810: a D23 holder specialization is a builtin the runtime lays out (a RuntimeCell word).
+                || ir::catalogue::service_holder(&format!("{}.{}", reg.modules[object.module].name.replace('/', "."),
+                    object.name));
             let id = this.builder.declare(ir::Declaration {
                 name: if object.name.contains('<') && !registered {
                     format!("{}::{}", reg.modules[object.module].name, object.name)
@@ -531,7 +534,12 @@ impl Declarations {
                 _ => None,
             };
             // #601 Q1, D22: a member of the std async primitives that the runtime provides.
-            let primitive = if atomic.is_none() { super::drivers::intrinsic_name(reg, body) } else { None };
+            // #810: a member of a ready D23 holder row (FutureGroup), named by its specialization's suffix.
+            let primitive = if atomic.is_none() {
+                super::drivers::intrinsic_name(reg, body).or_else(|| super::drivers::holder_intrinsic(reg, body))
+            } else {
+                None
+            };
             if atomic.is_none() && primitive.is_none() {
                 super::asynchronous::check_intrinsic(reg, body)?;
             }
@@ -603,9 +611,12 @@ impl Declarations {
                 });
             }
             let destroy = this.functions.get(&thir::BodyOwner::Destroy { object }).copied();
+            let holder = ir::catalogue::service_holder(&format!("{}.{}",
+                reg.modules[info.module].name.replace('/', "."), info.name));
             this.builder.raw_mut().declarations.get_mut(decl)?.kind = ir::DeclarationKind::Object {
                 fields, witnesses: vec![], destroy,
-                builtin: cell || reg.modules[info.module].name == "async/atomic" && info.name.starts_with("Atomic_"),
+                builtin: cell || holder
+                    || reg.modules[info.module].name == "async/atomic" && info.name.starts_with("Atomic_"),
             };
         }
         // Shorthand omissions change the language signature, so each supplied-field

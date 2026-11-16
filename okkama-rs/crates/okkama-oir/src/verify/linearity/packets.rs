@@ -1178,7 +1178,15 @@ pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
             }
             Ok(Type::Array(element) | Type::Successor(element) | Type::Builder(element)) => pending.push(*element),
             Ok(Type::Map(key, value) | Type::MapBuilder(key, value)) => pending.extend([*key, *value]),
-            Ok(Type::Object { decl, .. }) => pending.extend(fields(*decl)),
+            Ok(Type::Object { decl, .. }) => {
+                // A D23 holder (#810) holds its members' Futures in its runtime word.
+                if module.declarations.get(*decl).is_ok_and(|declaration| {
+                    crate::catalogue::service_holder(&declaration.name)
+                }) {
+                    return true;
+                }
+                pending.extend(fields(*decl));
+            }
             Ok(Type::Variant(decl)) => {
                 if let Ok(DeclarationKind::Variant { cases, .. }) = module.declarations.get(*decl)
                     .map(|declaration| &declaration.kind)

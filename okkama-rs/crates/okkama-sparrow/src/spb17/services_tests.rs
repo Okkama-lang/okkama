@@ -336,6 +336,20 @@ fn holders_are_futures_and_what_reaches_them() {
     assert!(services::reaches_holder(&p, Type::Object(9)));
 }
 
+/// #810: a FutureGroup holds its own entry, so it is a holder whatever its storage (its runtime cell); an object of
+/// another name with the same storage is not.
+#[test]
+fn a_future_group_is_a_holder() {
+    let mut p = returned(Make::Rehomed, Caller::Admit, None);
+    let mut group = super::async_tests::res();
+    group.name = "async.scope.FutureGroup_int".into();
+    group.layout.storage_fields = vec![Type::RuntimeCell];
+    p.objects.push(group);
+    assert!(services::reaches_holder(&p, Type::Object(0)));
+    p.objects[0].name = "async.scope.FutureGroupish_int".into();
+    assert!(!services::reaches_holder(&p, Type::Object(0)));
+}
+
 // --- SPB_REHOME, state form (ABI C-4 with D25.3) --------------------------------------------------------------
 
 /// @pass's scope (the fourth function's).

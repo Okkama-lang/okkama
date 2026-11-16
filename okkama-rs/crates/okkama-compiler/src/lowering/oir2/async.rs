@@ -157,7 +157,7 @@ pub(super) fn check_intrinsic(registry: &Registry<'_>, body: &thir::Body) -> Res
     // waits for its runtime slice; lowering its std body would run the placeholder (`Raced.winner` throwing
     // NoFutures).
     if let Some(row) = super::drivers::holder_row(registry, body)
-        && !okkama_sparrow::spb17::drivers::HOLDERS_READY
+        && !row.ready
     {
         let slice = match row.slice {
             okkama_sparrow::spb17::drivers::Slice::Q2 => "Q2",

@@ -352,6 +352,8 @@ impl Specializer<'_, '_> {
         }
         let module = self.input.registry.modules[source.module].name.as_str();
         let generic = matches!((module, source.name.as_str()), ("async/atomic", "Atomic") | ("cell", "Cell"));
+        // #810 (G1): a D23 holder family the runtime provides, named by its element's suffix like an Atomic.
+        let holder = matches!((module, source.name.as_str()), ("async/scope", "FutureGroup"));
         let ordinary = self.finite_boundary(object);
         let imported = source.module < self.registry.root_start;
         // Registered Atomic/Cell specializations (P2.4 §4.8): plain scalars and arrays of them, and role values
@@ -359,6 +361,12 @@ impl Specializer<'_, '_> {
         // protocol of the registered service and stays unsupported.
         let suffix = match args {
             [value] if generic => self.atomic_suffix_of(value, span)?,
+            // A holder holds Futures of any element type: a scalar suffix, else the encoded type (`t_`), never
+            // through `atomic_storable`.
+            [value] if holder => Some(match atomic_suffix(value) {
+                Some(suffix) => suffix,
+                None => format!("t_{}", self.encode(value)?),
+            }),
             _ => None,
         };
         let plain_value = suffix.is_some();
@@ -370,6 +378,7 @@ impl Specializer<'_, '_> {
         let thrown = match module {
             "async/atomic" => Some("AtomicClosed"),
             "async/barrier" => Some("BrokenBarrier"),
+            "async/scope" => Some("FinishedFutureGroup"),
             _ => None,
         };
         if let Some(thrown) = thrown {
@@ -382,7 +391,7 @@ impl Specializer<'_, '_> {
         let specialized = !source.params.is_empty();
         let instance = if specialized { ty::ObjectId(self.registry.objects.len()) } else { object };
         let type_names = args.iter().map(|ty| self.encode(ty)).collect::<Result<Vec<_>>>()?;
-        let name = if imported && generic && let Some(suffix) = &suffix {
+        let name = if imported && (generic || holder) && let Some(suffix) = &suffix {
             format!("{}_{suffix}", source.name)
         } else if imported && ordinary {
             source.name.clone()

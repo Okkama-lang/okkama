@@ -43,6 +43,18 @@ impl Driver<'_, '_> {
         }) {
             self.emitter.budget_ref().stats.splits_elided += point.env.scopes.len();
         }
+        // An offered fresh Future is stored: coro absorbs its token right after its owner's split (D25.2). The splits
+        // run from the innermost scope out, so when the owner is not the outermost one, a later split can fail and its
+        // unwind returns the selected packet, with the entry, to the owner. That owner settles entries at run time
+        // (D25.3), as the owner of a Future pushed into a builder does (#802).
+        let outermost = point.env.scopes.keys().next().copied();
+        for value in &values {
+            if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| created == value)
+                && Some(*owner) != outermost
+            {
+                self.dynamic_owners.insert(*owner);
+            }
+        }
         self.offered_values(point, values.into_iter().collect())
     }
 
