@@ -2548,8 +2548,12 @@ a field transfers them. A transfer, like passing a successor value, does not
 prove that the receiver ever calls it. A bound action (`later.count` without a
 call) carries its successor receiver's obligation by the same rules, while a
 direct call `later.count()`, and a chain such as `bottle.opened().is_open()`,
-uses the receiver at once. Await transfers a successor future's
-obligation to its result. Runtime discard guards remain for dynamic cases.
+uses the receiver at once. An async successor's obligation moves into its
+future, which must be awaited or handed on: await transfers the obligation to
+its result; passing, returning or storing the future, or spawning it, transfers
+the future itself. Reading `done()` or `cancelled()` does not. An explicit
+`cancel()` discharges the obligation: the program decides, in its text, that
+the transition will not happen. Runtime discard guards remain for dynamic cases.
 These checks concern language-level consumption, not persistence or business
 usefulness; they do not forbid using an already consumed object again.
 
