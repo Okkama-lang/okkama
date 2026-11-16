@@ -45,6 +45,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   internal spellings (`okkama_runtime_core::testing::display_name`).
   Showing an object by its `string()` needs compiler support (#793); Champ's
   case texts of generic variant instances are wrong (#792).
+- **The outcome of a spawned task that nobody awaits is released at its
+  owner's close, on both engines (#768).** 0.5.8's Tomato never destroyed it;
+  since #581 (a Future owns its cached outcome) Tomato releases it when the
+  scope that owns the Future closes, once, in reverse creation order, which
+  is Champ's moment (ABI D24.2). New case
+  `L08.spawn.unawaited-outcome-released` and a Tomato test pin it.
 - **`tally --help` reads on a command with subcommands (#637).** A branch
   command refused every invocation without a child ("child command
   required"), so its own `--help` could not be asked for. Now a branch stops
