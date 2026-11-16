@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Debug builds optimize Cranelift (#761).** Champ's JIT runs in every debug
+  build: unit tests, the end-to-end harnesses and the conformance adapter,
+  which builds with plain `cargo build`. Unoptimized Cranelift code
+  generation took most of a case's run time, and cases near the 30 s
+  conformance budget timed out depending on the runner. The dev profile now
+  optimizes the Cranelift crates and `regalloc2` (`opt-level = 2`), and
+  Okkama's own crates stay debug. CPU time on a debug champ-abi build, on
+  top of #755: L07.traversal.escaping 16.4 s → 8.9 s,
+  L09.digest.md5-sha1-vectors 16.5 s → 6.2 s, L09.csv.rows-and-round-trip
+  13.0 s → 5.0 s.
 - **SPB 17 liveness and allocation checks are fast (#755).** Liveness swept
   every PC until nothing changed, kept a `BTreeSet` per PC and re-closed all
   dependency records at every PC; one load computed it up to four times per
