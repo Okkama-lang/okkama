@@ -66,8 +66,8 @@ impl s::ExternalContracts for Catalog<'_> {
     }
 
     /// Host implementations bind by name first; only an unbound canonical symbol uses the adapter.
-    fn adapter(&self, declared: &s::Function) -> Option<s::Function> {
-        self.1.adapter(declared)
+    fn adapter(&self, declared: &s::Function, composites: &[s::Composite]) -> Option<s::Function> {
+        self.1.adapter(declared, composites)
     }
 }
 
@@ -316,7 +316,7 @@ impl Runtime {
         let p1 = source.functions.iter().zip(&implementations).map(|(function, implementation)| {
             function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
                 .is_some_and(|name| s::ExternalContracts::entry(catalog.1, name).is_some()
-                    || (implementation.is_none() && catalog.1.adapter(function).is_some()))
+                    || (implementation.is_none() && catalog.1.adapter(function, &source.composites).is_some()))
         }).collect();
         runtime.champ.machine = Some(Program {
             source: verified.source.clone(), plans, selections, entries, shielded_entries,

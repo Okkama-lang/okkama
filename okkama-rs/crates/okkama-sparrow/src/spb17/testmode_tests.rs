@@ -301,3 +301,18 @@ fn test_checks_reject_objects_that_value_equality_rejects() {
     let carrier = object("Carrier", vec![Type::Error], false, false);
     reject(&compare_objects(DataOp::TestIsnt, Type::Object(0), vec![carrier]), "TEST_OPERAND");
 }
+
+/// `test.is` compares arrays as `val.eq` does (#751): an array of plain data is compared, an array of native
+/// handles or of resource objects is not, at any depth.
+#[test]
+fn test_checks_compare_only_plain_arrays() {
+    let point = || object("Point", vec![Type::Int, Type::Str], false, false);
+    let array = |leaf, depth| Type::Array(ArrayType { leaf, depth });
+    accept(&compare_objects(DataOp::TestIs, array(ArrayLeaf::Int, 1), vec![point()]));
+    accept(&compare_objects(DataOp::TestIsnt, array(ArrayLeaf::Object(0), 2), vec![point()]));
+    let state = || object("runtime.json.JsonNode", vec![], false, true);
+    reject(&compare_objects(DataOp::TestIs, array(ArrayLeaf::Handle(0), 1), vec![state()]), "TEST_OPERAND");
+    reject(&compare_objects(DataOp::TestIsnt, array(ArrayLeaf::Handle(0), 2), vec![state()]), "TEST_OPERAND");
+    let file = object("File", vec![Type::Int], true, false);
+    reject(&compare_objects(DataOp::TestIs, array(ArrayLeaf::Object(0), 1), vec![file]), "TEST_OPERAND");
+}

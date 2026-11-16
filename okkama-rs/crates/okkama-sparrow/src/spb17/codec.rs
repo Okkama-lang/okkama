@@ -478,7 +478,7 @@ record! { ArrayType { leaf, depth } }
 tagged! { ArrayLeaf {
     0 => Int, 1 => Bool, 2 => Str, 3 => Range, 4 => Bytes, 5 => Object(id: u32),
     6 => Float, 7 => Char, 8 => Rat, 9 => Variant(id: u32), 10 => Map(id: u32), 11 => Never, 20 => Role(id: u32),
-    21 => Any,
+    21 => Any, 22 => Handle(id: u32),
 } }
 tagged! { ServiceKind {
     0 => Packet, 1 => ScopeState, 2 => Pending, 3 => Cleanup, 4 => StableKey,
