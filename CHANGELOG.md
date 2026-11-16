@@ -20,6 +20,51 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Large functions compile and load faster on Champ (#779).** The SPB 17
+  load check computed dominance with bitsets of blocks² / 64 words per pass
+  and closed dependency sets by walking every record until nothing changed;
+  it now uses a dominator tree (Cooper, Harvey and Kennedy) and the
+  obligations table, as the codegen's root anchors do. The OIR-2 construction
+  check and codegen's dead-alias pruning propagate along a worklist instead
+  of repeated passes, and the pipeline no longer verifies the Low module a
+  second time inside codegen. In a debug build `L09.ini.native-equivalence`
+  takes about 11 s of CPU instead of 14 s (codegen and the load check 2.3 s
+  instead of 4.2 s), `L09.db.row-readers` 25 s, and
+  `L04.once.generic-std-instantiation` 18 s.
+
+- **A holder of a closure that captures a resource passes full verification
+  (#777).** Since #723 a holder's function type is resolved by the closures
+  the module creates, so its classification no longer carried the type's
+  dictionary, and own bound no `type.of` in the function that owns the
+  holder. The verifier cleans a `fn` value up only through a dictionary
+  bound in that function (P2.4 §5.1), took the unknown branch and rejected
+  the scope's envelope (`B104`, `B112`). The classification now keeps these
+  closure types with their dictionaries: own binds them where it owns the
+  holder, and the scope's envelope counts their cleanup effects.
+
+- **Large std instantiations and row readers build on Champ (#781).** An
+  observation entry that returned a managed value which cannot own from a
+  retained inner scope committed a reserve and returned its packet, beyond
+  its one declared result (`T2`); own now closes those scopes without a
+  reserve. The SPB 17 allocation checker kept every dead alias that edge
+  copies coalesced into a slot, so its stored states grew with PCs times
+  aliases (about 1 400 entries per PC in `main` of `L09.db.row-readers`, past
+  the 8 Mi bound); with the function's liveness it now forgets the
+  locations that are not live (22 entries per PC at most there, 60 611 in
+  all), which can only make it reject, never accept.
+  `L04.once.generic-std-instantiation` and `L09.db.row-readers` pass on
+  Champ.
+
+- **An early-self constructor that fails after handing out `self` builds on
+  Champ (#780).** A pending check, and the check that a valued `for` ran,
+  inside `try` continued from the trap block's carried locals instead of the
+  values that reached the check, which broke SSA (`SSA2`). An early self now
+  takes each field that is still unbound as an `undef` defined next to its
+  allocation, so own's split at a resource binding between the prologue and
+  the allocation no longer turns the later `obj.init` into a second binding
+  (`A2`). `L04.invariant.escaped-self-failed-constructor` and
+  `L04.invariant.escaped-self-in-block-failed-constructor` pass on Champ.
+
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the

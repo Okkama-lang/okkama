@@ -357,10 +357,13 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             if matches!(driver.module.types.get(*ty), Ok(Type::Parameter(_))) {
                 continue;
             }
+            // A closure type inside an owned type needs its dictionary here too (#777): the owner's cleanup
+            // reaches its closures through it.
             let required = driver.analysis.scopes.iter().any(|(scope, facts)| {
                 driver.module.scopes.get(*scope).is_ok_and(|scope| scope.function == function)
                     && facts.potential_owned_types.iter().any(|owned| {
-                        driver.analysis.types[owned].descriptors.iter().any(|bound| {
+                        let owned = &driver.analysis.types[owned];
+                        owned.closures.contains_key(ty) || owned.descriptors.iter().any(|bound| {
                             bound.cleanup == descriptor.cleanup && bound.retention == descriptor.retention
                                 && bound.managed == descriptor.managed
                         })

@@ -24,10 +24,22 @@ impl s::ExternalContracts for Catalog {
 
 fn emit(source: &str) -> (AllocatedProgram, Catalog) {
     let module = o::text::parse(source).unwrap();
+    let layouts = fixture_layouts(&module);
+    let raw = generate_with_allocation(&module, &layouts).unwrap_or_else(|e| panic!("{}: {e}", module.name));
+    let catalog = Catalog(raw.program.functions.iter().filter(|f| {
+        f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some())
+    }).cloned().collect());
+    let output = compile_low(&module, &layouts, o::VerifyContext {
+        external_contracts: &OirContracts(&module), ..o::VerifyContext::default()
+    }, &catalog).unwrap_or_else(|e| panic!("{}: {e}", module.name));
+    (output, catalog)
+}
+
+fn fixture_layouts(module: &o::Module) -> BTreeMap<u32, ObjectLayout> {
     let mut layouts = BTreeMap::new();
     for (id, decl) in module.declarations.iter() {
         let o::DeclarationKind::Object { fields, destroy, .. } = &decl.kind else { panic!("object") };
-        let storage_fields = fields.iter().map(|field| translate_type(&module, field.ty).unwrap()).collect::<Vec<_>>();
+        let storage_fields = fields.iter().map(|field| translate_type(module, field.ty).unwrap()).collect::<Vec<_>>();
         let traced = storage_fields.iter().enumerate().filter_map(|(index, ty)| {
             matches!(ty, s::Type::Object(_) | s::Type::Str).then_some(index as u32)
         }).collect::<Vec<_>>();
@@ -41,14 +53,23 @@ fn emit(source: &str) -> (AllocatedProgram, Catalog) {
             source_fields: (0..fields.len() as u32).collect(),
         });
     }
-    let raw = generate_with_allocation(&module, &layouts).unwrap_or_else(|e| panic!("{}: {e}", module.name));
-    let catalog = Catalog(raw.program.functions.iter().filter(|f| {
-        f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some())
-    }).cloned().collect());
-    let output = compile_low(&module, &layouts, o::VerifyContext {
-        external_contracts: &OirContracts(&module), ..o::VerifyContext::default()
-    }, &catalog).unwrap_or_else(|e| panic!("{}: {e}", module.name));
-    (output, catalog)
+    layouts
+}
+
+/// #779: `compile_verified_low`, the pipeline's path after its own verify_low, builds and load-checks what
+/// `compile_low` builds; it still refuses a module that is not Low.
+#[test]
+fn verified_low_compiles_as_compile_low_does() {
+    let low = o::text::parse(include_str!("fixtures/spec16-1.low.oir")).unwrap();
+    let layouts = fixture_layouts(&low);
+    let (output, catalog) = emit(include_str!("fixtures/spec16-1.low.oir"));
+    let verified = compile_verified_low(&low, &layouts, &catalog).unwrap();
+    assert_eq!(verified.program, output.program);
+    assert_eq!(verified.allocations, output.allocations);
+    let mut high = low;
+    high.profile = o::Profile::High;
+    let failure = compile_verified_low(&high, &layouts, &catalog).unwrap_err();
+    assert!(failure.0.contains("expected Low profile"), "{failure}");
 }
 
 fn check_extra_snapshot(name: &str, low: &o::Module, program: &s::Program) {

@@ -686,3 +686,80 @@ fn checker_agrees_with_the_reference_on_generated_allocations_with_proofs() {
     }
     assert!(accepted > 1000 && rejected > 1000, "accepted {accepted}, rejected {rejected}");
 }
+
+/// A constant passed down a chain of `count` blocks, each with one parameter: the allocator gives every
+/// parameter the constant's slot and elides every copy, so without pruning that slot keeps each earlier
+/// parameter as a dead alias and the stored states grow with `count`² / 2 (#781).
+fn alias_chain(count: u32) -> Function {
+    let mut f = empty_function();
+    f.registers = vec![Type::Int; count as usize + 1];
+    f.code = vec![constant_with(0, vec![])];
+    f.code.extend((1..=count).map(|pc| Instruction::Br(edge(pc + 1, vec![(pc, pc - 1)]))));
+    f.code.push(Instruction::Ret(vec![count]));
+    f.blocks.extend((1..=count).map(|parameter| Block {
+        pc: parameter + 1, params: vec![Location::Register(parameter)],
+    }));
+    f
+}
+
+/// With the liveness the states keep only live locations (#781): 4200 blocks would store about 8.8 M dead
+/// aliases, beyond the checker's 8 Mi storage bound; pruned, each state holds the one live parameter.
+#[test]
+fn checker_states_forget_dead_aliases() {
+    let f = alias_chain(4200);
+    let live = Liveness::of(&f).unwrap();
+    let allocation = allocate_with(&f, &live).unwrap();
+    assert_eq!(allocation.slots.len(), 1, "one slot for the whole chain");
+    check_allocation_with(&f, &allocation, &live).unwrap();
+}
+
+/// The pruned checker accepts and rejects what the checker before #701 does, as the unpruned one does (#781).
+#[test]
+fn pruned_checker_agrees_with_the_reference_on_generated_allocations_with_proofs() {
+    let mut random = Random(0x0781_c4ec_0781_c4ec);
+    let (mut accepted, mut rejected) = (0, 0);
+    for _ in 0..2000 {
+        let plain = generated(&mut random);
+        let f = with_proofs(&mut random, plain);
+        let Ok(live) = Liveness::of(&f) else { continue };
+        let Ok(allocation) = allocate_with(&f, &live) else { continue };
+        let candidates = std::iter::once(allocation.clone())
+            .chain((0..4).map(|_| mutated(&mut random, &allocation)));
+        for candidate in candidates {
+            let expected = verdict(reference::check_allocation(&f, &candidate));
+            assert_eq!(verdict(check_allocation_with(&f, &candidate, &live)), expected, "{f:?}\n{candidate:?}");
+            if expected.is_ok() { accepted += 1 } else { rejected += 1 }
+        }
+    }
+    assert!(accepted > 1000 && rejected > 1000, "accepted {accepted}, rejected {rejected}");
+}
+
+/// The liveness only prunes: one that misses a location the function reads later makes the check reject the
+/// correct allocation, never accept a wrong one. Here the liveness of the same shape that returns `r1` instead
+/// of `r0` drops `r0` before the ret.
+#[test]
+fn checker_rejects_with_a_liveness_that_misses_a_use() {
+    let shape = |returned: u32| {
+        let mut f = empty_function();
+        f.registers = vec![Type::Int; 2];
+        f.code = vec![constant_with(0, vec![]), constant_with(1, vec![]), Instruction::Ret(vec![returned])];
+        f
+    };
+    let (f, other) = (shape(0), shape(1));
+    let live = Liveness::of(&f).unwrap();
+    let allocation = allocate_with(&f, &live).unwrap();
+    check_allocation_with(&f, &allocation, &live).unwrap();
+    let failure = check_allocation_with(&f, &allocation, &Liveness::of(&other).unwrap()).unwrap_err();
+    assert!(failure.message.contains("clobbered"), "{failure}");
+}
+
+/// A liveness of another function, or one without every proof record, is refused before any state is pruned.
+#[test]
+fn checker_refuses_a_liveness_of_another_function() {
+    let f = alias_chain(3);
+    let allocation = allocate(&f).unwrap();
+    for live in [Liveness::of(&alias_chain(4)).unwrap(), liveness(&f, Parts::REQUIRED).unwrap()] {
+        let failure = check_allocation_with(&f, &allocation, &live).unwrap_err();
+        assert!(failure.message.contains("liveness of another function"), "{failure}");
+    }
+}

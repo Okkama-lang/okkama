@@ -650,3 +650,121 @@ fn oir2_own_large_plain_functions_finish_within_the_default_budgets() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// #780: a pending check of a call inside `try` continues from the values that reach the check. Its trap block
+/// takes fresh carried locals for the unwind edge into the handler; the call past it must not use them, or
+/// verify_high rejects the use (SSA2). Tomato prints `Refused.empty`, then `a`.
+#[test]
+fn oir2_pending_check_inside_try_continues_with_the_checked_values() {
+    let source = concat!("module app; import \"io/stdout\" take Stdout; enum Refused is Error = (empty); ",
+        "object Tree { has name is string; Tree(name is string) { self.name = name; let alias = self; ",
+        "confirm name != \"\" else throw Refused.empty; } name() is string { name; } } ",
+        "main() is int { let out = Stdout(); ",
+        "out.writeln(try { Tree(\"\").name(); } catch e is Refused { e.text(); }); ",
+        "out.writeln(Tree(\"a\").name()); 0; }");
+    own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+}
+
+/// #780: the same for the check that a valued `for` ran at least once, inside `try`. Tomato prints `6`, then
+/// fails with "A void result cannot be used as a value" (a trap, which `catch` does not take).
+#[test]
+fn oir2_iteration_check_inside_try_continues_with_the_checked_values() {
+    let source = concat!("module app; import \"io/stdout\" take Stdout; ",
+        "object Probe { Probe(); last(items is @int) is int { let out = Stdout(); ",
+        "try { for items -> i { i * 3; } } catch e is Error { out.writeln(\"caught\"); 7; } } } ",
+        "main() is int { let empty is @int = []; Stdout().writeln(Probe().last([1, 2]).string()); ",
+        "Probe().last(empty); }");
+    own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+}
+
+/// The fields of an early self that are still unbound enter its incomplete `obj.new` as `undef`s defined in the
+/// allocation's own block (#780). A2 counts only a directly defined `undef` as unbound; the constructor's
+/// prologue `undef` would reach a later allocation through block parameters once own splits the body at a
+/// resource binding (here the `Atomic` parameter), and the later `obj.init` would read as a second binding.
+#[test]
+fn oir2_early_self_takes_its_unbound_fields_as_adjacent_undefs() {
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "object Tree { has name is string; has marks is @int; ",
+        "Tree(name is string, tags is @int, sink is Atomic<Maybe<Tree>>) { self.name = name; ",
+        "marks = tags.map() -> tag { sink.replace(Maybe.some(self)); tag * 2; }; } ",
+        "size() is int { marks.size(); } } ",
+        "main() is int { let sink is Atomic<Maybe<Tree>> = Atomic(Maybe.none); ",
+        "Tree(\"a\", [1, 2], sink).size(); }");
+    let module = high(source, None).unwrap();
+    let mut incomplete = 0;
+    for (_, function) in module.functions.iter() {
+        let Some(body) = function.body.as_ref() else { continue };
+        for (block_id, block) in body.blocks.iter() {
+            for &id in &block.insts {
+                let op = &body.insts.get(id).unwrap().op;
+                let ir::Operation::Core(ir::CoreOp::ObjNew { fields, construction, .. }) = op else {
+                    continue;
+                };
+                if *construction != ir::ConstructionStatus::Incomplete {
+                    continue;
+                }
+                incomplete += 1;
+                let undefs: Vec<_> = fields.iter().filter_map(|&value| match body.values.get(value).unwrap().def {
+                    ir::Definition::InstResult { inst, .. } if matches!(body.insts.get(inst).unwrap().op,
+                        ir::Operation::Core(ir::CoreOp::Undef { .. })) => Some(inst),
+                    _ => None,
+                }).collect();
+                // `marks` and `$pending`.
+                assert_eq!(undefs.len(), 2, "{}", function.symbol);
+                assert!(undefs.iter().all(|inst| block.insts.contains(inst)), "{}: {block_id:?}", function.symbol);
+            }
+        }
+    }
+    assert_eq!(incomplete, 1);
+    own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+}
+
+/// #781: an observation entry (`pick`, whose root scope owns nothing) returns a managed value that cannot own
+/// from inside its loop, whose role call keeps the loop scope. It returns only its declared result: own closes
+/// the loop scope without a reserve to commit to the caller, whose packet the entry would return (T2).
+#[test]
+fn oir2_observation_entry_returns_a_managed_result_from_a_retained_scope() {
+    let source = concat!("module app; role Gen { value() is int; } ",
+        "object Base does Gen { has n is int; Base(:n); value() is int { n; } } ",
+        "object Wrapped does Gen { has origin is Gen; has condition is (int) is bool; ",
+        "Wrapped(:origin, :condition); value() is int { origin.value(); } } ",
+        "object Picker { has origin is Gen; has condition is (int) is bool; has attempts is int; ",
+        "Picker(:origin, :condition, :attempts); ",
+        "pick() is Gen { for (0..attempts) -> index { let sample = origin; ",
+        "if condition(sample.value() + index) { return Wrapped(origin: sample, condition: condition); } } ",
+        "Base(n: 0); } } ",
+        "main() is int { let p = Picker(origin: Base(n: 3), condition: (n is int) is bool { n % 2 == 0; }, ",
+        "attempts: 5); p.pick().value(); }");
+    let low = own_to_low(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, pick) = low.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Picker.pick"))
+        .unwrap();
+    assert_eq!(pick.signature.ownership_abi, ir::OwnershipAbi::Observation);
+    assert_eq!(pick.signature.results.len(), 1);
+}
+
+/// #777 (full verification): a scope that owns a holder of an action value whose closure captures a resource
+/// binds the function type's dictionary (`type.of`), through which its cleanup reaches the closure, and its
+/// envelope counts what the captured resource's destroy may do. The verifier finds the dictionary in the
+/// owner's function and agrees (B104, B112), whether the holder comes back from a call or is built in the
+/// scope of the resource.
+#[test]
+fn oir2_holder_of_a_resource_closure_binds_the_closure_dictionary() {
+    let common = concat!("module app; import \"io/stdout\" take Stdout; ",
+        "object Res { has n is string; Res(:n); size() is int { n.length(); } ",
+        "destroy { Stdout().writeln(\"destroy \" + n); } } ",
+        "object Filter { has keep is (int) is bool; Filter(:keep); passes(value is int) is bool { keep(value); } } ");
+    let returned = format!("{common}{}", concat!("object Sets { Sets(); sized(name is string) is Filter { ",
+        "let r = Res(n: name); Filter(keep: (value is int) is bool { value > r.size(); }); } } ",
+        "main() is int { { let f = Sets().sized(\"abc\"); Stdout().writeln(f.passes(5).string()); } 0; }"));
+    let local = format!("{common}{}", concat!("main() is int { { let r = Res(n: \"abc\"); ",
+        "let f = Filter(keep: (v is int) is bool { v > r.size(); }); Stdout().writeln(f.passes(5).string()); } ",
+        "0; }"));
+    for source in [returned, local] {
+        let (module, _) = own_stage(&source, None, ir::verify::VerifyMode::Full).unwrap_or_else(|error| {
+            panic!("{error}\n{source}")
+        });
+        let main = module.functions.get(module.entry.unwrap()).unwrap().body.as_ref().unwrap();
+        assert!(main.insts.iter().any(|(_, inst)| matches!(&inst.op, ir::Operation::Core(ir::CoreOp::TypeOf { ty, .. })
+            if matches!(module.types.get(*ty), Ok(ir::Type::Fn(_))))), "{source}");
+    }
+}

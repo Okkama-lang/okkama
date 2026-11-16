@@ -2057,66 +2057,26 @@ fn verify_function(p: &Program, f: &Function) -> Check {
             }
         }
     }
-    // Bounded dominator bitsets: hostile CFGs cannot cause unbounded verifier
-    // memory expansion. This check is independent of the decoder's budget.
+    // The bound of the dominator bitsets that #779 replaced by a dominator tree stays the bound on a CFG:
+    // hostile CFGs cannot cause unbounded verifier work. This check is independent of the decoder's budget.
     let count = f.blocks.len();
     let words = count.div_ceil(64);
     require(count.saturating_mul(words).saturating_mul(8) <= 64 * 1024 * 1024,
         "CFG exceeds dominator memory budget")?;
-    let mut reachable = vec![false; count];
-    reachable[0] = true;
-    loop {
-        let mut changed = false;
-        for index in 1..count {
-            if !reachable[index] && predecessors[index].iter().any(|&pred| reachable[pred]) {
-                reachable[index] = true;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    let mut dom = vec![vec![u64::MAX; words]; count];
-    for index in 0..count {
-        if index == 0 || !reachable[index] {
-            dom[index].fill(0);
-            dom[index][index / 64] |= 1 << (index % 64);
-        }
-    }
-    loop {
-        let mut changed = false;
-        for index in 1..count {
-            if !reachable[index] {
-                continue;
-            }
-            let mut next = vec![u64::MAX; words];
-            for &pred in predecessors[index].iter().filter(|&&pred| reachable[pred]) {
-                for (word, &other) in next.iter_mut().zip(&dom[pred]) {
-                    *word &= other;
-                }
-            }
-            next[index / 64] |= 1 << (index % 64);
-            if next != dom[index] {
-                dom[index] = next;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+    let dominance = Dominance::of(&predecessors);
+    // check_proofs has checked every dependency location; the table closes a set in time linear in what it adds,
+    // where `close_dependencies` walks every record until nothing changes (#779).
+    let obligations = allocation::Obligations::new(f)?;
     for (block_index, block) in f.blocks.iter().enumerate() {
         let end = f.blocks.get(block_index + 1).map_or(f.code.len(), |block| block.pc as usize);
         for (pc, metadata) in metadata.iter().enumerate().take(end).skip(block.pc as usize) {
             let mut used = allocation::direct_uses(f, pc);
             used.extend(uses(&f.code[pc]));
             used.extend(metadata);
-            allocation::close_dependencies(f, &mut used);
+            obligations.close(&mut used);
             for used in used {
                 let &(def_block, def_pc) = definitions.get(&used).ok_or_else(|| error("undefined location"))?;
-                require(dom[block_index][def_block / 64] & (1 << (def_block % 64)) != 0,
-                    "definition does not dominate use")?;
+                require(dominance.dominates(def_block, block_index), "definition does not dominate use")?;
                 require(def_block != block_index || def_pc.is_none_or(|defined| defined < pc),
                     "location used before definition")?;
                 if let Location::Register(reg) = used
@@ -2137,6 +2097,117 @@ fn verify_function(p: &Program, f: &Function) -> Check {
     check_successors(p, f, &pcs)?;
     check_builders(p, f, &pcs)?;
     Ok(())
+}
+
+/// Dominance among the blocks of a function whose entry, block 0, has no predecessor (#779): Cooper, Harvey and
+/// Kennedy's iterative algorithm over the reverse postorder of the entry's reach, then the entry and exit order of
+/// a walk of the dominator tree. A block outside the entry's reach is dominated by itself only, and dominates no
+/// other block. Time and memory stay linear in the blocks and edges for each pass, where the bitsets it replaces
+/// took blocks² / 64 words per pass.
+pub(super) struct Dominance {
+    /// Entry and exit order in the dominator tree, `u32::MAX` outside the entry's reach.
+    enter: Vec<u32>,
+    exit: Vec<u32>,
+}
+
+impl Dominance {
+    pub(super) fn of(predecessors: &[Vec<usize>]) -> Self {
+        let count = predecessors.len();
+        let mut successors = vec![Vec::new(); count];
+        for (block, sources) in predecessors.iter().enumerate() {
+            for &source in sources {
+                successors[source].push(block);
+            }
+        }
+        // Reverse postorder of the blocks the entry reaches, by an explicit stack.
+        let mut postorder = Vec::with_capacity(count);
+        let mut visited = vec![false; count];
+        let mut stack = Vec::new();
+        if count > 0 {
+            visited[0] = true;
+            stack.push((0, 0));
+        }
+        while let Some((block, next)) = stack.last_mut() {
+            if let Some(&successor) = successors[*block].get(*next) {
+                *next += 1;
+                if !visited[successor] {
+                    visited[successor] = true;
+                    stack.push((successor, 0));
+                }
+            } else {
+                postorder.push(*block);
+                stack.pop();
+            }
+        }
+        let mut rank = vec![usize::MAX; count];
+        for (position, &block) in postorder.iter().rev().enumerate() {
+            rank[block] = position;
+        }
+        let mut idom = vec![usize::MAX; count];
+        if count > 0 {
+            idom[0] = 0;
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in postorder.iter().rev().skip(1) {
+                let mut new = usize::MAX;
+                for &source in &predecessors[block] {
+                    if idom[source] == usize::MAX {
+                        continue;
+                    }
+                    new = if new == usize::MAX { source } else { Self::intersect(&idom, &rank, source, new) };
+                }
+                if idom[block] != new {
+                    idom[block] = new;
+                    changed = true;
+                }
+            }
+        }
+        let mut children = vec![Vec::new(); count];
+        for &block in postorder.iter().rev().skip(1) {
+            children[idom[block]].push(block);
+        }
+        let (mut enter, mut exit) = (vec![u32::MAX; count], vec![u32::MAX; count]);
+        let mut clock = 0u32;
+        let mut stack = Vec::new();
+        if count > 0 {
+            enter[0] = clock;
+            stack.push((0, 0));
+        }
+        while let Some((block, next)) = stack.last_mut() {
+            if let Some(&child) = children[*block].get(*next) {
+                *next += 1;
+                clock += 1;
+                enter[child] = clock;
+                stack.push((child, 0));
+            } else {
+                clock += 1;
+                exit[*block] = clock;
+                stack.pop();
+            }
+        }
+        Self { enter, exit }
+    }
+
+    fn intersect(idom: &[usize], rank: &[usize], mut left: usize, mut right: usize) -> usize {
+        while left != right {
+            while rank[left] > rank[right] {
+                left = idom[left];
+            }
+            while rank[right] > rank[left] {
+                right = idom[right];
+            }
+        }
+        left
+    }
+
+    /// Whether every path from the entry to `block` passes `dominator`; a block always dominates itself.
+    pub(super) fn dominates(&self, dominator: usize, block: usize) -> bool {
+        // A block beyond the reach has both orders at u32::MAX: as `block` it fails the exit order.
+        dominator == block || self.enter[dominator] != u32::MAX
+            && self.enter[dominator] <= self.enter[block] && self.exit[block] <= self.exit[dominator]
+    }
 }
 
 /// A construction field operand: any operand of obj.new, a non-receiver operand of obj.init/obj.next.

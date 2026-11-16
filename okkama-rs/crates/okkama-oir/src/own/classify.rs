@@ -16,6 +16,11 @@ pub struct TypeClassification {
     pub destroy_entries: BTreeSet<FuncId>,
     pub service_types: BTreeSet<TypeId>,
     pub descriptors: Vec<DescriptorContract>,
+    /// The function types that are parts of this graph and resolved by the closures this module creates
+    /// (#723), with their dictionaries when the module binds one (#777). They do not make the type residual or
+    /// owning, yet a scope that owns the type cleans their closures up through those dictionaries: own binds them
+    /// in the owner's function, and the scope's envelope counts their cleanup effects.
+    pub closures: BTreeMap<TypeId, Option<DescriptorContract>>,
     pub unresolved: BTreeSet<TypeId>,
     /// The value graph reaches an opaque reference (function, cap, role, any or
     /// future). The verifier requires full dependencies for such values even
@@ -321,6 +326,7 @@ fn graph(context: &Context<'_>, root: TypeId, once: bool, budget: &mut Budget<'_
         destroy_entries: BTreeSet::new(),
         service_types: BTreeSet::new(),
         descriptors: vec![],
+        closures: BTreeMap::new(),
         unresolved: BTreeSet::new(),
         references: false,
         capabilities: false,
@@ -346,6 +352,10 @@ fn graph(context: &Context<'_>, root: TypeId, once: bool, budget: &mut Budget<'_
         // dictionary for its own calls and cleanup.
         let function_type = matches!(module.types.get(ty).map_err(arena)?, Type::Fn(_));
         let by_closures = function_type && (once || term != root_term && !context.foreign.contains(&ty));
+        if by_closures && !once {
+            budget.memory(512)?;
+            facts.closures.insert(ty, context.dictionaries.get(&ty).cloned());
+        }
         if let Some(descriptor) = context.dictionaries.get(&ty).filter(|_| !by_closures) {
             module.functions.get(descriptor.cleanup).map_err(arena)?;
             module.summaries.get(descriptor.summary).map_err(arena)?;

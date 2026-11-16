@@ -240,7 +240,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         reconstructed.check_budget()?;
         automaton::check(p, f, &destroy_masks)?;
         let allocation = allocation::allocate_with(f, &live)?;
-        check_allocation(f, &allocation)?;
+        allocation::check_allocation_with(f, &allocation, &live)?;
     }
     Ok(())
 }

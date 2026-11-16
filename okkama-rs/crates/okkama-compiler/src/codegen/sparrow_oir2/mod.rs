@@ -75,8 +75,9 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
     }
     let mut allocations = Vec::new();
     for function in &p.functions {
-        let allocation = s::allocate(function)?;
-        s::check_allocation(function, &allocation)?;
+        let live = s::Liveness::of(function)?;
+        let allocation = s::allocate_with(function, &live)?;
+        s::check_allocation_with(function, &allocation, &live)?;
         allocations.push(allocation);
     }
     Ok(AllocatedProgram { program: p, allocations })
@@ -1354,6 +1355,20 @@ pub fn compile_low_with(
     }
     o::verify_low_with(module, options, context)
         .map_err(|report| GenerateError(format!("verify_low: {report:?}")))?;
+    compile_verified_low(module, layouts, contracts)
+}
+
+/// [`compile_low_with`] for a Low module that the caller has already passed through `verify_low`, as the OIR-2
+/// pipeline does under the build's own options (#779): SPB 17 and its load check against `contracts`, without
+/// verifying the same module a second time.
+pub fn compile_verified_low(
+    module: &o::Module,
+    layouts: &dyn LayoutRegistry,
+    contracts: &dyn s::ExternalContracts,
+) -> Result<AllocatedProgram, GenerateError> {
+    if module.profile != o::Profile::Low {
+        return Err(GenerateError("expected Low profile".into()));
+    }
     let output = generate_with_allocation(module, layouts)?;
     s::verify_load(&output.program, contracts)?;
     Ok(output)
@@ -1395,28 +1410,27 @@ fn root_duty_words(function: &mut s::Function) {
     }
 }
 
+/// `root_dependency_anchors_with` over a table of its own, for the tests.
+#[cfg(test)]
+fn root_dependency_anchors(function: &s::Function, locations: &mut BTreeSet<s::Location>) {
+    root_dependency_anchors_with(function, &s::Obligations::new(function).unwrap(), locations);
+}
+
 /// Low roots a value with its full dependencies (`RootTrace::FullDependencies`, managed facts). In SPB 17 a location
 /// keeps the anchors its dependencies name alive (`proofs.dependencies`), so every traced anchor joins each map that
 /// holds the location: for instance a fixed root's deps of its result, taken before its scope closes, keep the
 /// result's register alive up to fut.publish.
-fn root_dependency_anchors(function: &s::Function, locations: &mut BTreeSet<s::Location>) {
+/// `obligations` is the function's table (`s::Obligations::new`).
+fn root_dependency_anchors_with(function: &s::Function, obligations: &s::Obligations,
+    locations: &mut BTreeSet<s::Location>) {
     let traced = |location: &s::Location| match *location {
         s::Location::Register(id) => !matches!(function.registers[id as usize], s::Type::Bool | s::Type::Never
             | s::Type::Descriptor | s::Type::Byte | s::Type::Float | s::Type::Char),
         s::Location::Service(id) => !s::layout::service_layout(function.services[id as usize]).references.is_empty(),
     };
+    // The obligations table closes the set in time linear in what it adds (#779), as `close_dependencies` does.
     let mut reached = locations.clone();
-    loop {
-        let before = reached.len();
-        for dependency in &function.proofs.dependencies {
-            if reached.contains(&dependency.value) {
-                reached.extend(&dependency.obligations);
-            }
-        }
-        if reached.len() == before {
-            break;
-        }
-    }
+    obligations.close(&mut reached);
     locations.extend(reached.into_iter().filter(traced));
 }
 
@@ -1444,13 +1458,14 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
     }
     let low_roots = !function.proofs.closes.is_empty() || !function.proofs.post_roots.is_empty();
     root_duty_words(function);
+    let obligations = s::Obligations::new(function)?;
     for locations in roots.values_mut() {
-        root_dependency_anchors(function, locations);
+        root_dependency_anchors_with(function, &obligations, locations);
     }
     let mut post = std::mem::take(&mut function.proofs.post_roots);
     for root in &mut post {
         let mut locations = root.locations.iter().copied().collect::<BTreeSet<_>>();
-        root_dependency_anchors(function, &mut locations);
+        root_dependency_anchors_with(function, &obligations, &mut locations);
         for location in locations {
             if !root.locations.contains(&location) {
                 root.locations.push(location);

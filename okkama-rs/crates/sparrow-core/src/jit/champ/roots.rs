@@ -31,8 +31,8 @@ impl Frame {
         let live = s::Liveness::of(source).map_err(failed)?;
         let allocation = s::allocate_with(source, &live).map_err(failed)?;
         // Forward symbolic execution checks all outcomes, metadata reads, ownership lifetimes,
-        // cycle scratch, parallel edge copies and post roots independently of the live sets.
-        s::check_allocation(source, &allocation).map_err(failed)?;
+        // cycle scratch, parallel edge copies and post roots; the live sets only prune its states (#781).
+        s::check_allocation_with(source, &allocation, &live).map_err(failed)?;
         let mut frame = Self {
             allocation, offsets: vec![], words: vec![], bytes: 0, traced: Map::new(),
             before: vec![], after: vec![],

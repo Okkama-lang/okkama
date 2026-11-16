@@ -33,3 +33,24 @@ fn roles_contextual_wrap_runs_within_budget() {
 fn variants_search_runs_within_budget() {
     within_budget("L05.variants.search");
 }
+
+/// #779: about 14 s of CPU in a debug build before (codegen and the load check 4.2 s), about 11 s after the
+/// load check's dominator tree and obligations table and the pipeline's single verify_low (2.3 s).
+#[test]
+fn ini_native_equivalence_runs_within_budget() {
+    within_budget("L09.ini.native-equivalence");
+}
+
+/// #781: past the allocation checker's storage bound before its states forgot dead aliases; #779 then brought
+/// its codegen and load check from 26 s to about 7 s in a debug build.
+#[test]
+fn db_row_readers_runs_within_budget() {
+    within_budget("L09.db.row-readers");
+}
+
+/// #781: an observation entry returning a managed result from a retained scope (T2); the large instantiations of
+/// `testing/generation` take about 18 s in a debug build after #779.
+#[test]
+fn once_generic_std_instantiation_runs_within_budget() {
+    within_budget("L04.once.generic-std-instantiation");
+}

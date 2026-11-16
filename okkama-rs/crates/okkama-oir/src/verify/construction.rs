@@ -1,6 +1,6 @@
 use super::{EntityLocation as L, RuleId as R, State};
 use crate::*;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Origin { Instruction(InstId), Invoke(BlockId) }
@@ -331,24 +331,47 @@ fn definite_self(
     for (block, data) in body.blocks.iter() {
         if block != body.entry { valid.extend(&data.params); }
     }
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for edge in edges {
-            let Ok(target) = body.blocks.get(edge.target) else { continue; };
-            for (arg, param) in edge.args.iter().zip(&target.params) {
-                if !state.step(1) { return valid; }
-                let local = match arg {
-                    EdgeArg::Value(value) => valid.contains(value),
-                    EdgeArg::Produced(result) => result.outcome == Outcome::Normal && result.slot == 0
+    let mut flows = Vec::new();
+    for edge in edges {
+        let Ok(target) = body.blocks.get(edge.target) else { continue; };
+        for (arg, param) in edge.args.iter().zip(&target.params) {
+            if !state.step(1) || !state.memory(16) { return valid; }
+            match arg {
+                EdgeArg::Value(value) => flows.push((Some(*value), *param)),
+                EdgeArg::Produced(result) => {
+                    let local = result.outcome == Outcome::Normal && result.slot == 0
                         && body.blocks.get(edge.source).is_ok_and(|block| match &block.term.kind {
                             TermKind::InvokeOwn { op, normal, .. } => normal.block == edge.target
                                 && normal.args == edge.args && matches!(**op, Operation::Core(CoreOp::ObjNew { .. })),
                             _ => false,
-                        }),
-                };
-                if !local && valid.remove(param) { changed = true; }
+                        });
+                    if !local { flows.push((None, *param)); }
+                }
             }
+        }
+    }
+    retain_fed(valid, &flows, state)
+}
+
+/// The greatest subset of `valid` in which every parameter that a flow `(source, parameter)` feeds has its source
+/// in the subset too; a `None` source is never in it (#779). A parameter that leaves removes the parameters it
+/// feeds in turn, so each flow is read a bounded number of times, where repeated passes over every edge took
+/// as many passes as the longest chain of parameters.
+fn retain_fed(mut valid: BTreeSet<ValueId>, flows: &[(Option<ValueId>, ValueId)], state: &mut State<'_>)
+    -> BTreeSet<ValueId> {
+    let mut fed = BTreeMap::<ValueId, Vec<ValueId>>::new();
+    let mut leaving = Vec::new();
+    for &(source, parameter) in flows {
+        if !state.step(1) || !state.memory(32) { return valid; }
+        match source {
+            Some(source) if valid.contains(&source) => fed.entry(source).or_default().push(parameter),
+            _ => leaving.push(parameter),
+        }
+    }
+    while let Some(parameter) = leaving.pop() {
+        if !state.step(1) { return valid; }
+        if valid.remove(&parameter) && let Some(targets) = fed.get(&parameter) {
+            leaving.extend(targets);
         }
     }
     valid
@@ -360,5 +383,55 @@ fn join_failure(target: &mut Option<Vec<u8>>, values: &[u8]) {
         Some(old) => {
             for (old, new) in old.iter_mut().zip(values) { *old |= new; }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::verify::{EntityLocation, VerifyContext, VerifyOptions, VerifyStats};
+
+    /// `retain_fed` is the greatest fixed point the passes before #779 reached: drop every parameter with a
+    /// flow from outside the set, until no flow does. Random flow graphs with cycles, chains and repeated flows.
+    #[test]
+    fn retain_fed_reaches_the_pass_fixed_point() {
+        let module = ModuleBuilder::new("construction", Profile::High).finish().unwrap();
+        let options = VerifyOptions::default();
+        let mut random = 0x0779_5e1f_0779_5e1fu64;
+        let mut next = |bound: u32| {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            (random % u64::from(bound)) as u32
+        };
+        let mut removed = 0;
+        for _ in 0..2000 {
+            let count = 1 + next(30);
+            let valid: BTreeSet<_> = (0..count).filter(|_| next(4) != 0).map(ValueId::from_u32).collect();
+            let flows: Vec<_> = (0..next(60)).map(|_| {
+                let source = (next(8) != 0).then(|| ValueId::from_u32(next(count)));
+                (source, ValueId::from_u32(next(count)))
+            }).collect();
+            let mut expected = valid.clone();
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for &(source, parameter) in &flows {
+                    if !source.is_some_and(|source| expected.contains(&source)) && expected.remove(&parameter) {
+                        changed = true;
+                    }
+                }
+            }
+            let mut state = State {
+                module: &module, options: &options, context: VerifyContext::default(), diagnostics: vec![],
+                stats: VerifyStats::default(), incomplete: false, exhausted_limit: None, suppressed: 0,
+                location: EntityLocation::Module, source_loc: None, poisoned: BTreeSet::new(),
+                positions: BTreeMap::new(), edge_positions: BTreeMap::new(), cleanup_origins: None,
+            };
+            let actual = retain_fed(valid.clone(), &flows, &mut state);
+            assert_eq!(actual, expected, "{valid:?} {flows:?}");
+            removed += valid.len() - actual.len();
+        }
+        assert!(removed > 1000, "{removed}");
     }
 }
