@@ -943,3 +943,38 @@ fn an_async_slot_with_an_intrinsic_and_a_body_dispatches_to_two_thunks() {
         assert!(matches!(thunk.results.as_slice(), [s::Type::Future(_)]), "{}", thunk.symbol);
     }
 }
+
+/// An async slot with two implementations by bodies, and an async action with another outcome type.
+const TWO_LOADERS: &str = "module app v1.0.0;
+role Loading { async load(n is int) is int; }
+object Net does Loading { Net(); async load(n is int) is int { n * 2; } }
+object Disk does Loading { Disk(); async load(n is int) is int { n + 1; } }
+object Namer { Namer(); async name() is string { \"x\"; } }
+async main() is int {
+    let a is Loading = Net();
+    let b is Loading = Disk();
+    let s = await Namer().name();
+    await a.load(1) + await b.load(2) + s.length();
+}";
+
+/// #791 W3 (§4.8 item 3, `ROLE_IMPL`): every implementation of an async slot returns the slot's Future type. One
+/// thunk retyped to the Future of another outcome is refused, whatever its body.
+#[test]
+fn the_implementations_of_an_async_slot_agree_on_its_future_type() {
+    let p = compile(TWO_LOADERS);
+    load(&p).unwrap();
+    let loading = object(&p, "app.Loading");
+    let slot = p.objects[loading as usize].role.as_ref().unwrap().slots[0].clone();
+    let [s::Type::Future(index)] = slot.results[..] else { panic!("the slot returns its Future") };
+    let net = s::implementation(&p, object(&p, "app.Net"), loading, 0).unwrap() as usize;
+    let disk = s::implementation(&p, object(&p, "app.Disk"), loading, 0).unwrap() as usize;
+    assert_eq!((&p.functions[net].results, &p.functions[disk].results), (&slot.results, &slot.results));
+    let other = p.tables.future_results.iter().position(|result| *result == Some(s::Type::Str))
+        .expect("the Future of a string") as u32;
+    assert_ne!(other, index);
+    let mut retyped = p.clone();
+    retyped.functions[disk].results = vec![s::Type::Future(other)];
+    let failure = load(&retyped).unwrap_err();
+    assert_eq!(failure.rule, "ROLE_IMPL", "{failure}");
+    assert!(failure.message.contains("implementation differs from role slot load"), "{failure}");
+}
