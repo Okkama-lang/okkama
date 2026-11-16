@@ -397,6 +397,66 @@ fn successor_obligations_are_checked_before_lowering() {
     }
 }
 
+const ASYNC_COUNTER: &str =
+    "object C { has n is int = 0; C(); async inc() is ^C { ^n = n + 1; } value() is int { n; } }";
+
+/// The obligation of an async successor moves into its `Future<^C>`, which
+/// must be awaited or handed on (Book, consumption; Bible §13.14; #754).
+#[test]
+fn successor_futures_carry_the_obligation_until_awaited() {
+    let leaked = |name: &str| {
+        format!("Successor action result must be used; binding \"{name}\" can leave scope without consumption")
+    };
+    let dropped = || "Successor action result must be used".to_string();
+    for (body, expected) in [
+        // Bound and dropped.
+        ("let pending = C().inc(); 0;", leaked("pending")),
+        // Bound and only read for `done()`/`cancelled()`.
+        ("let pending = C().inc(); if pending.done() { 1; } else { 0; }", leaked("pending")),
+        ("let pending = C().inc(); let gone = pending.cancelled(); 0;", leaked("pending")),
+        // An alias shares the obligation; the latest binding is named.
+        ("let pending = C().inc(); let alias = pending; 0;", leaked("alias")),
+        // Awaited on one branch only.
+        (
+            "let pending = C().inc(); if 1 > 0 { let c = await pending; c.value(); } else { 0; }",
+            leaked("pending"),
+        ),
+        // A spawned task carries the Future's obligation.
+        ("let task = spawn C().inc(); 0;", leaked("task")),
+        // A dropped call, and `done()` on a temporary, lose it at once.
+        ("C().inc(); 0;", dropped()),
+        ("if C().inc().done() { 1; } else { 0; }", dropped()),
+    ] {
+        assert_eq!(
+            messages(&format!("{ASYNC_COUNTER} async main() is int {{ {body} }}")),
+            [expected],
+            "{body}"
+        );
+    }
+    for body in [
+        // Awaited later, also after reading `done()`.
+        "let pending = C().inc(); let ready = pending.done(); let c = await pending; c.value();",
+        // Awaited through an alias.
+        "let pending = C().inc(); let alias = pending; let c = await alias; c.value();",
+        // Returned from its scope as the value of an `if`.
+        "let f = if 1 > 0 { let inner = C().inc(); inner; } else { C().inc(); }; let c = await f; c.value();",
+        // Passed on into an aggregate, and stored there.
+        "let pending = C().inc(); let all = [pending]; 0;",
+        "let pending = C().inc(); let all = [pending]; let c = await all[0]; c.value();",
+        // Awaited on one branch and passed on on the other.
+        "let pending = C().inc(); if 1 > 0 { let c = await pending; c.value(); } else { let all = [pending]; 0; }",
+        // Spawned and awaited.
+        "let task = spawn C().inc(); let c = await task; c.value();",
+        // An explicit cancel decides the transition.
+        "let pending = C().inc(); pending.cancel(); 0;",
+    ] {
+        assert!(
+            messages(&format!("{ASYNC_COUNTER} async main() is int {{ {body} }}")).is_empty(),
+            "{body}"
+        );
+    }
+}
+
 /// Замыкание несёт обязательства захваченных successor (#322).
 #[test]
 fn closures_carry_successor_obligations() {

@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A successor Future must be awaited or handed on (#754).** The checker
+  rejected only an awaited successor whose result was dropped. Now a call of
+  an async successor gives its `Future<^C>` the successor's obligation, as the
+  Book says: a binding that can leave its scope without awaiting it, or reads
+  it only for `done()`, gets the synchronous must-use error at the binding; a
+  dropped call and `spawn` of one are rejected too. Awaiting it, aliasing it,
+  storing it in an aggregate, giving it as a block value, spawning and
+  awaiting the task, or cancelling it explicitly consumes or transfers it.
+  New case `L12.future-successor-bound-dropped`. Handing it on through a typed
+  parameter, field or result is not expressible yet (#790).
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the
