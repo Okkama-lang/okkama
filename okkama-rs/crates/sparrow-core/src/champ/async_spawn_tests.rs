@@ -17,8 +17,6 @@ const SPAWNS_FAILS: u32 = 3;
 const AWAITS_SPAWNED: u32 = 4;
 const RETURNS_SPAWNED: u32 = 5;
 const ASYNC_P1: u32 = 6;
-/// `Future<Future<int>>`, the Future of `returns_spawned`.
-const FUTURE_OF_FUTURE: s::Type = s::Type::Future(2);
 
 /// Slots of a spawner: 0 inputs, 1 owner state, 2 cache duty, 3 task duty, 4 the Future, 5–7 the unwind.
 fn spawner_slots() -> Vec<s::FrameSlot> {
@@ -113,6 +111,7 @@ fn p1_program() -> s::Program {
             scopes: (0..ASYNC_P1).map(|index| s::Scope { function: index, parent: None, boundary: index }).collect(),
             boundaries: (0..ASYNC_P1).map(|scope| s::Boundary { scope }).collect(),
             frames,
+            // Future 2 is `Future<Future<int>>`, the Future of `returns_spawned`.
             future_results: vec![Some(s::Type::Int), None, Some(FUTURE_INT)],
             ..s::ChampTables::default()
         },
