@@ -30,6 +30,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   awaiting the task, or cancelling it explicitly consumes or transfers it.
   New case `L12.future-successor-bound-dropped`. Handing it on through a typed
   parameter, field or result is not expressible yet (#790).
+- **`buffer_state_append` is documented as returning the bytes appended
+  (#674).** Its doc comment in `std/runtime/buffer` said "the new size";
+  Tomato, the reference, returns how many bytes were appended, and
+  `io/buffer` relies on that (`written == bytes.size()`). The Champ handle
+  test now checks the returned count too.
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the

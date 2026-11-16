@@ -16,7 +16,7 @@ native buffer_state_create(initial is @byte) is BufferState;
 // Takes at most limit bytes from the front.
 native buffer_state_read(state is BufferState, limit is int) is @byte;
 
-// Appends value; the new size.
+// Appends value; how many bytes were appended (the size of value).
 native buffer_state_append(state is BufferState, value is @byte) is int;
 
 // Every byte held.
