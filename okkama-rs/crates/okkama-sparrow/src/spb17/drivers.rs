@@ -32,10 +32,12 @@ const CANCELLATION: &str = "async.cancellation.Cancellation";
 const TOKEN: &str = "async.cancellation.CancellationToken";
 const CANCELLING: &str = "async.cancellation.Cancelling";
 
-/// Failure mask bits of an entry (`EntryContract::failures`): a thrown error, a program failure. A cancellation
-/// has no bit.
+/// Failure mask bits of an entry (`EntryContract::failures`): a thrown error, a program failure, a panic and a
+/// native provider's failure. A cancellation has no bit.
 pub const THROWN: u32 = 1;
 pub const PROGRAM: u32 = 2;
+pub const PANIC: u32 = 4;
+pub const NATIVE: u32 = 8;
 
 /// How a catalogue member is called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +114,19 @@ pub const CATALOGUE: &[Row] = &[
 /// The catalogue row named `name`.
 pub fn row_named(name: &str) -> Option<&'static Row> {
     CATALOGUE.iter().find(|row| row.name == name)
+}
+
+/// The std declaration whose member a row is: `okkama.<family>.<Object>.<member>` is a member of
+/// `async.<family>.<Object>`, the declaration of `async/<family>`'s object.
+pub fn member_of(row: &Row) -> Option<String> {
+    let mut parts = row.name.strip_prefix("okkama.")?.split('.');
+    let (family, object) = (parts.next()?, parts.next()?);
+    Some(format!("async.{family}.{object}"))
+}
+
+/// Whether some row is a member of the declaration `name` (#799: the producer's objects of the catalogue).
+pub fn has_members(name: &str) -> bool {
+    CATALOGUE.iter().any(|row| member_of(row).as_deref() == Some(name))
 }
 
 /// The deps proofs of a member, as own elaborates its external signature: one for each Event cell parameter (a

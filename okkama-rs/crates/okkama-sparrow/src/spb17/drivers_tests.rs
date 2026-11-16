@@ -332,3 +332,21 @@ fn a_runtime_cell_round_trips_the_codec() {
     let p = with_cell(|_| {});
     assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
 }
+
+/// #799: the rows name the std declarations whose members they are, the one source of the producer's objects.
+#[test]
+fn the_rows_name_the_declarations_of_their_members() {
+    let row = super::drivers::row_named("okkama.lock.LockGuard.close").unwrap();
+    assert_eq!(super::drivers::member_of(row).as_deref(), Some("async.lock.LockGuard"));
+    for name in [EVENT, "async.lock.Lock", "async.semaphore.Permit", "async.barrier.BarrierState",
+        "async.cancellation.Cancellation", "async.cancellation.CancellationToken"]
+    {
+        assert!(super::drivers::has_members(name), "{name}");
+    }
+    // A declaration the runtime only creates or throws, a role, another module's object, a channel (Q2).
+    for name in ["async.barrier.BrokenBarrier", "async.cancellation.Cancelling", "async.atomic.Atomic",
+        "async.channel.Channel", "app.Event"]
+    {
+        assert!(!super::drivers::has_members(name), "{name}");
+    }
+}

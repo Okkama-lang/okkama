@@ -56,6 +56,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   formula with itself. The cancellation token's rows stop in low on #775
   until it lands.
 
+- **The producer's catalogue objects and native failures come from SPB 17
+  (#799).** The std objects whose members are runtime intrinsics are now the
+  declarations the SPB 17 rows name (`drivers::has_members`), and a native's
+  failure kinds are read from `p1::NATIVE_FAILURES` through one mask
+  conversion; the producer's own copies (`OBJECTS`, `[Program, Native]`) are
+  gone.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own

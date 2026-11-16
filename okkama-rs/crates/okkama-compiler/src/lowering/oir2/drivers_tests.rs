@@ -226,3 +226,13 @@ fn q1_events_compare_and_their_runtime_word_reaches_nothing() {
     assert!(!event.layout.may_reach_resource && event.layout.selection_layout.is_empty());
     assert!(matches!(event.fields.as_slice(), [field] if field.name == "initial" && field.storage == 0));
 }
+
+/// #799: the failure kinds of an SPB 17 mask, one source for the catalogue rows and the natives (`NATIVE_FAILURES`).
+#[test]
+fn q1_failure_masks_name_their_kinds() {
+    use ir::FailureKind::{Native, Panic, Program, Thrown};
+    assert_eq!(super::mask_failures(s::p1::NATIVE_FAILURES), [Program, Native]);
+    assert_eq!(super::mask_failures(s::drivers::THROWN | s::drivers::PROGRAM), [Thrown, Program]);
+    assert_eq!(super::mask_failures(s::drivers::PANIC), [Panic]);
+    assert!(super::mask_failures(0).is_empty());
+}

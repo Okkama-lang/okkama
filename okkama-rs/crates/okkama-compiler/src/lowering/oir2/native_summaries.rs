@@ -228,7 +228,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
         (true, name) => {
             // A provider refuses with its own `NativeFailure` or with a program failure of the call (a missing
             // provider, a refused permission), which passes every catch uncaught (language spec 9.5, #719).
-            failures.extend([ir::FailureKind::Program, ir::FailureKind::Native]);
+            failures.extend(super::drivers::mask_failures(okkama_sparrow::spb17::p1::NATIVE_FAILURES));
             // An async native (#601 N1, D22): this is its body summary, the driver's. It suspends and can be
             // cancelled; its inputs are plain data and handles, borrowed, and its result is plain data or a handle
             // the provider registered (async ABI §4.3: no fresh identity).
