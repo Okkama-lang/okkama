@@ -213,6 +213,10 @@ language.
   repeats, SecureRandom has no seed, rejection sampling; Python, Go 1.20/1.22,
   Java, Rust); Limits → 5.14. Also #754's `cancel()` rule in 13.14, and #754/#756
   marked fixed in 28.1 and 15.8.
+- 2026-11-16: 22.16 time zones without the host (`22-zones`: a Kostanay call
+  read in three cities, the New York gap as MissingLocalTime, tzdata 2026c;
+  Kazakhstan's 2024a change; Python zoneinfo/PEP 495, Java tzdb and gap shift,
+  Go tzdata).
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

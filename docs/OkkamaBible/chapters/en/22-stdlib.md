@@ -506,3 +506,47 @@ decode into a buffer they throw away. Each rewrite was first pinned by
 tests that pass on the old code — the published behaviour, byte for byte,
 was the specification — and then measured. That is the library's
 efficiency principle at work: the surface stays put while the cost moves.
+
+## 22.16 A worked example: time zones without the host
+
+Time zones show the library's rules under the most pressure. The rules change
+by government decree, the host's database may be out of date, and local
+times can be missing or repeated. `time/zone` answers every question from a
+database bundled with the toolchain and never from the machine it runs on.
+
+{{example:22-zones}}
+
+- **Deterministic answers.** `Zone("Asia/Qostanay")` reads the bundled IANA
+  database (2026c) and never the host's configured zone or files. The same
+  program gives the same answer on every machine, and
+  `TimeZoneDatabaseVersion()` says which rules it used. That matters here:
+  Kazakhstan moved Qostanay and Almaty from UTC+6 to UTC+5 on 1 March 2024,
+  a change shipped in tzdata 2024a [@iana2024a]. A host with older data
+  would place the 19:00 call an hour off. With the database bundled, the
+  rules change only when the toolchain does, and the change is visible.
+- **The zone is a value.** Converting an instant to local time takes a
+  `Zone` argument. There is no "local" default to read from an environment
+  variable (Section 22.6).
+- **A missing local time is a failure, not a guess.** On 8 March 2026,
+  New York's clocks jump from 02:00 to 03:00, so 02:30 does not exist that
+  day. `instant` throws `MissingLocalTime` instead of choosing a nearby
+  moment. A repeated time in autumn takes the earlier instant unless the
+  call says `fold: Fold.later`, so the choice is written in the code.
+
+Other libraries make other choices on each of the three points.
+
+- **Python.** `zoneinfo` reads the system database, or the `tzdata`
+  package where the system has none [@pep615]. A wall time in a gap is not
+  an error: PEP 495's `fold` attribute picks the offset from before or
+  after the transition [@pep495].
+- **Java.** `java.time` ships its own copy of tzdb with the runtime, updated
+  with the JDK. `ZonedDateTime.of` resolves a gap by shifting the local time
+  forward by the length of the gap [@javazdt].
+- **Go.** `time.LoadLocation` reads the host's zoneinfo. A program that
+  imports `time/tzdata` embeds a copy instead [@gotzdata].
+
+Okkama takes Java's bundled database and refuses Java's and Python's
+silent adjustment of a gap. The cost is a `try` around conversions of user
+input, and a toolchain update to receive new rules. What it buys is the
+library's promise in a domain where it is hardest to keep: an answer that
+does not depend on where the program happens to run.

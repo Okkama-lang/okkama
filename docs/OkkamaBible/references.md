@@ -71,6 +71,7 @@ bibliographic data were checked are listed.
 - [@gosling2023] James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - [@gospec] The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec {label: Go specification}
 - [@gotesting] The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing {label: Go package testing}
+- [@gotzdata] The Go Authors (2026). Package tzdata. *Go standard library*. https://pkg.go.dev/time/tzdata {label: Go documentation}
 - [@griesemer2020] Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
 - [@grigore2017] Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - [@halstead1985] Robert H. Halstead Jr. (1985). MULTILISP: A Language for Concurrent Symbolic Computation. *ACM Transactions on Programming Languages and Systems* 7(4): 501–538. https://doi.org/10.1145/4472.4478
@@ -85,9 +86,11 @@ bibliographic data were checked are listed.
 - [@hoare2009] Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
 - [@hsexception] The GHC Team (2026). Control.Exception. *base library documentation*. https://hackage.haskell.org/package/base/docs/Control-Exception.html {label: Haskell base library}
 - [@hyperspec] Kent M. Pitman (1996). *Common Lisp HyperSpec*, Chapter 9: Conditions. Harlequin; now LispWorks. https://www.lispworks.com/documentation/HyperSpec/Body/09_.htm
+- [@iana2024a] Internet Assigned Numbers Authority (2024). Time Zone Database Release 2024a. https://www.iana.org/time-zones/releases/2024a {label: IANA}
 - [@ieee754] IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229 {label: IEEE 754}
 - [@javalist] Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html {label: Java SE 21 API}
 - [@javastream] Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html {label: Java SE 21 API}
+- [@javazdt] Oracle (2026). Class ZonedDateTime. *Java SE API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/ZonedDateTime.html {label: Java SE documentation}
 - [@jep361] Gavin Bierman (2020). JEP 361: Switch Expressions. OpenJDK. https://openjdk.org/jeps/361
 - [@jep395] Gavin Bierman (2021). JEP 395: Records. OpenJDK. https://openjdk.org/jeps/395
 - [@jep409] Gavin Bierman (2021). JEP 409: Sealed Classes. OpenJDK. https://openjdk.org/jeps/409
@@ -162,7 +165,9 @@ bibliographic data were checked are listed.
 - [@pep3134] Ka-Ping Yee (2005). PEP 3134 – Exception Chaining and Embedded Tracebacks. *Python Enhancement Proposals*. https://peps.python.org/pep-3134/ {label: PEP 3134}
 - [@pep343] Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - [@pep484] Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
+- [@pep495] Alexander Belopolsky, Tim Peters (2015). PEP 495 – Local Time Disambiguation. *Python Enhancement Proposals*. https://peps.python.org/pep-0495/ {label: PEP 495}
 - [@pep572] Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/ {label: PEP 572}
+- [@pep615] Paul Ganssle (2020). PEP 615 – Support for the IANA Time Zone Database in the Standard Library. *Python Enhancement Proposals*. https://peps.python.org/pep-0615/ {label: PEP 615}
 - [@peters2004] Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - [@pierce2002] Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - [@pike2015] Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values

@@ -314,6 +314,7 @@
   - [22.13 Другие библиотеки, другие ответы](#2213-другие-библиотеки-другие-ответы)
   - [22.14 Чего стоит стиль](#2214-чего-стоит-стиль)
   - [22.15 Кодеки: по объекту на направление](#2215-кодеки-по-объекту-на-направление)
+  - [22.16 Разобранный пример: часовые пояса без хоста](#2216-разобранный-пример-часовые-пояса-без-хоста)
 - [Глава 24. Пишем утилиту командной строки](#глава-24-пишем-утилиту-командной-строки)
   - [24.1 Чем утилита обязана пользователю](#241-чем-утилита-обязана-пользователю)
   - [24.2 Командная строка как данные](#242-командная-строка-как-данные)
@@ -18364,6 +18365,90 @@ quoted-printable кодируется за один проход вместо п
 измеряли. Это принцип эффективности библиотеки в действии: поверхность
 остаётся на месте, а цена сдвигается.
 
+## 22.16 Разобранный пример: часовые пояса без хоста
+
+Часовые пояса сильнее всего испытывают правила библиотеки. Правила меняются
+постановлением правительства, база хоста может устареть, а местное время
+бывает пропущенным или повторённым. `time/zone` отвечает на любой вопрос по
+базе, поставленной вместе с тулчейном, и никогда — по машине, на которой
+идёт программа.
+
+```okkama
+module bible/zones v1.0.0;
+
+// Time zones from the bundled IANA database, never from the host: one call
+// placed in Kostanay and read in three other cities, a wall time that a
+// clock change skips, and the database version the answers depend on.
+import "io/stdout" take Stdout;
+import "time/zone" take Zone, ZonedDateTime, MissingLocalTime, TimeZoneDatabaseVersion;
+import "time/iso" take IsoText;
+
+main() is int {
+    let out = Stdout();
+    let home = Zone("Asia/Qostanay");
+    let call = home.instant(IsoText("2026-12-01T19:00:00").local_date_time());
+    out.writeln("the call, UTC:    " + call.string());
+    for ["America/New_York", "Europe/Berlin", "Asia/Tokyo"] -> name {
+        let there = ZonedDateTime(instant: call, zone: Zone(name));
+        out.writeln(name + ": " + there.local_datetime().string() + " " + there.abbreviation());
+    }
+    let skipped = try {
+        Zone("America/New_York").instant(IsoText("2026-03-08T02:30:00").local_date_time()).string();
+    }
+    catch e is MissingLocalTime {
+        "2026-03-08 02:30 in New York: " + e.text();
+    };
+    out.writeln(skipped);
+    out.writeln("tzdata " + TimeZoneDatabaseVersion().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+the call, UTC:    2026-12-01T14:00:00Z
+America/New_York: 2026-12-01T09:00:00 EST
+Europe/Berlin: 2026-12-01T15:00:00 CET
+Asia/Tokyo: 2026-12-01T23:00:00 JST
+2026-03-08 02:30 in New York: MissingLocalTime.zone("America/New_York")
+tzdata 2026c
+```
+
+- **Детерминированные ответы.** `Zone("Asia/Qostanay")` читает встроенную
+  базу IANA (2026c) и никогда не смотрит на настроенный пояс хоста или его
+  файлы. Одна и та же программа даёт один и тот же ответ на любой машине, а
+  `TimeZoneDatabaseVersion()` говорит, по каким правилам. Здесь это важно:
+  Казахстан перевёл Костанай и Алматы с UTC+6 на UTC+5 1 марта 2024 года,
+  и это изменение вышло в tzdata 2024a [[IANA](#ref-iana2024a)]. Хост со старой базой
+  поставил бы звонок в 19:00 на час не туда. Со встроенной базой правила
+  меняются только вместе с тулчейном, и это изменение видно.
+- **Пояс — значение.** Перевод момента в местное время принимает аргумент
+  `Zone`. «Местного» умолчания, прочитанного из переменной окружения, нет
+  (раздел 22.6).
+- **Пропущенное местное время — отказ, а не догадка.** 8 марта 2026 года
+  часы в Нью-Йорке прыгают с 02:00 на 03:00, так что 02:30 в этот день нет.
+  `instant` бросает `MissingLocalTime`, а не выбирает момент поблизости.
+  Повторённое осенью время берёт более ранний момент, если вызов не скажет
+  `fold: Fold.later`, так что выбор записан в коде.
+
+Другие библиотеки решают каждый из трёх пунктов иначе.
+
+- **Python.** `zoneinfo` читает системную базу или пакет `tzdata`, если в
+  системе её нет [[PEP 615](#ref-pep615)]. Время в разрыве — не ошибка: атрибут `fold` из
+  PEP 495 выбирает смещение до или после перехода [[PEP 495](#ref-pep495)].
+- **Java.** `java.time` поставляет свою копию tzdb вместе со средой
+  выполнения и обновляет её с JDK. `ZonedDateTime.of` разрешает разрыв,
+  сдвигая местное время вперёд на длину разрыва [[Java SE documentation](#ref-javazdt)].
+- **Go.** `time.LoadLocation` читает zoneinfo хоста. Программа, которая
+  импортирует `time/tzdata`, встраивает свою копию [[Go documentation](#ref-gotzdata)].
+
+Okkama берёт у Java встроенную базу и отказывается от молчаливой поправки
+разрыва, как у Java и Python. Цена — `try` вокруг перевода пользовательского
+ввода и обновление тулчейна ради новых правил. Взамен — обещание библиотеки
+в той области, где его труднее всего сдержать: ответ, который не зависит от
+того, где программе довелось выполняться.
+
 # Глава 24. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в
@@ -22764,6 +22849,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-go120"></a>The Go Authors (2023). Go 1.20 Release Notes. https://go.dev/doc/go1.20
+- <a id="ref-gotzdata"></a>The Go Authors (2026). Package tzdata. *Go standard library*. https://pkg.go.dev/time/tzdata
 - <a id="ref-gotesting"></a>The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
@@ -22783,10 +22869,12 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
+- <a id="ref-iana2024a"></a>Internet Assigned Numbers Authority (2024). Time Zone Database Release 2024a. https://www.iana.org/time-zones/releases/2024a
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - <a id="ref-javalist"></a>Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html
 - <a id="ref-javastream"></a>Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html
+- <a id="ref-javazdt"></a>Oracle (2026). Class ZonedDateTime. *Java SE API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/ZonedDateTime.html
 - <a id="ref-jep444"></a>Ron Pressler, Alan Bateman (2023). JEP 444: Virtual Threads. OpenJDK. https://openjdk.org/jeps/444
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
@@ -22853,7 +22941,9 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
 - <a id="ref-pep308"></a>Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/
 - <a id="ref-pep3134"></a>Ka-Ping Yee (2005). PEP 3134 – Exception Chaining and Embedded Tracebacks. *Python Enhancement Proposals*. https://peps.python.org/pep-3134/
+- <a id="ref-pep495"></a>Alexander Belopolsky, Tim Peters (2015). PEP 495 – Local Time Disambiguation. *Python Enhancement Proposals*. https://peps.python.org/pep-0495/
 - <a id="ref-pep572"></a>Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/
+- <a id="ref-pep615"></a>Paul Ganssle (2020). PEP 615 – Support for the IANA Time Zone Database in the Standard Library. *Python Enhancement Proposals*. https://peps.python.org/pep-0615/
 - <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values

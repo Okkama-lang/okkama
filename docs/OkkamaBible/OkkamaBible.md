@@ -314,6 +314,7 @@
   - [22.13 Other libraries, other answers](#2213-other-libraries-other-answers)
   - [22.14 What the style costs](#2214-what-the-style-costs)
   - [22.15 Codecs: one object per direction](#2215-codecs-one-object-per-direction)
+  - [22.16 A worked example: time zones without the host](#2216-a-worked-example-time-zones-without-the-host)
 - [Chapter 24. Building a CLI tool](#chapter-24-building-a-cli-tool)
   - [24.1 What a tool owes its user](#241-what-a-tool-owes-its-user)
   - [24.2 The command line as data](#242-the-command-line-as-data)
@@ -18161,6 +18162,90 @@ tests that pass on the old code — the published behaviour, byte for byte,
 was the specification — and then measured. That is the library's
 efficiency principle at work: the surface stays put while the cost moves.
 
+## 22.16 A worked example: time zones without the host
+
+Time zones show the library's rules under the most pressure. The rules change
+by government decree, the host's database may be out of date, and local
+times can be missing or repeated. `time/zone` answers every question from a
+database bundled with the toolchain and never from the machine it runs on.
+
+```okkama
+module bible/zones v1.0.0;
+
+// Time zones from the bundled IANA database, never from the host: one call
+// placed in Kostanay and read in three other cities, a wall time that a
+// clock change skips, and the database version the answers depend on.
+import "io/stdout" take Stdout;
+import "time/zone" take Zone, ZonedDateTime, MissingLocalTime, TimeZoneDatabaseVersion;
+import "time/iso" take IsoText;
+
+main() is int {
+    let out = Stdout();
+    let home = Zone("Asia/Qostanay");
+    let call = home.instant(IsoText("2026-12-01T19:00:00").local_date_time());
+    out.writeln("the call, UTC:    " + call.string());
+    for ["America/New_York", "Europe/Berlin", "Asia/Tokyo"] -> name {
+        let there = ZonedDateTime(instant: call, zone: Zone(name));
+        out.writeln(name + ": " + there.local_datetime().string() + " " + there.abbreviation());
+    }
+    let skipped = try {
+        Zone("America/New_York").instant(IsoText("2026-03-08T02:30:00").local_date_time()).string();
+    }
+    catch e is MissingLocalTime {
+        "2026-03-08 02:30 in New York: " + e.text();
+    };
+    out.writeln(skipped);
+    out.writeln("tzdata " + TimeZoneDatabaseVersion().string());
+    0;
+}
+```
+
+Output:
+
+```text
+the call, UTC:    2026-12-01T14:00:00Z
+America/New_York: 2026-12-01T09:00:00 EST
+Europe/Berlin: 2026-12-01T15:00:00 CET
+Asia/Tokyo: 2026-12-01T23:00:00 JST
+2026-03-08 02:30 in New York: MissingLocalTime.zone("America/New_York")
+tzdata 2026c
+```
+
+- **Deterministic answers.** `Zone("Asia/Qostanay")` reads the bundled IANA
+  database (2026c) and never the host's configured zone or files. The same
+  program gives the same answer on every machine, and
+  `TimeZoneDatabaseVersion()` says which rules it used. That matters here:
+  Kazakhstan moved Qostanay and Almaty from UTC+6 to UTC+5 on 1 March 2024,
+  a change shipped in tzdata 2024a [[IANA](#ref-iana2024a)]. A host with older data
+  would place the 19:00 call an hour off. With the database bundled, the
+  rules change only when the toolchain does, and the change is visible.
+- **The zone is a value.** Converting an instant to local time takes a
+  `Zone` argument. There is no "local" default to read from an environment
+  variable (Section 22.6).
+- **A missing local time is a failure, not a guess.** On 8 March 2026,
+  New York's clocks jump from 02:00 to 03:00, so 02:30 does not exist that
+  day. `instant` throws `MissingLocalTime` instead of choosing a nearby
+  moment. A repeated time in autumn takes the earlier instant unless the
+  call says `fold: Fold.later`, so the choice is written in the code.
+
+Other libraries make other choices on each of the three points.
+
+- **Python.** `zoneinfo` reads the system database, or the `tzdata`
+  package where the system has none [[PEP 615](#ref-pep615)]. A wall time in a gap is not
+  an error: PEP 495's `fold` attribute picks the offset from before or
+  after the transition [[PEP 495](#ref-pep495)].
+- **Java.** `java.time` ships its own copy of tzdb with the runtime, updated
+  with the JDK. `ZonedDateTime.of` resolves a gap by shifting the local time
+  forward by the length of the gap [[Java SE documentation](#ref-javazdt)].
+- **Go.** `time.LoadLocation` reads the host's zoneinfo. A program that
+  imports `time/tzdata` embeds a copy instead [[Go documentation](#ref-gotzdata)].
+
+Okkama takes Java's bundled database and refuses Java's and Python's
+silent adjustment of a gap. The cost is a `try` around conversions of user
+input, and a toolchain update to receive new rules. What it buys is the
+library's promise in a domain where it is hardest to keep: an answer that
+does not depend on where the program happens to run.
+
 # Chapter 24. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
@@ -22535,6 +22620,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - <a id="ref-go120"></a>The Go Authors (2023). Go 1.20 Release Notes. https://go.dev/doc/go1.20
+- <a id="ref-gotzdata"></a>The Go Authors (2026). Package tzdata. *Go standard library*. https://pkg.go.dev/time/tzdata
 - <a id="ref-gotesting"></a>The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
@@ -22554,10 +22640,12 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-hoare1978"></a>C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - <a id="ref-hoare1981"></a>C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
 - <a id="ref-hoare2009"></a>Tony Hoare (2009). Null References: The Billion Dollar Mistake. Talk at QCon London, March 2009. https://www.infoq.com/presentations/Null-References-The-Billion-Dollar-Mistake-Tony-Hoare/
+- <a id="ref-iana2024a"></a>Internet Assigned Numbers Authority (2024). Time Zone Database Release 2024a. https://www.iana.org/time-zones/releases/2024a
 - <a id="ref-ieee754"></a>IEEE (2019). *IEEE Standard for Floating-Point Arithmetic* (IEEE Std 754-2019). https://doi.org/10.1109/IEEESTD.2019.8766229
 - <a id="ref-wasi"></a>WebAssembly System Interface (WASI): capability-based access, pre-opened directories. https://wasi.dev/
 - <a id="ref-javalist"></a>Oracle (2023). Interface List<E>. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html
 - <a id="ref-javastream"></a>Oracle (2023). Package java.util.stream. *Java SE 21 API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html
+- <a id="ref-javazdt"></a>Oracle (2026). Class ZonedDateTime. *Java SE API Specification*. https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/ZonedDateTime.html
 - <a id="ref-jep444"></a>Ron Pressler, Alan Bateman (2023). JEP 444: Virtual Threads. OpenJDK. https://openjdk.org/jeps/444
 - <a id="ref-jones2023"></a>Richard Jones, Antony Hosking, Eliot Moss (2023). *The Garbage Collection Handbook: The Art of Automatic Memory Management*, 2nd edition. CRC Press.
 - <a id="ref-baker1977"></a>Henry C. Baker Jr. and Carl Hewitt (1977). The Incremental Garbage Collection of Processes. MIT AI Laboratory Working Paper 149; also in *Proceedings of the Symposium on Artificial Intelligence and Programming Languages*, Rochester, NY. https://hdl.handle.net/1721.1/41969
@@ -22624,7 +22712,9 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
 - <a id="ref-pep308"></a>Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/
 - <a id="ref-pep3134"></a>Ka-Ping Yee (2005). PEP 3134 – Exception Chaining and Embedded Tracebacks. *Python Enhancement Proposals*. https://peps.python.org/pep-3134/
+- <a id="ref-pep495"></a>Alexander Belopolsky, Tim Peters (2015). PEP 495 – Local Time Disambiguation. *Python Enhancement Proposals*. https://peps.python.org/pep-0495/
 - <a id="ref-pep572"></a>Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/
+- <a id="ref-pep615"></a>Paul Ganssle (2020). PEP 615 – Support for the IANA Time Zone Database in the Standard Library. *Python Enhancement Proposals*. https://peps.python.org/pep-0615/
 - <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
 - <a id="ref-pike2015"></a>Rob Pike (2015). Errors are values. *The Go Blog*, 12 January 2015. https://go.dev/blog/errors-are-values
