@@ -12,3 +12,7 @@ okkama-runtime-abi = { path = "../okkama-runtime-abi" }
 
 [lints]
 workspace = true
+
+[features]
+# Checks every liveness and allocation against the algorithms before #755 (tests only; never in a runtime).
+liveness-reference = []

@@ -423,20 +423,21 @@ fn liveness_converges_below_the_work_bound() {
 }
 
 #[test]
-fn liveness_work_beyond_the_bound_is_rejected() {
-    // About 100 * 1100^2 / 2 = 60 M visited entries over 1101 passes; the stored sets stay at 110_100.
-    expect_budget(live_locations(&backward_chain(100, 1100)).map(drop), "ALLOCATION_WORK",
-        "allocation liveness work budget exceeded");
+fn liveness_of_a_long_backward_chain_converges_below_the_work_bound() {
+    // The sweeping solver before #755 moved the set one branch per pass: about 100 * 1100^2 / 2 = 60 M entries
+    // over 1101 passes, beyond the bound. In postorder each PC is visited once: about 2 * 110_100 entries.
+    let live = live_locations(&backward_chain(100, 1100)).unwrap();
+    assert!(live.iter().all(|set| set.len() == 100));
 }
 
 #[test]
-fn liveness_storage_beyond_the_bound_is_rejected() {
-    // 3000 registers live at 2801 instructions: 8.4 M stored entries within one pass.
+fn liveness_work_beyond_the_bound_is_rejected() {
+    // A dispatch with 50 K outcomes to a ret of 1000 registers: its one visit reads the ret's 1000 live entries
+    // for every outcome, 50 M in all; the stored sets stay at 2000 entries.
     let mut f = empty_function();
-    f.registers = vec![Type::Int; 3000];
-    f.code = (1..=2800).map(branch).collect();
-    f.code.push(Instruction::Ret((0..3000).collect()));
-    expect_budget(live_locations(&f).map(drop), "ALLOCATION_MEMORY", "allocation liveness storage exceeded");
+    f.registers = vec![Type::Int; 1000];
+    f.code = vec![fan_out(50_000, 1), Instruction::Ret((0..1000).collect())];
+    expect_budget(live_locations(&f).map(drop), "ALLOCATION_WORK", "allocation liveness work budget exceeded");
 }
 
 /// `count` unused parameters, then `used` constants that the ret reads.

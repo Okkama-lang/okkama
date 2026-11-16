@@ -16,6 +16,7 @@ mod take;
 mod services;
 
 pub use allocation::{AllocatedRoot, Allocation, Copy, CopySource, allocate, check_allocation, live_locations};
+pub use allocation::{Liveness, Obligations, allocate_with};
 pub use codec::{assemble, decode, disassemble, encode};
 pub use registry::{CallAbi, CleanupAbi, Helper, HelperClass, MachineArgument, Opcode, ProducedType, ResultContext};
 pub use registry::Tag;

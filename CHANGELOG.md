@@ -20,6 +20,23 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **SPB 17 liveness and allocation checks are fast (#755).** Liveness swept
+  every PC until nothing changed, kept a `BTreeSet` per PC and re-closed all
+  dependency records at every PC; one load computed it up to four times per
+  function, and the allocation checker and root maps re-closed dependencies
+  per use. Liveness is now a postorder worklist over predecessors with sparse
+  per-PC lists, closing obligations only from locations that just became
+  live; the loader solves it once without roots and reuses that result when
+  the roots add nothing live; the allocator, its checker and the JIT share an
+  obligation table, and the checker keeps each state in one buffer. Results
+  are unchanged: the algorithms before #755 stay as a test-only reference
+  that every liveness and allocation in the `okkama-sparrow` and compiler
+  tests is checked against (feature `liveness-reference`). The work budget
+  now counts entries read per visit, so a long backward chain is no longer
+  rejected and a wide fan-out is. In debug Champ builds `L07.traversal.escaping`
+  takes 17 s instead of 24 s, and `L07.traversal.early-exits` 16 s instead
+  of 24 s; Cranelift codegen is now most of what remains.
+
 - **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
   rehomes ran on every function and cloned a dense map of all locations at
   every instruction. Debug builds spent 50 s of a 53 s compile of
