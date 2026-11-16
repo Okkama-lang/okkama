@@ -20,8 +20,11 @@ pub struct P1Contracts {
     handles: BTreeMap<String, u32>,
     /// The `fn` roles: one owning slot named `call`.
     callables: Vec<u32>,
-    /// The declarations each std async primitive entry creates or throws (#601 Q1, `drivers`).
+    /// The declarations each std async primitive entry creates or throws (#601 Q1, `drivers`), and each ready holder
+    /// row's specialization (#810).
     related: BTreeMap<String, Vec<u32>>,
+    /// The objects, for the holder rows' entries, which their declarations' registers complete (#810).
+    objects: Vec<Object>,
 }
 
 /// The failure mask of a native entry: a provider refusal (`NativeFailure`, Native = 8) or a program failure of
@@ -130,7 +133,19 @@ impl P1Contracts {
         let callables = objects.iter().enumerate().filter(|(_, object)| object.role.as_ref().is_some_and(|role| {
             matches!(role.slots.as_slice(), [slot] if slot.name == "call" && slot.entry_abi == EntryAbi::Owned)
         })).map(|(id, _)| id as u32).collect();
-        Ok(Self { core: entries, natives, mapped, handles, callables, related })
+        // #810: the related declarations of every ready holder row for each specialization of its family.
+        for template in super::drivers::HOLDERS.iter().filter(|template| template.ready) {
+            let family = super::drivers::member_of_holder(template);
+            for object in objects {
+                let Some(suffix) = object.name.strip_prefix(&family).and_then(|rest| rest.strip_prefix('_')) else {
+                    continue;
+                };
+                if let Some(ids) = super::drivers::holder_related(template, objects, suffix) {
+                    related.insert(super::drivers::specialized(template, &[suffix]), ids);
+                }
+            }
+        }
+        Ok(Self { core: entries, natives, mapped, handles, callables, related, objects: objects.to_vec() })
     }
 
     /// The finite P1 entries: Atomic operations, `Error.text`, the test intrinsics and the std async primitives.
@@ -158,6 +173,10 @@ impl P1Contracts {
             return Some(entry);
         }
         let name = declared.proofs.entry.as_ref()?.external.as_deref()?;
+        // #810: a ready holder row's specialization.
+        if let Some(entry) = super::drivers::holder_entry(name, &self.objects, declared) {
+            return Some(entry);
+        }
         let symbol = catalogue::Symbol::parse(name)?;
         if let Some(native) = self.mapped.get(name) {
             return self.mapped_entry(*native, declared, composites);
@@ -420,6 +439,16 @@ fn native_entry(native: abi::Native, registers: Vec<Type>, results: Vec<Type>) -
     entry(native.symbol(), registers, results, true, NATIVE_FAILURES)
 }
 
+/// Whether a parameter of `ty` carries deps in an elaborated external signature, as own gives them: an object, an
+/// error, a role value, a Future, or an array of role values or of Futures.
+pub(super) fn carries_deps(ty: Type) -> bool {
+    match ty {
+        Type::Object(_) | Type::Error | Type::Role(_) | Type::Future(_) => true,
+        Type::Array(shape) => matches!(shape.leaf, ArrayLeaf::Role(_) | ArrayLeaf::Future(_)),
+        _ => false,
+    }
+}
+
 /// PR-A: whether an Atomic's value is a Future or an array of Futures, which the Atomic borrows (`ATOMIC_BORROW`).
 pub fn borrowed_future(value: Type) -> bool {
     matches!(value, Type::Future(_)) || matches!(value, Type::Array(shape) if matches!(shape.leaf, ArrayLeaf::Future(_)))
@@ -432,11 +461,7 @@ fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, fail
     }
     // A role value (an Atomic over a role, #764) carries its deps like an object, and so does an array of role
     // values (an Atomic over other closed plain data, #778), as own elaborates them.
-    let deps = registers.iter().filter(|ty| match ty {
-        Type::Object(_) | Type::Error | Type::Role(_) | Type::Future(_) => true,
-        Type::Array(shape) => matches!(shape.leaf, ArrayLeaf::Role(_) | ArrayLeaf::Future(_)),
-        _ => false,
-    }).count();
+    let deps = registers.iter().filter(|ty| carries_deps(**ty)).count();
     let mut services = vec![ServiceKind::Deps; deps];
     // Proof parameters precede the owning packet, as in elaborated OIR signatures.
     if owned {

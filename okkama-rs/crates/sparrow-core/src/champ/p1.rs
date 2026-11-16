@@ -10,6 +10,10 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
     if name == s::p1::SYNC_CLOSURE_CLEANUP || name == s::p1::ANY_CLEANUP {
         return opaque_cleanup(ctx, io);
     }
+    // A ready D23 holder row (#810) takes the packet its protocol is offered: it is not a plain boundary.
+    if let Some(row) = s::drivers::ready_holder(name) {
+        return super::groups::invoke(ctx, function, row.name, io, args);
+    }
     // Acceptance follows the packet ABI for every call-boundary entry, including replace.
     let mut post = CallPost::default();
     if !io.is_null() {

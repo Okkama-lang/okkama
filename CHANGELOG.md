@@ -20,6 +20,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: FutureGroup (#810, G1 step 1).** `async/scope`'s FutureGroup runs on Champ.
+  - `start` registers a fresh Future and only retains a bound one, then starts it.
+  - `wait`, `active` and `cancel` behave as on Tomato.
+  - The group travels with the value that holds it.
+  - When the group's owner closes, the group seals. Its members' outcomes are destroyed in the owner's cleanup, and a member that still runs is left to shutdown, as on Tomato built from the current tree.
+
+  Two compiler fixes came with it and apply to any program:
+  - A fresh Future passed from a nested scope (inside a `try`, say) together with a value from an enclosing scope no longer stops the build with SPB_SCHEDULE.
+  - An async action that waits on a group stored in one of its fields compiles.
+
+  Not yet supported:
+  - Futures whose inputs hold a resource (#735);
+  - a Future started through the `Supervising` role is settled when that call returns, not when the group's owner closes (#818);
+  - a few group shapes that the build refuses: #819–#822;
+  - the collectors, timeouts and FutureScope (the next G1 steps).
+
 - **Champ: an Atomic holds Futures as borrowed views (PR-A, D25 tail).** Std keeps
   optional Futures in `Atomic<@Future<T>>` slots (sqlite, tcp, http, logging). The
   Atomic never holds a Future's duty: writing one offers nothing, reading gives a

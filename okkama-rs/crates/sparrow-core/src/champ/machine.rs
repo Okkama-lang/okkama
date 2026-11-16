@@ -48,6 +48,8 @@ pub(crate) struct Program {
     pub schedules: Vec<Vec<u64>>,
     /// The value of each module constant (`Program::globals`), built before the program runs (#709).
     pub globals: Vec<Word>,
+    /// Whether each object descriptor is a FutureGroup specialization (#810): a holder the selection walk selects.
+    pub groups: Vec<bool>,
 }
 
 impl Program {
@@ -233,7 +235,8 @@ impl Runtime {
             // frame layout reads it for the RESULT word.
             let intrinsic = external.as_deref().and_then(|name| verified.p1.related(name).map(|objects| {
                 okkama_sparrow::Intrinsic {
-                    name: name.to_owned(), helpers: vec![],
+                    // A ready holder row runs Tomato's intrinsic of its base name (#810), by specialization.
+                    name: s::drivers::ready_holder(name).map_or(name, |row| row.name).to_owned(), helpers: vec![],
                     objects: objects.iter().map(|&id| okkama_sparrow::ObjectRef(id)).collect(),
                 }
             }));
@@ -354,6 +357,7 @@ impl Runtime {
         runtime.champ.machine = Some(Program {
             source: verified.source.clone(), plans, selections, entries, shielded_entries,
             external: implementations, p1, native_failure, frames, schedules, globals: Vec::new(),
+            groups: source.objects.iter().map(|object| s::drivers::group_specialization(&object.name)).collect(),
         });
         let globals = super::collections::build_globals(&mut runtime, source).map_err(Error)?;
         runtime.champ.machine.as_mut().expect("Champ program").globals = globals;

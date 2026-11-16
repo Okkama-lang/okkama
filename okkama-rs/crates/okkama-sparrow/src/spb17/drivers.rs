@@ -297,12 +297,9 @@ pub(super) fn arguments(callee: &Function) -> Vec<ProducedType> {
 // `async.<family>.<Object>_<suffix>` and the entry `okkama.<family>.<Object>.<member>$<suffix>` (two suffixes for
 // FutureScope<T, R>). A suffix is the Atomic one: a scalar or array suffix, `role_<declaration>`, or `t_<encoded>`.
 //
-// The rows exist before the runtime does (lane A, slices A3 and A4): the producer keeps its named refusal of these
-// members, and the loader does not admit them yet ([`HOLDERS_READY`]), so no program changes behaviour. The runtime
-// slices wire [`instantiate`] into the trusted entries, with the loader rule `CHANNEL_MESSAGE` for a `t_` message.
-
-/// Whether the runtime runs the holders' rows. False until slices A3 (Q2) and A4 (G1) land.
-pub const HOLDERS_READY: bool = false;
+// The rows exist before the runtime does (lane A, slices A3 and A4). A row is `ready` once the runtime runs it
+// (#810, G1 in steps: FutureGroup first); the producer keeps its named refusal of the other members, and the loader
+// trusts only ready rows, so no other program changes behaviour.
 
 /// The hidden runtime word of a holder (ruling PR-C): its one storage word, a traced `RuntimeCell` that refers to the
 /// runtime payload (`ChannelHolder`, `GroupHolder`). Channel, its endpoints and FutureGroup have no source field.
@@ -386,13 +383,20 @@ pub struct Template {
     /// Whether the driver calls the program's helpers (`Within`, `Before`: the clock, PR-D thunks).
     pub helpers: bool,
     pub slice: Slice,
+    /// Whether the runtime runs this row: the producer declares it as an intrinsic and the loader trusts it (#810).
+    pub ready: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
 const fn holder(name: &'static str, params: &'static [Slot], results: &'static [Slot], abi: Abi, failures: u32,
     effect: Effect, related: &'static [&'static str], slice: Slice) -> Template
 {
-    Template { name, params, results, abi, failures, effect, related, helpers: false, slice }
+    Template { name, params, results, abi, failures, effect, related, helpers: false, slice, ready: false }
+}
+
+/// A row the runtime runs (#810).
+const fn ready(template: Template) -> Template {
+    Template { ready: true, ..template }
 }
 
 use Slot::{Future as FUT, Holder as H, Int as INT, Outcome as OUT, Sequence as SEQ, Value as VAL};
@@ -416,16 +420,16 @@ pub const HOLDERS: &[Template] = &[
         Slice::Q2),
     holder("okkama.channel.Receiving.close", &[H(RECEIVING)], &[], Abi::Observation, PROGRAM, Effect::Plain, &[],
         Slice::Q2),
-    holder("okkama.scope.FutureGroup.new", &[], &[H(FUTURE_GROUP)], Abi::Owned, 0, Effect::FreshHolder,
-        &[FUTURE_GROUP], Slice::G1),
-    holder("okkama.scope.FutureGroup.start", &[H(FUTURE_GROUP), FUT], &[], Abi::Owned, THROWN | PROGRAM,
-        Effect::Offer, &[FINISHED_GROUP], Slice::G1),
-    holder("okkama.scope.FutureGroup.active", &[H(FUTURE_GROUP)], &[INT], Abi::Observation, PROGRAM, Effect::Plain,
-        &[], Slice::G1),
-    holder("okkama.scope.FutureGroup.cancel", &[H(FUTURE_GROUP)], &[], Abi::Observation, PROGRAM, Effect::Plain,
-        &[], Slice::G1),
-    holder("okkama.scope.FutureGroup.wait", &[H(FUTURE_GROUP)], &[H(FUTURE_GROUP)], Abi::Driver, THROWN | PROGRAM,
-        Effect::AliasesReceiver, &[], Slice::G1),
+    ready(holder("okkama.scope.FutureGroup.new", &[], &[H(FUTURE_GROUP)], Abi::Owned, 0, Effect::FreshHolder,
+        &[FUTURE_GROUP], Slice::G1)),
+    ready(holder("okkama.scope.FutureGroup.start", &[H(FUTURE_GROUP), FUT], &[], Abi::Owned, THROWN | PROGRAM,
+        Effect::Offer, &[FINISHED_GROUP], Slice::G1)),
+    ready(holder("okkama.scope.FutureGroup.active", &[H(FUTURE_GROUP)], &[INT], Abi::Observation, PROGRAM, Effect::Plain,
+        &[], Slice::G1)),
+    ready(holder("okkama.scope.FutureGroup.cancel", &[H(FUTURE_GROUP)], &[], Abi::Observation, PROGRAM, Effect::Plain,
+        &[], Slice::G1)),
+    ready(holder("okkama.scope.FutureGroup.wait", &[H(FUTURE_GROUP)], &[H(FUTURE_GROUP)], Abi::Driver, THROWN | PROGRAM,
+        Effect::AliasesReceiver, &[], Slice::G1)),
     holder("okkama.scope.FutureScope.outcome", &[H(FUTURE_SCOPE)], &[OUT], Abi::Driver, THROWN | PROGRAM,
         Effect::Delivered, &[FUTURE_GROUP], Slice::G1),
     holder("okkama.collect.AllFutures.results", &[H(ALL_FUTURES)], &[SEQ], Abi::Driver, THROWN | PROGRAM,
@@ -449,6 +453,18 @@ pub fn holder_named(name: &str) -> Option<&'static Template> {
     HOLDERS.iter().find(|template| template.name == name)
 }
 
+/// #810: the row of a ready holder entry `name$suffix…`, which the runtime runs; its `name` is Tomato's.
+pub fn ready_holder(name: &str) -> Option<&'static Template> {
+    let (base, _) = name.split_once('$')?;
+    holder_named(base).filter(|template| template.ready)
+}
+
+/// #810: whether a declaration is a specialization of FutureGroup (`async.scope.FutureGroup_<suffix>`): its runtime
+/// word refers to the runtime's group record, and its packet entry is the group's own duty.
+pub fn group_specialization(name: &str) -> bool {
+    name.strip_prefix(FUTURE_GROUP).is_some_and(|rest| rest.starts_with('_'))
+}
+
 /// The std declaration whose member a holder row is: `okkama.<family>.<Object>.<member>` of
 /// `async.<family>.<Object>` (before its specialization).
 pub fn member_of_holder(template: &Template) -> String {
@@ -459,6 +475,13 @@ pub fn member_of_holder(template: &Template) -> String {
 /// The entry of `template` for a specialization: `name$suffix`, and `name$T$R` for FutureScope.
 pub fn specialized(template: &Template, suffixes: &[&str]) -> String {
     std::iter::once(template.name).chain(suffixes.iter().copied()).collect::<Vec<_>>().join("$")
+}
+
+/// #810: whether a declaration is the specialization of a holder family whose runtime word is its only storage
+/// (`holder_layout`): a Channel, its endpoints, a FutureGroup.
+pub fn holder_specialization(name: &str) -> bool {
+    [CHANNEL, SENDING, RECEIVING, FUTURE_GROUP].iter()
+        .any(|family| name.strip_prefix(family).is_some_and(|rest| rest.starts_with('_')))
 }
 
 /// The declaration of a holder family's specialization: `async.channel.Channel_<suffix>`.
@@ -513,6 +536,40 @@ fn carried(ty: Type) -> bool {
     !matches!(ty, Type::Builder(_) | Type::MapBuilder(_) | Type::Never | Type::RuntimeCell)
 }
 
+/// #810: the related declarations of a holder row for one specialization: its holder families by their
+/// specialization, its errors by name. None when one is missing.
+pub fn holder_related(template: &Template, objects: &[Object], suffix: &str) -> Option<Vec<u32>> {
+    template.related.iter().map(|name| {
+        if [CHANNEL, SENDING, RECEIVING, FUTURE_GROUP].contains(name) {
+            holder_declaration(objects, name, &[suffix])
+        } else {
+            objects.iter().position(|object| object.name == *name && !object.error_cases.is_empty()).map(|id| id as u32)
+        }
+    }).collect()
+}
+
+/// #810: the trusted entry of a ready holder row named `name$suffix`, for a declaration whose registers and results
+/// give the bindings a suffix cannot (a `t_` element, the Future and Sequencing types of the program's tables).
+pub fn holder_entry(name: &str, objects: &[Object], declared: &Function) -> Option<Function> {
+    let (base, suffix) = name.split_once('$')?;
+    let template = holder_named(base).filter(|template| template.ready)?;
+    let mut bindings = Bindings::default();
+    for (slot, &ty) in template.params.iter().zip(&declared.registers).chain(template.results.iter().zip(&declared.results)) {
+        let binding = match slot {
+            Slot::Future if matches!(ty, Type::Future(_)) => &mut bindings.future,
+            Slot::Value => &mut bindings.value,
+            Slot::Outcome => &mut bindings.outcome,
+            Slot::Sequence => &mut bindings.sequence,
+            _ => continue,
+        };
+        if binding.is_some_and(|bound| bound != ty) {
+            return None;
+        }
+        *binding = Some(ty);
+    }
+    instantiate(template, objects, &[suffix], bindings).map(|(function, _)| function)
+}
+
 /// The trusted entry of `template` for the specialization `suffixes` (one, or T and R for FutureScope), or None when
 /// a declaration it names lacks its runtime layout or a binding is missing or not carried.
 pub fn instantiate(template: &Template, objects: &[Object], suffixes: &[&str], bindings: Bindings)
@@ -541,10 +598,18 @@ pub fn instantiate(template: &Template, objects: &[Object], suffixes: &[&str], b
         }
     }).collect::<Option<Vec<_>>>()?;
     let name = specialized(template, suffixes);
+    // Own gives deps to every managed parameter: the holder and a Future (#810).
+    let deps = registers.iter().filter(|ty| super::p1::carries_deps(**ty)).count();
     let function = match template.abi {
-        Abi::Observation => entry(&name, registers, 0, results, false, template.failures),
-        Abi::Owned => entry(&name, registers, 0, results, true, template.failures),
+        Abi::Observation => entry(&name, registers, deps, results, false, template.failures),
+        Abi::Owned => entry(&name, registers, deps, results, true, template.failures),
         Abi::Driver => driver(&name, registers, results, template.failures),
     };
+    // A result that aliases the receiver retains it (#774 A6, as the producer's summary says).
+    let mut function = function;
+    if template.effect == Effect::AliasesReceiver
+        && let Some(entry) = function.proofs.entry.as_mut() {
+        entry.retained_params = vec![0];
+    }
     Some((function, related))
 }

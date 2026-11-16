@@ -365,6 +365,10 @@ impl Run {
 /// D25 service kinds (Champ draft 3 §6.1, ABI D25.1): a Future's cache duty and a spawned Future's task duty.
 pub const SERVICE_CACHE: u64 = 0;
 pub const SERVICE_TASK: u64 = 1;
+/// A FutureGroup's own duty (memo OIR-2-async-remaining §6.4, #810): its holder is the group object, whose runtime
+/// cell keeps the registered duties. It settles in its owner's dynamic step: the registered duties settle by their
+/// own rows, nested first, and the group registers nothing more (it is not sealed: only `wait` and `cancel` seal).
+pub const SERVICE_GROUP: u64 = 3;
 /// The target of a rehome receipt that returns its Future to the caller (ABI C-4 ruling): owner ids are nonzero.
 pub const TARGET_CALLER: u64 = 0;
 

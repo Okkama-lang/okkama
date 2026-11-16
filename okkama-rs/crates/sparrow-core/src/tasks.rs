@@ -537,6 +537,14 @@ impl Runtime {
 
     pub(crate) fn cancel(&mut self, ctx: *mut Ctx, future: Word) {
         let _ = ctx;
+        // A Champ Future settles by its own rows: a cold one with its emergency failure (draft 3 §4.3).
+        #[cfg(feature = "champ-abi")]
+        if get(future, FLAGS) & crate::champ::CHAMP != 0 {
+            if let Err(error) = self.champ_cancel(future) {
+                crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
+            }
+            return;
+        }
         match get(future, STATE) {
             COLD => {
                 let failure = self.cancelled_failure();

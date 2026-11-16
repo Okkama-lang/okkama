@@ -27,7 +27,11 @@ impl Driver<'_, '_> {
     ) -> Result<(Landing, ValueId), OwnError> {
         let mut values = BTreeSet::new();
         for original in originals {
-            if self.elide_offers && !self.may_offer(&point, *original) {
+            // A fresh Future's duty is a cache duty, never an admission the snapshot knows: elision does not drop it,
+            // or the callee would not get it (a group would retain the Future instead of registering it, #810 review
+            // F2), as a builder push keeps it (#802).
+            let future = self.high.values.get(*original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty));
+            if self.elide_offers && !future && !self.may_offer(&point, *original) {
                 continue;
             }
             // PR-B1 (#784): own never names a bound Future in an admissible selection for a store or an offer.
@@ -42,6 +46,18 @@ impl Driver<'_, '_> {
             self.managed(self.high.values.get(*original).unwrap().ty)
         }) {
             self.emitter.budget_ref().stats.splits_elided += point.env.scopes.len();
+        }
+        // An offered fresh Future is stored: coro absorbs its token right after its owner's split (D25.2). The splits
+        // run from the innermost scope out, so when the owner is not the outermost one, a later split can fail and its
+        // unwind returns the selected packet, with the entry, to the owner. That owner settles entries at run time
+        // (D25.3), as the owner of a Future pushed into a builder does (#802).
+        let outermost = point.env.scopes.keys().next().copied();
+        for value in &values {
+            if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| created == value)
+                && Some(*owner) != outermost
+            {
+                self.dynamic_owners.insert(*owner);
+            }
         }
         self.offered_values(point, values.into_iter().collect())
     }

@@ -54,6 +54,7 @@ pub(super) fn known(name: &str) -> bool {
 /// Whether the catalogue entry `name` is an async external (D22).
 pub(super) fn asynchronous(name: &str) -> bool {
     entry(name).is_some_and(|entry| entry.abi == Abi::Driver)
+        || holder_entry(name).is_some_and(|(row, _)| row.abi == Abi::Driver)
 }
 
 /// Whether a std object's runtime layout replaces its source fields: the Event cell.
@@ -65,6 +66,11 @@ pub(super) fn builtin(module: &str, object: &str) -> bool {
 /// parameter names joined by `_`, with the std declaration it belongs to (`async.<family>.<Object>`). None for a
 /// body of the program or one that is not a member.
 fn member_name(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, String)> {
+    member_parts(registry, body).map(|(name, declaration, _)| (name, declaration))
+}
+
+/// [`member_name`] with the suffix of a holder specialization (`FutureGroup_int`: `int`, #810).
+fn member_parts(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, String, Option<String>)> {
     let (object, action) = match body.owner {
         thir::BodyOwner::Method { object, method } => (object, registry.objects[object.0].methods[method].name.clone()),
         thir::BodyOwner::Ctor { object, ctor } => {
@@ -84,9 +90,30 @@ fn member_name(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, St
     }
     let module = registry.modules[info.module].name.as_str();
     let family = module.rsplit('/').next().unwrap_or(module);
-    // A specialization keeps its source name before its arguments (`Channel<int>`).
+    // A specialization keeps its source name before its arguments (`Channel<int>`); a holder family's is named by
+    // its element's suffix (`FutureGroup_int`, #810).
     let object = info.name.split('<').next().unwrap_or(&info.name);
-    Some((format!("okkama.{family}.{object}.{action}"), format!("{}.{object}", module.replace('/', "."))))
+    let (object, suffix) = match object.split_once('_') {
+        Some((base, suffix)) if catalogue::holder_named(&format!("okkama.{family}.{base}.{action}")).is_some() => {
+            (base, Some(suffix.to_string()))
+        }
+        _ => (object, None),
+    };
+    Some((format!("okkama.{family}.{object}.{action}"), format!("{}.{object}", module.replace('/', ".")), suffix))
+}
+
+/// #810: the ready holder row of a specialized std member and its intrinsic's name (`name$suffix`).
+pub(super) fn holder_intrinsic(registry: &Registry<'_>, body: &thir::Body) -> Option<String> {
+    let (name, declaration, suffix) = member_parts(registry, body)?;
+    let row = catalogue::holder_named(&name).filter(|row| catalogue::member_of_holder(row) == declaration)?;
+    let suffix = suffix?;
+    row.ready.then(|| catalogue::specialized(row, &[suffix.as_str()]))
+}
+
+/// #810: the ready holder row of an intrinsic's name (`name$suffix`) and its suffix.
+fn holder_entry(name: &str) -> Option<(&'static catalogue::Template, &str)> {
+    let (base, suffix) = name.split_once('$')?;
+    catalogue::holder_named(base).filter(|row| row.ready).map(|row| (row, suffix))
 }
 
 /// The D23 holder row (slices Q2 and G1, `spb17::drivers::HOLDERS`) of a std member the runtime provides. Until
@@ -133,6 +160,9 @@ fn named_type(module: &ir::Module, name: &str) -> Result<ir::TypeId, NativeSumma
 pub(super) fn contract(module: &ir::Module, name: &str, signature: &ir::Signature)
     -> Result<Option<ir::Summary>, NativeSummaryError>
 {
+    if let Some((row, suffix)) = holder_entry(name) {
+        return holder_contract(module, name, row, suffix, signature).map(Some);
+    }
     let Some(entry) = entry(name) else {
         return Ok(None);
     };
@@ -164,9 +194,59 @@ pub(super) fn contract(module: &ir::Module, name: &str, signature: &ir::Signatur
     }))
 }
 
+/// #810: the summary of a ready holder row over the language signature (memo §6.2). Every parameter is borrowed,
+/// as for the other owned entries: own offers a fresh Future argument of `start` (Effect::Offer) into the call's
+/// packet, and the runtime registers what the packet holds in the group instead of returning it (a bound Future is
+/// never offered, PR-B1, and the group retains it). A driver's result that aliases the receiver says so.
+fn holder_contract(module: &ir::Module, name: &str, row: &catalogue::Template, suffix: &str,
+    signature: &ir::Signature) -> Result<ir::Summary, NativeSummaryError>
+{
+    let _ = (module, suffix);
+    if signature.params.len() != row.params.len() || signature.results.len() != row.results.len() {
+        return Err(error(format!("invalid holder signature for {name}")));
+    }
+    let parameters = signature.params.iter().map(|_| ir::ParameterEffect {
+        convention: ir::FreshConvention::Borrow, retention: None, deps: vec![],
+        destination: ir::TransferDestination::None,
+    }).collect();
+    let results = signature.results.iter().map(|_| ir::ResultRelation {
+        fresh: vec![],
+        aliases: if row.effect == catalogue::Effect::AliasesReceiver { vec![ir::SummarySelection::Parameter(0)] }
+            else { vec![] },
+        external_deps: vec![], opaque: false, provenance: ir::AdmissionProvenance::UnboundResult,
+    }).collect();
+    let mut failures = mask_failures(row.failures);
+    if row.abi == Abi::Driver {
+        failures.push(Cancelled);
+    }
+    Ok(ir::Summary {
+        entry_kind: if row.abi == Abi::Observation {
+            ir::EntryKind::ObservationAdmissionStaysCaller
+        } else {
+            ir::EntryKind::CallBoundary
+        },
+        parameters,
+        results,
+        contract: ir::CallContract {
+            results: signature.results.clone(), failures, suspends: row.abi == Abi::Driver, async_destroy: false,
+            publication: ir::Publication::Atomic, protocol: None,
+        },
+    })
+}
+
 /// The declarations the runtime creates or throws for `name` (the intrinsic's descriptors): `None` when `name`
 /// is not in the catalogue.
 pub(super) fn objects(module: &ir::Module, name: &str) -> Result<Option<Vec<ir::DeclId>>, NativeSummaryError> {
+    if let Some((row, suffix)) = holder_entry(name) {
+        // A holder family by its specialization, an error by its name.
+        return row.related.iter().map(|object| {
+            let family = [catalogue::CHANNEL, catalogue::SENDING, catalogue::RECEIVING, catalogue::FUTURE_GROUP]
+                .contains(object);
+            let wanted = if family { catalogue::specialization(object, &[suffix]) } else { (*object).to_string() };
+            module.declarations.iter().find_map(|(id, declaration)| (declaration.name == wanted).then_some(id))
+                .ok_or_else(|| error(format!("{name} requires the {wanted} descriptor")))
+        }).collect::<Result<Vec<_>, _>>().map(Some);
+    }
     let Some(entry) = entry(name) else {
         return Ok(None);
     };

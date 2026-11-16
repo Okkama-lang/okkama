@@ -432,6 +432,15 @@ impl Universe {
             summary.contract.suspends = true;
             normal::failures(&mut summary.contract.failures, &[FailureKind::Cancelled]);
         }
+        // Coro gives an async body a frame for parameters (OIR-2 §12), so its retention keeps whole parameters, never
+        // a path into one (T4 would type the path against the frame). A field that is not carrier-free, such as a
+        // FutureGroup's (#810), is retained through its container: an over-approximation that loses no dependency,
+        // as the body's creation summary retains the parameter whole.
+        if asynchronous {
+            for effect in &mut summary.parameters {
+                effect.retention = effect.retention.take().map(whole_parameters);
+            }
+        }
         normal::normalize(&mut summary, budget)?;
         Ok(BodyInference { summary, replacements })
     }
@@ -718,6 +727,17 @@ pub(crate) fn carrier_free_projection(module: &Module, types: &BTreeMap<TypeId, 
         types.get(&field.ty).is_some_and(|facts| !facts.may_own())
             && !crate::verify::holds_futures(module, field.ty)
     })
+}
+
+/// A retention that keeps every parameter it reaches whole (an async body's, see `infer_body`).
+fn whole_parameters(selection: SummarySelection) -> SummarySelection {
+    match selection {
+        SummarySelection::Field { parameter, .. } | SummarySelection::Path { parameter, .. } => {
+            SummarySelection::Parameter(parameter)
+        }
+        SummarySelection::Union(items) => SummarySelection::Union(items.into_iter().map(whole_parameters).collect()),
+        other => other,
+    }
 }
 
 /// PR-P (#749): the carrier-free projections of `relation`, alone: no fresh family, no external deps. A projection

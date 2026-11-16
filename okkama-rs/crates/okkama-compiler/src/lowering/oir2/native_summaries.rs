@@ -146,7 +146,11 @@ impl P1NativeSummaries {
                     [field] if field.name == "initial" && Some(field.ty) == bool_type && !field.once)));
             let plain_error = decl.name == "Error"
                 && matches!(decl.kind, ir::DeclarationKind::Role { builtin: true, .. });
-            if atomic || plain_error {
+            // #810: a D23 holder (FutureGroup) is a service of its own; its settle seals the group and settles the
+            // registered members by their cache rows, whose effects their own cache settles carry.
+            let holder = matches!(&decl.kind, ir::DeclarationKind::Object { builtin: true, destroy: None, fields, .. }
+                if fields.is_empty()) && ir::catalogue::service_holder(&decl.name);
+            if atomic || plain_error || holder {
                 catalog.services.insert(id, ir::Summary {
                     entry_kind: ir::EntryKind::Internal,
                     parameters: vec![], results: vec![],

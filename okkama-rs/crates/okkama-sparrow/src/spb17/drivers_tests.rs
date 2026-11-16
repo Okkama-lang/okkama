@@ -406,10 +406,13 @@ fn suffixes(template: &Template) -> Vec<&'static str> {
 }
 
 /// The rows follow memo §§5.2 and 6.2: one per member Tomato runs as an intrinsic, a driver for each async member
-/// (thrown, program and cancelled), none of them in the Q1 catalogue, and none admitted before their runtime.
+/// (thrown, program and cancelled), none of them in the Q1 catalogue, and only those with a runtime ready (#810:
+/// FutureGroup's five members).
 #[test]
 fn holder_rows_are_the_q2_and_g1_members() {
-    const { assert!(!d::HOLDERS_READY) };
+    let ready: Vec<_> = d::HOLDERS.iter().filter(|template| template.ready).map(|template| template.name).collect();
+    assert_eq!(ready, ["okkama.scope.FutureGroup.new", "okkama.scope.FutureGroup.start",
+        "okkama.scope.FutureGroup.active", "okkama.scope.FutureGroup.cancel", "okkama.scope.FutureGroup.wait"]);
     let q2 = d::HOLDERS.iter().filter(|template| template.slice == Slice::Q2).count();
     assert_eq!((q2, d::HOLDERS.len() - q2), (9, 13));
     let mut names = std::collections::BTreeSet::new();
@@ -487,4 +490,29 @@ fn a_holder_row_needs_its_runtime_layout_and_a_carried_value() {
     // A scalar or role suffix names its value; a `t_` one waits for CHANNEL_MESSAGE.
     assert_eq!(d::suffix_value(&holders(), "int"), Some(Type::Int));
     assert_eq!(d::suffix_value(&holders(), "t_object(app::Res)"), None);
+}
+
+/// #810: an entry of a ready row, by any specialization, runs Tomato's intrinsic of the row's name; a row without its
+/// runtime, a name without a specialization and an Atomic entry are no ready holder entries.
+#[test]
+fn a_ready_holder_entry_is_a_specialized_ready_row() {
+    let row = |name: &str| d::ready_holder(name).map(|row| row.name);
+    assert_eq!(row("okkama.scope.FutureGroup.start$int"), Some("okkama.scope.FutureGroup.start"));
+    assert_eq!(row("okkama.scope.FutureGroup.wait$t_object(app::Res)"), Some("okkama.scope.FutureGroup.wait"));
+    assert_eq!(row("okkama.scope.FutureGroup.start"), None);
+    assert_eq!(row("okkama.channel.Sending.send$int"), None);
+    assert_eq!(row("okkama.scope.FutureScope.outcome$int$string"), None);
+    assert_eq!(row("okkama.atomic.Atomic.value$int"), None);
+}
+
+/// #810: a FutureGroup specialization is named by its family and a suffix; other families and prefixes are not.
+#[test]
+fn a_group_specialization_is_named_by_its_family() {
+    assert!(d::group_specialization("async.scope.FutureGroup_int"));
+    assert!(d::group_specialization("async.scope.FutureGroup_t_object(app::Res)"));
+    for name in ["async.scope.FutureGroup", "async.scope.FutureGroups_int", "async.scope.FutureScope_int_string",
+        "async.channel.Channel_int", "app.FutureGroup_int"]
+    {
+        assert!(!d::group_specialization(name), "{name}");
+    }
 }

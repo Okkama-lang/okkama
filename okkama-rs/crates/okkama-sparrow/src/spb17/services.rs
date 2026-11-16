@@ -72,8 +72,9 @@ pub fn identity_free(objects: &[Object], ty: Type) -> bool {
     true
 }
 
-/// Whether a value of `ty` can reach a service holder (a Future), through object fields, variant cases, error
-/// cases, array and map elements, role implementations and any boxes. Unknown declarations can.
+/// Whether a value of `ty` can reach a service holder (a Future, or a FutureGroup with its own entry, #810), through
+/// object fields, variant cases, error cases, array and map elements, role implementations and any boxes. Unknown
+/// declarations can.
 pub fn reaches_holder(p: &Program, ty: Type) -> bool {
     let mut pending = vec![ty];
     let mut seen = std::collections::HashSet::new();
@@ -85,6 +86,9 @@ pub fn reaches_holder(p: &Program, ty: Type) -> bool {
             Type::Future(_) => return true,
             Type::Object(id) | Type::Successor(id) | Type::Variant(id) => {
                 let Some(object) = p.objects.get(id as usize) else { return true };
+                if super::drivers::group_specialization(&object.name) {
+                    return true;
+                }
                 // PR-A: an Atomic over Futures borrows them; its value word holds no entry (ATOMIC_BORROW), as the
                 // ownership verifier's `holds_futures` reads a builtin Atomic.
                 let borrowing = object.name.starts_with("async.atomic.Atomic_t_")

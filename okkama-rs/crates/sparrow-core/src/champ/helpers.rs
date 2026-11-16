@@ -144,10 +144,15 @@ pub(super) fn validate(runtime: &Runtime, packet: &Packet) -> Result<(), Error> 
     // One place per duty (draft 3 §1.4): a service entry is in exactly one packet, state or reserve.
     let mut duties = HashSet::new();
     for service in &packet.services {
-        if !matches!(service.kind, SERVICE_CACHE | SERVICE_TASK) {
-            return Err(error("unknown service kind"));
+        match service.kind {
+            SERVICE_CACHE | SERVICE_TASK => {
+                runtime.champ_cache(service.holder)?;
+            }
+            SERVICE_GROUP => {
+                runtime.champ_group(service.holder)?;
+            }
+            _ => return Err(error("unknown service kind")),
         }
-        runtime.champ_cache(service.holder)?;
         if !duties.insert((service.holder, service.kind)) {
             return Err(error("a service duty in two places"));
         }
@@ -180,16 +185,22 @@ pub(super) fn preflight(runtime: &Runtime, packet: &Packet, holder: HolderId, ow
     duties_preflight(runtime, &packet.services, owner)
 }
 fn duties_preflight(runtime: &Runtime, services: &[Service], owner: OwnerId) -> Result<(), Error> {
-    for service in services.iter().filter(|service| service.kind == SERVICE_CACHE) {
-        runtime.champ_duty_preflight(service.holder, owner)?;
+    for service in services {
+        match service.kind {
+            SERVICE_CACHE => runtime.champ_duty_preflight(service.holder, owner)?,
+            SERVICE_GROUP => runtime.champ_group_preflight(service.holder, owner)?,
+            _ => {}
+        }
     }
     Ok(())
 }
-fn duties_transition(runtime: &mut Runtime, services: &mut [Service], owner: OwnerId) {
+pub(super) fn duties_transition(runtime: &mut Runtime, services: &mut [Service], owner: OwnerId) {
     for service in services {
         service.target = None;
-        if service.kind == SERVICE_CACHE {
-            runtime.champ_duty_transition(service.holder, owner);
+        match service.kind {
+            SERVICE_CACHE => runtime.champ_duty_transition(service.holder, owner),
+            SERVICE_GROUP => runtime.champ_group_transition(service.holder, owner),
+            _ => {}
         }
     }
 }
@@ -357,6 +368,12 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, aut
         // A Champ Future reached as a root or through a field is a holder: the split moves its service entries,
         // if the source holds them (a token absorbed by coro never was in it), and walks no further (D25.1, #771).
         if heap::kind(header) == heap::FRAME && crate::tasks::get(object, crate::tasks::FLAGS) & super::CHAMP != 0 {
+            selected.insert(object);
+            continue;
+        }
+        // A FutureGroup is a holder too (ruling PR-C, #810): the split moves its own entry, if the source holds it,
+        // and the walk stops at it. Its members are its record's, not the graph's.
+        if heap::kind(header) == heap::OBJECT && runtime.champ_group_object(object) {
             selected.insert(object);
             continue;
         }

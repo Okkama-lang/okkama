@@ -2219,3 +2219,31 @@ fn oir2_bound_flags_cross_unwind_and_catch_edges() {
     }).filter(|condition| flags[0].contains(condition)).count();
     assert_eq!(checked, 1, "the completion's check reads the field's flag");
 }
+
+/// #810 (found by a sealed FutureGroup's `start` inside a `try`): a fresh Future offered from a nested scope together
+/// with a value of an enclosing scope makes its owner settle entries at run time. Splits run from the innermost scope
+/// out, so the enclosing scope's split runs after the Future's entry is absorbed, and its unwind returns the entry to
+/// the owner. From the outermost scope nothing is in flight, and the owner keeps a static schedule.
+#[test]
+fn oir2_an_offer_from_a_nested_scope_makes_the_futures_owner_dynamic() {
+    let declarations = concat!("module app; enum Broken is Error = (broken); object Res { Res(); destroy { } } ",
+        "object Maker { Maker(); async make() is Res { Res(); } } ",
+        "object Keeper { has res is Res; Keeper(:res); take(f is Future<Res>) is void { throw Broken.broken; } } ");
+    let nested = format!("{declarations}async main() is int {{ let keeper = Keeper(res: Res()); \
+        try {{ keeper.take(Maker().make()); 1; }} catch e is Broken {{ 0; }} }}");
+    let flat = format!("{declarations}async main() is int {{ let keeper = Keeper(res: Res()); \
+        keeper.take(Maker().make()); 0; }}");
+    for (source, dynamic) in [(nested, true), (flat, false)] {
+        let module = high_of(&source);
+        let catalog = super::native_summaries::P1NativeSummaries::for_module(&module).unwrap();
+        let options = ir::own::OwnOptions::default();
+        let inferred = ir::own::elaborate_ownership(module, &catalog, &options).unwrap();
+        let own = ir::own::rewrite_subset(inferred, &options).unwrap();
+        let (_, main) = own.module.functions.iter().find(|(_, function)| function.symbol == "main").unwrap();
+        let body = main.body.as_ref().unwrap();
+        let owners: Vec<_> = body.service_schedules.iter()
+            .filter(|schedule| schedule.duties.iter().any(|duty| matches!(duty, ir::ScheduleDuty::Value(_))))
+            .map(|schedule| schedule.duties.last() == Some(&ir::ScheduleDuty::Dynamic)).collect();
+        assert_eq!(owners, [dynamic], "{source}");
+    }
+}
