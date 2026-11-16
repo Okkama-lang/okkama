@@ -139,6 +139,41 @@ fn error_text_writes_every_layout_of_an_error_as_tomato_does() {
     assert_eq!(text_of(&runtime, nested), "Ferr.nested(Inner.named(\"in\\\"ner\"))");
 }
 
+/// An Error payload of a plain variant (language spec: enums whose payloads satisfy the same rule) shows the
+/// case by the variant's case names, with its own payload, nested variants included (#763): `Shape.dot`,
+/// `Shape.rect(2, 3)`, `Box.of(Shape.circle(1))`.
+#[test]
+fn error_text_shows_a_plain_variant_payload_by_its_case_names() {
+    let objects = vec![
+        s::Object { variant_cases: vec![1, 2, 3], enum_names: vec!["Shape.dot".into(), "Shape.circle".into(),
+            "Shape.rect".into()], ..declared("app.Shape", vec![], &[]) },
+        declared("app.Shape.dot", vec![], &[]),
+        s::Object { fields: vec![s::Field { name: "r".into(), storage: 0, once: false }],
+            ..declared("app.Shape.circle", vec![s::Type::Int], &[]) },
+        s::Object { fields: vec![s::Field { name: "w".into(), storage: 0, once: false },
+            s::Field { name: "h".into(), storage: 1, once: false }],
+            ..declared("app.Shape.rect", vec![s::Type::Int, s::Type::Int], &[]) },
+        s::Object { variant_cases: vec![5], enum_names: vec!["Box.of".into()], ..declared("app.Box", vec![], &[]) },
+        s::Object { fields: vec![s::Field { name: "shape".into(), storage: 0, once: false }],
+            ..declared("app.Box.of", vec![s::Type::Variant(0)], &[]) },
+        declared("app.Fault.major", vec![s::Type::Int, s::Type::Variant(0)], &["Fault.major"]),
+        declared("app.Fault.boxed", vec![s::Type::Variant(4)], &["Fault.boxed"]),
+    ];
+    let mut runtime = Runtime::new_champ(s::Program { objects, ..s::Program::default() }, Vec::new()).unwrap();
+    let dot = runtime.heap.object_new(1, &[]);
+    let one = runtime.heap.int(1);
+    let dotted = runtime.heap.object_new(6, &[one, dot]);
+    assert_eq!(text_of(&runtime, dotted), "Fault.major(1, Shape.dot)");
+    let (two, three) = (runtime.heap.int(2), runtime.heap.int(3));
+    let rect = runtime.heap.object_new(3, &[two, three]);
+    let major = runtime.heap.object_new(6, &[one, rect]);
+    assert_eq!(text_of(&runtime, major), "Fault.major(1, Shape.rect(2, 3))");
+    let circle = runtime.heap.object_new(2, &[one]);
+    let boxed = runtime.heap.object_new(5, &[circle]);
+    let fault = runtime.heap.object_new(7, &[boxed]);
+    assert_eq!(text_of(&runtime, fault), "Fault.boxed(Box.of(Shape.circle(1)))");
+}
+
 #[test]
 fn catch_of_an_error_variant_takes_each_of_its_cases() {
     let mut runtime = errors();

@@ -776,7 +776,8 @@ impl Driver<'_, '_> {
                 point.env.cleanup.defers.entry(scope).or_default().push(inst);
                 return Ok(point);
             }
-            Operation::Call(CallOp::Direct { function, .. }) if super::futures::is_async(self.module, function) => {
+            Operation::Call(CallOp::Direct { function, .. } | CallOp::Intrinsic { function, .. })
+                if super::futures::is_async(self.module, function) => {
                 return self.create_future(point, instruction, function);
             }
             Operation::Async(AsyncOp::Await { .. }) => return self.await_future(point, instruction),

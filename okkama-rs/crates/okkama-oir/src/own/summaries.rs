@@ -348,7 +348,7 @@ impl Universe {
                         .map(|binding| format!("{:?}", binding.contract))
                 }).collect();
                 let key = (kind, targets.clone(), captures.clone(), call.type_args.clone(), public_types, dictionaries);
-                let creation = matches!(op, Operation::Call(CallOp::Direct { .. }))
+                let creation = matches!(op, Operation::Call(CallOp::Direct { .. } | CallOp::Intrinsic { .. }))
                     .then(|| universe.creations.get(&FuncId::from_u32(targets[0] as u32)).copied()).flatten();
                 let node = if let Some(creation) = creation {
                     // An async call creates the Future; its body runs only when started.

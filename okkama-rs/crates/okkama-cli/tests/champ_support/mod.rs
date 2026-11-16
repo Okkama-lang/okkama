@@ -163,8 +163,32 @@ pub fn run_case(id: &str) -> Result<(), String> {
         (_, Ok(code)) => return Err(format!("completed with {code}, expected a failure; stdout={stdout:?}")),
         (_, Err(_)) => {}
     }
+    let order = &expect["stdout"]["partial_order"];
+    if order.is_object() {
+        return partial_order(&stdout, order);
+    }
     if stdout != expected_stdout {
         return Err(format!("stdout {stdout:?}, expected {expected_stdout:?}"));
+    }
+    Ok(())
+}
+
+/// An OCS `partial_order` stdout: the lines, in any order, and each `before` pair in that order.
+fn partial_order(stdout: &str, order: &Value) -> Result<(), String> {
+    let mut lines = stdout.lines().collect::<Vec<_>>();
+    let mut expected = order["lines"].as_array().unwrap().iter().map(|line| line.as_str().unwrap()).collect::<Vec<_>>();
+    let printed = lines.clone();
+    lines.sort_unstable();
+    expected.sort_unstable();
+    if lines != expected {
+        return Err(format!("stdout {stdout:?}, expected the lines {expected:?} in a partial order"));
+    }
+    for pair in order["before"].as_array().unwrap() {
+        let [first, second] = [0, 1].map(|index| pair[index].as_str().unwrap());
+        let position = |line: &str| printed.iter().position(|printed| *printed == line).unwrap();
+        if position(first) > position(second) {
+            return Err(format!("stdout {stdout:?}: {first:?} is not before {second:?}"));
+        }
     }
     Ok(())
 }

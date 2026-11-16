@@ -57,6 +57,9 @@ pub fn drive(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word) -> bool {
             true
         }
         Done(value) => {
+            // A Champ Future's outcome packet is in its cache before its waiters wake (draft 3 §9, #601 Q1).
+            #[cfg(feature = "champ-abi")]
+            runtime.champ_driver_done(frame);
             runtime.settle(frame, DONE, value);
             false
         }

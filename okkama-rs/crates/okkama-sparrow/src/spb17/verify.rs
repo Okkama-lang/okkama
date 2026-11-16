@@ -66,6 +66,10 @@ pub fn implementation(p: &Program, object: u32, role: u32, slot: u32) -> Option<
 
 pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
     match ty {
+        // A hidden runtime word is a storage type only; the object storage check admits it (#601 Q1 audit A1).
+        Type::RuntimeCell => {
+            return Err(violation(RUNTIME_CELL, "a runtime cell is object storage only, never a value type"));
+        }
         Type::Object(id) | Type::Successor(id) => {
             enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
             enforce(at(&p.objects, id)?.role.is_none(), "ROLE_TYPE", "object type names a role declaration")?;
@@ -128,6 +132,9 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
 /// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; a Future is
 /// held only in registers (no object storage holds one before the service entries of D25).
 pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
+/// A runtime cell (`Type::RuntimeCell`) is a storage word of an object with source fields, which no source field
+/// names and no selection walks; it is no value type (#601 Q1 audit A1).
+pub(crate) const RUNTIME_CELL: &str = "SPB_RUNTIME_CELL";
 
 /// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
 /// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
@@ -209,7 +216,8 @@ fn plain_graph(p: &Program, ty: Type, handles: bool) -> bool {
                 {
                     return false;
                 }
-                pending.extend(&object.layout.storage_fields);
+                // A runtime cell is the runtime's word, outside the value: equality reads the source fields.
+                pending.extend(object.layout.storage_fields.iter().filter(|&&ty| ty != Type::RuntimeCell));
                 pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
             }
             // A native handle is the native registry's: it has no Okkama destroy and holds no ownership graph
@@ -519,10 +527,13 @@ pub fn verify(p: &Program) -> Check {
                 && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
             enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
         }
-        // Case texts belong to a plain enum only, one per case; an enum may also carry none.
+        // Case texts belong to a plain enum or a plain variant only, one per case; either may also carry none
+        // (a variant names its cases for the text of an Error payload, #763).
         enforce(object.enum_names.is_empty()
-            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize),
-            "ENUM_NAMES", "enum case names belong to a plain enum, one per case")?;
+            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize)
+            || (object.error_cases.is_empty() && !object.variant_cases.is_empty()
+                && object.enum_names.len() == object.variant_cases.len()),
+            "ENUM_NAMES", "enum case names belong to a plain enum or variant, one per case")?;
         if !object.variant_cases.is_empty() {
             // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
             // variant declares that it reaches resources exactly when one of its cases does.
@@ -541,6 +552,17 @@ pub fn verify(p: &Program) -> Check {
         unique(&layout.trace_layout)?;
         unique(&layout.selection_layout)?;
         for (index, &ty) in layout.storage_fields.iter().enumerate() {
+            if ty == Type::RuntimeCell {
+                // Equality and keys read an object's source fields; a runtime cell is none of them, and an object
+                // without source fields would compare its storage words (#601 Q1 audit A1).
+                let source = object.fields.iter().any(|field| field.storage == index as u32);
+                enforce(!source && !object.fields.is_empty() && !layout.selection_layout.contains(&(index as u32))
+                    && !object.any_box && object.role.is_none() && !object.handle && object.error_cases.is_empty()
+                    && object.enum_cases == 0 && object.variant_cases.is_empty(),
+                    RUNTIME_CELL, "a runtime cell is an unselected hidden word of an object with source fields")?;
+                require(layout.trace_layout.contains(&(index as u32)), "incorrect object trace layout")?;
+                continue;
+            }
             ty_valid(ty, p)?;
             enforce(!matches!(ty, Type::Future(_)), FUTURE_TYPES, "object storage cannot hold a Future")?;
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
@@ -1149,9 +1171,15 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
                 .ok_or_else(|| error("fut.new requires an entry"))?;
             let callee = at(&p.functions, entry)?;
-            let layout = p.frame_layout(callee).filter(|_| matches!(callee.entry_abi, EntryAbi::AsyncBody { .. }))
-                .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
-            let start = layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?;
+            // An async external (D22, #601 Q1): its driver takes the language arguments as its registers.
+            let start = if callee.entry_abi == EntryAbi::AsyncExternal {
+                drivers::arguments(callee)
+            } else {
+                let layout = p.frame_layout(callee)
+                    .filter(|_| matches!(callee.entry_abi, EntryAbi::AsyncBody { .. }))
+                    .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
+                layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?
+            };
             // A fixed root starts without a packet: only the root driver starts it (#667).
             enforce(!suspension::fixed_root(p, entry), suspension::ASYNC_ENTRY,
                 "fut.new cannot create a fixed root")?;
@@ -1167,6 +1195,10 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 FUTURE_TYPES, "the Future type differs from the async body's result")?;
             require(locations.len() >= inputs + 2, "fut.new needs its arguments, input packet and owner state")?;
             for (&location, expected) in locations.iter().zip(&start[..inputs]) {
+                if callee.entry_abi == EntryAbi::AsyncExternal {
+                    enforce(loc_type(f, location)? == *expected, drivers::EXTERNAL_ASYNC,
+                        "fut.new of an async external passes an argument of another type")?;
+                }
                 require(loc_type(f, location)? == *expected, "fut.new argument type mismatch")?;
             }
             input(inputs, Packet)?;
@@ -1921,6 +1953,7 @@ fn uses(inst: &Instruction) -> Vec<Location> {
 
 fn verify_function(p: &Program, f: &Function) -> Check {
     check_proofs(p, f)?;
+    drivers::check_declaration(f)?;
     suspension::check_entry(f)?;
     if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
         enforce(f.code.is_empty() && f.blocks.is_empty(), "EXTERNAL_SIGNATURE", "external entry cannot carry code")?;

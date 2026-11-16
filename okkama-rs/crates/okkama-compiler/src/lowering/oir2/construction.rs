@@ -26,12 +26,13 @@ pub(super) fn undefined_values(body: &ir::Body) -> Result<HashSet<ir::ValueId>> 
             undefined.extend(inst.results.iter().copied());
         }
     }
+    // Every edge, unwind and catch edges included: a field bound in a `try` is undef on its handler's path.
     loop {
         let count = undefined.len();
         for (_, block) in body.blocks.iter() {
-            for edge in targets(&block.term.kind) {
-                for (&value, &param) in edge.args.iter().zip(&body.blocks.get(edge.block)?.params) {
-                    if undefined.contains(&value) {
+            for (target, args) in edges(block) {
+                for (value, &param) in args.iter().zip(&body.blocks.get(target)?.params) {
+                    if value.is_some_and(|value| undefined.contains(&value)) {
                         undefined.insert(param);
                     }
                 }
@@ -64,16 +65,15 @@ pub(super) fn check(module: &ir::Module, body: &ir::Body) -> Result<()> {
             return Err(error("incomplete self requires trailing $pending: bool = undef"));
         }
         // A complete self takes a field that may be unbound only after the check of its bound flag (#708): every
-        // path to the allocation passes the flag's Cond, whose other edge traps as Tomato does.
+        // path to the allocation passes a Cond on that field's flag (#770), whose other edge traps as Tomato does.
         let guards = if *construction == ir::ConstructionStatus::Complete {
-            guarded(body, allocation)?
+            let flags = field_flags(module, body, *declaration, layout.len(), &HashSet::new())?;
+            guarded(body, allocation, &flags)?
         } else {
             HashSet::new()
         };
-        let object = short_name(&module.declarations.get(*declaration)?.name);
         let unguarded = |index: usize, value: &ir::ValueId| undefined.contains(value)
-            && (direct_undef(body, *value)
-                || !guards.contains(&super::objects::unbound_message(&object, &layout[index].name)));
+            && (direct_undef(body, *value) || !guards.contains(&index));
         if *construction == ir::ConstructionStatus::Complete
             && (fields.iter().enumerate().any(|(index, value)| unguarded(index, value))
                 || (pending && !fields.last().is_some_and(|value| is_false(body, *value)))) {
@@ -102,10 +102,9 @@ pub(super) fn check(module: &ir::Module, body: &ir::Body) -> Result<()> {
             }
         }
         local_objects.extend(aliases.iter().copied());
-        let messages: Vec<_> = layout.iter().map(|field| super::objects::unbound_message(&object, &field.name))
-            .collect();
+        let flags = field_flags(module, body, *declaration, layout.len(), &aliases)?;
         let identity = Identity { allocation, fields, construction: *construction, aliases: &aliases, pending };
-        check_identity(body, &identity, &undefined, &messages)?;
+        check_identity(body, &identity, &undefined, &flags)?;
     }
     for (_, inst) in body.insts.iter() {
         if let ir::Operation::Core(ir::CoreOp::ObjInit { object, .. }) = inst.op
@@ -129,10 +128,10 @@ fn direct_undef(body: &ir::Body, value: ir::ValueId) -> bool {
         if body.insts.get(inst).is_ok_and(|inst| matches!(inst.op, ir::Operation::Core(ir::CoreOp::Undef { .. })))))
 }
 
-/// The messages of the bound-flag checks that every path to `allocation` passes (#708): from its block up a chain
-/// of blocks, each the `yes` target of its only predecessor's `Cond`, whose `no` target traps with
-/// `TrapCode::Unbound`.
-fn guarded(body: &ir::Body, allocation: ir::InstId) -> Result<HashSet<String>> {
+/// The fields whose bound-flag checks every path to `allocation` passes (#708): from its block up a chain of
+/// blocks, each the `yes` target of its only predecessor's `Cond` on a field's flag (`flags`, #770), whose `no`
+/// target traps with `TrapCode::Unbound`.
+fn guarded(body: &ir::Body, allocation: ir::InstId, flags: &[HashSet<ir::ValueId>]) -> Result<HashSet<usize>> {
     let mut predecessors: HashMap<ir::BlockId, Vec<ir::BlockId>> = HashMap::new();
     let mut current = None;
     for (id, block) in body.blocks.iter() {
@@ -146,22 +145,126 @@ fn guarded(body: &ir::Body, allocation: ir::InstId) -> Result<HashSet<String>> {
             predecessors.entry(unwind.target.block).or_default().push(id);
         }
     }
-    let mut messages = HashSet::new();
+    let mut fields = HashSet::new();
     let mut seen = HashSet::new();
     while let Some(block) = current.take().filter(|block| seen.insert(*block)) {
         let Some([source]) = predecessors.get(&block).map(Vec::as_slice) else { break };
-        let ir::TermKind::Cond { yes, no, .. } = &body.blocks.get(*source)?.term.kind else { break };
-        if yes.block != block || no.block == block {
+        let checked = bound_behind(body, &body.blocks.get(*source)?.term.kind, block, flags)?;
+        if checked.is_empty() {
             break;
         }
-        let ir::TermKind::Trap { code: ir::TrapCode::Unbound, message } = &body.blocks.get(no.block)?.term.kind
-        else {
-            break;
-        };
-        messages.insert(message.clone());
+        fields.extend(checked);
         current = Some(*source);
     }
-    Ok(messages)
+    Ok(fields)
+}
+
+/// The bound flags of each field of `declaration` (#708, #770): the bool values whose every definition is
+/// `const false`, a `const true` that follows a write of that field in its block (a `stage` of the field, or
+/// an `obj.init` of it on `self` through `aliases`), or a block parameter whose every incoming value is a flag
+/// of the field. A `true` flag therefore proves, on every path that carries it, that the field was written:
+/// the check of the flag, not its trap's message, links the check to the field.
+pub(super) fn field_flags(module: &ir::Module, body: &ir::Body, declaration: ir::DeclId, count: usize,
+    aliases: &HashSet<ir::ValueId>) -> Result<Vec<HashSet<ir::ValueId>>> {
+    let mut flags = vec![HashSet::new(); count];
+    for (_, block) in body.blocks.iter() {
+        let mut written = HashSet::new();
+        for &id in &block.insts {
+            let inst = body.insts.get(id)?;
+            match &inst.op {
+                ir::Operation::Lexical(ir::LexicalOp::Stage { field, .. }) if field.declaration == declaration => {
+                    written.insert(field.index as usize);
+                }
+                ir::Operation::Core(ir::CoreOp::ObjInit { object, field, .. }) if aliases.contains(object) => {
+                    written.insert(field.index as usize);
+                }
+                ir::Operation::Const(ir::Literal::Bool(value)) => {
+                    for (index, flag) in flags.iter_mut().enumerate() {
+                        if !*value || written.contains(&index) {
+                            flag.extend(inst.results.iter().copied());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Every edge into a block with its arguments (a produced result is never a flag).
+    let mut incoming: HashMap<ir::BlockId, Vec<Vec<Option<ir::ValueId>>>> = HashMap::new();
+    for (_, block) in body.blocks.iter() {
+        for (target, mut args) in edges(block) {
+            // An unwind edge passes the leading parameters; the failure follows them.
+            if block.unwind.as_ref().is_some_and(|unwind| unwind.target.block == target) {
+                let count = body.blocks.get(target)?.params.len();
+                if args.len() < count {
+                    args.resize(count, None);
+                }
+            }
+            incoming.entry(target).or_default().push(args);
+        }
+    }
+    let bool_ty = module.types.iter().find(|(_, ty)| **ty == ir::Type::Bool).map(|(id, _)| id);
+    let mut candidates = vec![];
+    for (id, block) in body.blocks.iter() {
+        let Some(into) = incoming.get(&id) else { continue };
+        if id == body.entry || into.iter().any(|args| args.len() != block.params.len()) {
+            continue;
+        }
+        for (index, &param) in block.params.iter().enumerate() {
+            if bool_ty.is_some_and(|ty| body.values.get(param).is_ok_and(|value| value.ty == ty)) {
+                candidates.push((id, index, param));
+            }
+        }
+    }
+    for flag in &mut flags {
+        flag.extend(candidates.iter().map(|&(_, _, param)| param));
+        loop {
+            let before = flag.len();
+            for &(block, index, param) in &candidates {
+                let passes = |args: &Vec<Option<ir::ValueId>>| args[index].is_some_and(|value| flag.contains(&value));
+                if flag.contains(&param) && !incoming[&block].iter().all(passes) {
+                    flag.remove(&param);
+                }
+            }
+            if flag.len() == before {
+                break;
+            }
+        }
+    }
+    Ok(flags)
+}
+
+/// The edges out of `block`, ordinary and unwind, with their arguments; `None` for a produced result.
+fn edges(block: &ir::Block) -> Vec<(ir::BlockId, Vec<Option<ir::ValueId>>)> {
+    let plain = |target: &ir::Target| (target.block, target.args.iter().copied().map(Some).collect());
+    let produced = |edge: &ir::InvokeEdge| (edge.block, edge.args.iter().map(|arg| match arg {
+        ir::EdgeArg::Value(value) => Some(*value),
+        ir::EdgeArg::Produced(_) => None,
+    }).collect());
+    let mut edges: Vec<_> = block.unwind.iter().map(|unwind| plain(&unwind.target)).collect();
+    match &block.term.kind {
+        ir::TermKind::Br(target) => edges.push(plain(target)),
+        ir::TermKind::Cond { yes, no, .. } => edges.extend([plain(yes), plain(no)]),
+        ir::TermKind::Switch { cases, default, .. } => {
+            edges.extend(cases.iter().map(|case| plain(&case.target)));
+            edges.push(plain(default));
+        }
+        ir::TermKind::Catch { handler, next, .. } => edges.extend([produced(handler), plain(next)]),
+        ir::TermKind::Lookup { found, missing, .. } => edges.extend([produced(found), plain(missing)]),
+        ir::TermKind::InvokeOwn { normal, unwind, .. } => edges.extend([produced(normal), produced(unwind)]),
+        ir::TermKind::InvokeDefer { continue_edge, replacements, unwind, .. } => {
+            edges.push(produced(continue_edge));
+            edges.extend(replacements.iter().map(|replacement| produced(&replacement.edge)));
+            edges.extend(unwind.iter().map(produced));
+        }
+        ir::TermKind::CleanupNext { selected, done, .. } => edges.extend([produced(selected), produced(done)]),
+        ir::TermKind::ExitDispatch { success, pending, failed, .. } => {
+            edges.extend([success, pending, failed].into_iter().flatten().map(produced));
+        }
+        ir::TermKind::FailureDispatch { none, some, .. } => edges.extend([plain(none), produced(some)]),
+        _ => {}
+    }
+    edges
 }
 
 fn is_false(body: &ir::Body, value: ir::ValueId) -> bool {
@@ -183,29 +286,29 @@ struct Identity<'a> {
     pending: bool,
 }
 
-/// The fields a `Cond` edge into `target` proves initialized (#746): the `yes` edge of a bound-flag check, whose
-/// `no` target traps with `TrapCode::Unbound` and Tomato's message for the field (`messages`, in layout order).
-/// An early self reaches its completion after the producer's flag checks of the fields a path may have left
-/// unbound; behind the check, such a field is initialized on every path that goes on.
-pub(super) fn bound_behind(body: &ir::Body, term: &ir::TermKind, target: ir::BlockId, messages: &[String])
-    -> Result<Vec<usize>> {
-    let ir::TermKind::Cond { yes, no, .. } = term else {
+/// The fields a `Cond` edge into `target` proves initialized (#746, #770): the `yes` edge of a check of a field's
+/// bound flag (`flags`, in layout order), whose `no` target traps with `TrapCode::Unbound`. An early self reaches
+/// its completion after the producer's flag checks of the fields a path may have left unbound; behind the check,
+/// such a field is initialized on every path that goes on.
+pub(super) fn bound_behind(body: &ir::Body, term: &ir::TermKind, target: ir::BlockId,
+    flags: &[HashSet<ir::ValueId>]) -> Result<Vec<usize>> {
+    let ir::TermKind::Cond { condition, yes, no } = term else {
         return Ok(vec![]);
     };
     if yes.block != target || no.block == target {
         return Ok(vec![]);
     }
-    let ir::TermKind::Trap { code: ir::TrapCode::Unbound, message } = &body.blocks.get(no.block)?.term.kind else {
+    let ir::TermKind::Trap { code: ir::TrapCode::Unbound, .. } = &body.blocks.get(no.block)?.term.kind else {
         return Ok(vec![]);
     };
-    Ok(messages.iter().enumerate().filter(|(_, expected)| *expected == message).map(|(index, _)| index).collect())
+    Ok(flags.iter().enumerate().filter(|(_, flag)| flag.contains(condition)).map(|(index, _)| index).collect())
 }
 
 fn check_identity(
     body: &ir::Body,
     identity: &Identity<'_>,
     undefined: &HashSet<ir::ValueId>,
-    messages: &[String],
+    flags: &[HashSet<ir::ValueId>],
 ) -> Result<()> {
     let Identity { allocation, fields, construction, aliases, pending } = *identity;
     // Each cell is a set: absent (0), uninitialized (1), initialized (2).
@@ -257,7 +360,7 @@ fn check_identity(
         for edge in targets(&block.term.kind) {
             let mut state = state.clone();
             if state[fields.len()] == 1 {
-                for index in bound_behind(body, &block.term.kind, edge.block, messages)? {
+                for index in bound_behind(body, &block.term.kind, edge.block, flags)? {
                     state[index] = 2;
                 }
             }

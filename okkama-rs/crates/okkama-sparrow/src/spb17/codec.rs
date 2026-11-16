@@ -446,7 +446,7 @@ tagged! { Type {
     7 => Object(id: u32), 8 => Successor(id: u32), 13 => Never, 9 => Descriptor,
     23 => Array(shape: ArrayType), 24 => Variant(id: u32), 25 => Handle(id: u32),
     26 => Map(id: u32), 27 => MapBuilder(id: u32), 28 => Builder(id: u32), 29 => Future(id: u32),
-    40 => Role(id: u32), 41 => RoleSuccessor(id: u32), 42 => Any,
+    40 => Role(id: u32), 41 => RoleSuccessor(id: u32), 42 => Any, 43 => RuntimeCell,
 } }
 impl Wire for Composite {
     fn put(&self, w: &mut Writer) {
@@ -549,6 +549,7 @@ impl Wire for EntryAbi {
                 w.number(4);
                 layout.put(w);
             }
+            Self::AsyncExternal => w.number(5),
         }
     }
     fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
@@ -558,6 +559,7 @@ impl Wire for EntryAbi {
             2 => Ok(Self::Defer { labels: Vec::get(r)? }),
             3 => Ok(Self::AsyncBody { layout: u32::get(r)? }),
             4 => Ok(Self::AsyncDefer { layout: u32::get(r)? }),
+            5 => Ok(Self::AsyncExternal),
             _ => Err(r.fail("unknown entry ABI")),
         }
     }

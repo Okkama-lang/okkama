@@ -39,6 +39,12 @@ pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::E
             o::SummarySelection::Descriptor(_) => return Err(error("descriptor summary retention is outside P1")),
         }
     }
+    // An async body takes only its frame (#772): its language inputs arrive in continuation 0, and what it retains of
+    // them the Future's inputs holder keeps from creation (OIR-2 §10.1). No synchronous call names it, so its entry
+    // retains no SPB parameter.
+    if f.body.is_some() && f.attrs.contains(&o::FunctionAttr::Async) {
+        retained.clear();
+    }
     let positions = f.signature.params.iter().enumerate().filter_map(|(index, &ty)| {
         matches!(kind(module, ty), Ok(P::Value(_))).then_some(index as u32)
     }).collect::<Vec<_>>();
@@ -76,6 +82,23 @@ pub(super) fn external(module: &o::Module, f: &o::Function) -> Result<s::Functio
         params: vec![], results: vec![], blocks: vec![], code: vec![], proofs: s::FunctionProofs::default(),
     };
     function.proofs.entry = Some(contract);
+    // An async external (D22, #601 Q1) is a driver: its language arguments are its registers, in order, and it has
+    // no service; its creation packet goes to `fut.new` and its deps are the caller's proofs.
+    if f.attrs.contains(&o::FunctionAttr::Async) {
+        function.entry_abi = s::EntryAbi::AsyncExternal;
+        for &ty in &f.signature.params {
+            if let P::Value(ty) = kind(module, ty)? {
+                function.params.push(L::Register(function.registers.len() as u32));
+                function.registers.push(ty);
+            }
+        }
+        for &ty in &f.signature.results {
+            if let P::Value(ty) = kind(module, ty)? {
+                function.results.push(ty);
+            }
+        }
+        return Ok(function);
+    }
     function.entry_abi = if f.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. })) {
         s::EntryAbi::Defer { labels: labels(module, f)? }
     } else if matches!(f.signature.ownership_abi, o::OwnershipAbi::Explicit { .. })

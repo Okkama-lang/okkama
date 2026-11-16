@@ -197,6 +197,11 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
         {
+            // D22 (#601 Q1): a driver resolves only to a trusted catalogue driver, and a catalogue driver is never
+            // declared as a synchronous entry.
+            let driver = contracts.entry(name).is_some_and(|trusted| trusted.entry_abi == EntryAbi::AsyncExternal);
+            enforce(driver == (f.entry_abi == EntryAbi::AsyncExternal), drivers::EXTERNAL_ASYNC,
+                &format!("external {name}: an async external resolves to a catalogue driver, and a driver is async"))?;
             let adapter;
             let trusted = match contracts.entry(name) {
                 Some(trusted) => trusted,
@@ -301,8 +306,8 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
         Argument::Location(location) => Some(*location), _ => None,
     }).collect::<Vec<_>>();
     let reserve = f.proofs.cleanup_plans.iter().any(|plan| plan.close == close && plan.reserve);
-    let empty_source = locations.first()
-        .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
+    // A scope inventory carried around a loop has no finite inventory; its emptiness is still provable (#753).
+    let empty_source = locations.first().is_some_and(|&loc| evidence.provably_empty(loc));
     let empty_reserve = !reserve || contract.reserve && locations.get(1)
         .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
     evidence.check_budget()?;

@@ -163,6 +163,8 @@ pub(super) struct Evidence<'a> {
     evaluating: bool,
     requested: Vec<(Location, u8)>,
     resource_free: bool,
+    /// The locations that may hold a key, once computed (#753).
+    nonempty: Option<BTreeSet<Location>>,
 }
 impl<'a> Evidence<'a> {
     pub fn new(program: &'a Program, function: &'a Function) -> Self {
@@ -174,7 +176,7 @@ impl<'a> Evidence<'a> {
         }).collect();
         Self { program, function, steps: 0, exhausted: false, definitions: definitions(function),
             cache: BTreeMap::new(), commits, evaluating: false, requested: vec![],
-            resource_free: resource_free(program, function) }
+            resource_free: resource_free(program, function), nonempty: None }
     }
 
     /// The source of output `slot` of a `frame.resume` at `pc`; slot 0 is the frame token.
@@ -212,6 +214,141 @@ impl<'a> Evidence<'a> {
     pub fn identity(&mut self, location: Location) -> Option<(u32, Option<u32>)> {
         let inventory = self.resolve(location, true)?;
         if inventory.len() == 1 { inventory.first().copied() } else { None }
+    }
+
+    /// Whether no obligation can reach `location` (#753): a flow-insensitive closure over every definition of
+    /// every location, so cycles (a packet carried around a loop through builder journals) do not defeat it as
+    /// they defeat [`Self::inventory`], which needs one finite inventory. A location may hold a key when one of
+    /// its definitions introduces one (a fresh call result, a committed resource, an opaque input or an
+    /// unrecognised producer) or passes on a location that may hold one. It only proves emptiness: it never
+    /// names a key, so it cannot certify a direct plan.
+    pub fn provably_empty(&mut self, location: Location) -> bool {
+        if self.inventory(location).is_some_and(|keys| keys.is_empty()) {
+            return true;
+        }
+        // A location nothing defines holds whatever the frame left there.
+        if !self.definitions.contains_key(&location) && !self.function.params.contains(&location) {
+            return false;
+        }
+        if self.nonempty.is_none() {
+            self.nonempty = Some(self.may_hold_keys());
+        }
+        self.nonempty.as_ref().is_some_and(|nonempty| !nonempty.contains(&location))
+    }
+
+    /// Every location that may hold a key, or every location when its own step budget runs out (the proof then
+    /// fails, as before #753, without spending the budget of the inventory queries).
+    fn may_hold_keys(&self) -> BTreeSet<Location> {
+        let mut steps = 0usize;
+        // For each location: whether a definition introduces keys, and the locations its definitions pass on.
+        let mut sources = BTreeMap::<Location, Vec<Location>>::new();
+        let mut seeds = BTreeSet::new();
+        let definitions = &self.definitions;
+        for (&location, list) in definitions {
+            for &definition in list {
+                steps += 1;
+                match self.passes_on(definition) {
+                    Some(inputs) => sources.entry(location).or_default().extend(inputs),
+                    None => {
+                        seeds.insert(location);
+                    }
+                }
+            }
+        }
+        // A parameter without a definition: an opaque packet unless the inputs are plain; anything else unknown.
+        for &location in &self.function.params {
+            if definitions.contains_key(&location) {
+                continue;
+            }
+            let packet = matches!(location, Location::Service(id)
+                if self.function.services[id as usize] == ServiceKind::Packet);
+            if !packet || !plain_inputs(self.program, self.function) {
+                seeds.insert(location);
+            }
+        }
+        let mut readers = BTreeMap::<Location, Vec<Location>>::new();
+        for (&location, inputs) in &sources {
+            for &input in inputs {
+                readers.entry(input).or_default().push(location);
+                // A location read without any definition (not a parameter) is unknown.
+                if !definitions.contains_key(&input) && !self.function.params.contains(&input) {
+                    seeds.insert(input);
+                }
+            }
+        }
+        let mut nonempty = seeds.clone();
+        let mut work: Vec<_> = seeds.into_iter().collect();
+        while let Some(location) = work.pop() {
+            steps += 1;
+            if steps > STEP_BUDGET {
+                return definitions.keys().copied().chain(self.function.params.iter().copied())
+                    .chain(sources.values().flatten().copied()).collect();
+            }
+            for &reader in readers.get(&location).into_iter().flatten() {
+                if nonempty.insert(reader) {
+                    work.push(reader);
+                }
+            }
+        }
+        nonempty
+    }
+
+    /// The locations whose keys one definition of `location` passes on, or `None` when it may introduce keys
+    /// of its own. Mirrors the producers [`Self::inventory`] recognises; anything else introduces keys.
+    fn passes_on(&self, definition: Definition) -> Option<Vec<Location>> {
+        use Opcode::*;
+        let code = &self.function.code;
+        match definition {
+            Definition::Incoming(_, _, Source::Location(source)) => Some(vec![source]),
+            Definition::Incoming(pc, ordinal, Source::ProducedSlot(slot)) => {
+                let Instruction::Champ { op, arguments: args, flow: Flow::Outcomes(outcomes) } = &code[pc] else {
+                    return None;
+                };
+                let locations = arguments(&code[pc]);
+                match (op, outcomes.get(ordinal)?.tag) {
+                    (InvokeCallOwn, Tag::Normal) => {
+                        let entry = args.iter().find_map(|arg| match arg {
+                            Argument::Entry(id) => self.program.functions.get(*id as usize), _ => None,
+                        })?;
+                        plain_results(self.program, entry).then(Vec::new)
+                    }
+                    (InvokeDispatchOwn, Tag::Normal) => dispatch_plain_results(self.program, args).then(Vec::new),
+                    (op, _) if journal_transition(*op) => Some(vec![*locations.last()?]),
+                    (ScopeSplit | OwnSplitChecked, Tag::Normal) => Some(vec![*locations.first()?]),
+                    (ScopeSplit | OwnSplitChecked, Tag::Unwind) if slot == 0 => Some(vec![*locations.first()?]),
+                    (OwnDynamic, Tag::Normal) => Some(locations.iter().take(2).copied().collect()),
+                    _ => None,
+                }
+            }
+            Definition::Instruction(pc, slot) => {
+                if self.resumed(pc, slot).is_some() {
+                    return None;
+                }
+                let Instruction::Champ { op, arguments: args, .. } = &code[pc] else {
+                    return None;
+                };
+                let locations = arguments(&code[pc]);
+                match op {
+                    OwnEmpty | ScopeBegin => Some(vec![]),
+                    OwnCreateCommit => {
+                        let object = args.iter().find_map(|arg| match arg {
+                            Argument::Object(id) => Some(*id), _ => None,
+                        })?;
+                        (!self.program.objects[object as usize].layout.has_destroy).then(Vec::new)
+                    }
+                    BuilderAbandon => Some(vec![*locations.last()?]),
+                    OwnMove | OwnJoin | OwnAdmit | OwnAccept | ExitExtend => Some(locations),
+                    OwnBind | OwnRebind => Some(vec![locations[0], *locations.last()?]),
+                    OwnStage if args.first() == Some(&Argument::Flag(false)) => {
+                        Some(vec![locations[0], *locations.last()?])
+                    }
+                    OwnSplit => Some(vec![*locations.first()?]),
+                    ExitPrepare => Some(vec![*locations.last()?]),
+                    ExitCommit => Some(vec![*locations.first()?]),
+                    _ => None,
+                }
+            }
+        }
     }
 
     pub fn inventory(&mut self, location: Location) -> Option<Inventory> {
@@ -840,3 +977,7 @@ pub(super) fn static_selections_with(_p: &Program, f: &Function, evidence: &mut 
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "evidence_tests.rs"]
+mod tests;

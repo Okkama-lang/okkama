@@ -5,6 +5,7 @@ mod codec;
 pub mod layout;
 mod registry;
 pub mod p1;
+pub mod drivers;
 mod verify;
 mod load;
 mod evidence;
@@ -249,6 +250,11 @@ pub enum Type {
     /// An `any` value: a reference to an any box (`Object::any_box`), which holds the value in its one
     /// field and the value's type in its descriptor.
     Any,
+    /// A hidden runtime word of an object's storage: a reference the runtime keeps for the object (the waiters of
+    /// an Event cell, #601 Q1 audit A1). The collector traces it; it is never a source field, a value of a
+    /// register, a comparison operand, a selected field or part of a resource graph (`RUNTIME_CELL`). The hidden
+    /// words of the channel and group holders (slices Q2, G1) take this type too.
+    RuntimeCell,
 }
 
 impl Type {
@@ -256,7 +262,8 @@ impl Type {
     pub fn traced(self) -> bool {
         matches!(self, Self::Error | Self::Bytes | Self::Array(_) | Self::Str | Self::Object(_) | Self::Successor(_)
             | Self::Failure | Self::Rat | Self::Variant(_) | Self::Handle(_) | Self::Map(_) | Self::MapBuilder(_)
-            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_) | Self::Any)
+            | Self::Builder(_) | Self::Future(_) | Self::Role(_) | Self::RoleSuccessor(_) | Self::Any
+            | Self::RuntimeCell)
     }
 }
 
@@ -525,6 +532,10 @@ pub enum EntryAbi {
     /// a shielded child. Its success publication continues the caller, its failure unwinds it. It has no
     /// replacement labels in 0.6.0 (`SPB_ASYNC_DEFER_LABELS` holds by construction).
     AsyncDefer { layout: u32 },
+    /// An async external (async ABI D22, #601 Q1): a driver of the trusted catalogue. It has no body; only `fut.new`
+    /// names it, and the runtime runs its Future with the driver its external name resolves to
+    /// (`SPB_EXTERNAL_ASYNC`). The name is the entry contract's `external`.
+    AsyncExternal,
 }
 
 impl EntryAbi {
@@ -1267,6 +1278,8 @@ mod rules_tests;
 mod budget_tests;
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod drivers_tests;
 
 #[cfg(test)]
 mod spawn_tests;

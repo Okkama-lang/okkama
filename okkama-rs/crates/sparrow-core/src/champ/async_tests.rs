@@ -2539,3 +2539,6 @@ mod cancel;
 
 #[path = "async_spawn_tests.rs"]
 mod spawn;
+
+#[path = "async_drivers_tests.rs"]
+mod drivers;

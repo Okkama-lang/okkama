@@ -20,6 +20,50 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A loop scope of a resource holder closes on Champ (#753).** The SPB 17
+  loader (`D18_EXECUTOR`) checks a merge close's envelope against the
+  destroys its inventory may see. When it cannot reconstruct the inventory
+  it assumes every destroy the function's inputs and callees reach. A
+  packet carried around a loop (a `map` or `for` that builds an array,
+  through builder journals) is a cycle, which has no finite inventory, so a
+  method of an object holding a resource with a failing destroy was refused
+  ("fs.file.FileBytes.bytes#2 close 4: merge envelope 0 omits destroy
+  failures 11"), though own's empty envelope was right. Neither own nor
+  codegen was wrong: the loader's evidence was too weak. It now proves
+  emptiness flow-insensitively: a location may hold a key only when a
+  definition introduces one (a fresh call result, a committed resource, an
+  opaque input or an unrecognised producer) or passes one on, so cycles of
+  copies and journals stay empty. The proof never names a key, so it cannot
+  certify a direct plan. `L10.fs.missing-file` and
+  `L12.malformed-boundary-inputs` run on Champ.
+- **An Error payload of a plain variant runs on Champ (#763).** The SPB 17
+  P1 contract admitted an Error enum's payload of a variant type only when
+  every case of the variant was an Error case, and its test refused "a plain
+  variant", so `L05.variants.case-layouts` stopped at load with "invalid P1
+  plain Error layout". The language spec admits payload enums whose payloads
+  satisfy the same rule and shows a nested variant by its own text, as
+  Tomato does: `Fault.major(1, Shape.rect(2, 3))`. A plain variant now names
+  its cases in SPB 17 (`enum_names`, one per case; `ENUM_NAMES` admits it),
+  the P1 contract admits a named plain variant whose cases show their
+  payloads (recursively, a recursive variant included), and Champ's
+  `Error.text` writes the case and its payload. A plain variant without
+  names, with names that miss a case, or with a payload the text cannot
+  show (a `char`) is still refused.
+- **The bound-flag check of a constructor field is linked to the field by
+  its flag, not by its message (#770).** The verifier's construction rule
+  (A2) and the producer's construction self-check took a field as
+  initialized behind any `cond` whose failing edge trapped with that field's
+  `not initialized` message, so a check of another flag passed. Both now
+  compute each field's bound flags: values whose every definition is
+  `const false`, a `const true` that follows a write of the field in its
+  block (`obj.init` on the early self; also `stage` for the producer), or a
+  block parameter whose every incoming argument is such a flag; unwind edges
+  pass their leading parameters. The `cond` must read the field's flag; the
+  trap must still be `TrapCode::Unbound`. The producer's undef propagation
+  now follows unwind and catch edges too, so a field bound inside a `try`
+  whose body fails first gets its check and fails as on Tomato instead of
+  completing with an undef field. Verifier fixtures: a check of another
+  field's flag and a check of an ordinary bool are refused.
 - **Tomato: `e.text()` on a cancellation caught as `Error` no longer
   crashes (#744).** A catch of the Error role binds a `Cancelled` value,
   which Sparrow builds from the system `Cancelled` object; the OIR-1
@@ -64,6 +108,25 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   the loader keeps checking `ARRAY_PLAIN`). Eight cases pass;
   `L08.collect.race-empty` stops next on an array of futures in an object
   field (#758). The Champ case harness passes a case's `args`.
+- **Champ: the Event cell's runtime word and Tomato's tracking (#601 Q1
+  audit A1, A2).** The waiters word of the Event cell was typed `any` in SPB
+  17: `==` of two Events read the runtime list of waiters as an any box
+  (unsound), and an `any` holding a resource made the cell reach resources,
+  which dropped every `okkama.event.*` catalogue entry. SPB 17 gains
+  `Type::RuntimeCell` (wire tag 43), a traced hidden storage word that is no
+  value type, no source field, never selected and never compared (loader
+  rule `SPB_RUNTIME_CELL`); the Event cell is `[Bool, Bool, RuntimeCell]`
+  and keeps its source field `initial`, which `==` compares, as on Tomato.
+  Champ's equality reads only objects. A Champ runtime also never runs
+  Tomato's resource tracking: in a program with a destroy, a driver
+  Future's settle took its cache record word for an outcome region.
+- **A Future creation offers only its managed inputs (#601 Q1).** Own
+  offered every input of an async call when one of them was managed, a
+  Future argument included, though a Future input only borrows its cache
+  and no selection may name it (OIR-2 §10.2, D12). On Champ the creation
+  then walked the Future's frame and stopped with "unsupported selection
+  root", for example `spawn Worker(event).run(child)`.
+
 - **Collections of native handles on Champ (#751).** SPB 17 had no array
   leaf for a native handle and no builder of handles, so OIR-2 code
   generation stopped on json's parsed nodes (`Array(Handle(_))`,
@@ -506,6 +569,32 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **Champ runs the std async primitives (#601 Q1, OIR-2 async ABI D22).**
+  Event, Lock, Semaphore, Barrier and the cancellation token are a trusted
+  catalogue of the producer (`lowering/oir2/drivers`) and of SPB 17
+  (`spb17::drivers`): a member whose std body is a VM intrinsic, and the
+  constructors Tomato overrides, is a bodyless `[intrinsic]` named as Tomato
+  names it. An async member is an async external: its call is
+  `fut.new … environment external`, and SPB 17 declares it
+  `EntryAbi::AsyncExternal` (wire tag 5), a driver whose parameters are its
+  registers. New loader rule `SPB_EXTERNAL_ASYNC`: an async external is a
+  bodyless external that resolves only to a catalogue driver, a catalogue
+  driver is never declared synchronous, and `fut.new` passes it its
+  registers' types. Champ links the catalogue to Tomato's intrinsics in its
+  declaration view, so Tomato's drivers run a driver Future (Tomato's driver
+  frame with the Champ tail) through the same scheduler as `spawn`, with an
+  empty outcome packet committed before the waiters wake; the synchronous
+  members run as Tomato's intrinsics. Payloads are plain; the Event cell
+  keeps Tomato's layout `[initial, set, waiters]`. Eleven conformance cases
+  pass on Champ (`L08.wake.event-set`, `wake.already-settled`,
+  `wake.multiple-waiters`, `wake.cancel-defers-cleanup`,
+  `spawn.event-barrier`, `deadlock.two-tasks`,
+  `shutdown.outstanding-task-cleanup`, `cancel.awaited-cleanup-settles`,
+  `cancel.awaited-spawned`, `cancel.final-defer-await-interrupted`,
+  `L12.cancellation-runs-cleanup`; `champ_cases_q1`). The other std async
+  intrinsics name their slice in the refusal: channels Q2, groups,
+  collectors and timeouts G1.
 
 - **Champ runs `spawn` of an async action (#601 P1, OIR-2 async ABI D24).**
   `spawn R(…).a(…)` lowers to the creating call followed by `fut.spawn` of

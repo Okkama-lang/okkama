@@ -814,3 +814,148 @@ fn c6_own_runs_an_async_defer_entry_with_its_input_packet() {
     assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::UnsupportedAsync);
     assert!(diagnostics[0].message.contains("may own suspending cleanup"), "{diagnostics:?}");
 }
+
+/// #601 Q1, D22: async-plain-await with `@work` a bodyless async intrinsic (`external`) called through
+/// `call.intrinsic`, or an async native when `native`. The catalogue gives the external its body summary.
+fn driver_source(native: bool) -> String {
+    let work = input("async-plain-await");
+    let start = work.find("func @work(").unwrap();
+    let end = work.find("func @main(").unwrap();
+    let (attr, call) = if native {
+        ("[async, extern \"q1.work\"]", "call.native @work(%seven)")
+    } else {
+        ("[async, intrinsic \"q1.work\"]", "call.intrinsic @work(%seven)")
+    };
+    let declaration = format!("func @work(%x: int) -> int {attr} async-creation(MworkC) async-body(MworkB);\n");
+    let source = format!("{}{declaration}{}", &work[..start], &work[end..]);
+    edit(&source, "call @work(%seven)", call)
+}
+
+/// The trusted catalogue of `@work` at one profile: its declared signature and its body summary.
+struct Driver(Signature, Summary);
+impl crate::verify::ExternalContracts for Driver {
+    fn native(&self, name: &str) -> Option<&Signature> {
+        (name == "q1.work").then_some(&self.0)
+    }
+    fn intrinsic(&self, name: &str) -> Option<&Signature> {
+        (name == "q1.work").then_some(&self.0)
+    }
+    fn native_summary(&self, name: &str) -> Option<&Summary> {
+        (name == "q1.work").then_some(&self.1)
+    }
+    fn intrinsic_summary(&self, name: &str) -> Option<&Summary> {
+        (name == "q1.work").then_some(&self.1)
+    }
+}
+
+fn driver_contracts(module: &Module) -> Driver {
+    let (_, work) = function(module, "work");
+    let body = work.summary.or(work.async_body_summary).unwrap();
+    Driver(work.signature.clone(), module.summaries.get(body).unwrap().clone())
+}
+
+/// Own's driver declaration: the call-boundary entry ABI, `(int, own) -> (int, own)`.
+fn own_driver(module: &mut Module, body: Summary) -> Driver {
+    let int = module.types.intern(Type::Int).unwrap();
+    let own = module.types.intern(Type::Service(ServiceType::Own)).unwrap();
+    let signature = Signature {
+        params: vec![int, own], results: vec![int, own],
+        ownership_abi: OwnershipAbi::Explicit { input_packet: 1, output_packet: 1 },
+    };
+    Driver(signature, body)
+}
+
+fn rewrite_driver(source: &str) -> Result<OwnOutput, OwnError> {
+    let mut module = crate::text::parse(source).unwrap();
+    let contracts = driver_contracts(&module);
+    let context = crate::verify::VerifyContext { external_contracts: &contracts, ..Default::default() };
+    crate::verify::verify_high_with(&module, &Default::default(), context)
+        .unwrap_or_else(|report| panic!("High input: {report:?}"));
+    let mut natives = catalog(&module);
+    natives.named.insert("q1.work".into(), contracts.1.clone());
+    let own = own_driver(&mut module, contracts.1.clone());
+    let output = elaborate_ownership(module, &natives, &OwnOptions::default())?;
+    let context = crate::verify::VerifyContext { external_contracts: &own, ..Default::default() };
+    rewrite_synchronous_with(output, &OwnOptions::default(), context)
+}
+
+#[test]
+fn q1_an_async_intrinsic_call_creates_an_external_future() {
+    // Async ABI D22 §4.2: High types the call as the Future of the driver's result (verified in rewrite_driver);
+    // own creates it with `fut.new … environment external`, gives its owner the cache duty and leaves the
+    // driver without a body.
+    let output = rewrite_driver(&driver_source(false)).unwrap();
+    let (work, data) = function(&output.module, "work");
+    assert!(data.body.is_none() && data.async_creation_summary.is_some() && data.async_body_summary.is_some());
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let environments: Vec<_> = operations(body).into_iter().filter_map(|op| match op {
+        Operation::Async(AsyncOp::FutureNew { environment, .. }) => Some(environment.clone()),
+        _ => None,
+    }).collect();
+    assert!(matches!(environments.as_slice(), [FutureEnvironment::External { function, .. }] if *function == work),
+        "{environments:?}");
+    assert_eq!(body.service_schedules.len(), 1, "the owner settles the driver Future's cache duty");
+}
+
+#[test]
+fn q1_an_async_native_is_still_refused() {
+    // Async natives are slice N1: own refuses them by name before any rewrite.
+    let error = rewrite_driver(&driver_source(true)).unwrap_err();
+    let OwnError::Diagnostics { diagnostics, .. } = error else { panic!("{error:?}") };
+    assert_eq!(diagnostics[0].kind, OwnDiagnosticKind::UnsupportedAsync);
+    assert!(diagnostics[0].message.contains("slice N1"), "{diagnostics:?}");
+}
+
+#[test]
+fn a_future_input_beside_a_managed_input_is_never_offered() {
+    // OIR-2 §10.2, D12: a Future input's cache is borrowed, so no selection of the creation names it, also when
+    // a managed input (a fresh Res) is offered with it.
+    let source = edit(&input("r1-cold-escape"), "func @read(%arg: Res) -> int",
+        "func @read(%arg: Res, %g: future<int>) -> int");
+    let borrow = "parameter_effect(convention=borrow, destination=none)";
+    let source = edit(&source, &format!("summary MreadC call-boundary parameters [{borrow}]"),
+        &format!("summary MreadC call-boundary parameters [{borrow}, {borrow}]"));
+    let source = edit(&source, &format!("summary MreadB call-boundary parameters [{borrow}]"),
+        &format!("summary MreadB call-boundary parameters [{borrow}, {borrow}]"));
+    let source = edit(&source, "scope S action in @main\n", "scope SS action in @seed\nscope S action in @main\n");
+    let source = edit(&source, "func @main()", "summary MseedC call-boundary results \
+        [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary MseedB call-boundary results [result_relation(provenance=unbound_result)] contract \
+        call_contract(results=[int], failures=[cancelled], suspends=true, publication=atomic)
+func @seed() -> int [async] async-creation(MseedC) async-body(MseedB) {
+    boundary BS lexical in SS
+    ^entry in SS:
+    %n: int = const 2
+    want %n
+    [iprepS] exit.prepare return %n at BS
+    result.exit edge normal(0), value %n, demand want, prepare iprepS
+    ret %n
+}
+func @main()");
+    let source = edit(&source, "    %r: Res = call @res()\n    %f: future<int> = call @read(%r)\n",
+        "    %r: Res = call @res()\n    %e: future<int> = call @seed()\n    %f: future<int> = call @read(%r, %e)\n");
+    let output = rewrite_async(&source).unwrap();
+    verify_own(&output.module).unwrap();
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let mut offers = 0;
+    for op in operations(body) {
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. })
+            = op else { continue };
+        let mut pending = vec![*selection];
+        while let Some(selection) = pending.pop() {
+            match body.selections.get(selection).unwrap() {
+                SelectionExpr::Union(items) => pending.extend(items),
+                SelectionExpr::Admissible(inner) => pending.push(*inner),
+                SelectionExpr::Value(value) => {
+                    offers += 1;
+                    let ty = output.module.types.get(body.values.get(*value).unwrap().ty).unwrap();
+                    assert!(!matches!(ty, Type::Future(_)), "a selection names a Future: {op:?}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(offers > 0, "the managed inputs are offered");
+}

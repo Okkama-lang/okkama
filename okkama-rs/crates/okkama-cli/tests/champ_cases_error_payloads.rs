@@ -20,6 +20,13 @@ fn single_case_error_tags_and_payloads() {
     ]);
 }
 
+/// Variant layouts end to end, among them an Error payload of a plain variant whose text shows the variant's case:
+/// `Fault.major(1, Shape.rect(2, 3))` (#763).
+#[test]
+fn plain_variant_payloads_of_errors() {
+    check(&["L05.variants.case-layouts"]);
+}
+
 #[test]
 fn a_case_pattern_binds_the_payload_of_the_only_case() {
     let run = run_source(r#"module app v1.0.0;

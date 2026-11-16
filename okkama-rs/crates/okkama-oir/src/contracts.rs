@@ -514,9 +514,11 @@ impl<'a> ContractRegistry<'a> {
         contract.roots.through_suspend = contract.effects.suspends;
         Ok(contract)
     }
-    /// The body result of a direct async callee, whose call creates a Future of it.
+    /// The body result of a direct async callee, whose call creates a Future of it. An async intrinsic or native
+    /// (D22, #601 Q1) creates the Future of its driver the same way.
     fn async_creation(&self, op: &CallOp) -> Result<Option<Option<TypeId>>, ContractError> {
-        let CallOp::Direct { function, .. } = op else { return Ok(None) };
+        let (CallOp::Direct { function, .. } | CallOp::Intrinsic { function, .. }
+            | CallOp::Native { function, .. }) = op else { return Ok(None) };
         let callee = self.module.functions.get(*function)?;
         if !callee.attrs.contains(&FunctionAttr::Async) { return Ok(None); }
         let mut results = callee.signature.results.iter().copied()

@@ -97,7 +97,8 @@ impl Declarations {
                 type_params: vec![],
                 kind: ir::DeclarationKind::Object {
                     fields: vec![], witnesses: vec![], destroy: None,
-                    builtin: reg.modules[object.module].name == "async/atomic" && object.name.starts_with("Atomic_"),
+                    builtin: super::drivers::builtin(&reg.modules[object.module].name, &object.name)
+                        || reg.modules[object.module].name == "async/atomic" && object.name.starts_with("Atomic_"),
                 },
                 loc: None,
             })?;
@@ -530,11 +531,15 @@ impl Declarations {
                 }
                 _ => None,
             };
-            if atomic.is_none() {
+            // #601 Q1, D22: a member of the std async primitives that the runtime provides.
+            let primitive = if atomic.is_none() { super::drivers::intrinsic_name(reg, body) } else { None };
+            if atomic.is_none() && primitive.is_none() {
                 super::asynchronous::check_intrinsic(reg, body)?;
             }
             let function = if let Some(name) = atomic {
                 this.external(&name, false, params, results, attrs, body.span)?
+            } else if let Some(name) = &primitive {
+                this.primitive(name, params, results, attrs, body.span)?
             } else {
                 this.builder.declare_function(ir::Function {
                     symbol,
@@ -551,7 +556,7 @@ impl Declarations {
             if body.owner == thir::BodyOwner::Entry {
                 this.builder.raw_mut().entry = Some(function);
             }
-            if async_action {
+            if async_action && primitive.is_none() {
                 super::asynchronous::declare(&mut this.builder, function)?;
             }
             if let thir::BodyOwner::Test(index) = body.owner {
@@ -577,6 +582,9 @@ impl Declarations {
         object_ids.sort_by_key(|(object, _)| *object);
         for (object, decl) in object_ids {
             let info = &reg.objects[object.0];
+            // The Event cell's runtime layout extends its source field `initial` with the runtime's words (#601 Q1):
+            // its constructors are intrinsics, and an equality reads `initial`, as Tomato's (audit A1).
+            let cell = super::drivers::builtin(&reg.modules[info.module].name, &info.name);
             let mut fields = vec![];
             for (index, field) in info.fields.iter().enumerate() {
                 fields.push(ir::Field {
@@ -590,7 +598,7 @@ impl Declarations {
                 matches!(body.owner, thir::BodyOwner::Ctor { object: owner, .. } if owner == object)
                     && body.block.stmts.iter().any(super::defer::uses_receiver)
             });
-            if thir::escapes_self(&analysis.bodies, object) || defer_receiver {
+            if !cell && (thir::escapes_self(&analysis.bodies, object) || defer_receiver) {
                 fields.push(ir::Field {
                     name: PENDING_FIELD.into(), ty: this.types[&ty::Ty::Bool], default: None, once: false,
                 });
@@ -598,7 +606,7 @@ impl Declarations {
             let destroy = this.functions.get(&thir::BodyOwner::Destroy { object }).copied();
             this.builder.raw_mut().declarations.get_mut(decl)?.kind = ir::DeclarationKind::Object {
                 fields, witnesses: vec![], destroy,
-                builtin: reg.modules[info.module].name == "async/atomic" && info.name.starts_with("Atomic_"),
+                builtin: cell || reg.modules[info.module].name == "async/atomic" && info.name.starts_with("Atomic_"),
             };
         }
         // Shorthand omissions change the language signature, so each supplied-field
@@ -722,6 +730,44 @@ impl Declarations {
             type_params: vec![], body: None, loc: None,
             async_creation_summary: None, async_body_summary: None,
         })?)
+    }
+
+    /// A std async primitive the runtime provides (#601 Q1, D22): an `[intrinsic]` without a body. A synchronous
+    /// member carries its catalogue summary; an async one (`attrs` has `[async]`) is an async external, with the
+    /// High creation envelope and the catalogue body summary (async ABI §4.1).
+    fn primitive(&mut self, name: &str, params: Vec<ir::TypeId>, results: Vec<ir::TypeId>,
+        mut attrs: Vec<ir::FunctionAttr>, span: Span) -> Result<ir::FuncId> {
+        let signature = ir::Signature { params, results, ownership_abi: ir::OwnershipAbi::Unelaborated };
+        let unsupported = |error: ir::own::NativeSummaryError| LowerError::unsupported(span, error.message);
+        let body = super::native_summaries::contract(self.builder.module(), name, false, &signature)
+            .map_err(unsupported)?;
+        let objects = super::native_summaries::intrinsic_objects(self.builder.module(), name, &signature)
+            .map_err(unsupported)?;
+        let asynchronous = attrs.contains(&ir::FunctionAttr::Async);
+        if asynchronous != super::drivers::asynchronous(name) {
+            return Err(LowerError::invalid(span, format!("{name}: async attribute differs from the catalogue")));
+        }
+        attrs.push(ir::FunctionAttr::Intrinsic { name: name.into(), objects, helpers: vec![] });
+        let mut function = ir::Function {
+            symbol: name.to_owned(), signature, attrs, summary: None,
+            type_params: vec![], body: None, loc: None,
+            async_creation_summary: None, async_body_summary: None,
+        };
+        if asynchronous {
+            let module = self.builder.raw_mut();
+            if !module.requires.contains(&ir::Feature::Async) {
+                module.requires.push(ir::Feature::Async);
+            }
+            let outcome = function.signature.results.first().copied();
+            let future = self.builder.intern_type(ir::Type::Future(outcome))?;
+            let parameters = function.signature.params.len();
+            let creation = super::asynchronous::creation_envelope(parameters, future);
+            function.async_creation_summary = Some(self.builder.add_summary(creation)?);
+            function.async_body_summary = Some(self.builder.add_summary(body)?);
+        } else {
+            function.summary = Some(self.builder.add_summary(body)?);
+        }
+        Ok(self.builder.declare_function(function)?)
     }
 
     fn collection_type(&mut self, ty: &ty::Ty, span: Span) -> Result<()> {

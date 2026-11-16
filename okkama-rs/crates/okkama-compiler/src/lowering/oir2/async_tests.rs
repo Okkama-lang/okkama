@@ -452,20 +452,24 @@ fn oir2_v5_async_native_keeps_its_diagnostic() {
     );
 }
 
+/// #601 Q1: the std async primitives lower (`drivers`); the runtime intrinsics of channels (slice Q2) and of
+/// collectors (slice G1) keep a diagnostic that names their slice. Their bodies are never lowered.
 #[test]
-fn oir2_v5_std_async_intrinsics_keep_their_diagnostic() {
-    assert_names(
-        concat!("module app; import \"async/event\" take Event; ",
-            "async main() is int { let e = Event(ready: true); await e.wait(); 0; }"),
-        "std async intrinsic Event.wait (P2.5 slice Q1, D22)",
-        None,
-    );
-    // A synchronous member of an async primitive is a runtime intrinsic too: its body is never lowered.
-    assert_names(
-        "module app; import \"async/event\" take Event; main() is int { Event().set(); 0; }",
-        "std async intrinsic Event.set (P2.5 slice Q1, D22)",
-        None,
-    );
+fn oir2_std_async_intrinsics_outside_q1_name_their_slice() {
+    for (source, slice) in [
+        (concat!("module app; import \"async/channel\" take Channel; ",
+            "async main() is int { let c is Channel<int> = Channel(1); await c.sending().send(1); 0; }"),
+            "(P2.5 slice Q2, D23)"),
+        (concat!("module app; import \"async/collect\" take AllFutures; ",
+            "object Job { Job(); async run() is int { 1; } } ",
+            "async main() is int { let all is AllFutures<int> = AllFutures(origins: [Job().run()]); ",
+            "let r = await all.results(); 0; }"),
+            "(P2.5 slice G1, D23)"),
+    ] {
+        let (message, _) = diagnostic(source);
+        assert!(message.starts_with("unsupported in OIR-2 lowering: std async intrinsic ") && message.contains(slice),
+            "{message}");
+    }
 }
 
 #[test]

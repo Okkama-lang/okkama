@@ -205,13 +205,18 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             .and_then(s::p1::atomic_value);
         // A once slot is an ordinary Maybe field: the producer stores Maybe.none at construction and
         // once.load/once.store read and fill it (SPB 17 `Field::once` keeps it out of equality and keys).
-        if builtin && atomic.is_none() {
+        // The Event cell of the std async primitives (#601 Q1): `[initial, set, waiters]`, as Tomato keeps it.
+        let event = builtin && destroy.is_none() && declaration.name == s::drivers::EVENT
+            && matches!(fields, [field] if field.name == "initial" && !field.once);
+        if builtin && atomic.is_none() && !event {
             return Err(phase("layout", format!("missing final runtime override for {}", declaration.name)));
         }
         let mut storage_fields = fields.iter().map(|field| sparrow_oir2::translate_type(module, field.ty))
             .collect::<Result<Vec<_>, _>>().map_err(|error| phase("layout", error))?;
         if let Some(value) = atomic {
             storage_fields = vec![value, s::Type::Bool];
+        } else if event {
+            storage_fields = s::drivers::EVENT_STORAGE.to_vec();
         } else if matches!(declaration.kind, o::DeclarationKind::Enum { .. }) {
             storage_fields = vec![s::Type::Int];
         }
