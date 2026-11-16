@@ -19,6 +19,10 @@ L08.await.non-future	conformance/cases/L08-async-and-concurrency/await.non-futur
 L08.cancel.after-await-settled	conformance/cases/L08-async-and-concurrency/cancel.after-await-settled/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
 L08.cancel.awaited-cleanup-settles	conformance/cases/L08-async-and-concurrency/cancel.awaited-cleanup-settles/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3)
 L08.cancel.awaited-spawned	conformance/cases/L08-async-and-concurrency/cancel.awaited-spawned/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3)
+L08.cancel.final-async-destroy-shielded	conformance/cases/L08-async-and-concurrency/cancel.final-async-destroy-shielded/case.json	D1	W4	run	success	0	-	-	async destroy and Event (Q1); #739 K2 probe
+L08.cancel.final-defer-await-interrupted	conformance/cases/L08-async-and-concurrency/cancel.final-defer-await-interrupted/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3); #739 K2 probe
+L08.cancel.final-exit-window	conformance/cases/L08-async-and-concurrency/cancel.final-exit-window/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; #739 K2 probe
+L08.cancel.late-after-last-await	conformance/cases/L08-async-and-concurrency/cancel.late-after-last-await/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; #739 K2 probe
 L08.cancel.nested-frame-next-await	conformance/cases/L08-async-and-concurrency/cancel.nested-frame-next-await/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
 L08.cancel.shared-awaited-survives	conformance/cases/L08-async-and-concurrency/cancel.shared-awaited-survives/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1; also defer await (R3)
 L08.cancellation.cooperative-token	conformance/cases/L08-async-and-concurrency/cancellation.cooperative-token/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
@@ -34,7 +38,7 @@ L08.db.query-lifetime	conformance/cases/L08-async-and-concurrency/db.query-lifet
 L08.deadlock.after-timer	conformance/cases/L08-async-and-concurrency/deadlock.after-timer/case.json	Q1	W3	run	failure	-	-	-	plan §4 Q1
 L08.deadlock.two-tasks	conformance/cases/L08-async-and-concurrency/deadlock.two-tasks/case.json	Q1	W3	run	failure	-	-	-	plan §4 Q1
 L08.failure.rethrown-at-every-await	conformance/cases/L08-async-and-concurrency/failure.rethrown-at-every-await/case.json	V5	W1	run	success	0	okkama-rs/crates/okkama-compiler/src/lowering/oir2/goldens/p2_5/L08.failure.rethrown-at-every-await.oir	-	W1 case of plan §4 V5 and V10
-L08.failure.spawned-task-observed	conformance/cases/L08-async-and-concurrency/failure.spawned-task-observed/case.json	P1	W3	run	success	0	-	-	plan §4 P1
+L08.failure.spawned-task-observed	conformance/cases/L08-async-and-concurrency/failure.spawned-task-observed/case.json	P1	W3	run	success	0	-	-	plan §4 P1; runs on Champ (champ_cases_spawn)
 L08.for-await.multiple-bindings	conformance/cases/L08-async-and-concurrency/for-await.multiple-bindings/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await with two bindings
 L08.for-await.stream	conformance/cases/L08-async-and-concurrency/for-await.stream/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2 and F1 (async role slot Reading.next)
 L08.for-await.sync-action	conformance/cases/L08-async-and-concurrency/for-await.sync-action/case.json	frontend	-	check	reject	-	-	-	the checker rejects for await outside async actions
@@ -53,7 +57,7 @@ L08.role-shape.async-mismatch	conformance/cases/L08-async-and-concurrency/role-s
 L08.scope.future-scope-and-deadlines	conformance/cases/L08-async-and-concurrency/scope.future-scope-and-deadlines/case.json	G1	W3	run	success	0	-	-	plan §4 G1; also a bound async action value (F1)
 L08.scope.group-waits	conformance/cases/L08-async-and-concurrency/scope.group-waits/case.json	G1	W3	run	success	0	-	-	plan §4 G1
 L08.shutdown.outstanding-task-cleanup	conformance/cases/L08-async-and-concurrency/shutdown.outstanding-task-cleanup/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
-L08.shutdown.unobserved-failure	conformance/cases/L08-async-and-concurrency/shutdown.unobserved-failure/case.json	P1	W3	run	error	-	-	-	plan §4 P1
+L08.shutdown.unobserved-failure	conformance/cases/L08-async-and-concurrency/shutdown.unobserved-failure/case.json	P1	W3	run	error	-	-	-	plan §4 P1; runs on Champ (champ_cases_spawn)
 L08.spawn.eager-start-and-channel	conformance/cases/L08-async-and-concurrency/spawn.eager-start-and-channel/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
 L08.spawn.event-barrier	conformance/cases/L08-async-and-concurrency/spawn.event-barrier/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
 L08.spawn.worker-process	conformance/cases/L08-async-and-concurrency/spawn.worker-process/case.json	X1	W4	run	success	0	-	-	plan §4 X1
@@ -68,7 +72,7 @@ L08.wake.channel-and-semaphore	conformance/cases/L08-async-and-concurrency/wake.
 L08.wake.event-set	conformance/cases/L08-async-and-concurrency/wake.event-set/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
 L08.wake.multiple-waiters	conformance/cases/L08-async-and-concurrency/wake.multiple-waiters/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
 L08.wake.no-external	conformance/cases/L08-async-and-concurrency/wake.no-external/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
-L08.wake.spawn-and-cold-start	conformance/cases/L08-async-and-concurrency/wake.spawn-and-cold-start/case.json	P1	W3	run	success	0	-	-	plan §4 P1
+L08.wake.spawn-and-cold-start	conformance/cases/L08-async-and-concurrency/wake.spawn-and-cold-start/case.json	P1	W3	run	success	0	-	-	plan §4 P1; runs on Champ (champ_cases_spawn)
 L08.wake.transitive	conformance/cases/L08-async-and-concurrency/wake.transitive/case.json	G1	W3	run	success	0	-	-	plan §4 G1
 L10.clock.monotonic-order	conformance/cases/L10-stdlib-host-resources/clock.monotonic-order/case.json	N1	W3	run	success	0	-	-	plan §4 N1 (L10); also the async role slot Timing.wait (F1)
 L10.process.capture	conformance/cases/L10-stdlib-host-resources/process.capture/case.json	N1	W3	run	success	0	-	native-failure	plan §4 N1 (L10)

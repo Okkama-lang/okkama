@@ -36,7 +36,8 @@ fn p1_a_spawned_task_runs_before_the_spawner_continues() {
     expect(concat!(
         "module app v1.0.0;\n",
         "import \"io/stdout\" take Stdout;\n",
-        "object Job { has name is string; Job(:name); async run() is int { Stdout().writeln(name + \" runs\"); 1; } }\n",
+        "object Job { has name is string; Job(:name); ",
+        "async run() is int { Stdout().writeln(name + \" runs\"); 1; } }\n",
         "async main() is int { spawn Job(name: \"a\").run(); Stdout().writeln(\"main\"); 0; }\n",
     ), "a runs\nmain\n", 0);
 }
