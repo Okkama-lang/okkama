@@ -54,6 +54,7 @@ mod builtin_roles;
 #[cfg(test)]
 mod std_collection_tests;
 mod roles;
+mod timeouts;
 mod walk;
 mod scalar;
 mod operators;
@@ -146,6 +147,8 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
     }).collect();
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
+    // #810: the timeout drivers' helpers, once the witnesses of the clock roles exist.
+    timeouts::declare_helpers(&mut declarations)?;
     declarations.declare_lambdas(&prepared.callables)?;
     let walked: Vec<_> = analysis.bodies.iter()
         .chain(prepared.callables.bodies.iter().map(|discovered| &discovered.body)).collect();

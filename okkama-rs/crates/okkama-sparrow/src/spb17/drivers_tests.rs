@@ -407,12 +407,13 @@ fn suffixes(template: &Template) -> Vec<&'static str> {
 
 /// The rows follow memo §§5.2 and 6.2: one per member Tomato runs as an intrinsic, a driver for each async member
 /// (thrown, program and cancelled), none of them in the Q1 catalogue, and only those with a runtime ready (#810:
-/// FutureGroup's five members).
+/// FutureGroup's five members, then the two timeouts).
 #[test]
 fn holder_rows_are_the_q2_and_g1_members() {
     let ready: Vec<_> = d::HOLDERS.iter().filter(|template| template.ready).map(|template| template.name).collect();
     assert_eq!(ready, ["okkama.scope.FutureGroup.new", "okkama.scope.FutureGroup.start",
-        "okkama.scope.FutureGroup.active", "okkama.scope.FutureGroup.cancel", "okkama.scope.FutureGroup.wait"]);
+        "okkama.scope.FutureGroup.active", "okkama.scope.FutureGroup.cancel", "okkama.scope.FutureGroup.wait",
+        "okkama.timeout.Within.outcome", "okkama.timeout.Before.outcome"]);
     let q2 = d::HOLDERS.iter().filter(|template| template.slice == Slice::Q2).count();
     assert_eq!((q2, d::HOLDERS.len() - q2), (9, 13));
     let mut names = std::collections::BTreeSet::new();
@@ -425,7 +426,7 @@ fn holder_rows_are_the_q2_and_g1_members() {
         if template.abi == d::Abi::Driver {
             assert_eq!(template.failures, d::THROWN | d::PROGRAM, "{}", template.name);
         }
-        assert_eq!(template.helpers, template.name.starts_with("okkama.timeout."), "{}", template.name);
+        assert_eq!(!template.helpers.is_empty(), template.name.starts_with("okkama.timeout."), "{}", template.name);
     }
     for family in [d::CHANNEL, d::SENDING, d::RECEIVING, d::FUTURE_GROUP, d::FUTURE_COMPLETIONS] {
         assert!(!d::has_members(family), "{family}: the producer keeps its refusal until the runtime");

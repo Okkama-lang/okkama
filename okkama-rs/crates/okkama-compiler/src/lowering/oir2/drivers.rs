@@ -211,9 +211,15 @@ fn holder_contract(module: &ir::Module, name: &str, row: &catalogue::Template, s
     }).collect();
     let results = signature.results.iter().map(|_| ir::ResultRelation {
         fresh: vec![],
-        aliases: if row.effect == catalogue::Effect::AliasesReceiver { vec![ir::SummarySelection::Parameter(0)] }
-            else { vec![] },
-        external_deps: vec![], opaque: false, provenance: ir::AdmissionProvenance::UnboundResult,
+        // A result that aliases the receiver (`wait`), or a view of its graph (a timeout's origin outcome, opaque:
+        // which member it is, is unknown).
+        aliases: if matches!(row.effect, catalogue::Effect::AliasesReceiver | catalogue::Effect::View) {
+            vec![ir::SummarySelection::Parameter(0)]
+        } else {
+            vec![]
+        },
+        external_deps: vec![], opaque: row.effect == catalogue::Effect::View,
+        provenance: ir::AdmissionProvenance::UnboundResult,
     }).collect();
     let mut failures = mask_failures(row.failures);
     if row.abi == Abi::Driver {

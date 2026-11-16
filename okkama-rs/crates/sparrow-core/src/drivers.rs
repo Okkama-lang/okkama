@@ -907,17 +907,17 @@ fn timeout_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
     let timer = (|| {
         let mut limit = runtime.heap.field(receiver, 1);
         if before {
-            let now = call_function(ctx, runtime, helpers[0], &[clock])?;
+            let now = helper_call(ctx, runtime, frame, helpers[0], &[clock])?;
             runtime.roots.push((now, Repr::Ref));
-            let remaining = call_function(ctx, runtime, helpers[1], &[limit, now]);
+            let remaining = helper_call(ctx, runtime, frame, helpers[1], &[limit, now]);
             runtime.roots.pop();
             limit = remaining?;
         }
         runtime.roots.push((limit, Repr::Ref));
-        let amount = call_function(ctx, runtime, helpers[offset], &[limit]);
+        let amount = helper_call(ctx, runtime, frame, helpers[offset], &[limit]);
         let result = amount.and_then(|amount| {
             if runtime.rational(amount).sign() > 0 {
-                call_function(ctx, runtime, helpers[offset + 1], &[clock, limit]).map(Some)
+                helper_call(ctx, runtime, frame, helpers[offset + 1], &[clock, limit]).map(Some)
             } else {
                 Some(None)
             }
@@ -936,6 +936,17 @@ fn timeout_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
     };
     collection(runtime, frame).entries.push(timer);
     None
+}
+
+/// A helper call of a driver: on Champ through the driver call bridge, which keeps a returned packet in the
+/// driver's inputs (#810, memo §6.4); on Tomato a plain call.
+fn helper_call(ctx: *mut Ctx, runtime: &mut Runtime, frame: Word, function: usize, args: &[Word]) -> Option<Word> {
+    #[cfg(feature = "champ-abi")]
+    if runtime.champ.machine.is_some() {
+        return runtime.champ_driver_call(ctx, frame, function, args);
+    }
+    let _ = frame;
+    call_function(ctx, runtime, function, args)
 }
 
 /// An inert result word for a settled timer stand-in of `function`.

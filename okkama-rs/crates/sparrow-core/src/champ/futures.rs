@@ -228,7 +228,7 @@ impl Runtime {
     }
 
     /// A Champ body frame: a FRAME whose flags carry CHAMP and whose function has a frame map.
-    fn champ_body(&self, frame: Word) -> Result<&FrameMap, Error> {
+    pub(super) fn champ_body(&self, frame: Word) -> Result<&FrameMap, Error> {
         if frame == 0 || frame & 7 != 0 || heap::kind(self.heap.header_of(frame)) != heap::FRAME
             || get(frame, tasks::FLAGS) & CHAMP == 0
         {
