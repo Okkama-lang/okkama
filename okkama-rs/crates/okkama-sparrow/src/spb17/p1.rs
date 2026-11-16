@@ -270,6 +270,8 @@ fn abi_type(ty: &abi::Type, prefix: &str, handles: &BTreeMap<String, u32>) -> Op
                 Type::Float => ArrayLeaf::Float,
                 Type::Str => ArrayLeaf::Str,
                 Type::Bytes => ArrayLeaf::Bytes,
+                // An array of the module's handles (`@JsonNodeState`, #751) is plain data, as a handle is.
+                Type::Handle(id) => ArrayLeaf::Handle(id),
                 Type::Array(shape) => {
                     let depth = shape.depth.checked_add(1)?;
                     return Some(Type::Array(ArrayType { depth, ..shape }));

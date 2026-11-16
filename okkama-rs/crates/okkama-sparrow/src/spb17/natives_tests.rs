@@ -71,6 +71,28 @@ fn table_natives_take_and_return_float_arrays() {
     assert_eq!(contracts.native("runtime/statistics@1::statistics_quantiles/3"), Some(&quantiles));
 }
 
+/// Arrays of a module's handles cross the native bridge as arrays of registry cells (json's parsed nodes, #751):
+/// the trusted entry is the table's, with the handle leaf of the module's handle declaration.
+#[test]
+fn table_natives_take_and_return_handle_arrays() {
+    let json = || vec![object("runtime.json.JsonNodeState", true, vec![]), object("app.Node", true, vec![])];
+    let nodes = |id| Type::Array(ArrayType { leaf: ArrayLeaf::Handle(id), depth: 1 });
+    let items = declaration("runtime/json@1::json_node_items/1", vec![Type::Handle(0)], vec![nodes(0)]);
+    let array = declaration("runtime/json@1::json_array_node/1", vec![nodes(0)], vec![Type::Handle(0)]);
+    let object_node = declaration("runtime/json@1::json_object_node/2",
+        vec![Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 1 }), nodes(0)], vec![Type::Handle(0)]);
+    load(&program(json(), vec![items.clone(), array.clone(), object_node.clone()])).unwrap();
+    let contracts = P1Contracts::new(&json()).unwrap();
+    assert_eq!(contracts.native("runtime/json@1::json_node_items/1"), Some(&items));
+    assert_eq!(contracts.native("runtime/json@1::json_array_node/1"), Some(&array));
+    assert_eq!(contracts.native("runtime/json@1::json_object_node/2"), Some(&object_node));
+    // The leaf is the table's: another module's handles, or a single handle for the array, differ from it.
+    let other = declaration("runtime/json@1::json_node_items/1", vec![Type::Handle(0)], vec![nodes(1)]);
+    assert_eq!(load(&program(json(), vec![other])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+    let single = declaration("runtime/json@1::json_array_node/1", vec![Type::Handle(0)], vec![Type::Handle(0)]);
+    assert_eq!(load(&program(json(), vec![single])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+}
+
 #[test]
 fn a_table_native_cannot_change_its_signature() {
     let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Str], vec![Type::Str]);

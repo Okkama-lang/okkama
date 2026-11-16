@@ -20,6 +20,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Collections of native handles on Champ (#751).** SPB 17 had no array
+  leaf for a native handle and no builder of handles, so OIR-2 code
+  generation stopped on json's parsed nodes (`Array(Handle(_))`,
+  `Builder(Handle(_))`) in seven conformance cases. `ArrayLeaf::Handle(decl)`
+  (wire tag 22) is the new leaf, so arrays, builders and maps of handles
+  translate. A native handle is plain data without an Okkama destroy (P2.4
+  §4.7, #717): its collections are plain and, like a handle, not compared.
+  The loader checks that the leaf names a native handle declaration
+  (`HANDLE_TYPE`), and `test.is` now compares arrays only when `val.eq`
+  would (`TEST_OPERAND`). Table natives over arrays of their module's
+  handles (`json_node_items`, `json_array_node`, `json_object_node`) get
+  their trusted entries. Champ keeps handle elements as references to their
+  registry cells, which the collector traces as it traces a handle field.
+  Six of the cases pass; `L12.malformed-boundary-inputs` stops next on #753.
+
 - **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
   rehomes ran on every function and cloned a dense map of all locations at
   every instruction. Debug builds spent 50 s of a 53 s compile of

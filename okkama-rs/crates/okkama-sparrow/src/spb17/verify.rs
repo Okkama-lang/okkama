@@ -101,6 +101,10 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
             if let Type::Role(id) = element {
                 role_decl(p, id)?;
             }
+            // An array of native handles (#751) names a native handle declaration, as a handle type does.
+            if let Type::Handle(_) = element {
+                ty_valid(element, p)?;
+            }
             // An object with an async destroy is rejected for every use outside P1, arrays included.
             enforce(collection_leaf(p, element), "ARRAY_PLAIN", "array element graph is not closed plain data")?;
         }
@@ -1658,14 +1662,15 @@ fn check_data_types(p: &Program, op: DataOp, types: &[Type], out: Option<Type>, 
             };
             enforce(valid && out == Some(Type::Bool), "TEST_OPERAND",
                 "test operation operand types differ from its check, or its result is not bool")?;
-            // `test.is` compares as `val.eq` does: objects are compared structurally only when closed plain.
+            // `test.is` compares as `val.eq` does: objects and arrays are compared structurally only when they
+            // are closed plain data without native handles (an array of handles has no structural value, #751).
             let compared = match types {
                 [Type::Successor(id), _] => Some(Type::Object(*id)),
-                [ty @ (Type::Object(_) | Type::Variant(_)), _] => Some(*ty),
+                [ty @ (Type::Object(_) | Type::Variant(_) | Type::Array(_)), _] => Some(*ty),
                 _ => None,
             };
             enforce(compared.is_none_or(|ty| comparable(p, ty)), "TEST_OPERAND",
-                "test.is/test.isnt compare objects only when they are closed plain data")
+                "test.is/test.isnt compare objects and arrays only when they are closed plain data")
         }
         RoleNarrow => enforce(matches!((types, out), ([Type::Role(_)], Some(Type::Role(_)))), "ROLE_NARROW",
             "role narrowing converts a role value to another role"),
