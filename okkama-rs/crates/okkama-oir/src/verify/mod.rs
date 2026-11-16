@@ -304,6 +304,7 @@ fn run_mode<'m>(
         low_phases::check(module, function, &mut state);
         low_roots::check(module, function, &mut state);
         coro_flow::check(module, function, &mut state);
+        coro::spawn_freshness(module, function, &mut state);
         later::async_cleanup_and_profiles(module, function, &mut state);
     }
     order_diagnostics(module, &mut state);

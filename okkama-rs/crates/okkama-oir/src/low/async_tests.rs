@@ -52,6 +52,13 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("start-deps"),
     // #733: an async successor action publishes its successor (T5 and B8.2 read the language signature).
     golden!("async-successor"),
+    // #601 P1 (D24): spawn awaited, a spawned task nobody awaits (`d24-detach-at-close`), and a sync owner that
+    // spawns with a Future argument (`d24-sync-owner-running-future`, B7): the task duty settles first.
+    golden!("p1-spawn-awaited"),
+    golden!("p1-spawn-detached"),
+    golden!("p1-sync-owner-spawn"),
+    // #601 P1, C-4: a spawned Future returned through its owner's exit, its task duty with its cache duty.
+    golden!("p1-spawn-returned"),
 ];
 const PLAIN: usize = 0;
 const NEVER: usize = 5;
@@ -158,26 +165,6 @@ fn later_slices_keep_named_rejections() {
     };
     let error = lower_cleanup(module, &LowOptions::default()).unwrap_err();
     assert_eq!(error, LowError::Unsupported { function: risky, message: eligibility::ASYNC_DEFER.into() });
-    // Spawn (slice P1).
-    let mut module = parsed(source);
-    let body = function_mut(&mut module, "main");
-    let (await_block, _) = body.blocks.iter().find(|(_, block)| matches!(&block.term.kind,
-        TermKind::InvokeOwn { op, .. } if matches!(**op, Operation::Async(AsyncOp::Await { .. })))).unwrap();
-    let TermKind::InvokeOwn { op, .. } = &mut body.blocks.get_mut(await_block).unwrap().term.kind else {
-        unreachable!();
-    };
-    let Operation::Async(AsyncOp::Await { future, .. }) = **op else {
-        unreachable!();
-    };
-    let state = body.blocks.get(body.entry).unwrap().params[0];
-    let inst = body.insts.alloc(Instruction {
-        results: vec![], op: Operation::Async(AsyncOp::FutureSpawn { future, state }),
-        facts: InstructionFacts::default(), loc: None,
-    }).unwrap();
-    let entry = body.entry;
-    body.blocks.get_mut(entry).unwrap().insts.push(inst);
-    let error = lower_cleanup(module, &LowOptions::default()).unwrap_err();
-    assert!(matches!(&error, LowError::Unsupported { message, .. } if message.contains("P1")), "{error:?}");
 }
 
 /// B10.4, D21 §3.3: the root map of a suspension site survives the suspension.

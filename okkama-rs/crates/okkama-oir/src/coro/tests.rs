@@ -55,6 +55,12 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("start-deps"),
     // #733: an async successor action publishes its successor (T5 and B8.2 read the language signature).
     golden!("async-successor"),
+    // #601 P1 (D24.1): spawn forwards the cache duty and adds the task duty, which settles first (§6.3).
+    golden!("p1-spawn-awaited"),
+    golden!("p1-spawn-detached"),
+    golden!("p1-sync-owner-spawn"),
+    // C-4: a returned spawned Future's rehome takes its task duty with its cache duty (token form, `task`).
+    golden!("p1-spawn-returned"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).

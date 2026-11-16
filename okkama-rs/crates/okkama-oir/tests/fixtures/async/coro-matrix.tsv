@@ -8,3 +8,5 @@ coro-unbracketed-suspend	coro/coro-nested-cold-await.oir	audit-invalid/hide-toke
 coro-slot-overlap	audit-valid/slot-ok.oir	audit-invalid/slot-overlap.oir
 async-unmodeled-op	coro/coro-nested-cold-await.oir	audit-invalid/c4b.oir
 coro-missing-layout	../verify/valid/B9-unique-temporary-take.oir	coro-invalid/coro-missing-layout.oir
+d24-spawn-not-fresh	coro/p1-spawn-awaited.oir	coro-invalid/d24-spawn-not-fresh.oir
+d24-schedule-task-first	coro/p1-spawn-awaited.oir	coro-invalid/d24-schedule-task-first.oir

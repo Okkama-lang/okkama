@@ -7,11 +7,20 @@ use super::{Budget, CoroError};
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The owner's cache duty of one Future (C-1).
+/// The owner's cache duty of one Future (C-1) and, for a spawned Future, its task duty (D24.1). `token` is the
+/// cache duty as the spawn forwards it; the task duty settles first (D24.2, §6.3).
 struct Duty {
     future: ValueId,
     token: ValueId,
     scope: ScopeId,
+    task: Option<ValueId>,
+}
+
+impl Duty {
+    /// The duty tokens in schedule order: the task before the cache (§6.3).
+    fn tokens(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.task.into_iter().chain([self.token])
+    }
 }
 
 /// The Services schedule that own declared for one owner (D16). Own names each duty by its Future;
@@ -117,8 +126,9 @@ impl Lowering<'_, '_> {
         } else {
             self.schedules(&schedules, &duties, &closes, &BTreeMap::new(), &rehomed)?;
         }
-        if !rehomed.is_empty() {
-            // The state results of the rewritten rehomes have no definition left.
+        let spawned = duties.iter().any(|duty| duty.task.is_some());
+        if !rehomed.is_empty() || spawned {
+            // The state results of the rewritten rehomes and spawns have no definition left.
             crate::low::compact::compact_body(&mut self.body).map_err(|message| self.invalid(&message))?;
         }
         Ok(())
@@ -247,8 +257,9 @@ impl Lowering<'_, '_> {
                 let index = u16::try_from(index).map_err(|_| CoroError::LimitExceeded("results"))?;
                 self.body.values.get_mut(*value)?.def = Definition::InstResult { inst, index };
             }
-            duties.push(Duty { future: results[0], token, scope: owner });
+            duties.push(Duty { future: results[0], token, scope: owner, task: None });
         }
+        self.spawns(&mut duties)?;
         let mut ordered = Vec::with_capacity(duties.len());
         for schedule in schedules {
             for future in &schedule.futures {
@@ -261,6 +272,40 @@ impl Lowering<'_, '_> {
             return Err(self.invalid("a cache duty has no entry in a Services schedule of its owner (D16)"));
         }
         Ok(ordered)
+    }
+
+    /// D24.1: own's `%q1 = fut.spawn %f, state %q0` forwards the owner state; coro's form takes the cache duty of the
+    /// Future's `fut.new` and gives it back with a new task-state, `(%c1, %task) = fut.spawn %f, state %c0`. The
+    /// state passes through, so its later uses read the state the spawn no longer consumes.
+    fn spawns(&mut self, duties: &mut [Duty]) -> Result<(), CoroError> {
+        let insts: Vec<_> = self.body.blocks.iter().flat_map(|(_, block)| block.insts.clone()).collect();
+        for inst in insts {
+            self.budget.step(1)?;
+            let Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state) }) = self.body.insts.get(inst)?.op
+            else {
+                continue;
+            };
+            let duty = duties.iter_mut().find(|duty| duty.future == future)
+                .ok_or_else(|| self.invalid("fut.spawn of a Future without a fut.new here (d24-spawn-not-fresh)"))?;
+            if duty.task.is_some() {
+                return Err(self.invalid("a Future is spawned twice"));
+            }
+            let results = self.body.insts.get(inst)?.results.clone();
+            let [moved] = results[..] else {
+                return Err(self.invalid("the own form of fut.spawn gives the owner state"));
+            };
+            let cache_ty = self.intern(Type::Service(ServiceType::CacheState))?;
+            let task_ty = self.intern(Type::Service(ServiceType::TaskState))?;
+            let cache = self.value(cache_ty, Definition::InstResult { inst, index: 0 }, ValueFacts::Service)?;
+            let task = self.value(task_ty, Definition::InstResult { inst, index: 1 }, ValueFacts::Service)?;
+            let instruction = self.body.insts.get_mut(inst)?;
+            instruction.op = Operation::Async(AsyncOp::FutureSpawn { future, state: Some(duty.token) });
+            instruction.results = vec![cache, task];
+            visit::rewrite_uses(&mut self.body, &mut repair::Replace::single(moved, state));
+            duty.token = cache;
+            duty.task = Some(task);
+        }
+        Ok(())
     }
 
     /// C-1, C-4: own's rehome of a Future created here moves its cache duty from the owner state; in coro the duty
@@ -294,13 +339,15 @@ impl Lowering<'_, '_> {
             };
             let instruction = self.body.insts.get_mut(inst)?;
             instruction.op = Operation::Async(AsyncOp::CacheRehome {
-                form: RehomeForm::Token { pending, cache: duty.token, task: None }, target, protocol,
+                form: RehomeForm::Token { pending, cache: duty.token, task: duty.task }, target, protocol,
             });
             instruction.results = vec![reserve];
             self.body.values.get_mut(reserve)?.def = Definition::InstResult { inst, index: 0 };
             // The state's other uses read the state the rehome no longer consumes.
             visit::rewrite_uses(&mut self.body, &mut repair::Replace::single(moved, state));
-            rehomed.entry(duty.token).or_default().push(inst);
+            for token in duty.tokens() {
+                rehomed.entry(token).or_default().push(inst);
+            }
         }
         Ok(rehomed)
     }
@@ -785,25 +832,25 @@ impl Lowering<'_, '_> {
         }
         let predecessors = graph::predecessors(&self.body);
         let mut closes: BTreeMap<Site, Vec<ValueId>> = BTreeMap::new();
-        for duty in duties {
-            let kills = rehomed.get(&duty.token).cloned().unwrap_or_default();
-            let (must, may) = self.available(duty.token, &kills, &predecessors)?;
-            for &(site, block, position, scope) in &sites {
-                if scope != duty.scope {
+        for (token, scope) in duties.iter().flat_map(|duty| duty.tokens().map(|token| (token, duty.scope))) {
+            let kills = rehomed.get(&token).cloned().unwrap_or_default();
+            let (must, may) = self.available(token, &kills, &predecessors)?;
+            for &(site, block, position, closed) in &sites {
+                if closed != scope {
                     continue;
                 }
                 let index = block.as_u32() as usize;
                 // The duty's last event in the block before the close, else its state at the block entry.
                 let mut here = (must[index], may[index]);
                 for &inst in &self.body.blocks.get(block)?.insts[..position] {
-                    if self.body.insts.get(inst)?.results.contains(&duty.token) {
+                    if self.body.insts.get(inst)?.results.contains(&token) {
                         here = (true, true);
                     } else if kills.contains(&inst) {
                         here = (false, false);
                     }
                 }
                 match here {
-                    (true, _) => closes.entry(site).or_default().push(duty.token),
+                    (true, _) => closes.entry(site).or_default().push(token),
                     (false, true) => {
                         return Err(self.unsupported("a cache duty that reaches its owner's close on some paths only"));
                     }
@@ -1075,7 +1122,7 @@ impl Lowering<'_, '_> {
     ) -> Result<(), CoroError> {
         for schedule in own {
             let tokens: Vec<ValueId> = duties.iter().filter(|duty| duty.scope == schedule.owner)
-                .map(|duty| duty.token).collect();
+                .flat_map(Duty::tokens).collect();
             let mut versions: Vec<Vec<ScheduleDuty>> = Vec::new();
             for (site, settled) in closes {
                 self.budget.step(settled.len() + 1)?;
