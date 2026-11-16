@@ -1400,6 +1400,94 @@ fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
     assert!(runtime.heap.stats().collections > 0);
 }
 
+/// #826: machine code's `array.get` reads every persistent form Tomato's operations make: a flat array in place,
+/// a view of a shared buffer (an append chain, #246) or of a flat array (a slice, #249) from its first element, and
+/// a trie (#250) through `trie_get`, also after reads flatten it. An index outside the version fails, though the
+/// buffer behind a view holds more.
+#[test]
+fn champ_array_get_reads_views_slices_and_tries() {
+    let ints = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 1 });
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "get".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![ints, s::Type::Int, s::Type::Int, s::Type::Failure],
+        services: vec![], params: vec![reg(0), reg(1)], results: vec![s::Type::Int],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0), reg(1)] },
+            s::Block { pc: 1, params: vec![reg(2)] },
+            s::Block { pc: 2, params: vec![reg(3)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Champ { op: O::ArrayGet,
+                arguments: vec![A::Location(reg(0)), A::Location(reg(1))],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 1, assignments: vec![s::Assignment {
+                            destination: reg(2), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 2, assignments: vec![s::Assignment {
+                            destination: reg(3), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]) },
+            s::Instruction::Ret(vec![2]),
+            s::Instruction::Raise(3),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    let repr = machine::repr(s::Type::Int);
+    let words = |runtime: &mut Runtime, values: std::ops::Range<i64>| -> Vec<Word> {
+        values.map(|value| runtime.heap.int(value)).collect()
+    };
+    // A flat array, a view at the end of an append chain, a slice of the flat array and a trie.
+    let items = words(&mut runtime, 0..100);
+    let flat = runtime.heap.allocate_array(repr, &items);
+    let mut chain = runtime.heap.allocate_array(repr, &items[..crate::heap::CHAIN_MIN]);
+    for &item in &items[crate::heap::CHAIN_MIN..] {
+        let one = runtime.heap.allocate_array(repr, &[item]);
+        chain = crate::ops::concat_arrays(&mut runtime, repr, false, &[chain, one]);
+    }
+    let start = runtime.heap.int(20);
+    let end = runtime.heap.int(90);
+    let slice = crate::ops::slice_array(&mut runtime, flat, start, end).unwrap();
+    let trie = runtime.heap.trie_from(repr, &items);
+    for (array, values, header) in [(flat, 0..100, 0), (chain, 0..100, crate::heap::SHARED),
+        (slice, 20..90, crate::heap::SHARED), (trie, 0..100, crate::heap::TRIE)]
+    {
+        assert_eq!(runtime.heap.header_of(array) & (crate::heap::SHARED | crate::heap::TRIE), header);
+        let length = values.end - values.start;
+        // Two rounds, so that a trie read often enough flattens itself between them.
+        for _ in 0..2 {
+            for (index, expected) in values.clone().enumerate() {
+                ctx.status = OK;
+                ctx.failure = 0;
+                let index_word = runtime.heap.int(index as i64);
+                let value = unsafe { invoke(code, &mut ctx, &[array, index_word]) };
+                assert_eq!((ctx.status, runtime.small_or_big(value).unwrap()), (OK, expected));
+            }
+        }
+        ctx.status = OK;
+        ctx.failure = 0;
+        let outside = runtime.heap.int(length);
+        unsafe { invoke(code, &mut ctx, &[array, outside]) };
+        assert_eq!(ctx.status, FAILED);
+        let failure = runtime.failure(ctx.failure).unwrap();
+        assert!(matches!(&failure.kind, FailureKind::Program(message) if message == "Array index out of bounds"));
+    }
+}
+
 /// S1 data form: `left op right`, then a use of the result that would misread a failed helper's zero.
 fn s1_fallible(op: s::DataOp, result: s::Type, immediate: s::Immediate, use_op: s::DataOp) -> s::Function {
     let reg = L::Register;

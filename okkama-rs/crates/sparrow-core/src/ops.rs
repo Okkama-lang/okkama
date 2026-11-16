@@ -627,6 +627,116 @@ fn prepend_shared(runtime: &mut Runtime, repr: Repr, words: &[Word], size: usize
     Some(runtime.heap.allocate_view(repr, buffer, room, size))
 }
 
+/// `a + b + …` on arrays, for Tomato and Champ (#826): a chain of appends
+/// (#246) or prepends (#247) writes into a shared buffer; anything else is
+/// copied flat once, for the sum of the parts' lengths, and marked so that
+/// the next append or prepend to a long result starts a chain. A byte array
+/// (`bytes`, `@byte`) is packed and always copied.
+pub(crate) fn concat_arrays(runtime: &mut Runtime, repr: Repr, bytes: bool, words: &[Word]) -> Word {
+    let size: usize = words.iter().map(|&w| crate::heap::payload(runtime.heap.header_of(w)) as usize).sum();
+    if bytes {
+        let mut packed = Vec::with_capacity(size);
+        for &w in words {
+            packed.extend_from_slice(&runtime.heap.byte_view(w));
+        }
+        return runtime.heap.allocate_bytes(&packed);
+    }
+    if let Some(array) = append_shared(runtime, repr, words, size) {
+        return array;
+    }
+    if let Some(array) = prepend_shared(runtime, repr, words, size) {
+        return array;
+    }
+    let mut items = Vec::with_capacity(size);
+    for &w in words {
+        items.extend_from_slice(&runtime.heap.elements(w));
+    }
+    let array = runtime.heap.allocate_array(repr, &items);
+    if shared_arrays() && words.len() > 1 {
+        let first = crate::heap::payload(runtime.heap.header_of(words[0])) as usize;
+        let last = crate::heap::payload(runtime.heap.header_of(words[words.len() - 1])) as usize;
+        if first < crate::heap::CHAIN_MIN && last >= crate::heap::CHAIN_MIN {
+            runtime.heap.mark(array, crate::heap::PREPENDED);
+        }
+        if first >= crate::heap::CHAIN_MIN {
+            runtime.heap.mark_appended(array);
+        }
+    }
+    array
+}
+
+/// `array.slice(start, end)` (and `take`, `drop`), for Tomato and Champ: a
+/// view of the origin's storage when it keeps at least half of it (#249),
+/// else a copy of the range.
+pub(crate) fn slice_array(runtime: &mut Runtime, array: Word, start: Word, end: Word) -> Result<Word, String> {
+    let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
+    let range = slice_bounds(runtime, length, start, end)?;
+    if runtime.heap.is_bytes(array) {
+        let bytes = runtime.heap.bytes(array)[range].to_vec();
+        return Ok(runtime.heap.allocate_bytes(&bytes));
+    }
+    let repr = element_repr(runtime, array);
+    if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
+        return Ok(view);
+    }
+    let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
+    Ok(runtime.heap.allocate_array(repr, &items))
+}
+
+/// The position `index` inside `array`, or `array.get`'s failure.
+fn position_inside(runtime: &Runtime, array: Word, index: Word) -> Result<usize, String> {
+    let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
+    word::small_value(index)
+        .and_then(|i| usize::try_from(i).ok())
+        .filter(|&i| i < length)
+        .ok_or_else(|| "Array index out of bounds".to_string())
+}
+
+/// `array.removed(index)`, for Tomato and Champ: a copy without one element
+/// (#251); `array.get`'s bounds.
+pub(crate) fn remove_at(runtime: &mut Runtime, array: Word, index: Word) -> Result<Word, String> {
+    let at = position_inside(runtime, array, index)?;
+    if runtime.heap.is_bytes(array) {
+        let mut bytes = runtime.heap.bytes(array).to_vec();
+        bytes.remove(at);
+        return Ok(runtime.heap.allocate_bytes(&bytes));
+    }
+    let repr = element_repr(runtime, array);
+    let mut items = runtime.heap.elements(array).into_owned();
+    items.remove(at);
+    Ok(runtime.heap.allocate_array(repr, &items))
+}
+
+/// `array.replaced(index, item)`, for Tomato and Champ: a copy with one
+/// element replaced; a chain of replacements in a large array becomes a
+/// trie, which copies one path per replacement instead of the array (#250).
+/// `array.get`'s bounds.
+pub(crate) fn replace_at(runtime: &mut Runtime, array: Word, index: Word, item: Word) -> Result<Word, String> {
+    let at = position_inside(runtime, array, index)?;
+    if runtime.heap.is_bytes(array) {
+        let mut bytes = runtime.heap.bytes(array).to_vec();
+        bytes[at] = item as u8;
+        return Ok(runtime.heap.allocate_bytes(&bytes));
+    }
+    let repr = element_repr(runtime, array);
+    let header = runtime.heap.header_of(array);
+    if trie_arrays() && header & crate::heap::TRIE != 0 {
+        return Ok(runtime.heap.trie_set(array, at, item));
+    }
+    let mut items = runtime.heap.elements(array).into_owned();
+    items[at] = item;
+    let length = items.len();
+    if trie_arrays() && length >= crate::heap::TRIE_MIN {
+        if header & crate::heap::REPLACED != 0 {
+            return Ok(runtime.heap.trie_from(repr, &items));
+        }
+        let copy = runtime.heap.allocate_array(repr, &items);
+        runtime.heap.mark(copy, crate::heap::REPLACED);
+        return Ok(copy);
+    }
+    Ok(runtime.heap.allocate_array(repr, &items))
+}
+
 // ---- structural equality ----
 
 /// A new array for register `dst` of `function`: byte arrays (`@byte`) are
@@ -1227,72 +1337,9 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
             let boxed = AnyBox { value: value(source), ty, repr };
             Ok(runtime.heap.allocate_payload(Box::new(boxed)))
         }
-        I::ArraySlice { array, start, end, .. } => {
-            let array = value(array);
-            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
-            let range = slice_bounds(runtime, length, value(start), value(end))?;
-            // Copy only the range.
-            if runtime.heap.is_bytes(array) {
-                let bytes = runtime.heap.bytes(array)[range].to_vec();
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = element_repr(runtime, array);
-            if let Some(view) = slice_shared(runtime, array, repr, range.clone()) {
-                return Ok(view);
-            }
-            let items: Vec<Word> = runtime.heap.elements(array)[range].to_vec();
-            Ok(runtime.heap.allocate_array(repr, &items))
-        }
-        I::ArrayRemove { array, index, .. } => {
-            // A copy without one element (#251); `arr.get`'s bounds.
-            let (array, index) = (value(array), value(index));
-            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
-            let at = word::small_value(index)
-                .and_then(|i| usize::try_from(i).ok())
-                .filter(|&i| i < length)
-                .ok_or_else(|| "Array index out of bounds".to_string())?;
-            if runtime.heap.is_bytes(array) {
-                let mut bytes = runtime.heap.bytes(array).to_vec();
-                bytes.remove(at);
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = element_repr(runtime, array);
-            let mut items = runtime.heap.elements(array).into_owned();
-            items.remove(at);
-            Ok(runtime.heap.allocate_array(repr, &items))
-        }
-        I::ArrayReplace { array, index, value: item, .. } => {
-            // A copy with one element replaced (#250); `arr.get`'s bounds.
-            let (array, index, item) = (value(array), value(index), value(item));
-            let length = crate::heap::payload(runtime.heap.header_of(array)) as usize;
-            let at = word::small_value(index)
-                .and_then(|i| usize::try_from(i).ok())
-                .filter(|&i| i < length)
-                .ok_or_else(|| "Array index out of bounds".to_string())?;
-            if runtime.heap.is_bytes(array) {
-                let mut bytes = runtime.heap.bytes(array).to_vec();
-                bytes[at] = item as u8;
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = element_repr(runtime, array);
-            let header = runtime.heap.header_of(array);
-            // A chain of replacements in a large array becomes a trie, which
-            // copies one path per replacement instead of the array (#250).
-            if trie_arrays() && header & crate::heap::TRIE != 0 {
-                return Ok(runtime.heap.trie_set(array, at, item));
-            }
-            let mut items = runtime.heap.elements(array).into_owned();
-            items[at] = item;
-            if trie_arrays() && length >= crate::heap::TRIE_MIN {
-                if header & crate::heap::REPLACED != 0 {
-                    return Ok(runtime.heap.trie_from(repr, &items));
-                }
-                let copy = runtime.heap.allocate_array(repr, &items);
-                runtime.heap.mark(copy, crate::heap::REPLACED);
-                return Ok(copy);
-            }
-            Ok(runtime.heap.allocate_array(repr, &items))
-        }
+        I::ArraySlice { array, start, end, .. } => slice_array(runtime, value(array), value(start), value(end)),
+        I::ArrayRemove { array, index, .. } => remove_at(runtime, value(array), value(index)),
+        I::ArrayReplace { array, index, value: item, .. } => replace_at(runtime, value(array), value(index), value(item)),
         I::ArrayJoin { array, separator, .. } => runtime
             .heap
             .allocate_join(value(array), value(separator))
@@ -1393,36 +1440,8 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 Some(Type::Array(element)) => *element,
                 _ => return Err("arr.concat needs an array type".into()),
             };
-            // The result is allocated once, for the sum of the parts' lengths.
-            let size: usize = words.iter().map(|&w| crate::heap::payload(runtime.heap.header_of(w)) as usize).sum();
-            if runtime.kind_of(element) == Kind::Byte {
-                let mut bytes = Vec::with_capacity(size);
-                for &w in &words {
-                    bytes.extend_from_slice(&runtime.heap.byte_view(w));
-                }
-                return Ok(runtime.heap.allocate_bytes(&bytes));
-            }
-            let repr = runtime.kind_of(element).repr();
-            if let Some(array) = append_shared(runtime, repr, &words, size) {
-                return Ok(array);
-            }
-            if let Some(array) = prepend_shared(runtime, repr, &words, size) {
-                return Ok(array);
-            }
-            let mut items = Vec::with_capacity(size);
-            for &w in &words {
-                items.extend_from_slice(&runtime.heap.elements(w));
-            }
-            let array = new_array(runtime, function, dst.0, repr, &items);
-            let first = crate::heap::payload(runtime.heap.header_of(words[0])) as usize;
-            let last = crate::heap::payload(runtime.heap.header_of(words[words.len() - 1])) as usize;
-            if shared_arrays() && words.len() > 1 && first < crate::heap::CHAIN_MIN && last >= crate::heap::CHAIN_MIN {
-                runtime.heap.mark(array, crate::heap::PREPENDED);
-            }
-            if shared_arrays() && words.len() > 1 && first >= crate::heap::CHAIN_MIN {
-                runtime.heap.mark_appended(array);
-            }
-            Ok(array)
+            let kind = runtime.kind_of(element);
+            Ok(concat_arrays(runtime, kind.repr(), kind == Kind::Byte, &words))
         }
         I::ArrayDiff { dst, array, removed } => {
             let element = match runtime.ty(function, dst.0) {

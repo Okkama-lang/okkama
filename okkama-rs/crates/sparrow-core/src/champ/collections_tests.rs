@@ -250,3 +250,134 @@ fn handle_collections_keep_their_registry_cells() {
     runtime.heap.collect(|_| {});
     assert_eq!(runtime.heap.take_released(), vec![third]);
 }
+
+fn ints_array(runtime: &mut Runtime, program: &s::Program, values: std::ops::Range<i64>) -> Word {
+    let words: Vec<Word> = values.map(|value| int(runtime, value)).collect();
+    collection(runtime, program, s::DataOp::ArrayNew, &vec![s::Type::Int; words.len()], INTS, &words).unwrap()
+}
+
+fn concat(runtime: &mut Runtime, program: &s::Program, left: Word, right: Word) -> Word {
+    collection(runtime, program, s::DataOp::ArrayConcat, &[INTS, INTS], INTS, &[left, right]).unwrap()
+}
+
+/// #826: a chain of appends continues in a shared buffer, as on Tomato (#246): from the second append to a long
+/// array every version is a view, and an append at the buffer's frontier writes in place, so 168 appends take two
+/// buffers (capacities 128 and 512). Every version keeps its elements; an append to an older version, which does
+/// not end at the frontier, copies into a buffer of its own.
+#[test]
+fn appends_continue_in_a_shared_buffer_and_keep_every_version() {
+    use crate::heap::{CHAIN_MIN, SHARED};
+    let (mut runtime, program) = runtime();
+    let mut versions = vec![ints_array(&mut runtime, &program, 0..CHAIN_MIN as i64)];
+    for value in CHAIN_MIN as i64..200 {
+        let item = ints_array(&mut runtime, &program, value..value + 1);
+        let next = concat(&mut runtime, &program, *versions.last().unwrap(), item);
+        versions.push(next);
+    }
+    let mut buffers = std::collections::HashSet::new();
+    for &version in &versions[2..] {
+        assert_ne!(runtime.heap.header_of(version) & SHARED, 0, "a version of the chain is a view");
+        buffers.insert(runtime.heap.shared(version).0);
+    }
+    assert_eq!(buffers.len(), 2);
+    for (index, &version) in versions.iter().enumerate() {
+        assert_eq!(ints(&runtime, version), (0..CHAIN_MIN as i64 + index as i64).collect::<Vec<_>>());
+    }
+    let item = ints_array(&mut runtime, &program, 999..1000);
+    let branch = concat(&mut runtime, &program, versions[50], item);
+    let mut expected: Vec<i64> = (0..CHAIN_MIN as i64 + 50).collect();
+    expected.push(999);
+    assert_eq!(ints(&runtime, branch), expected);
+    assert!(!buffers.contains(&runtime.heap.shared(branch).0), "a branch writes into a buffer of its own");
+    assert_eq!(ints(&runtime, versions[51]), (0..CHAIN_MIN as i64 + 51).collect::<Vec<_>>());
+}
+
+/// #826: a chain of prepends (`[x] + items`, #247) continues in a shared buffer with room in front.
+#[test]
+fn prepends_continue_in_a_shared_buffer() {
+    use crate::heap::{CHAIN_MIN, PREPENDED, SHARED};
+    let (mut runtime, program) = runtime();
+    let mut version = ints_array(&mut runtime, &program, 0..CHAIN_MIN as i64);
+    let mut buffers = std::collections::HashSet::new();
+    for value in 1..=100 {
+        let item = ints_array(&mut runtime, &program, -value..-value + 1);
+        version = concat(&mut runtime, &program, item, version);
+        let header = runtime.heap.header_of(version);
+        if value == 1 {
+            assert_ne!(header & PREPENDED, 0, "the first prepend to a long array starts a chain");
+        } else {
+            assert_ne!(header & SHARED, 0, "a later version of the chain is a view");
+            buffers.insert(runtime.heap.shared(version).0);
+        }
+    }
+    assert!(buffers.len() <= 2, "{} buffers for 99 prepends", buffers.len());
+    assert_eq!(ints(&runtime, version), (-100..CHAIN_MIN as i64).collect::<Vec<_>>());
+}
+
+/// #826: building an array by appends allocates linearly, not quadratically: 10⁴ one-element appends to a growing
+/// array allocate well under the 400 MB a copy per append would take.
+#[test]
+fn appending_in_a_loop_allocates_linearly() {
+    let (mut runtime, program) = runtime();
+    let mut array = ints_array(&mut runtime, &program, 0..0);
+    let before = runtime.heap.stats().allocated_bytes;
+    for value in 0..10_000 {
+        let item = ints_array(&mut runtime, &program, value..value + 1);
+        array = concat(&mut runtime, &program, array, item);
+    }
+    let spent = runtime.heap.stats().allocated_bytes - before;
+    assert!(spent < 2_000_000, "{spent} bytes for 10⁴ appends");
+    assert_eq!(ints(&runtime, array), (0..10_000).collect::<Vec<_>>());
+}
+
+/// #826: a chain of replacements in a large array becomes a trie (#250): the first replacement copies and marks
+/// the copy, the next ones build and update a trie. Every version keeps its elements.
+#[test]
+fn replacements_in_a_large_array_become_a_trie() {
+    use crate::heap::{REPLACED, TRIE, TRIE_MIN};
+    let (mut runtime, program) = runtime();
+    let original = ints_array(&mut runtime, &program, 0..TRIE_MIN as i64);
+    let replace = |runtime: &mut Runtime, array: Word, at: i64, value: i64| {
+        let (at, value) = (int(runtime, at), int(runtime, value));
+        collection(runtime, &program, s::DataOp::ArrayReplace, &[INTS, s::Type::Int, s::Type::Int], INTS,
+            &[array, at, value]).unwrap()
+    };
+    let first = replace(&mut runtime, original, 0, 100);
+    assert_ne!(runtime.heap.header_of(first) & REPLACED, 0);
+    assert_eq!(runtime.heap.header_of(first) & TRIE, 0);
+    let second = replace(&mut runtime, first, 1, 101);
+    let third = replace(&mut runtime, second, 63, 163);
+    assert_ne!(runtime.heap.header_of(second) & TRIE, 0);
+    assert_ne!(runtime.heap.header_of(third) & TRIE, 0);
+    let with = |changes: &[(usize, i64)]| {
+        let mut values: Vec<i64> = (0..TRIE_MIN as i64).collect();
+        for &(at, value) in changes {
+            values[at] = value;
+        }
+        values
+    };
+    assert_eq!(ints(&runtime, original), with(&[]));
+    assert_eq!(ints(&runtime, first), with(&[(0, 100)]));
+    assert_eq!(ints(&runtime, second), with(&[(0, 100), (1, 101)]));
+    assert_eq!(ints(&runtime, third), with(&[(0, 100), (1, 101), (63, 163)]));
+}
+
+/// #826: a slice that keeps at least half of its origin shares the origin's storage (#249); a short one copies.
+#[test]
+fn a_large_slice_is_a_view_and_a_short_one_a_copy() {
+    use crate::heap::SHARED;
+    let (mut runtime, program) = runtime();
+    let array = ints_array(&mut runtime, &program, 0..64);
+    let slice = |runtime: &mut Runtime, start: i64, end: i64| {
+        let (start, end) = (int(runtime, start), int(runtime, end));
+        collection(runtime, &program, s::DataOp::ArraySlice, &[INTS, s::Type::Int, s::Type::Int], INTS,
+            &[array, start, end]).unwrap()
+    };
+    let large = slice(&mut runtime, 10, 50);
+    assert_ne!(runtime.heap.header_of(large) & SHARED, 0);
+    assert_eq!(runtime.heap.shared(large), (array, 10));
+    assert_eq!(ints(&runtime, large), (10..50).collect::<Vec<_>>());
+    let short = slice(&mut runtime, 1, 4);
+    assert_eq!(runtime.heap.header_of(short) & SHARED, 0);
+    assert_eq!(ints(&runtime, short), vec![1, 2, 3]);
+}

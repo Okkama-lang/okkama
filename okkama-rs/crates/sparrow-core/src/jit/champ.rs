@@ -235,6 +235,37 @@ impl Emit<'_, '_> {
         self.builder.ins().store(MEMORY, value, pointer, offset as i32);
     }
 
+    /// Element `position` (in bounds) of a word array whose header is `header`, as Tomato's machine code reads
+    /// it (#826): one branch on two header bits keeps a flat array on the plain load; a view (`heap::SHARED`,
+    /// #246, #249) reads from the address of its first element, one load more; a trie (`heap::TRIE`, #250)
+    /// calls `trie_get`.
+    fn element(&mut self, array: Value, header: Value, position: Value) -> Value {
+        let special = self.builder.ins().band_imm_u(header, (crate::heap::SHARED | crate::heap::TRIE) as i64);
+        let (flat, other, view, trie, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(special, other, &[], flat, &[]);
+        self.builder.switch_to_block(flat);
+        let offset = self.builder.ins().ishl_imm_u(position, 3);
+        let address = self.builder.ins().iadd(array, offset);
+        let value = self.load(address, 8);
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(other);
+        let shared = self.builder.ins().band_imm_u(header, crate::heap::SHARED as i64);
+        self.builder.ins().brif(shared, view, &[], trie, &[]);
+        self.builder.switch_to_block(view);
+        let first = self.load(array, 8);
+        let offset = self.builder.ins().ishl_imm_u(position, 3);
+        let address = self.builder.ins().iadd(first, offset);
+        let value = self.load(address, 0);
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(trie);
+        let value = self.call("trie_get", &[self.ctx, array, position]).expect("trie_get returns the element");
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
     fn offset(&self, location: L) -> usize {
         self.frame.offsets[self.frame.allocation.locations[&location] as usize] as usize
     }
@@ -680,9 +711,7 @@ impl Emit<'_, '_> {
                     let pointer = self.builder.ins().iadd(array, position);
                     self.builder.ins().uload8(types::I64, MEMORY, pointer, 8)
                 } else {
-                    let offset = self.builder.ins().ishl_imm_u(position, 3);
-                    let pointer = self.builder.ins().iadd(array, offset);
-                    self.load(pointer, 8)
+                    self.element(array, header, position)
                 };
                 self.edge(&outcomes[0].edge, &[vec![value]]);
                 self.builder.switch_to_block(outside);
