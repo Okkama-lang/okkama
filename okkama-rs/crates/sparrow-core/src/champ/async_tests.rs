@@ -1076,7 +1076,7 @@ impl Activation {
                     Location::Service(id) => id as usize,
                     Location::Register(_) => usize::MAX,
                 }) == Some(&K::ScopeState);
-                if let ([_, state, future], true) = (operands[..], state_form) {
+                if let (&[_, state, future], true) = (&operands[..], state_form) {
                     // The state form takes the entry the scope admitted (ABI D25.3).
                     let mut source = ScopeSlot { record: self.word(state) };
                     let future = self.word(future);

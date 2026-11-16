@@ -15,7 +15,10 @@ use tasks::champ_flags::{CANCEL_REQUESTED, OBSERVED, SPAWNED};
 const SPAWNS_WORK: u32 = 2;
 const SPAWNS_FAILS: u32 = 3;
 const AWAITS_SPAWNED: u32 = 4;
-const ASYNC_P1: u32 = 5;
+const RETURNS_SPAWNED: u32 = 5;
+const ASYNC_P1: u32 = 6;
+/// `Future<Future<int>>`, the Future of `returns_spawned`.
+const FUTURE_OF_FUTURE: s::Type = s::Type::Future(2);
 
 /// Slots of a spawner: 0 inputs, 1 owner state, 2 cache duty, 3 task duty, 4 the Future, 5–7 the unwind.
 fn spawner_slots() -> Vec<s::FrameSlot> {
@@ -58,11 +61,45 @@ fn spawner(symbol: &str, index: u32, entry: u32, awaits: bool) -> (s::Function, 
     (b.finish(), layout)
 }
 
+/// `async returns_spawned() is Future<int> { return spawn work(7); }`: the spawned Future leaves through the exit
+/// with its task duty and its cache duty (token `cache.rehome` with the task, ABI C-4), so the close settles none.
+fn returns_spawned() -> (s::Function, s::FrameLayout) {
+    let slots = spawner_slots();
+    let index = RETURNS_SPAWNED;
+    let (mut b, frame) = Body::asynchronous("returns_spawned", index, vec![FUTURE_INT]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(index), A::Boundary(index)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let seven = b.constant(s::Constant::Int("7".into()), s::Type::Int);
+    let (future, cache, q2) = future_new(&mut b, index, WORK, &[seven], q1);
+    let [kept, task] = [b.service(K::CacheState), b.service(K::TaskState)];
+    b.next(O::FutureSpawn, vec![l(future), l(cache)], vec![kept, task]);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let prepared = b.emit(O::ExitPrepare, vec![A::Kind(s::ExitKind::Return), A::Boundary(index), l(future), l(empty),
+        A::Selection(selection)], K::Pending);
+    let pending = b.emit(O::CacheRehome, vec![A::Destination(s::ExitDestination::Caller), l(prepared), l(kept),
+        l(task)], K::Pending);
+    let finished = b.close(q2, Some(pending), None, index, &[], false);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let outputs = vec![b.register(FUTURE_INT), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(s::ExitDestination::Caller)], outputs.clone());
+    let mut published = vec![l(body), A::Flag(true)];
+    published.extend(outputs.into_iter().map(l));
+    b.next(O::FuturePublish, published, vec![]);
+    b.ret();
+    let layout = b.layout(slots, vec![(vec![0], vec![])]);
+    (b.finish(), layout)
+}
+
 fn p1_program() -> s::Program {
     let mut functions = Vec::new();
     let mut frames = Vec::new();
     for (function, layout) in [work(), fails(), spawner("spawns_work", SPAWNS_WORK, WORK, false),
-        spawner("spawns_fails", SPAWNS_FAILS, FAILS, false), spawner("awaits_spawned", AWAITS_SPAWNED, WORK, true)]
+        spawner("spawns_fails", SPAWNS_FAILS, FAILS, false), spawner("awaits_spawned", AWAITS_SPAWNED, WORK, true),
+        returns_spawned()]
     {
         functions.push(function);
         frames.push(layout);
@@ -76,7 +113,7 @@ fn p1_program() -> s::Program {
             scopes: (0..ASYNC_P1).map(|index| s::Scope { function: index, parent: None, boundary: index }).collect(),
             boundaries: (0..ASYNC_P1).map(|scope| s::Boundary { scope }).collect(),
             frames,
-            future_results: vec![Some(s::Type::Int), None],
+            future_results: vec![Some(s::Type::Int), None, Some(FUTURE_INT)],
             ..s::ChampTables::default()
         },
         ..s::Program::default()
@@ -374,4 +411,32 @@ fn champ_p1_task_duty_rows() {
         assert!(runtime.fatal.as_deref().unwrap().contains("another Future"));
         assert_eq!(get(cold, tasks::STATE), tasks::COLD);
     }
+}
+
+#[test]
+fn champ_p1_a_returned_spawned_future_carries_both_duties_to_the_caller() {
+    // C-4, D24.1: the rehome takes the cache duty and the task duty, task first, into the reserve; the commit hands
+    // both to the returning Future's cache, whose outcome packet now holds them for the caller.
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_p1(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let inputs = empty(&mut ctx);
+        let outer = new_future(&mut ctx, RETURNS_SPAWNED, &[], &mut state, inputs);
+        runtime.champ_future_start(&mut ctx, 0, outer);
+        assert_eq!((ctx.status, get(outer, tasks::STATE)), (OK, tasks::DONE), "{:?}", runtime.fatal);
+        let inner = get(outer, tasks::RESULT);
+        assert_eq!(get(inner, tasks::STATE), tasks::DONE, "the spawned task ran at once");
+        assert_ne!(get(inner, tasks::FLAGS) & SPAWNED, 0);
+        let outcome = super::super::helpers::packet(&runtime, runtime.champ_cache(outer).unwrap().packet).unwrap();
+        let entries: Vec<_> = outcome.services.iter().map(|entry| (entry.holder, entry.kind, entry.target)).collect();
+        assert_eq!(entries, [(inner, SERVICE_TASK, None), (inner, SERVICE_CACHE, None)]);
+        let cache = runtime.champ_cache(inner).unwrap();
+        assert_eq!((cache.owner, cache.flags & (RELEASED | REHOMED)), (runtime.champ_cache(outer).unwrap().owner, 0));
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
 }
