@@ -20,6 +20,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ closes detached Futures' outcomes at shutdown and keeps their
+  records until then (#699, draft 3 §7.3, KL-1).** A detached Future whose
+  outcome packet holds identities stays in the root registry through every
+  collection; at shutdown the root closer destroys those identities once, in
+  one serial plan, after settling the packets' own service entries. A
+  shielded root closer frame for async destroys follows D1 (#760).
+
+- **Cancellation at the final exit: Tomato re-run and conformance cases
+  (#739).** The four K2 probes are now conformance cases with Tomato's
+  output (`L08.cancel.final-exit-window`,
+  `L08.cancel.final-async-destroy-shielded`,
+  `L08.cancel.final-defer-await-interrupted`,
+  `L08.cancel.late-after-last-await`). Tomato 0.5.8 and the current tree
+  agree with the K2 ruling as written (`direct 42 cancelled false`); Champ
+  runs them once `Event` (Q1) and async destroy (D1) lower.
+
 - **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
   rehomes ran on every function and cloned a dense map of all locations at
   every instruction. Debug builds spent 50 s of a 53 s compile of
@@ -396,6 +412,26 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **Champ runs `spawn` of an async action (#601 P1, OIR-2 async ABI D24).**
+  `spawn R(…).a(…)` lowers to the creating call followed by `fut.spawn` of
+  the fresh Future (own forwards the owner state; coro adds the spawned
+  task's duty beside the cache duty and schedules it first; low settles both).
+  SPB 17 assigns opcode 65 (class X, helper `champ_future_spawn`), and the
+  token `cache.rehome` carries a returned spawned Future's task duty. Champ
+  starts the task at once on the spawner's stack until its first suspension
+  and registers it in the root registry; at its owner's close a running task
+  detaches with its cache to the root (not cancelled) and a settled one
+  closes; shutdown cancels the running registered tasks, waits for them,
+  closes the detached outcomes and reports the first unobserved failure that
+  is not a cancellation, in spawn order. New verifier rules
+  `d24-spawn-not-fresh` and `d24-schedule-task-first`; new loader rule
+  `SPB_SPAWN`, with `SPB_TASK_RECEIPT` and `SPB_SCHEDULE` extended to spawned
+  task duties. `L08.wake.spawn-and-cold-start`,
+  `L08.failure.spawned-task-observed` and `L08.shutdown.unobserved-failure`
+  pass on Champ (`champ_cases_spawn`); the other spawn cases now stop on
+  `Event`/channels (Q1), async destroy (D1) or async role slots (F1).
+  Futures created in a `for` body still stop in coro (#759).
 
 - **OIR-2 low settles the dynamic transfers of open calls and `any` (#683).**
   `lower_cleanup` and the Low verifier now accept `own.dynamic` with the

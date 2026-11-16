@@ -1,0 +1,68 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+
+object Child {
+    has go is Event;
+    Child(:go);
+    async run() is int {
+        await go.wait();
+        42;
+    }
+}
+
+object Worker {
+    has ready is Event;
+    has go is Event;
+    has child is Future<int>;
+    Worker(:ready, :go, :child);
+    async inner() is int {
+        defer Stdout().writeln("inner cleanup");
+        await ready.wait();
+        go.set();
+        let v = await child;
+        Stdout().writeln("inner observed " + v.string());
+        v + 1;
+    }
+    async run() is int {
+        defer Stdout().writeln("worker cleanup");
+        let f = self.inner();
+        let v = try { await f; } catch e is Cancelled { Stdout().writeln("inner cancelled " + f.cancelled().string()); -2; };
+        Stdout().writeln("worker got " + v.string());
+        v;
+    }
+    async direct() is int {
+        defer Stdout().writeln("direct cleanup");
+        await ready.wait();
+        go.set();
+        let v = await child;
+        Stdout().writeln("direct observed " + v.string());
+        v;
+    }
+}
+
+async main() is int {
+    let ready = Event();
+    let go = Event();
+    let child = spawn Child(go: go).run();
+    let worker = spawn Worker(ready: ready, go: go, child: child).run();
+    ready.set();
+    let v = await child;
+    Stdout().writeln("main observed " + v.string());
+    worker.cancel();
+    Stdout().writeln("cancel requested");
+    let r = try { await worker; } catch e is Cancelled { -1; };
+    Stdout().writeln(r.string());
+    Stdout().writeln("cancelled " + worker.cancelled().string());
+    let ready2 = Event();
+    let go2 = Event();
+    let child2 = spawn Child(go: go2).run();
+    let w2 = spawn Worker(ready: ready2, go: go2, child: child2).direct();
+    ready2.set();
+    Stdout().writeln("main observed " + (await child2).string());
+    w2.cancel();
+    let r2 = try { await w2; } catch e is Cancelled { -1; };
+    Stdout().writeln("direct " + r2.string() + " cancelled " + w2.cancelled().string());
+    0;
+}
