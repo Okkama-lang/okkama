@@ -20,6 +20,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A loop scope of a resource holder closes on Champ (#753).** The SPB 17
+  loader (`D18_EXECUTOR`) checks a merge close's envelope against the
+  destroys its inventory may see. When it cannot reconstruct the inventory
+  it assumes every destroy the function's inputs and callees reach. A
+  packet carried around a loop (a `map` or `for` that builds an array,
+  through builder journals) is a cycle, which has no finite inventory, so a
+  method of an object holding a resource with a failing destroy was refused
+  ("fs.file.FileBytes.bytes#2 close 4: merge envelope 0 omits destroy
+  failures 11"), though own's empty envelope was right. Neither own nor
+  codegen was wrong: the loader's evidence was too weak. It now proves
+  emptiness flow-insensitively: a location may hold a key only when a
+  definition introduces one (a fresh call result, a committed resource, an
+  opaque input or an unrecognised producer) or passes one on, so cycles of
+  copies and journals stay empty. The proof never names a key, so it cannot
+  certify a direct plan. `L10.fs.missing-file` and
+  `L12.malformed-boundary-inputs` run on Champ.
 - **An Error payload of a plain variant runs on Champ (#763).** The SPB 17
   P1 contract admitted an Error enum's payload of a variant type only when
   every case of the variant was an Error case, and its test refused "a plain

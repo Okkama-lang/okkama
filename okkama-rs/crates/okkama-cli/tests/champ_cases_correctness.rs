@@ -347,6 +347,45 @@ main() is int {
     assert!(failure.contains("Object \"Holder\" field \"a\" was not initialized"), "{failure}");
 }
 
+/// A method of an object that holds a resource maps over an array: the scope of each turn closes a builder
+/// packet carried around the loop, which the loader proves empty though it has no finite inventory, so the
+/// merge envelope of that close needs no destroy failures (#753; it stopped at D18_EXECUTOR). Tomato prints 3.
+#[test]
+fn champ_correctness_a_loop_scope_of_a_resource_holder_closes_an_empty_packet() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Broken is Error = (broken);
+
+object Res {
+    has name is string;
+    Res(:name);
+    destroy {
+        confirm name != "" else throw Broken.broken;
+    }
+}
+
+object Holder {
+    has res is Res;
+    has items is @int;
+    Holder(:res, :items);
+    doubled() is @int {
+        items.map() -> x { x * 2; };
+    }
+}
+
+main() is int {
+    let h = Holder(res: Res(name: "r"), items: [1, 2, 3]);
+    Stdout().writeln(h.doubled().size().string());
+    0;
+}"#;
+    let run = run_source(source);
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.result.map_err(|error| error.0), Ok(0), "stdout={stdout:?}");
+    assert_eq!(stdout, "3\n");
+}
+
 /// The same early self binds its field on every path: no check fails and both objects complete.
 #[test]
 fn champ_correctness_early_self_fields_bound_on_every_path() {

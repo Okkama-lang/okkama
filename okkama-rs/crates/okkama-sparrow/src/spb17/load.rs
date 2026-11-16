@@ -299,8 +299,8 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
         Argument::Location(location) => Some(*location), _ => None,
     }).collect::<Vec<_>>();
     let reserve = f.proofs.cleanup_plans.iter().any(|plan| plan.close == close && plan.reserve);
-    let empty_source = locations.first()
-        .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
+    // A scope inventory carried around a loop has no finite inventory; its emptiness is still provable (#753).
+    let empty_source = locations.first().is_some_and(|&loc| evidence.provably_empty(loc));
     let empty_reserve = !reserve || contract.reserve && locations.get(1)
         .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
     evidence.check_budget()?;
