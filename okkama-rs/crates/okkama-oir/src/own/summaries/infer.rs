@@ -25,14 +25,15 @@ impl Universe {
         // nothing of it: the parameter stays borrowed (OIR-2 §7.2, §10.2; P2.4 §4.8: storage must not become
         // ownership).
         let mut borrowed = BTreeSet::new();
-        // PR-P (#749): the borrowed parameters by value, for the fields they lend.
-        let mut lent = BTreeMap::new();
+        // PR-P (#749): the borrowed parameters by value, for the fields they lend. A block parameter fed by several
+        // borrowed parameters lends the fields of each of them.
+        let mut lent: BTreeMap<ValueId, BTreeSet<u16>> = BTreeMap::new();
         for value in &entry.params {
             let ty = body.values.get(*value).map_err(arena)?.ty;
             if !language(module, &[ty]).is_empty() {
                 if !types[&ty].may_own() && types[&ty].references {
                     borrowed.insert(parameter);
-                    lent.insert(*value, parameter);
+                    lent.entry(*value).or_default().insert(parameter);
                 }
                 if types[&ty].may_own() {
                     let relation = &mut values[value.as_u32() as usize];
@@ -80,12 +81,15 @@ impl Universe {
                 // it, so a result that keeps it declares it. A borrowed parameter has no alias of its own to project
                 // (#700, #731: it is never taken).
                 if let Operation::Core(CoreOp::ObjGet { object, field }) = op
-                    && let Some(parameter) = lent.get(object)
+                    && let Some(lenders) = lent.get(object)
                     && let Some(relation) = output.first_mut() {
-                    let selection = SummarySelection::Field { parameter: *parameter, field: *field };
-                    if carrier_free_projection(module, types, &selection)
-                        && lent_path(module, &language_parameters(module, body), &selection) {
-                        relation.aliases.push(selection);
+                    let parameters = language_parameters(module, body);
+                    for &parameter in lenders {
+                        let selection = SummarySelection::Field { parameter, field: *field };
+                        if carrier_free_projection(module, types, &selection)
+                            && lent_path(module, &parameters, &selection) {
+                            relation.aliases.push(selection);
+                        }
                     }
                 }
                 if let Site::Instruction(instruction) = site {
@@ -99,11 +103,13 @@ impl Universe {
                 let mut edge = |target: &Target| -> Result<(), OwnError> {
                     for (parameter, argument) in body.blocks.get(target.block).map_err(arena)?.params.iter()
                         .zip(&target.args) {
-                        // PR-P (#749): a block parameter that carries a borrowed parameter lends its fields as the
-                        // parameter does. Over-approximation is safe: an alias only adds deps.
-                        if let Some(lender) = lent.get(argument).copied() && !lent.contains_key(parameter) {
-                            lent.insert(*parameter, lender);
-                            changed = true;
+                        // PR-P (#749): a block parameter lends the fields of every borrowed parameter that reaches it.
+                        // Another value reaching it adds nothing: an alias only adds deps.
+                        if let Some(lenders) = lent.get(argument).cloned() {
+                            let target = lent.entry(*parameter).or_default();
+                            let before = target.len();
+                            target.extend(lenders);
+                            changed |= target.len() != before;
                         }
                         let relation = values[argument.as_u32() as usize].clone();
                         changed |= join_value(&mut values, *parameter, &relation, budget)?;

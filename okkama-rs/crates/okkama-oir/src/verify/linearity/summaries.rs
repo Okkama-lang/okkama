@@ -590,6 +590,9 @@ impl Engine<'_, '_> {
                 }
                 for key in &flow.refs[value.as_u32() as usize] {
                     match key {
+                        // A Future's key is the holder of the inputs its cache takes (D25.1): admitting it would admit
+                        // those inputs without a declared retention.
+                        Origin::Instruction(..) if self.future_origin(*key) => {}
                         Origin::Instruction(..) | Origin::Invoke(..) => {
                             creations.insert(*key);
                         }

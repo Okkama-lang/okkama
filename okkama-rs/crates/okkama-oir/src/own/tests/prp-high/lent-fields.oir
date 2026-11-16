@@ -1,5 +1,7 @@
 oir 2 high
-// PR-P (#749): the High stage of a program whose results keep a carrier-free field (a role over a plain object):
+// PR-P (#749): the High stage of a program whose results keep a carrier-free field (a role over a plain object).
+// `Holder.either` is written by hand (the language reads fields through `self` only): two borrowed receivers meet in
+// one block parameter, and the field read through it is lent by both.
 //   object Source { has res is Res; has tag is Named;
 //       first(late is bool) is Step { if late { Step(tag, res); } else { Step(tag, res); } } }
 //   object Holder { has tag is Named; has wide is bool;
@@ -59,6 +61,9 @@ scope S14 action in @app.Source.new#0
 scope S15 action in @app.Step.new#0
 scope S16 action in @app.Holder.new#0
 scope S17 action in @app.Mark.new#0
+scope S18 action in @app.Holder.either#0
+scope S19 branch in @app.Holder.either#0 parent S18
+scope S20 branch in @app.Holder.either#0 parent S18
 
 func @app.Tag.new#0(%0: int) -> app.Tag [ctor app.Tag] {
     binding b0 "n": int in S12
@@ -242,6 +247,28 @@ func @app.Holder.new#0(%0: app.Named, %1: bool) -> app.Holder [ctor app.Holder] 
     raise %5
 }
 
+func @app.Holder.either#0(%0: app.Holder, %1: app.Holder, %2: bool) -> app.Mark [method app.Holder] {
+    boundary B0 lexical in S18
+    boundary B1 lexical in S19
+    boundary B2 lexical in S20
+    ^b0 in S18 unwind ^b1:
+    cond %2, ^b3, ^b4
+    ^b1(%3: failure) in S18:
+    raise %3
+    ^b2(%4: app.Holder) in S18 unwind ^b1:
+    %5: app.Named = obj.get %4, tag
+    %6: int = const 3
+    [i3] %7: app.Mark = call @app.Mark.new#0(%5, %6)
+    want %7
+    [i5] exit.prepare return %7 at B0
+    result.exit edge normal(0), value %7, demand want, prepare #5
+    high.effects at #3 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %7
+    ^b3 in S19 unwind ^b1:
+    br ^b2(%0)
+    ^b4 in S20 unwind ^b1:
+    br ^b2(%1)
+}
 func @app.Holder.mark#0(%0: app.Holder) -> app.Mark [method app.Holder] {
     boundary B0 lexical in S7
     boundary B1 lexical in S8

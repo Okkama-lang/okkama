@@ -226,7 +226,8 @@ fn early_cleanup_reopened_scope_and_exceptional_pending_are_rejected() {
 
 /// PR-P (#749): a result that keeps a carrier-free field of a parameter declares it as an alias and never takes it.
 /// `Source.first` takes the receiver's resource `res` (its only take retention) and is lent `tag`, a role over a plain
-/// object; `Holder.mark`'s receiver holds no obligation, stays borrowed, and lends `tag` on both arms of a branch.
+/// object; `Holder.mark`'s receiver holds no obligation, stays borrowed, and lends `tag` on both arms of a branch;
+/// `Holder.either`'s two borrowed receivers both lend it through the block parameter where they meet.
 #[test]
 fn a_lent_field_is_declared_and_never_taken() {
     let module = crate::text::parse(include_str!("prp-high/lent-fields.oir")).unwrap();
@@ -251,6 +252,15 @@ fn a_lent_field_is_declared_and_never_taken() {
     let mark = summary("app.Holder.mark#0");
     assert_eq!(mark.parameters[0].convention, FreshConvention::Borrow);
     assert!(mark.results[0].aliases.contains(&field("app.Holder", 0)), "{:?}", mark.results[0]);
+    // Both receivers lend `tag` through the block parameter where they meet.
+    let either = summary("app.Holder.either#0");
+    let lent_by = |parameter: u16| SummarySelection::Field {
+        parameter, field: FieldRef { declaration: declaration("app.Holder"), index: 0 },
+    };
+    assert!(either.parameters[..2].iter().all(|effect| effect.convention == FreshConvention::Borrow));
+    for parameter in [0, 1] {
+        assert!(either.results[0].aliases.contains(&lent_by(parameter)), "{parameter}: {:?}", either.results[0]);
+    }
 }
 
 #[test]

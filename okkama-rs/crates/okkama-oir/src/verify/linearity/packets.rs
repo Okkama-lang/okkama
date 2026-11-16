@@ -70,7 +70,7 @@ impl Engine<'_, '_> {
         false
     }
     /// Whether `origin` is the identity of a Future created by a `fut.new` of this body.
-    fn future_origin(&self, origin: Origin) -> bool {
+    pub(super) fn future_origin(&self, origin: Origin) -> bool {
         let Origin::Instruction(inst, 0) = origin else {
             return false;
         };
