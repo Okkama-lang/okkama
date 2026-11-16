@@ -658,9 +658,10 @@ struct Driver<'a, 'o> {
     dynamic_owners: BTreeSet<ScopeId>,
     /// High Futures that their awaiting scope takes (OIR-2 §10.2, §10.3).
     temporaries: BTreeSet<ValueId>,
-    /// PR-B1 (#784): the binding that holds each High Future this function binds, read from its `bind`/`rebind`.
-    /// A created Future's `fut.new` carries it when the binding lives in the Future's owner.
-    future_bindings: BTreeMap<ValueId, BindingId>,
+    /// PR-B1 (#784): every binding that holds each High Future this function binds, read from its `bind`s and
+    /// `rebind`s. An alias (`let g = f`) binds the same SSA value again, so one value can have several. A created
+    /// Future's `fut.new` carries the one that lives in the Future's owner.
+    future_bindings: BTreeMap<ValueId, Vec<BindingId>>,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:

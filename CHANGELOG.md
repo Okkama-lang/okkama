@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **OIR own: an alias of a Future in a nested scope no longer unbinds it
+  (review of D25, F1, #784).** Whether a binding holds a Future is now the
+  flow-sensitive bound bit of its cache-duty atoms in the own analysis,
+  which follows the value through the block parameters High passes into a
+  branch and survives the alias's scope. Before, own kept one binding per
+  value and missed the branch's parameter: `let f = work(); if c { let g =
+  f; } helper(Wrapper(pending: f)); await f;` named `f` in the store's
+  admissible split and own stopped with an internal error ("a split names a
+  bound Future"). `fut.new … binding` names the first binding of the value
+  in the Future's owner.
 - **Champ: a bound Future stays with its binding when an aggregate stores it
   (#784, PR-B1).** A binding marks a Future's duty bound and moves nothing:
   `fut.new` gains the optional attribute `binding bN` for a Future that its

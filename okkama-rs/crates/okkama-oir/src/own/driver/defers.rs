@@ -13,7 +13,7 @@ impl Driver<'_, '_> {
             let mut bound = BTreeSet::new();
             for capture in &action.captures {
                 latest.push(point.env.value(*capture)?);
-                if self.bound_future(&point, *capture) {
+                if self.bound_future(*capture) {
                     bound.insert(latest.len() - 1);
                 }
             }

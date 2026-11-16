@@ -259,7 +259,8 @@ fn transfer_selected(
             let mask = state.provenance.entry((owner, *atom)).or_default();
             // A cache duty stays in its owner state: binding or staging its Future neither moves nor
             // stages the duty (D12, OIR-2 §10.2), so it can still leave by cache.rehome. PR-B1 (#784):
-            // a binding adds the bound bit and keeps the duty bit, which `rehome_caches` selects by.
+            // a binding adds the bound bit and keeps the duty bit, which `rehome_caches` selects by; the
+            // driver reads the bound bit (`Driver::bound_future`): no admissible selection names the Future.
             if *mask & futures::CACHE_DUTY != 0 {
                 if provenance == 2 {
                     *mask |= 2;

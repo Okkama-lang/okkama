@@ -97,8 +97,9 @@ impl Driver<'_, '_> {
         };
         let owner_state = point.env.scopes[&owner];
         // PR-B1 (#784): a Future that High binds in its owner scope is bound from its creation.
-        let binding = self.future_bindings.get(original).copied()
-            .filter(|binding| self.high.bindings.get(*binding).is_ok_and(|data| data.scope == owner));
+        // An alias binding in a nested scope (`if c { let g = f; }`) does not displace it.
+        let binding = self.future_bindings.get(original).into_iter().flatten().copied()
+            .find(|binding| self.high.bindings.get(*binding).is_ok_and(|data| data.scope == owner));
         point = self.emit(point, Operation::Async(AsyncOp::FutureNew {
             packet, deps, owner_state, environment, result, owner, binding,
         }))?;
@@ -274,16 +275,20 @@ impl Driver<'_, '_> {
         }
     }
 
-    /// PR-B1 (#784): High Future → the binding of its `bind` or `rebind`, for every Future value this function
-    /// binds: one an async call creates here, or one admitted with a packet.
-    pub(super) fn bound_futures(&self) -> BTreeMap<ValueId, BindingId> {
-        let mut bindings = BTreeMap::new();
+    /// PR-B1 (#784): High Future → the bindings of its `bind`s and `rebind`s, for every Future
+    /// value this function binds: one an async call creates here, or one admitted with a packet. An alias
+    /// (`let g = f`) binds the same value again, so every binding is kept, not the last.
+    pub(super) fn bound_futures(&self) -> BTreeMap<ValueId, Vec<BindingId>> {
+        let mut bindings: BTreeMap<ValueId, Vec<BindingId>> = BTreeMap::new();
         for (_, instruction) in self.high.insts.iter() {
             if let Operation::Lexical(LexicalOp::Bind { binding, value } | LexicalOp::Rebind { binding, value, .. })
                 = &instruction.op
                 && self.high.values.get(*value).is_ok_and(|data| is_future(self.module, data.ty))
             {
-                bindings.insert(*value, *binding);
+                let held = bindings.entry(*value).or_default();
+                if !held.contains(binding) {
+                    held.push(*binding);
+                }
             }
         }
         bindings

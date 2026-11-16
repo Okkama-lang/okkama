@@ -1123,3 +1123,92 @@ fn a_returned_borrowed_future_is_named_by_its_exit_selection() {
     assert!(named_futures(&output.module, make).is_empty(), "{:?}", named_futures(&output.module, make));
     assert_eq!(rehomes(&output.module, make).len(), 1);
 }
+
+// --- PR-B1 across nested scopes (review of D25, F1 and F3) --------------------------------------------------------
+
+const PR_B1_SCOPES: &str = include_str!("../../../tests/fixtures/async/high/pr-b1-scopes.oir");
+
+fn pr_b1_scopes() -> OwnOutput {
+    let output = rewrite_async(PR_B1_SCOPES).unwrap_or_else(|error| panic!("{error}"));
+    verify_own(&output.module).unwrap_or_else(|report| panic!("{report:?}"));
+    output
+}
+
+fn binding_named(body: &Body, name: &str) -> BindingId {
+    body.bindings.iter().find(|(_, binding)| binding.name == name).unwrap().0
+}
+
+/// The packet that `own.bind` of `binding` takes, and whether `own.empty` made it.
+fn bound_packet(body: &Body, binding: BindingId) -> (ValueId, bool) {
+    let packet = operations(body).into_iter().find_map(|op| match op {
+        Operation::Ownership(OwnershipOp::Bind { binding: elaborated }) if elaborated.binding == binding => {
+            Some(elaborated.resource.packet)
+        }
+        _ => None,
+    }).expect("an own.bind of the binding");
+    let empty = body.insts.iter().any(|(_, instruction)| instruction.results.contains(&packet)
+        && matches!(instruction.op, Operation::Ownership(OwnershipOp::Empty {})));
+    (packet, empty)
+}
+
+/// The Futures that admissible selections of `body` name, each once (a split per open scope repeats a selection).
+fn admissible_futures(module: &Module, body: &Body) -> Vec<ValueId> {
+    let named: BTreeSet<_> = named_futures(module, body).into_iter().filter(|(admissible, _)| *admissible)
+        .map(|(_, value)| value).collect();
+    named.into_iter().collect()
+}
+
+/// F1: `let f = Child(n: 4).run(); let e = f; if true { let r = Res(); let g = f; } Holder(f: f)`. High passes `f`
+/// into the branch through a block parameter and binds that parameter as `g` in a retained scope; `f` is bound in
+/// its owner before, inside and after the branch. `fut.new` carries `f`'s binding (the first one in the owner), the
+/// binding of `g` emits nothing (the duty never left its owner), and the store after the branch names no Future:
+/// the Holder borrows `f`, whose token stays scheduled.
+#[test]
+fn an_alias_in_a_nested_scope_keeps_a_created_future_bound() {
+    let output = pr_b1_scopes();
+    let (_, alias) = function(&output.module, "app.Cases.alias#0");
+    let body = alias.body.as_ref().unwrap();
+    assert_eq!(creation_bindings(body), [Some(binding_named(body, "f"))]);
+    assert!(admissible_futures(&output.module, body).is_empty(), "{:?}", named_futures(&output.module, body));
+}
+
+/// F1, admitted: `let g = Maker().make(9); if true { let r = Res(); let k = g; Holder(f: k); } Holder(f: g)`. Only
+/// `g`'s own binding is a split that names it. `k` aliases a Future already bound in the enclosing scope, so its
+/// `own.bind` takes an empty packet (the entry stays in the bound journal of `g`'s scope), and neither store names a
+/// Future.
+#[test]
+fn an_alias_of_a_bound_admitted_future_takes_nothing() {
+    let output = pr_b1_scopes();
+    let (_, retained) = function(&output.module, "app.Cases.retained#1");
+    let body = retained.body.as_ref().unwrap();
+    assert_eq!(admissible_futures(&output.module, body).len(), 1, "{:?}", named_futures(&output.module, body));
+    assert!(!bound_packet(body, binding_named(body, "g")).1, "g's binding takes its split's packet");
+    assert!(bound_packet(body, binding_named(body, "k")).1, "k's binding takes nothing");
+}
+
+/// F3 (PR-B1 item 4 with several open scopes): `if true { let r = Res(); let g = Maker().make(7); Holder(f: g); }`.
+/// The binding of an admitted Future in a nested retained scope is an admissible split that names it and an
+/// `own.bind` of the split's packet, as with one open scope; the Full verifier accepts it (no B51 at the store).
+#[test]
+fn an_admitted_future_first_bound_in_a_nested_scope_is_a_split_and_a_bind() {
+    let output = pr_b1_scopes();
+    let (_, nested) = function(&output.module, "app.Cases.nested#2");
+    let body = nested.body.as_ref().unwrap();
+    assert_eq!(admissible_futures(&output.module, body).len(), 1, "{:?}", named_futures(&output.module, body));
+    assert!(!bound_packet(body, binding_named(body, "g")).1, "g's binding takes its split's packet");
+}
+
+/// `let f = Child(n: 1).run(); Holder(f: Chain().after(f))`: the fresh Future depends on the bound `f`, and is still a
+/// fresh temporary: its store names it (D25.2), and only it.
+#[test]
+fn a_fresh_future_made_from_a_bound_one_is_named_by_its_store() {
+    let output = pr_b1_scopes();
+    let (_, chained) = function(&output.module, "app.Cases.chained#3");
+    let body = chained.body.as_ref().unwrap();
+    assert_eq!(creation_bindings(body), [Some(binding_named(body, "f")), None]);
+    let fresh = body.insts.iter().find_map(|(_, instruction)| match instruction.op {
+        Operation::Async(AsyncOp::FutureNew { binding: None, .. }) => instruction.results.first().copied(),
+        _ => None,
+    }).unwrap();
+    assert_eq!(admissible_futures(&output.module, body), [fresh]);
+}
