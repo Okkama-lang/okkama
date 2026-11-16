@@ -1238,6 +1238,8 @@ impl Checker<'_, '_> {
                     _ => return Err(TypeCheckError),
                 }
             }
+            // PR-E: the Future only (High refuses the form by H6: it names every spawn `fut.spawn %f`).
+            AsyncOp::FutureSpawnBound { future } => { self.future(*future)?; }
             AsyncOp::FutureCancel { future }
             | AsyncOp::FutureDone { future } | AsyncOp::FutureCancelled { future } => { self.future(*future)?; }
             AsyncOp::FutureNew { environment, packet, deps, owner, owner_state, result } => {

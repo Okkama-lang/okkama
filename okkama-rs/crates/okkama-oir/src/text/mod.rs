@@ -1347,6 +1347,7 @@ opcodes!(AsyncOp {
     UniqueCacheProof { proof } => "unique_cache.proof",
     CacheRehome { form, target, protocol } => "cache.rehome",
     FutureSpawn { future, state } => "fut.spawn",
+    FutureSpawnBound { future } => "fut.spawn.bound",
     FutureCancel { future } => "fut.cancel",
     FutureDone { future } => "fut.done",
     FutureCancelled { future } => "fut.cancelled",

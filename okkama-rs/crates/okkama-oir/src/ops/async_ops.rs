@@ -164,6 +164,10 @@ operation_group! { AsyncOp {
         });
     FutureSpawn { future: ValueId, state: Option<ValueId> }
         => ("fut.spawn", [future: Borrow, state: Consume], Rule::Spawn { state: *state });
+    // Ruling PR-E (#766): spawn of a Future not created on the spot. It starts the Future if it is cold and registers
+    // it; it takes and gives no duty, so its contract is High's stateless spawn.
+    FutureSpawnBound { future: ValueId }
+        => ("fut.spawn.bound", [future: Observe], Rule::Spawn { state: None });
     FutureCancel { future: ValueId }
         => ("fut.cancel", [future: Observe], Rule::Intent);
     FutureDone { future: ValueId }
