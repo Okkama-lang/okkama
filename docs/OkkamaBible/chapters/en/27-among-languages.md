@@ -115,7 +115,7 @@ Haskell is the purest language in the table: values never change, effects
 are confined to types such as `IO`, absence is `Maybe`, and contracts are
 type classes [@haskell2010]. Much of Okkama's vocabulary comes from this
 line, through ML: enums with payloads and `match` (Chapter 16), `Maybe`,
-roles that resemble type classes with declared instances (Section 14.9).
+roles that resemble type classes with declared instances (Section 14.10).
 
 Two differences matter. Haskell infers types across a whole program, while
 Okkama infers only inside bodies and asks for every declaration to be

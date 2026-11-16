@@ -179,6 +179,7 @@ bibliographic data were checked are listed.
 - [@rice1953] H. Gordon Rice (1953). Classes of Recursively Enumerable Sets and Their Decision Problems. *Transactions of the American Mathematical Society* 74(2): 358–366. https://doi.org/10.1090/S0002-9947-1953-0053041-6
 - [@rissanen1978] Jorma Rissanen (1978). Modeling by Shortest Data Description. *Automatica* 14(5): 465–471. https://doi.org/10.1016/0005-1098(78)90005-5
 - [@ritchie1993] Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
+- [@rust175] The Rust Release Team (2023). Announcing Rust 1.75.0. *Rust Blog*, 28 December 2023. https://blog.rust-lang.org/2023/12/28/Rust-1.75.0/ {label: Rust Blog}
 - [@rusthashmap] The Rust Project Developers (2026). Struct HashMap. *The Rust Standard Library*. https://doc.rust-lang.org/std/collections/struct.HashMap.html {label: Rust standard library}
 - [@saltzer1975] Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - [@scales2022] Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
@@ -197,6 +198,7 @@ bibliographic data were checked are listed.
 - [@summers2011] Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - [@sussman1975] Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - [@swiftbook] Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/ {label: The Swift Programming Language}
+- [@swiftse0296] John McCall, Doug Gregor (2021). SE-0296: Async/await. *Swift Evolution*, implemented in Swift 5.5. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0296-async-await.md {label: Swift Evolution}
 - [@syme2011] Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - [@thompson1968] Ken Thompson (1968). Programming Techniques: Regular Expression Search Algorithm. *Communications of the ACM* 11(6): 419–422. https://doi.org/10.1145/363347.363387
 - [@thorburn1918] W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345

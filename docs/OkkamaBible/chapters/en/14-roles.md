@@ -323,7 +323,63 @@ with the right names is not enough, and the type argument says what the
 loop's binding will be. A source that is consumed as it is read — a file, a
 socket — does the other standard role, `Batching<T>` (Chapter 8).
 
-## 14.9 Where roles came from
+## 14.9 Async actions in a role
+
+A role may promise an action that waits. Exchange rates come from a slow
+source in production and from a table in a test, and the code that converts
+money should not know which:
+
+{{example:14-async-role}}
+
+- **The caller awaits through the role.** `Converter` holds a `Rates` and
+  writes `await rates.rate(code)`. It does not know whether a desk, a table
+  or a decorator answers.
+- **A decorator is an implementation like any other.** `Fallback` holds two
+  `Rates`. It asks the first and, when that one throws `Unknown`, the
+  second. The euro comes from the desk at 1.17. The tenge is not quoted by
+  the desk, so it comes from the table. Gold is known to neither, and the
+  error from the table reaches the caller.
+- **The test double is a role implementation too.** `Converter(rates:
+  table)` converts at the table's 1.2, and no desk is involved. Chapter 15
+  builds whole suites this way.
+
+**Async is part of the action's shape.** An implementation that answers at
+once still writes `async`, as `Table` does. A synchronous `rate` does not
+conform:
+
+{{example:14-async-shape-rejected}}
+
+The rule is the same as for parameters (§14.1): the implementation repeats
+the role's signature exactly. The colour follows the role to its callers
+(Chapter 20). An action that holds a `Rates` and wants a rate must itself be
+async:
+
+{{example:14-async-caller-rejected}}
+
+The languages that have both interfaces and `async` disagree about the
+direction of conformance:
+
+- **Swift.** An `async` protocol requirement may be satisfied by a
+  synchronous function, but a synchronous requirement may not be satisfied by
+  an `async` one [@swiftse0296]. A synchronous answer is a special case of
+  an asynchronous one.
+- **Kotlin.** An override must repeat `suspend` exactly, in both
+  directions, because a suspending function takes a hidden continuation
+  parameter and the two are different signatures on the JVM.
+- **Rust.** `async fn` in traits arrived only in Rust 1.75, at the end of
+  2023 [@rust175]. An implementation may also write the desugared form, a
+  function that returns `impl Future`, and do synchronous work before it
+  builds the future.
+- **C#, TypeScript and Java's `CompletableFuture`.** The interface returns
+  a task or a promise, and `async` is an implementation detail. A method
+  that returns `Task.FromResult(x)` conforms like any other.
+
+Okkama takes Kotlin's side, and it costs `Table` one word, `async`. In
+return, one rule covers parameters, results and waiting alike: an
+implementation repeats the role's signature exactly. A reader who sees one
+implementation knows how every call through the role looks.
+
+## 14.10 Where roles came from
 
 The idea of a contract separate from its implementations has a short and
 traceable history.
@@ -357,7 +413,7 @@ resolve: the question traits answer, which of two inherited methods wins,
 does not arise. Shared behaviour lives in an object that others hold
 (§14.6), which is where Chapter 2 argued it belongs.
 
-## 14.10 Roles elsewhere
+## 14.11 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -377,7 +433,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.11 What this design costs
+## 14.12 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).

@@ -203,9 +203,10 @@
   - [14.6 Композиция вместо наследования](#146-композиция-вместо-наследования)
   - [14.7 Операторы — это роли](#147-операторы--это-роли)
   - [14.8 Своя коллекция: `Iterating` и `Cursor`](#148-своя-коллекция-iterating-и-cursor)
-  - [14.9 Откуда пришли роли](#149-откуда-пришли-роли)
-  - [14.10 Роли в других языках](#1410-роли-в-других-языках)
-  - [14.11 Чего стоит такой замысел](#1411-чего-стоит-такой-замысел)
+  - [14.9 Асинхронные действия в роли](#149-асинхронные-действия-в-роли)
+  - [14.10 Откуда пришли роли](#1410-откуда-пришли-роли)
+  - [14.11 Роли в других языках](#1411-роли-в-других-языках)
+  - [14.12 Чего стоит такой замысел](#1412-чего-стоит-такой-замысел)
 - [Глава 15. Фейки, тесты и свойства](#глава-15-фейки-тесты-и-свойства)
   - [15.1 Тесты живут рядом с кодом](#151-тесты-живут-рядом-с-кодом)
   - [15.2 Привязка `test`](#152-привязка-test)
@@ -10778,7 +10779,204 @@ day 4
 цикла. Источник, который расходуется при чтении, — файл, сокет, — реализует
 другую стандартную роль, `Batching<T>` (глава 8).
 
-## 14.9 Откуда пришли роли
+## 14.9 Асинхронные действия в роли
+
+Роль может обещать действие, которое ждёт. Курсы валют приходят из
+медленного источника в работе и из таблицы в тесте, и коду, который
+пересчитывает деньги, не нужно знать, откуда именно:
+
+```okkama
+module bible/asyncrole v1.0.0;
+
+// A role may promise an async action. Every implementation keeps the promise
+// with an async action of its own, and the caller awaits through the role
+// without knowing which one it holds.
+import "io/stdout" take Stdout;
+
+enum Unknown is Error = (currency(code is string));
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+// Asks a slower source, here another async object.
+object Desk {
+    Desk() {}
+    async quote(code is string) is rat {
+        confirm code == "EUR" else throw Unknown.currency(code);
+        117 / 100;
+    }
+}
+
+object Remote does Rates {
+    has desk is Desk;
+    Remote(:desk);
+    async rate(code is string) is rat { await desk.quote(code); }
+}
+
+// A fixed table, for tests and for currencies the desk does not quote.
+object Table does Rates {
+    has known is %string:rat;
+    Table(:known);
+    async rate(code is string) is rat {
+        confirm known.has(code) else throw Unknown.currency(code);
+        known[code];
+    }
+}
+
+// A decorator: the first source, and the second when the first does not know.
+object Fallback does Rates {
+    has first is Rates;
+    has second is Rates;
+    Fallback(:first, :second);
+    async rate(code is string) is rat {
+        try {
+            await first.rate(code);
+        }
+        catch e is Unknown {
+            await second.rate(code);
+        };
+    }
+}
+
+object Converter {
+    has rates is Rates;
+    Converter(:rates);
+    async converted(amount is rat, code is string) is rat { amount * await rates.rate(code); }
+}
+
+async main() is int {
+    let out = Stdout();
+    let table = Table(known: ["EUR": 6 / 5, "KZT": 1 / 500]);
+    let rates = Fallback(first: Remote(desk: Desk()), second: table);
+    let converter = Converter(rates: rates);
+    out.writeln("100 EUR = " + (await converter.converted(100.rat(), "EUR")).string());
+    out.writeln("5000 KZT = " + (await converter.converted(5000.rat(), "KZT")).string());
+    let missing = try {
+        (await converter.converted(1.rat(), "XAU")).string();
+    }
+    catch e is Unknown {
+        "unknown: " + e.text();
+    };
+    out.writeln(missing);
+    out.writeln("test double: " + (await Converter(rates: table).converted(10.rat(), "EUR")).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+100 EUR = 117
+5000 KZT = 10
+unknown: Unknown.currency("XAU")
+test double: 12
+```
+
+- **Вызывающий ждёт через роль.** `Converter` держит `Rates` и пишет
+  `await rates.rate(code)`. Он не знает, кто ответит: конторка, таблица
+  или декоратор.
+- **Декоратор — такая же реализация, как любая другая.** `Fallback` держит
+  два `Rates`. Он спрашивает первый, а когда тот бросает `Unknown` —
+  второй. Евро приходит от конторки по 1,17. Тенге конторка не котирует,
+  поэтому он приходит из таблицы. Золота не знает никто, и ошибка таблицы
+  доходит до вызывающего.
+- **Тестовый двойник — тоже реализация роли.** `Converter(rates: table)`
+  пересчитывает по табличным 1,2, и конторка не участвует. Глава 15 строит
+  так целые наборы тестов.
+
+**`async` — часть формы действия.** Реализация, которая отвечает сразу, всё
+равно пишет `async`, как `Table`. Синхронный `rate` не соответствует роли:
+
+```okkama
+module bible/async_shape_rejected v1.0.0;
+
+// A role's async action is kept only by an async action.
+
+import "io/stdout" take Stdout;
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+object Fixed does Rates {
+    Fixed() {}
+    rate(code is string) is rat { 1 / 1; }
+}
+
+async main() is int {
+    Stdout().writeln((await Fixed().rate("EUR")).string());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+14-async-shape-rejected.ok:11:8: semantic error: Action "rate" on object "Fixed" must match async shape for role "Rates"
+```
+
+Правило то же, что для параметров (§14.1): реализация повторяет сигнатуру
+роли в точности. Цвет следует за ролью к её вызывающим (глава 20).
+Действие, которое держит `Rates` и хочет курс, само должно быть async:
+
+```okkama
+module bible/async_caller_rejected v1.0.0;
+
+// An async action of a role is awaited only inside an async action.
+
+import "io/stdout" take Stdout;
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+object Fixed does Rates {
+    Fixed() {}
+    async rate(code is string) is rat { 1 / 1; }
+}
+
+object Report {
+    has rates is Rates;
+    Report(:rates);
+    line() is string { "EUR " + (await rates.rate("EUR")).string(); }
+}
+
+async main() is int {
+    Stdout().writeln(Report(rates: Fixed()).line());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+14-async-caller-rejected.ok:19:34: semantic error: await is available only inside an async action
+```
+
+Языки, где есть и интерфейсы, и `async`, расходятся в направлении
+соответствия:
+
+- **Swift.** Требование протокола с `async` может выполнить синхронная
+  функция, а синхронное требование функцией с `async` выполнить нельзя
+  [[Swift Evolution](#ref-swiftse0296)]. Синхронный ответ — частный случай асинхронного.
+- **Kotlin.** Переопределение обязано повторить `suspend` в точности, в обе
+  стороны: приостанавливаемая функция принимает скрытый параметр
+  продолжения, и на JVM это разные сигнатуры.
+- **Rust.** `async fn` в трейтах появились только в Rust 1.75, в конце 2023
+  года [[Rust Blog](#ref-rust175)]. Реализация может написать и раскрытую форму — функцию,
+  возвращающую `impl Future`, — и выполнить синхронную работу до того, как
+  построит future.
+- **C#, TypeScript и `CompletableFuture` в Java.** Интерфейс возвращает
+  задачу или промис, а `async` — деталь реализации. Метод, возвращающий
+  `Task.FromResult(x)`, соответствует, как любой другой.
+
+Okkama на стороне Kotlin, и `Table` это стоит одного слова, `async`. Взамен
+одно правило покрывает параметры, результаты и ожидание: реализация
+повторяет сигнатуру роли в точности. Читатель, увидевший одну реализацию,
+знает, как выглядит любой вызов через роль.
+
+## 14.10 Откуда пришли роли
 
 У идеи контракта, отделённого от реализаций, короткая и прослеживаемая
 история.
@@ -10811,7 +11009,7 @@ day 4
 победит, — не возникает. Общее поведение живёт в объекте, который держат
 другие (§14.6), — там, где ему, по доводам главы 2, и место.
 
-## 14.10 Роли в других языках
+## 14.11 Роли в других языках
 
 | | Роль Okkama | Интерфейс Java | Интерфейс Go | Трейт Rust |
 |---|---|---|---|---|
@@ -10831,7 +11029,7 @@ day 4
 У Okkama его нет, и именно это делает ссылку через роль возможностью, а не
 аннотацией типа.
 
-## 14.11 Чего стоит такой замысел
+## 14.12 Чего стоит такой замысел
 
 - **Код переадресации.** Декораторы повторяют каждое действие роли.
   Синтаксиса делегирования, который бы это сократил, нет (§14.6).
@@ -21340,7 +21538,7 @@ Haskell — самый чистый язык таблицы: значения н
 заключены в типы вроде `IO`, отсутствие — `Maybe`, контракты — классы типов
 [[Haskell 2010](#ref-haskell2010)]. Многое в словаре Okkama пришло из этой линии через ML:
 перечисления с полезной нагрузкой и `match` (глава 16), `Maybe`, роли,
-похожие на классы типов с объявленными экземплярами (раздел 14.9).
+похожие на классы типов с объявленными экземплярами (раздел 14.10).
 
 Важны два отличия. Haskell выводит типы по всей программе, а Okkama —
 только внутри тел и требует аннотировать каждое объявление (раздел 4.5). И
@@ -21771,7 +21969,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - передача вызовов вручную в декораторах и отсутствие тел по умолчанию в
   ролях (разделы 2.12, 14.6);
 - нет соответствия задним числом, а операторы смотрят только на левый
-  операнд (раздел 14.11);
+  операнд (раздел 14.12);
 - никакого приведения вниз от роли, никогда (раздел 14.3);
 - больше объектов и выделений памяти, чем в языке с мутацией (разделы
   12.14, 13.17);
@@ -21979,6 +22177,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-pep484"></a>Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
+- <a id="ref-rust175"></a>The Rust Release Team (2023). Announcing Rust 1.75.0. *Rust Blog*, 28 December 2023. https://blog.rust-lang.org/2023/12/28/Rust-1.75.0/
 - <a id="ref-rusthashmap"></a>The Rust Project Developers (2026). Struct HashMap. *The Rust Standard Library*. https://doc.rust-lang.org/std/collections/struct.HashMap.html
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
@@ -21996,6 +22195,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-stroustrup2001"></a>Bjarne Stroustrup (2001). Exception Safety: Concepts and Techniques. In Alexander Romanovsky, Christophe Dony, Jørgen Lindskov Knudsen, Anand Tripathi (eds.), *Advances in Exception Handling Techniques*, LNCS 2022: 60–76. Springer. https://doi.org/10.1007/3-540-45407-1_4
 - <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
+- <a id="ref-swiftse0296"></a>John McCall, Doug Gregor (2021). SE-0296: Async/await. *Swift Evolution*, implemented in Swift 5.5. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0296-async-await.md
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - <a id="ref-swiftbook"></a>Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/
 - <a id="ref-thompson1968"></a>Ken Thompson (1968). Programming Techniques: Regular Expression Search Algorithm. *Communications of the ACM* 11(6): 419–422. https://doi.org/10.1145/363347.363387

@@ -203,9 +203,10 @@
   - [14.6 Composition instead of inheritance](#146-composition-instead-of-inheritance)
   - [14.7 Operators are roles](#147-operators-are-roles)
   - [14.8 A collection of your own: `Iterating` and `Cursor`](#148-a-collection-of-your-own-iterating-and-cursor)
-  - [14.9 Where roles came from](#149-where-roles-came-from)
-  - [14.10 Roles elsewhere](#1410-roles-elsewhere)
-  - [14.11 What this design costs](#1411-what-this-design-costs)
+  - [14.9 Async actions in a role](#149-async-actions-in-a-role)
+  - [14.10 Where roles came from](#1410-where-roles-came-from)
+  - [14.11 Roles elsewhere](#1411-roles-elsewhere)
+  - [14.12 What this design costs](#1412-what-this-design-costs)
 - [Chapter 15. Fakes, tests and properties](#chapter-15-fakes-tests-and-properties)
   - [15.1 Tests live next to the code](#151-tests-live-next-to-the-code)
   - [15.2 The `test` binding](#152-the-test-binding)
@@ -10661,7 +10662,207 @@ with the right names is not enough, and the type argument says what the
 loop's binding will be. A source that is consumed as it is read — a file, a
 socket — does the other standard role, `Batching<T>` (Chapter 8).
 
-## 14.9 Where roles came from
+## 14.9 Async actions in a role
+
+A role may promise an action that waits. Exchange rates come from a slow
+source in production and from a table in a test, and the code that converts
+money should not know which:
+
+```okkama
+module bible/asyncrole v1.0.0;
+
+// A role may promise an async action. Every implementation keeps the promise
+// with an async action of its own, and the caller awaits through the role
+// without knowing which one it holds.
+import "io/stdout" take Stdout;
+
+enum Unknown is Error = (currency(code is string));
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+// Asks a slower source, here another async object.
+object Desk {
+    Desk() {}
+    async quote(code is string) is rat {
+        confirm code == "EUR" else throw Unknown.currency(code);
+        117 / 100;
+    }
+}
+
+object Remote does Rates {
+    has desk is Desk;
+    Remote(:desk);
+    async rate(code is string) is rat { await desk.quote(code); }
+}
+
+// A fixed table, for tests and for currencies the desk does not quote.
+object Table does Rates {
+    has known is %string:rat;
+    Table(:known);
+    async rate(code is string) is rat {
+        confirm known.has(code) else throw Unknown.currency(code);
+        known[code];
+    }
+}
+
+// A decorator: the first source, and the second when the first does not know.
+object Fallback does Rates {
+    has first is Rates;
+    has second is Rates;
+    Fallback(:first, :second);
+    async rate(code is string) is rat {
+        try {
+            await first.rate(code);
+        }
+        catch e is Unknown {
+            await second.rate(code);
+        };
+    }
+}
+
+object Converter {
+    has rates is Rates;
+    Converter(:rates);
+    async converted(amount is rat, code is string) is rat { amount * await rates.rate(code); }
+}
+
+async main() is int {
+    let out = Stdout();
+    let table = Table(known: ["EUR": 6 / 5, "KZT": 1 / 500]);
+    let rates = Fallback(first: Remote(desk: Desk()), second: table);
+    let converter = Converter(rates: rates);
+    out.writeln("100 EUR = " + (await converter.converted(100.rat(), "EUR")).string());
+    out.writeln("5000 KZT = " + (await converter.converted(5000.rat(), "KZT")).string());
+    let missing = try {
+        (await converter.converted(1.rat(), "XAU")).string();
+    }
+    catch e is Unknown {
+        "unknown: " + e.text();
+    };
+    out.writeln(missing);
+    out.writeln("test double: " + (await Converter(rates: table).converted(10.rat(), "EUR")).string());
+    0;
+}
+```
+
+Output:
+
+```text
+100 EUR = 117
+5000 KZT = 10
+unknown: Unknown.currency("XAU")
+test double: 12
+```
+
+- **The caller awaits through the role.** `Converter` holds a `Rates` and
+  writes `await rates.rate(code)`. It does not know whether a desk, a table
+  or a decorator answers.
+- **A decorator is an implementation like any other.** `Fallback` holds two
+  `Rates`. It asks the first and, when that one throws `Unknown`, the
+  second. The euro comes from the desk at 1.17. The tenge is not quoted by
+  the desk, so it comes from the table. Gold is known to neither, and the
+  error from the table reaches the caller.
+- **The test double is a role implementation too.** `Converter(rates:
+  table)` converts at the table's 1.2, and no desk is involved. Chapter 15
+  builds whole suites this way.
+
+**Async is part of the action's shape.** An implementation that answers at
+once still writes `async`, as `Table` does. A synchronous `rate` does not
+conform:
+
+```okkama
+module bible/async_shape_rejected v1.0.0;
+
+// A role's async action is kept only by an async action.
+
+import "io/stdout" take Stdout;
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+object Fixed does Rates {
+    Fixed() {}
+    rate(code is string) is rat { 1 / 1; }
+}
+
+async main() is int {
+    Stdout().writeln((await Fixed().rate("EUR")).string());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+14-async-shape-rejected.ok:11:8: semantic error: Action "rate" on object "Fixed" must match async shape for role "Rates"
+```
+
+The rule is the same as for parameters (§14.1): the implementation repeats
+the role's signature exactly. The colour follows the role to its callers
+(Chapter 20). An action that holds a `Rates` and wants a rate must itself be
+async:
+
+```okkama
+module bible/async_caller_rejected v1.0.0;
+
+// An async action of a role is awaited only inside an async action.
+
+import "io/stdout" take Stdout;
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+object Fixed does Rates {
+    Fixed() {}
+    async rate(code is string) is rat { 1 / 1; }
+}
+
+object Report {
+    has rates is Rates;
+    Report(:rates);
+    line() is string { "EUR " + (await rates.rate("EUR")).string(); }
+}
+
+async main() is int {
+    Stdout().writeln(Report(rates: Fixed()).line());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+14-async-caller-rejected.ok:19:34: semantic error: await is available only inside an async action
+```
+
+The languages that have both interfaces and `async` disagree about the
+direction of conformance:
+
+- **Swift.** An `async` protocol requirement may be satisfied by a
+  synchronous function, but a synchronous requirement may not be satisfied by
+  an `async` one [[Swift Evolution](#ref-swiftse0296)]. A synchronous answer is a special case of
+  an asynchronous one.
+- **Kotlin.** An override must repeat `suspend` exactly, in both
+  directions, because a suspending function takes a hidden continuation
+  parameter and the two are different signatures on the JVM.
+- **Rust.** `async fn` in traits arrived only in Rust 1.75, at the end of
+  2023 [[Rust Blog](#ref-rust175)]. An implementation may also write the desugared form, a
+  function that returns `impl Future`, and do synchronous work before it
+  builds the future.
+- **C#, TypeScript and Java's `CompletableFuture`.** The interface returns
+  a task or a promise, and `async` is an implementation detail. A method
+  that returns `Task.FromResult(x)` conforms like any other.
+
+Okkama takes Kotlin's side, and it costs `Table` one word, `async`. In
+return, one rule covers parameters, results and waiting alike: an
+implementation repeats the role's signature exactly. A reader who sees one
+implementation knows how every call through the role looks.
+
+## 14.10 Where roles came from
 
 The idea of a contract separate from its implementations has a short and
 traceable history.
@@ -10695,7 +10896,7 @@ resolve: the question traits answer, which of two inherited methods wins,
 does not arise. Shared behaviour lives in an object that others hold
 (§14.6), which is where Chapter 2 argued it belongs.
 
-## 14.10 Roles elsewhere
+## 14.11 Roles elsewhere
 
 | | Okkama role | Java interface | Go interface | Rust trait |
 |---|---|---|---|---|
@@ -10715,7 +10916,7 @@ the table has a way back from the contract to the concrete type. Okkama
 has none, and that is what makes a role reference a capability rather than
 a type annotation.
 
-## 14.11 What this design costs
+## 14.12 What this design costs
 
 - **Forwarding code.** Decorators repeat every action of the role. No
   delegation syntax shortens it (§14.6).
@@ -21121,7 +21322,7 @@ Haskell is the purest language in the table: values never change, effects
 are confined to types such as `IO`, absence is `Maybe`, and contracts are
 type classes [[Haskell 2010](#ref-haskell2010)]. Much of Okkama's vocabulary comes from this
 line, through ML: enums with payloads and `match` (Chapter 16), `Maybe`,
-roles that resemble type classes with declared instances (Section 14.9).
+roles that resemble type classes with declared instances (Section 14.10).
 
 Two differences matter. Haskell infers types across a whole program, while
 Okkama infers only inside bodies and asks for every declaration to be
@@ -21546,7 +21747,7 @@ language is, argued where they appear:
 - forwarding by hand in decorators, and no default bodies in roles
   (Sections 2.12, 14.6);
 - no retroactive conformance, and operators that look only to their left
-  operand (Section 14.11);
+  operand (Section 14.12);
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
   (Sections 12.14, 13.17);
@@ -21751,6 +21952,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-ritchie1993"></a>Dennis M. Ritchie (1993). The Development of the C Language. *HOPL-II: The Second ACM SIGPLAN Conference on History of Programming Languages*: 201–208. https://doi.org/10.1145/154766.155580
 - <a id="ref-pep343"></a>Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - <a id="ref-pep484"></a>Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
+- <a id="ref-rust175"></a>The Rust Release Team (2023). Announcing Rust 1.75.0. *Rust Blog*, 28 December 2023. https://blog.rust-lang.org/2023/12/28/Rust-1.75.0/
 - <a id="ref-rusthashmap"></a>The Rust Project Developers (2026). Struct HashMap. *The Rust Standard Library*. https://doc.rust-lang.org/std/collections/struct.HashMap.html
 - <a id="ref-saltzer1975"></a>Jerome H. Saltzer, Michael D. Schroeder (1975). The Protection of Information in Computer Systems. *Proceedings of the IEEE* 63(9): 1278–1308. https://doi.org/10.1109/PROC.1975.9939
 - <a id="ref-scales2022"></a>Dan Scales (2022). Go 1.18 Implementation of Generics via Dictionaries and Gcshape Stenciling. Design document, Go proposal repository, 22 February 2022. https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries-go1.18.md
@@ -21768,6 +21970,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-stroustrup2001"></a>Bjarne Stroustrup (2001). Exception Safety: Concepts and Techniques. In Alexander Romanovsky, Christophe Dony, Jørgen Lindskov Knudsen, Anand Tripathi (eds.), *Advances in Exception Handling Techniques*, LNCS 2022: 60–76. Springer. https://doi.org/10.1007/3-540-45407-1_4
 - <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
+- <a id="ref-swiftse0296"></a>John McCall, Doug Gregor (2021). SE-0296: Async/await. *Swift Evolution*, implemented in Swift 5.5. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0296-async-await.md
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - <a id="ref-swiftbook"></a>Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/
 - <a id="ref-thompson1968"></a>Ken Thompson (1968). Programming Techniques: Regular Expression Search Algorithm. *Communications of the ACM* 11(6): 419–422. https://doi.org/10.1145/363347.363387

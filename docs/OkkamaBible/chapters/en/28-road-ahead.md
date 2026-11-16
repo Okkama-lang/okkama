@@ -169,7 +169,7 @@ language is, argued where they appear:
 - forwarding by hand in decorators, and no default bodies in roles
   (Sections 2.12, 14.6);
 - no retroactive conformance, and operators that look only to their left
-  operand (Section 14.11);
+  operand (Section 14.12);
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
   (Sections 12.14, 13.17);

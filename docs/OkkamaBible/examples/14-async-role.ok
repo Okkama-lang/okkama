@@ -1,0 +1,76 @@
+module bible/asyncrole v1.0.0;
+
+// A role may promise an async action. Every implementation keeps the promise
+// with an async action of its own, and the caller awaits through the role
+// without knowing which one it holds.
+import "io/stdout" take Stdout;
+
+enum Unknown is Error = (currency(code is string));
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+// Asks a slower source, here another async object.
+object Desk {
+    Desk() {}
+    async quote(code is string) is rat {
+        confirm code == "EUR" else throw Unknown.currency(code);
+        117 / 100;
+    }
+}
+
+object Remote does Rates {
+    has desk is Desk;
+    Remote(:desk);
+    async rate(code is string) is rat { await desk.quote(code); }
+}
+
+// A fixed table, for tests and for currencies the desk does not quote.
+object Table does Rates {
+    has known is %string:rat;
+    Table(:known);
+    async rate(code is string) is rat {
+        confirm known.has(code) else throw Unknown.currency(code);
+        known[code];
+    }
+}
+
+// A decorator: the first source, and the second when the first does not know.
+object Fallback does Rates {
+    has first is Rates;
+    has second is Rates;
+    Fallback(:first, :second);
+    async rate(code is string) is rat {
+        try {
+            await first.rate(code);
+        }
+        catch e is Unknown {
+            await second.rate(code);
+        };
+    }
+}
+
+object Converter {
+    has rates is Rates;
+    Converter(:rates);
+    async converted(amount is rat, code is string) is rat { amount * await rates.rate(code); }
+}
+
+async main() is int {
+    let out = Stdout();
+    let table = Table(known: ["EUR": 6 / 5, "KZT": 1 / 500]);
+    let rates = Fallback(first: Remote(desk: Desk()), second: table);
+    let converter = Converter(rates: rates);
+    out.writeln("100 EUR = " + (await converter.converted(100.rat(), "EUR")).string());
+    out.writeln("5000 KZT = " + (await converter.converted(5000.rat(), "KZT")).string());
+    let missing = try {
+        (await converter.converted(1.rat(), "XAU")).string();
+    }
+    catch e is Unknown {
+        "unknown: " + e.text();
+    };
+    out.writeln(missing);
+    out.writeln("test double: " + (await Converter(rates: table).converted(10.rat(), "EUR")).string());
+    0;
+}
