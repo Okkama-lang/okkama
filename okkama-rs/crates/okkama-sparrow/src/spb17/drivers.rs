@@ -226,11 +226,18 @@ pub(super) fn check_declaration(f: &Function) -> Result<(), Error> {
         "an async external takes its registers in order, no service, and has at most one result")
 }
 
-/// Ruling PR-N (#601 N1): a native driver's inputs packet is statically empty. The packet operand of a `fut.new`
-/// whose entry is an async native of the runtime table (a canonical native symbol) has an empty finite inventory:
-/// `own.empty`, or only splits and joins of it, as own gives a native without arguments. Native parameters are
-/// plain data and handles, which carry no ownership graph, so nothing may enter the driver's INPUTS
-/// (`SPB_EXTERNAL_ASYNC`). The std async primitives' drivers are not natives; Q2 lifts the rule for `send` (PR-I).
+/// Ruling PR-N (#601 N1): a native driver's inputs packet is statically empty. Native parameters are plain data and
+/// handles, which carry no ownership graph, so nothing may enter the driver's INPUTS (`SPB_EXTERNAL_ASYNC`).
+///
+/// What is checked: for each `fut.new` whose entry is an `AsyncExternal` with a canonical symbol (after the load
+/// rules, an async native of the runtime table or its map adapter), the packet operand's evidence inventory
+/// (`Evidence::inventory`) resolves and is empty. The form is free: `own.empty`, which own gives a native, and any
+/// packet of no resource key (splits and joins of it, a packet of a resource-free program) pass alike. An
+/// inventory that does not resolve is refused too, under `LOAD_WORK_BUDGET` when the evidence ran out of budget.
+///
+/// What is not: the inventory counts resource keys, not service entries (ABI D25). A cache duty absorbed into the
+/// packet leaves it empty here; the D25 rule `SPB_FUTURE_INPUT` refuses such a packet. The std async primitives'
+/// drivers are not natives; Q2 lifts the rule for `send` (PR-I).
 pub(super) fn check_native_inputs(p: &Program, f: &Function) -> Result<(), Error> {
     let mut evidence = None;
     for instruction in &f.code {
