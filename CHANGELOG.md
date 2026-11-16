@@ -20,6 +20,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A result may keep a lent field of a parameter (PR-P, #749, #789).** A step or
+  a cursor that keeps its receiver's log (an object over an Atomic, or any value
+  that reaches no obligation and no Future) declares that field as an alias of its
+  result, and the Full ownership verifier admits it without taking it: the field is
+  lent, and the caller gets its dependencies through the alias. Own now infers
+  these declarations (also for a borrowed receiver and through branches), the
+  verifier's B5.1 admits a fresh result's own keys beside its take retention, and a
+  caller no longer ties a lent field to a temporary its callee settles. Under Full,
+  `L07.traversal.escaping` and the cursor-step program of #789 have no diagnostics
+  left (they still end Incomplete on the gate budget, #634).
+- **Wave CI: the verifier differential runs in two parallel parts on the gate
+  profile.** It ran unoptimized and sequentially, ~30 of a Wave run's minutes.
+
 - **Wave 18 review (Fable) follow-ups (#601).** The loader's refusal of a rehome
   that names the task duty of another Future (#765 b) has its SPB negative. A
   synchronous relay of a freshly created Future is checked end to end under the
