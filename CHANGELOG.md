@@ -44,6 +44,32 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   adapter accepts such maps too. Champ hands its maps to Tomato's native
   bridge and takes them back in key order, as Tomato does. The four regex
   and environment cases pass.
+- **Debug builds optimize Cranelift (#761).** Champ's JIT runs in every debug
+  build: unit tests, the end-to-end harnesses and the conformance adapter,
+  which builds with plain `cargo build`. Unoptimized Cranelift code
+  generation took most of a case's run time, and cases near the 30 s
+  conformance budget timed out depending on the runner. The dev profile now
+  optimizes the Cranelift crates and `regalloc2` (`opt-level = 2`), and
+  Okkama's own crates stay debug. CPU time on a debug champ-abi build, on
+  top of #755: L07.traversal.escaping 16.4 s → 8.9 s,
+  L09.digest.md5-sha1-vectors 16.5 s → 6.2 s, L09.csv.rows-and-round-trip
+  13.0 s → 5.0 s.
+- **SPB 17 liveness and allocation checks are fast (#755).** Liveness swept
+  every PC until nothing changed, kept a `BTreeSet` per PC and re-closed all
+  dependency records at every PC; one load computed it up to four times per
+  function, and the allocation checker and root maps re-closed dependencies
+  per use. Liveness is now a postorder worklist over predecessors with sparse
+  per-PC lists, closing obligations only from locations that just became
+  live; the loader solves it once without roots and reuses that result when
+  the roots add nothing live; the allocator, its checker and the JIT share an
+  obligation table, and the checker keeps each state in one buffer. Results
+  are unchanged: the algorithms before #755 stay as a test-only reference
+  that every liveness and allocation in the `okkama-sparrow` and compiler
+  tests is checked against (feature `liveness-reference`). The work budget
+  now counts entries read per visit, so a long backward chain is no longer
+  rejected and a wide fan-out is. In debug Champ builds `L07.traversal.escaping`
+  takes 17 s instead of 24 s, and `L07.traversal.early-exits` 16 s instead
+  of 24 s; Cranelift codegen is now most of what remains.
 
 - **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
   rehomes ran on every function and cloned a dense map of all locations at

@@ -326,12 +326,7 @@ pub(crate) fn check_flow(p: &Program, f: &Function) -> Check {
     }
     if let Some(layout) = p.frame_layout(f) {
         // Uses only: proof maps and dependency edges never keep a token alive past its frame.save.
-        let mut bare = f.clone();
-        bare.proofs.roots.clear();
-        bare.proofs.post_roots.clear();
-        bare.proofs.states.clear();
-        bare.proofs.dependencies.clear();
-        let live = live_locations(&bare)?;
+        let live = allocation::liveness(f, allocation::Parts::USES)?.sets();
         for continuation in layout.continuations.iter().skip(1) {
             let site = continuation.site.unwrap_or(0) as usize;
             let save = site.checked_sub(1).and_then(|save| frame_operation(f, save, Opcode::FrameSave));

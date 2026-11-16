@@ -27,10 +27,12 @@ pub(super) struct Frame {
 
 impl Frame {
     pub fn new(source: &s::Function) -> Result<Self, Error> {
-        let allocation = s::allocate(source).map_err(|error| Error(error.to_string()))?;
+        let failed = |error: s::Error| Error(error.to_string());
+        let live = s::Liveness::of(source).map_err(failed)?;
+        let allocation = s::allocate_with(source, &live).map_err(failed)?;
         // Forward symbolic execution checks all outcomes, metadata reads, ownership lifetimes,
         // cycle scratch, parallel edge copies and post roots independently of the live sets.
-        s::check_allocation(source, &allocation).map_err(|error| Error(error.to_string()))?;
+        s::check_allocation(source, &allocation).map_err(failed)?;
         let mut frame = Self {
             allocation, offsets: vec![], words: vec![], bytes: 0, traced: Map::new(),
             before: vec![], after: vec![],
@@ -44,24 +46,28 @@ impl Frame {
             frame.bytes += words as usize * 8;
         }
         frame.bytes = frame.bytes.max(8);
-        let live = s::live_locations(source).map_err(|error| Error(error.to_string()))?;
-        for (pc, locations) in live.iter().enumerate() {
-            frame.before.push(frame.map(locations));
+        let obligations = s::Obligations::new(source).map_err(failed)?;
+        let mut post = vec![Vec::new(); live.len()];
+        for root in &source.proofs.post_roots {
+            post.get_mut(root.pc as usize).ok_or_else(|| Error("Champ post root PC is missing".into()))?
+                .extend_from_slice(&root.locations);
+        }
+        for (pc, post) in post.iter().enumerate() {
+            frame.before.push(frame.map(live.at(pc)));
             // After-helper maps describe destinations after Post is copied, never Post itself.
             // In an outcome instruction, edge sources are still in their pre-edge locations.
             let mut after = BTreeSet::new();
             if matches!(&source.code[pc], s::Instruction::Data { .. }
                 | s::Instruction::Champ { flow: s::Flow::Next(_), .. })
-                && let Some(next) = live.get(pc + 1)
+                && pc + 1 < live.len()
             {
-                after.extend(next);
+                after.extend(live.at(pc + 1));
             }
             for edge in outgoing(&source.code[pc]) {
-                let mut next = live[edge.target_pc as usize].clone();
-                for assignment in &edge.assignments {
-                    next.remove(&assignment.destination);
-                }
-                after.extend(next);
+                let renamed = |location: &L| {
+                    edge.assignments.iter().any(|assignment| assignment.destination == *location)
+                };
+                after.extend(live.at(edge.target_pc as usize).filter(|location| !renamed(location)));
                 for assignment in &edge.assignments {
                     if let s::Source::Location(location) = assignment.source {
                         after.insert(location);
@@ -69,29 +75,17 @@ impl Frame {
                 }
             }
             // Ownership-only post lifetimes are required even without an ordinary next use.
-            for root in source.proofs.post_roots.iter().filter(|root| root.pc as usize == pc) {
-                after.extend(&root.locations);
-            }
-            loop {
-                let count = after.len();
-                for dependency in &source.proofs.dependencies {
-                    if after.contains(&dependency.value) {
-                        after.extend(&dependency.obligations);
-                    }
-                }
-                if after.len() == count {
-                    break;
-                }
-            }
-            frame.after.push(frame.map(&after));
+            after.extend(post);
+            obligations.close(&mut after);
+            frame.after.push(frame.map(after));
         }
         frame.check()?;
         Ok(frame)
     }
 
-    fn map(&self, locations: &BTreeSet<L>) -> Map {
-        locations.iter().flat_map(|location| {
-            let slot = self.allocation.locations[location] as usize;
+    fn map(&self, locations: impl IntoIterator<Item = L>) -> Map {
+        locations.into_iter().flat_map(|location| {
+            let slot = self.allocation.locations[&location] as usize;
             let (_, references) = shape(self.allocation.slots[slot]);
             references.into_iter().map(move |offset| self.offsets[slot] + offset)
         }).collect()
@@ -101,7 +95,7 @@ impl Frame {
         match pc {
             Some(pc) => self.before[pc].clone(),
             // Entry rejection and external adapters precede body PC 0. Only parameters exist.
-            None => self.map(&source.params.iter().copied().collect()),
+            None => self.map(source.params.iter().copied().collect::<BTreeSet<_>>()),
         }
     }
 

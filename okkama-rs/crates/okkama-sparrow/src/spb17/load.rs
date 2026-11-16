@@ -221,7 +221,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         let states = service_states(f)?;
         enforce(f.proofs.states == states, "EVIDENCE_STATES",
             "service maps differ from reconstructed lifetimes")?;
-        check_roots(f)?;
+        let live = check_roots(f)?;
         let mut reconstructed = evidence::Evidence::new(p, f);
         let destroy_masks = (0..f.proofs.closes.len()).map(|close| {
             visible_destroy_failures(p, f, close as u32, &mut reconstructed)
@@ -232,7 +232,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
             "EVIDENCE_SELECTIONS", "static selection relocation mismatch")?;
         reconstructed.check_budget()?;
         automaton::check(p, f, &destroy_masks)?;
-        let allocation = allocate(f)?;
+        let allocation = allocation::allocate_with(f, &live)?;
         check_allocation(f, &allocation)?;
     }
     Ok(())
@@ -252,12 +252,11 @@ fn root_index(roots: &[RootRequirement]) -> BTreeMap<u32, Active> {
     index
 }
 
-fn check_roots(f: &Function) -> Check {
-    let mut bare = f.clone();
-    bare.proofs.roots.clear();
-    bare.proofs.post_roots.clear();
+/// The supplied roots cover the traced locations live without them; returns the liveness with them, which the
+/// allocator takes.
+fn check_roots(f: &Function) -> Result<allocation::Liveness, Error> {
     // State maps were reconstructed above; dependencies keep zero-word deps leaves alive.
-    let live = live_locations(&bare)?;
+    let live = allocation::liveness(f, allocation::Parts::REQUIRED)?;
     let supplied = root_index(&f.proofs.roots);
     let post = root_index(&f.proofs.post_roots);
     // An undef placeholder is the constant zero until a construction stores over it; verify() admits
@@ -267,24 +266,25 @@ fn check_roots(f: &Function) -> Check {
         _ => None,
     }).collect::<BTreeSet<_>>();
     let traced = |f: &Function, location: Location| traced(f, location) && !placeholders.contains(&location);
-    for (pc, required) in live.iter().enumerate() {
+    for pc in 0..live.len() {
         let roots = supplied.get(&(pc as u32));
-        enforce(required.iter().filter(|&&loc| traced(f, loc))
-            .all(|loc| roots.is_some_and(|roots| roots.contains(loc))),
+        enforce(live.at(pc).filter(|&loc| traced(f, loc))
+            .all(|loc| roots.is_some_and(|roots| roots.contains(&loc))),
             "ROOTS_BEFORE", &format!("missing abstract reference root at pc {pc}"))?;
         // J1/J2 consume both maps. Post is after the helper, before the next instruction/edge copy.
         // Outcome payloads live in the destination block maps; Post records themselves are never roots (§8).
         if matches!(f.code[pc], Instruction::Champ { flow: Flow::Next(_), .. })
             && !matches!(f.code[pc], Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. })
         {
-            let after = live.get(pc + 1).into_iter().flatten().filter(|&&loc| traced(f, loc));
-            enforce(after.clone().all(|loc| post.get(&(pc as u32)).is_some_and(|roots| roots.contains(loc))),
+            let after = (pc + 1 < live.len()).then(|| live.at(pc + 1)).into_iter().flatten()
+                .filter(|&loc| traced(f, loc)).collect::<Vec<_>>();
+            enforce(after.iter().all(|loc| post.get(&(pc as u32)).is_some_and(|roots| roots.contains(loc))),
                 "ROOTS_AFTER", &format!("missing traced live-out at pc {pc}: {:?}",
-                    after.filter(|loc| !post.get(&(pc as u32)).is_some_and(|roots| roots.contains(loc)))
+                    after.iter().filter(|loc| !post.get(&(pc as u32)).is_some_and(|roots| roots.contains(loc)))
                         .collect::<Vec<_>>()))?;
         }
     }
-    Ok(())
+    live.with_roots(f)
 }
 
 /// A proved empty inventory sees no descriptor. Opaque packets/journals conservatively see all
