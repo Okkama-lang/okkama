@@ -385,8 +385,19 @@ fn champ_n1_a_host_refusal_is_the_drivers_failure() {
         runtime.champ_future_start(ctx, 0, future);
         settle(ctx, future);
         assert_eq!(get(future, tasks::STATE), tasks::FAILURE_STATE);
-        let failure = kind(runtime, get(future, tasks::FAILURE));
-        assert!(failure.starts_with("Native") || failure.starts_with("Program"), "{failure}");
+        // Tomato's kind: a NativeFailure, which `catch e is NativeFailure` takes (language spec 9.5, #719, #797),
+        // not a Program failure. Source: `host/native_root.rs` `rooted_coordinates` refuses with
+        // `fail(n, "invalid_input", "Invalid rooted offset")`, `native_root` makes it `FailureKind::Native`, and
+        // `drivers::native_io` fails the driver with it (`Start::Raise`). Observed on Tomato 0.5.8
+        // (`okkama run --engine sparrow`, in the cage): std `RootedEntry.piece(-1, 9)` catches it as
+        // NativeFailure and throws `FileError.invalid_operation("Invalid rooted offset")`.
+        let record = runtime.failure(get(future, tasks::FAILURE)).unwrap();
+        let FailureKind::Native(payload) = record.kind else {
+            panic!("{:?}", record.kind);
+        };
+        // The payload is the four-string NativeFailure: domain, code, operation, message.
+        let fields = (0..4).map(|field| runtime.heap.text(runtime.heap.field(payload, field)).to_owned());
+        assert_eq!(fields.collect::<Vec<_>>(), ["core.fs.root", "invalid_input", PIECE, "Invalid rooted offset"]);
         assert!(runtime.champ_cache(future).unwrap().packet == 0);
     }
 }
