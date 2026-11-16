@@ -31,10 +31,12 @@ bibliographic data were checked are listed.
 - [@church1936] Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - [@claessen2000] Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - [@clojureds] Rich Hickey and contributors (2026). Data Structures. *Clojure Reference*. https://clojure.org/reference/data_structures {label: Clojure Reference}
+- [@cloudflare2019] John Graham-Cumming (2019). Details of the Cloudflare outage on July 2, 2019. *The Cloudflare Blog*, 12 July 2019. https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/
 - [@codd1970] E. F. Codd (1970). A Relational Model of Data for Large Shared Data Banks. *Communications of the ACM* 13(6): 377–387. https://doi.org/10.1145/362384.362685
 - [@codd1979] E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
 - [@codd1990] E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - [@cook2009] William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
+- [@cox2007] Russ Cox (2007). Regular Expression Matching Can Be Simple And Fast (but is slow in Java, Perl, PHP, Python, Ruby, ...). January 2007. https://swtch.com/~rsc/regexp/regexp1.html
 - [@cox2018] Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - [@csrecords] Microsoft (2026). Records (C# reference). *C# language reference*. https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record {label: C# language reference}
 - [@cwe] The MITRE Corporation (2026). *Common Weakness Enumeration (CWE)*, version 5.0. https://cwe.mitre.org/ {label: MITRE CWE}
@@ -99,6 +101,7 @@ bibliographic data were checked are listed.
 - [@kernighan1988] Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - [@king2019] Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - [@klabnik2023] Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
+- [@kleene1956] Stephen Cole Kleene (1956). Representation of Events in Nerve Nets and Finite Automata. In Claude E. Shannon, John McCarthy (eds.), *Automata Studies*, Annals of Mathematics Studies 34: 3–41. Princeton University Press.
 - [@knuth1974] Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - [@knuth1997] Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - [@koenig1995] Andrew Koenig (1995). Patterns and Antipatterns. *Journal of Object-Oriented Programming* 8(1): 46–48.
@@ -187,6 +190,7 @@ bibliographic data were checked are listed.
 - [@snyder1986] Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
 - [@sober2015] Elliott Sober (2015). *Ockham's Razors: A User's Manual*. Cambridge University Press. https://doi.org/10.1017/CBO9781107705937
 - [@spade-sep] Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
+- [@stackexchange2016] Stack Exchange (2016). Outage Postmortem — July 20, 2016. *Stack Exchange Network Status*. https://stackstatus.tumblr.com/post/147710624694/outage-postmortem-july-20-2016
 - [@strom1986] Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
 - [@stroustrup1994] Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
 - [@stroustrup2001] Bjarne Stroustrup (2001). Exception Safety: Concepts and Techniques. In Alexander Romanovsky, Christophe Dony, Jørgen Lindskov Knudsen, Anand Tripathi (eds.), *Advances in Exception Handling Techniques*, LNCS 2022: 60–76. Springer. https://doi.org/10.1007/3-540-45407-1_4
@@ -194,6 +198,7 @@ bibliographic data were checked are listed.
 - [@sussman1975] Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - [@swiftbook] Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/ {label: The Swift Programming Language}
 - [@syme2011] Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
+- [@thompson1968] Ken Thompson (1968). Programming Techniques: Regular Expression Search Algorithm. *Communications of the ACM* 11(6): 419–422. https://doi.org/10.1145/363347.363387
 - [@thorburn1918] W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - [@tofte1997] Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - [@tscompat] Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html {label: TypeScript Handbook}

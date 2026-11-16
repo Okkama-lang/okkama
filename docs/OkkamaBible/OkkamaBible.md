@@ -82,7 +82,8 @@
   - [6.8 What text costs](#68-what-text-costs)
   - [6.9 Laying out text](#69-laying-out-text)
   - [6.10 A worked example: a slug from a title](#610-a-worked-example-a-slug-from-a-title)
-  - [6.11 Limits](#611-limits)
+  - [6.11 Patterns without catastrophe](#611-patterns-without-catastrophe)
+  - [6.12 Limits](#612-limits)
 - [Chapter 7. Absence Without Null](#chapter-7-absence-without-null)
   - [7.1 What null means — too many things](#71-what-null-means--too-many-things)
   - [7.2 Okkama's answer: one construct per meaning](#72-okkamas-answer-one-construct-per-meaning)
@@ -3617,7 +3618,117 @@ None of these steps is hidden in the string type or in a default of the
 library. When the slug comes out wrong for some title, the missing rule is
 missing from the program text, where a reader can find it and add it.
 
-## 6.11 Limits
+## 6.11 Patterns without catastrophe
+
+Section 6.4 kept patterns out of the string type: `split(".")` splits on
+dots. Patterns live in the `regex` module, and a program asks for one by
+name.
+
+```okkama
+module bible/patterns v1.0.0;
+
+// Patterns go through the regex module, explicitly. The dialect is regular:
+// no backreferences and no lookaround, so every match runs in linear time.
+import "io/stdout" take Stdout;
+import "regex/pattern" take Regex, InvalidRegex;
+
+main() is int {
+    let out = Stdout();
+    let log = "2026-11-03 deploy; 2026-11-14 rollback; 2026-11-16 deploy";
+
+    // Named groups read like the fields of a record.
+    let entry = Regex("(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2}) (?<event>\\w+)");
+    for entry.all(log) -> each {
+        out.writeln(each.text("event") + " on day " + each.int("day").string());
+    }
+
+    // Splitting and replacing by a pattern, and the literal forms beside them.
+    out.writeln(Regex(";\\s*").parts(log).join(" | "));
+    out.writeln(Regex("\\d{4}-\\d{2}-\\d{2}").replaced(origin: log, by: "<date>"));
+    out.writeln("1.5.0".split(".").join(" "));
+
+    // The pattern that hangs a backtracking matcher: forty a's and a b.
+    let nested = Regex("(a+)+$");
+    out.writeln("nested quantifiers: " + nested.found("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab").string());
+
+    // A malformed pattern is a typed error that says where it is wrong.
+    let broken = try {
+        Regex("(?<year>\\d{4}").found(log).string();
+    }
+    catch e is InvalidRegex {
+        e.text();
+    };
+    out.writeln(broken);
+    0;
+}
+```
+
+Output:
+
+```text
+deploy on day 3
+rollback on day 14
+deploy on day 16
+2026-11-03 deploy | 2026-11-14 rollback | 2026-11-16 deploy
+<date> deploy; <date> rollback; <date> deploy
+1 5 0
+nested quantifiers: false
+InvalidRegex.located(13, "invalid regex expression")
+```
+
+- **A match reads like a record.** `each.text("event")` is the text of a
+  named group, and `each.int("day")` reads the same group as a number, so
+  `"03"` becomes `3` without a separate parse. A group that took no part in
+  the match says so. It does not pretend to be empty text.
+- **The common questions are asked of the pattern.** `found`, `first`,
+  `all`, `parts` and `replaced` each take the whole text. `replaced` is
+  literal: a `$` in the replacement is just a dollar sign. Expanding
+  `${name}` is a separate, explicit policy.
+- **A malformed pattern is a typed error with a position.** The missing
+  `)` is reported at offset 13, the end of the expression, counted in code
+  points like everything else in this chapter. The pattern compiles once,
+  at its first use, and remembers either the program or the error.
+- **`(a+)+$` answers at once.** That line is the reason for the dialect.
+
+Regular expressions began as mathematics. Kleene described the "regular
+events" a finite automaton can recognise [[Kleene 1956](#ref-kleene1956)]. Thompson turned the
+notation into a search command for the QED editor, and his algorithm
+compiles a pattern into a nondeterministic automaton and runs every state
+at once, in time linear in the text [[Thompson 1968](#ref-thompson1968)]. The tools that came
+later, Perl first and then the libraries of Java, Python, Ruby and
+JavaScript, chose backtracking instead: they try one alternative, and on
+failure go back and try the next. Backtracking makes backreferences and
+lookaround easy. It also makes some patterns take exponential time. Russ
+Cox measured a 29-character input that took Perl over sixty seconds and a
+Thompson automaton about twenty microseconds [[Cox 2007](#ref-cox2007)].
+
+The pattern in the example is the textbook case. On this machine,
+Python 3.9's `re` takes 0.6 seconds for twenty-two `a`s and a `b`, and
+every further `a` doubles the time. The example's forty would take about
+two days. The failure has a CWE number, CWE-1333, Inefficient Regular
+Expression Complexity [[MITRE CWE](#ref-cwe)], and a history of outages.
+
+- **Stack Overflow, July 2016.** A post with about 20,000 whitespace
+  characters in a row met a pattern that trimmed trailing whitespace. Its
+  backtracking was only quadratic, but quadratic in 20,000 took the site
+  down for 34 minutes. The fix replaced the pattern with a substring
+  function [[Exchange 2016](#ref-stackexchange2016)].
+- **Cloudflare, July 2019.** One firewall rule containing `.*(?:.*=.*)` put
+  the CPUs that serve HTTP at nearly 100% across the network for 27
+  minutes. The remedy announced afterwards was a move to RE2 or Rust's
+  `regex`, two engines with a linear-time guarantee [[Graham-Cumming 2019](#ref-cloudflare2019)].
+
+Okkama's dialect makes the same choice those engines made. It has
+literals, classes, groups, alternation and the usual quantifiers, but no
+backreferences, lookaround, conditionals or recursion, so a bounded
+Thompson automaton can run every pattern in linear time. Its limits are
+explicit, typed failures: 4,096 code points of expression, 256 nested
+groups, 1,024 captures and 16,384 states. Its Unicode data is pinned to
+version 16.0, the same as the string type's. A program that needs a
+backreference writes the check as code after the match. The cost of that
+is a few lines. The cost of a catastrophic pattern is an outage.
+
+## 6.12 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the
@@ -21504,6 +21615,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-codd1979"></a>E. F. Codd (1979). Extending the Database Relational Model to Capture More Meaning. *ACM Transactions on Database Systems* 4(4): 397–434. https://doi.org/10.1145/320107.320109
 - <a id="ref-codd1990"></a>E. F. Codd (1990). *The Relational Model for Database Management: Version 2*. Addison-Wesley.
 - <a id="ref-cook2009"></a>William R. Cook (2009). On Understanding Data Abstraction, Revisited. In *Proceedings of OOPSLA 2009*, *ACM SIGPLAN Notices* 44(10): 557–572. https://doi.org/10.1145/1640089.1640133
+- <a id="ref-cox2007"></a>Russ Cox (2007). Regular Expression Matching Can Be Simple And Fast (but is slow in Java, Perl, PHP, Python, Ruby, ...). January 2007. https://swtch.com/~rsc/regexp/regexp1.html
 - <a id="ref-cox2018"></a>Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - <a id="ref-cytron1991"></a>Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - <a id="ref-dscope"></a>D Language Foundation (2026). Scope Guard Statement. *D Language Specification*, Statements. https://dlang.org/spec/statement.html#scope-guard-statement
@@ -21520,6 +21632,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-erlangref"></a>Ericsson AB (2026). *Erlang Reference Manual*. Erlang/OTP documentation. https://www.erlang.org/doc/system/reference_manual.html
 - <a id="ref-evans2003"></a>Eric Evans (2003). *Domain-Driven Design: Tackling Complexity in the Heart of Software*. Addison-Wesley.
 - <a id="ref-se0304"></a>Swift Evolution (2021). SE-0304: Structured Concurrency. https://github.com/swiftlang/swift-evolution/blob/main/proposals/0304-structured-concurrency.md
+- <a id="ref-stackexchange2016"></a>Stack Exchange (2016). Outage Postmortem — July 20, 2016. *Stack Exchange Network Status*. https://stackstatus.tumblr.com/post/147710624694/outage-postmortem-july-20-2016
 - <a id="ref-fowler2007"></a>Martin Fowler (2007). Mocks Aren't Stubs. https://martinfowler.com/articles/mocksArentStubs.html
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
@@ -21530,6 +21643,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
 - <a id="ref-gosling2023"></a>James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
+- <a id="ref-cloudflare2019"></a>John Graham-Cumming (2019). Details of the Cloudflare outage on July 2, 2019. *The Cloudflare Blog*, 12 July 2019. https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/
 - <a id="ref-griesemer2020"></a>Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
 - <a id="ref-grigore2017"></a>Radu Grigore (2017). Java Generics are Turing Complete. In *Proceedings of POPL 2017*: 73–85. ACM. https://doi.org/10.1145/3009837.3009871
 - <a id="ref-haskell2010"></a>Simon Marlow (ed.) (2010). *Haskell 2010 Language Report*. https://www.haskell.org/onlinereport/haskell2010/
@@ -21559,6 +21673,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-kernighan1988"></a>Brian W. Kernighan, Dennis M. Ritchie (1988). *The C Programming Language*, 2nd edition. Prentice Hall.
 - <a id="ref-king2019"></a>Alexis King (2019). Parse, Don't Validate. Blog post, 5 November 2019. https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 - <a id="ref-klabnik2023"></a>Steve Klabnik, Carol Nichols (2023). *The Rust Programming Language*, 2nd edition. No Starch Press. https://doc.rust-lang.org/book/
+- <a id="ref-kleene1956"></a>Stephen Cole Kleene (1956). Representation of Events in Nerve Nets and Finite Automata. In Claude E. Shannon, John McCarthy (eds.), *Automata Studies*, Annals of Mathematics Studies 34: 3–41. Princeton University Press.
 - <a id="ref-knuth1974"></a>Donald E. Knuth (1974). Structured Programming with go to Statements. *ACM Computing Surveys* 6(4): 261–301. https://doi.org/10.1145/356635.356640
 - <a id="ref-knuth1997"></a>Donald E. Knuth (1997). *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition. Addison-Wesley.
 - <a id="ref-koenig1995"></a>Andrew Koenig (1995). Patterns and Antipatterns. *Journal of Object-Oriented Programming* 8(1): 46–48.
@@ -21655,6 +21770,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15
 - <a id="ref-swiftbook"></a>Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/
+- <a id="ref-thompson1968"></a>Ken Thompson (1968). Programming Techniques: Regular Expression Search Algorithm. *Communications of the ACM* 11(6): 419–422. https://doi.org/10.1145/363347.363387
 - <a id="ref-thorburn1918"></a>W. M. Thorburn (1918). The Myth of Occam's Razor. *Mind* 27(107): 345–353. https://doi.org/10.1093/mind/XXVII.3.345
 - <a id="ref-tofte1997"></a>Mads Tofte, Jean-Pierre Talpin (1997). Region-Based Memory Management. *Information and Computation* 132(2): 109–176. https://doi.org/10.1006/inco.1996.2613
 - <a id="ref-tscompat"></a>Microsoft (2026). Type Compatibility. *TypeScript Handbook*. https://www.typescriptlang.org/docs/handbook/type-compatibility.html

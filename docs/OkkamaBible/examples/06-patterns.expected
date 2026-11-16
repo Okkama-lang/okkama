@@ -1,0 +1,8 @@
+deploy on day 3
+rollback on day 14
+deploy on day 16
+2026-11-03 deploy | 2026-11-14 rollback | 2026-11-16 deploy
+<date> deploy; <date> rollback; <date> deploy
+1 5 0
+nested quantifiers: false
+InvalidRegex.located(13, "invalid regex expression")

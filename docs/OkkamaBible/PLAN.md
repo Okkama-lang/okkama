@@ -180,6 +180,10 @@ language.
   between the static and the path check, fields bound in blocks, release
   order; C++, Java/OBJ11-J, Kotlin `lateinit`, Swift, Rust). Chapter 12 is
   9.8 pages.
+- 2026-11-16: 6.11 patterns without catastrophe (`06-patterns`: named
+  groups, literal replacement, typed errors, `(a+)+$`; Kleene, Thompson,
+  Cox; Python 3.9 `re` measured at 0.6 s for 22 a's, doubling per a;
+  Stack Overflow 2016 and Cloudflare 2019 outages, CWE-1333).
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

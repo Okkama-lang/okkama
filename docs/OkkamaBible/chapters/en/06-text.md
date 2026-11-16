@@ -294,7 +294,67 @@ None of these steps is hidden in the string type or in a default of the
 library. When the slug comes out wrong for some title, the missing rule is
 missing from the program text, where a reader can find it and add it.
 
-## 6.11 Limits
+## 6.11 Patterns without catastrophe
+
+Section 6.4 kept patterns out of the string type: `split(".")` splits on
+dots. Patterns live in the `regex` module, and a program asks for one by
+name.
+
+{{example:06-patterns}}
+
+- **A match reads like a record.** `each.text("event")` is the text of a
+  named group, and `each.int("day")` reads the same group as a number, so
+  `"03"` becomes `3` without a separate parse. A group that took no part in
+  the match says so. It does not pretend to be empty text.
+- **The common questions are asked of the pattern.** `found`, `first`,
+  `all`, `parts` and `replaced` each take the whole text. `replaced` is
+  literal: a `$` in the replacement is just a dollar sign. Expanding
+  `${name}` is a separate, explicit policy.
+- **A malformed pattern is a typed error with a position.** The missing
+  `)` is reported at offset 13, the end of the expression, counted in code
+  points like everything else in this chapter. The pattern compiles once,
+  at its first use, and remembers either the program or the error.
+- **`(a+)+$` answers at once.** That line is the reason for the dialect.
+
+Regular expressions began as mathematics. Kleene described the "regular
+events" a finite automaton can recognise [@kleene1956]. Thompson turned the
+notation into a search command for the QED editor, and his algorithm
+compiles a pattern into a nondeterministic automaton and runs every state
+at once, in time linear in the text [@thompson1968]. The tools that came
+later, Perl first and then the libraries of Java, Python, Ruby and
+JavaScript, chose backtracking instead: they try one alternative, and on
+failure go back and try the next. Backtracking makes backreferences and
+lookaround easy. It also makes some patterns take exponential time. Russ
+Cox measured a 29-character input that took Perl over sixty seconds and a
+Thompson automaton about twenty microseconds [@cox2007].
+
+The pattern in the example is the textbook case. On this machine,
+Python 3.9's `re` takes 0.6 seconds for twenty-two `a`s and a `b`, and
+every further `a` doubles the time. The example's forty would take about
+two days. The failure has a CWE number, CWE-1333, Inefficient Regular
+Expression Complexity [@cwe], and a history of outages.
+
+- **Stack Overflow, July 2016.** A post with about 20,000 whitespace
+  characters in a row met a pattern that trimmed trailing whitespace. Its
+  backtracking was only quadratic, but quadratic in 20,000 took the site
+  down for 34 minutes. The fix replaced the pattern with a substring
+  function [@stackexchange2016].
+- **Cloudflare, July 2019.** One firewall rule containing `.*(?:.*=.*)` put
+  the CPUs that serve HTTP at nearly 100% across the network for 27
+  minutes. The remedy announced afterwards was a move to RE2 or Rust's
+  `regex`, two engines with a linear-time guarantee [@cloudflare2019].
+
+Okkama's dialect makes the same choice those engines made. It has
+literals, classes, groups, alternation and the usual quantifiers, but no
+backreferences, lookaround, conditionals or recursion, so a bounded
+Thompson automaton can run every pattern in linear time. Its limits are
+explicit, typed failures: 4,096 code points of expression, 256 nested
+groups, 1,024 captures and 16,384 states. Its Unicode data is pinned to
+version 16.0, the same as the string type's. A program that needs a
+backreference writes the check as code after the match. The cost of that
+is a few lines. The cost of a catastrophic pattern is an outage.
+
+## 6.12 Limits
 
 - **Text assembly.** Extending a chain with `text + piece` costs the appended text rather than a copy of everything so far. A `TextBuffer` makes the intention to build one result explicit.
 - **Case conversion has no locale.** `lower()` and `upper()` follow the
