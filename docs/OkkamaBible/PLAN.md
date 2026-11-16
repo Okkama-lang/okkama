@@ -187,6 +187,10 @@ language.
 - 2026-11-16: 14.9 async actions in a role (`14-async-role`: a desk, a
   table and a fallback decorator; `14-async-shape-rejected`,
   `14-async-caller-rejected`; Swift SE-0296, Kotlin, Rust 1.75, C#).
+- 2026-11-16: 15.8 waiting without waiting (`15-backoff-tests`: a
+  recording `Timing`, `Stub`, `RecordedCalls`, mutation-checked; why
+  counting waits is right here); found #756 (test report prints object
+  identities).
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

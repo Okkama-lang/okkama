@@ -215,10 +215,11 @@
   - [15.5 Состояние в фейке](#155-состояние-в-фейке)
   - [15.6 Свойства](#156-свойства)
   - [15.7 Разобранный набор: сервис с часами и хранилищем](#157-разобранный-набор-сервис-с-часами-и-хранилищем)
-  - [15.8 Остальной инструментарий](#158-остальной-инструментарий)
-  - [15.9 Okkama среди других языков](#159-okkama-среди-других-языков)
-  - [15.10 Что пока не работает](#1510-что-пока-не-работает)
-  - [15.11 Чего стоит такой замысел](#1511-чего-стоит-такой-замысел)
+  - [15.8 Ждать, не дожидаясь: политика повторов](#158-ждать-не-дожидаясь-политика-повторов)
+  - [15.9 Остальной инструментарий](#159-остальной-инструментарий)
+  - [15.10 Okkama среди других языков](#1510-okkama-среди-других-языков)
+  - [15.11 Что пока не работает](#1511-что-пока-не-работает)
+  - [15.12 Чего стоит такой замысел](#1512-чего-стоит-такой-замысел)
 - [Глава 16. Перечисления и сопоставление с образцом](#глава-16-перечисления-и-сопоставление-с-образцом)
   - [16.1 Закрытый набор имён](#161-закрытый-набор-имён)
   - [16.2 Варианты с данными](#162-варианты-с-данными)
@@ -10974,7 +10975,9 @@ async main() is int {
 Okkama на стороне Kotlin, и `Table` это стоит одного слова, `async`. Взамен
 одно правило покрывает параметры, результаты и ожидание: реализация
 повторяет сигнатуру роли в точности. Читатель, увидевший одну реализацию,
-знает, как выглядит любой вызов через роль.
+знает, как выглядит любой вызов через роль. Раздел 20.11 показывает то же
+правило со стороны планировщика: реализация не может ответить синхронно
+там, где роль обещала ждать.
 
 ## 14.10 Откуда пришли роли
 
@@ -11630,7 +11633,152 @@ PASS
 набор всё равно пройдёт, пока поведение то же: тесты закрепляют контракт
 сервиса, а не его разговор с соавторами.
 
-## 15.8 Остальной инструментарий
+## 15.8 Ждать, не дожидаясь: политика повторов
+
+Есть код, который существует, чтобы ждать. Политика повторов пробует,
+ждёт и пробует снова, с ожиданием длиннее прежнего. Раздел 20.11 строит
+повтор над связанным async-действием; этот добавляет ожидания, а раздел
+проверяет их. Набор, который ждал бы по-настоящему, тратил бы секунды на
+тест и вдобавок был бы нестабильным. Политика ниже получает часы как роль
+`Timing`, поэтому набор их подменяет:
+
+```okkama
+module bible/backoff v1.0.0;
+
+// A retry policy with doubling waits, tested without waiting: the clock is a
+// fake that records each wait and returns at once, and the source is a stub
+// that answers from a script.
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "testing/double" take RecordedCalls, Stub;
+
+enum Down is Error = (unavailable(attempt is int));
+
+role Source {
+    async read(attempt is int) is string;
+}
+
+object Backoff {
+    has timing is Timing;
+    has attempts is int;
+
+    Backoff(:timing, :attempts);
+
+    async fetched(source is Source) is string {
+        await self.attempt(source, 1, Duration(seconds: 1));
+    }
+
+    async attempt(source is Source, number is int, delay is Duration) is string {
+        try {
+            await source.read(number);
+        }
+        catch e is Down {
+            confirm number < attempts else throw e;
+            await timing.wait(delay);
+            await self.attempt(source, number + 1, delay.plus(delay));
+        };
+    }
+}
+
+// The clock never waits: it writes each wait down and returns.
+object Recording does Timing {
+    has waits is RecordedCalls<Duration>;
+
+    Recording(:waits);
+
+    instant() is Instant { Instant(Duration(seconds: 0)); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    async wait(duration is Duration) is void { waits.record(duration); }
+}
+
+// The source answers from a script: "down" fails that attempt.
+object Scripted does Source {
+    has answers is Stub<string>;
+
+    Scripted(:answers);
+
+    async read(attempt is int) is string {
+        let answer = answers.next();
+        confirm answer != "down" else throw Down.unavailable(attempt);
+        answer;
+    }
+}
+
+async test "two failures cost one and then two seconds" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 4);
+    let source = Scripted(answers: Stub(["down", "down", "ready"]));
+    test.is(await backoff.fetched(source), "ready");
+    test.is(waits.size(), 2);
+    test.is(waits.records().item(0).value(), Duration(seconds: 1));
+    test.is(waits.records().item(1).value(), Duration(seconds: 2));
+}
+
+async test "the first answer needs no wait" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 4);
+    test.is(await backoff.fetched(Scripted(answers: Stub(["ready"]))), "ready");
+    test.is(waits.size(), 0);
+}
+
+async test "after the last attempt the failure reaches the caller" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 3);
+    let outcome = try {
+        await backoff.fetched(Scripted(answers: Stub(["down", "down", "down", "ready"])));
+    }
+    catch e is Down {
+        e.text();
+    };
+    test.is(outcome, "Down.unavailable(3)");
+    test.is(waits.size(), 2);
+}
+```
+
+Вывод:
+
+```text
+=== RUN   two failures cost one and then two seconds
+--- PASS: two failures cost one and then two seconds
+=== RUN   the first answer needs no wait
+--- PASS: the first answer needs no wait
+=== RUN   after the last attempt the failure reaches the caller
+--- PASS: after the last attempt the failure reaches the caller
+PASS
+```
+
+- **Часы записывают ожидания.** `Recording` выполняет `Timing`, а его
+  `wait` записывает длительность в `RecordedCalls` и сразу возвращается.
+  Три теста идут миллисекунды, а второй доказывает, что первый же ответ
+  не стоит никакого ожидания.
+- **Источник следует сценарию.** `Stub(["down", "down", "ready"])` выдаёт
+  ответы по порядку, а `Scripted` превращает `"down"` в типизированный
+  отказ, который ловит политика. Заглушка, у которой кончились ответы,
+  бросает `StubExhausted`, так что политика, попробовавшая лишний раз,
+  упала бы громко, а не прочитала устаревший ответ.
+- **Последний отказ достаётся вызывающему.** При трёх попытках политика
+  ждёт дважды, а потом перебрасывает `Down.unavailable(3)`. Четвёртый ответ
+  сценария так и не читается.
+
+Этот набор считает вызовы, чего раздел 15.7 избегал, и здесь это верно.
+Политика повторов — это её расписание: секунда, потом две. Ожидания — то,
+что она обещает, а не разговор с соавтором, поэтому их запись — это
+спецификация, а не мок под другим именем. Тест по-прежнему не говорит, как
+устроена политика: цикл, рекурсия или таблица задержек — набор не
+изменится.
+
+`Recording` возвращается сразу, и это правильно для кода, который ждёт
+последовательно. Коду, который ждёт, *пока* идут другие задачи, — например,
+таймауту, который соревнуется с ответом, — нужны часы, держащие ожидающих,
+пока тест их не сдвинет. Это `ManualClock` из `testing/time`, и раздел
+20.11 с его помощью отменяет курьера через тридцать секунд, которые так и
+не проходят.
+
+Проваленное сравнение двух `Duration` сейчас показывает в отчёте их адреса
+в куче (`Duration@52e44f14340`), а не значения (#756). Сама проверка
+точна, но отчёт не говорит, чем значения различаются.
+
+## 15.9 Остальной инструментарий
 
 Стандартная библиотека добавляет ещё несколько частей, все — только внутри
 идущего теста:
@@ -11660,7 +11808,7 @@ PASS
 поэтому тест, который может зависнуть, должен ограничить себя бюджетом или
 сроком.
 
-## 15.9 Okkama среди других языков
+## 15.10 Okkama среди других языков
 
 Каждый язык с культурой тестирования отвечает на одни и те же четыре
 вопроса: где живёт тест, как его находит запускающий, что подменяет
@@ -11690,7 +11838,7 @@ PASS
 меняются. Сотрудника подменяют так же, как в рабочем коде: передают другой
 объект, который исполняет роль.
 
-## 15.10 Что пока не работает
+## 15.11 Что пока не работает
 
 - Форматов отчёта, seed и параллельных исполнителей в командной строке
   нет; они запланированы вместе с переписанной стандартной библиотекой
@@ -11700,7 +11848,7 @@ PASS
 использованным (#275). Теперь это обычный аргумент:
 `test.is(bottle.open().close(), bottle)` сравнивает две бутылки.
 
-## 15.11 Чего стоит такой замысел
+## 15.12 Чего стоит такой замысел
 
 - **Фейк надо написать.** Библиотека моков порождает двойника из
   интерфейса одной строкой. Фейк — это код, и для большой роли его много.
@@ -21977,7 +22125,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - нет перехвата всего, кроме `catch e is Error`, и ошибки не могут нести
   объекты (раздел 10.19);
 - fake, который надо написать для каждой роли, подменяемой в тесте (раздел
-  15.11);
+  15.12);
 - нет списка случаев перечисления и порядка между ними (раздел 16.10);
 - нет состояния уровня модуля, только константы времени компиляции (раздел
   19.6);

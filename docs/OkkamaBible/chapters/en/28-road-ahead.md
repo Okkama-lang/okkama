@@ -176,7 +176,7 @@ language is, argued where they appear:
 - ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);
-- a fake to write for every role a test replaces (Section 15.11);
+- a fake to write for every role a test replaces (Section 15.12);
 - no list of an enum's cases and no order between them (Section 16.10);
 - no module-level state, only compile-time constants (Section 19.6);
 - a fixed cleanup order: newest first, owner before fields (Section 11.15).

@@ -287,7 +287,47 @@ No test names a call count or an argument list. If `Reminders` later caches
 behaviour is the same: what the tests pin is the service's contract, not its
 conversation with its collaborators.
 
-## 15.8 The rest of the toolbox
+## 15.8 Waiting without waiting: a retry policy
+
+Some code exists to wait. A retry policy tries, waits, and tries again with
+a longer wait. Section 20.11 builds a retry over a bound async action; this
+one adds the waits, and this section tests them. A suite that really waits for it would take seconds per
+test, and a flaky one at that. The policy below takes its clock as a
+`Timing` role, so the suite replaces the clock:
+
+{{example:15-backoff-tests}}
+
+- **The clock writes waits down.** `Recording` does `Timing`, and its
+  `wait` records the duration in a `RecordedCalls` and returns at once. The
+  three tests run in milliseconds, and the second test proves that a first
+  answer costs no wait at all.
+- **The source follows a script.** `Stub(["down", "down", "ready"])` hands
+  out its answers in order, and `Scripted` turns `"down"` into the typed
+  failure the policy catches. A stub that runs out throws `StubExhausted`,
+  so a policy that tried once too often would fail loudly instead of
+  reading a stale answer.
+- **The last failure is the caller's.** With three attempts the policy waits
+  twice and then rethrows `Down.unavailable(3)`. The fourth answer in the
+  script is never read.
+
+This suite counts calls, which Section 15.7 avoided, and here that is
+correct. A retry policy is its schedule: one second, then two. The waits
+are what it promises, not a conversation with a collaborator, so recording
+them is the specification and not a mock in disguise. The test still does
+not say how the policy is built. It could be a loop, recursion or a table
+of delays, and the suite would not change.
+
+`Recording` returns at once, which is right for code that waits in
+sequence. Code that waits *while* other tasks run, a timeout racing an
+answer for example, needs a clock that holds its waiters until the test
+moves it. That is `ManualClock` from `testing/time`, and Section 20.11
+uses it to time out a courier after thirty seconds that never pass.
+
+A failed comparison of two `Duration`s currently reports their heap
+identities (`Duration@52e44f14340`) instead of their values (#756). The
+check itself is exact, but the report does not say how the values differ.
+
+## 15.9 The rest of the toolbox
 
 The standard library adds a few more pieces, all usable only inside a
 running test:
@@ -316,7 +356,7 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
-## 15.9 Okkama among other languages
+## 15.10 Okkama among other languages
 
 Every language with a test culture answers the same four questions: where a
 test lives, how the runner finds it, what stands in for a collaborator, and
@@ -346,7 +386,7 @@ of a module while a test runs, has nothing to act on in a language whose
 objects never change. A collaborator is replaced the way it is in
 production, by passing a different object that does the role.
 
-## 15.10 What does not work yet
+## 15.11 What does not work yet
 
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
@@ -355,7 +395,7 @@ Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
 `test.is(bottle.open().close(), bottle)` compares the two bottles.
 
-## 15.11 What this design costs
+## 15.12 What this design costs
 
 - **A fake must be written.** A mocking library generates a double from an
   interface in one line. A fake is code, and for a large role it is a lot

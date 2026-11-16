@@ -377,7 +377,9 @@ direction of conformance:
 Okkama takes Kotlin's side, and it costs `Table` one word, `async`. In
 return, one rule covers parameters, results and waiting alike: an
 implementation repeats the role's signature exactly. A reader who sees one
-implementation knows how every call through the role looks.
+implementation knows how every call through the role looks. Section 20.11
+gives the scheduler's side of the rule: an implementation cannot answer
+synchronously where the role promised to wait.
 
 ## 14.10 Where roles came from
 

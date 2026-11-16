@@ -1,0 +1,7 @@
+=== RUN   two failures cost one and then two seconds
+--- PASS: two failures cost one and then two seconds
+=== RUN   the first answer needs no wait
+--- PASS: the first answer needs no wait
+=== RUN   after the last attempt the failure reaches the caller
+--- PASS: after the last attempt the failure reaches the caller
+PASS

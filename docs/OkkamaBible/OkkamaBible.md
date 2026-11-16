@@ -215,10 +215,11 @@
   - [15.5 State in a fake](#155-state-in-a-fake)
   - [15.6 Properties](#156-properties)
   - [15.7 A worked suite: a service with a clock and a store](#157-a-worked-suite-a-service-with-a-clock-and-a-store)
-  - [15.8 The rest of the toolbox](#158-the-rest-of-the-toolbox)
-  - [15.9 Okkama among other languages](#159-okkama-among-other-languages)
-  - [15.10 What does not work yet](#1510-what-does-not-work-yet)
-  - [15.11 What this design costs](#1511-what-this-design-costs)
+  - [15.8 Waiting without waiting: a retry policy](#158-waiting-without-waiting-a-retry-policy)
+  - [15.9 The rest of the toolbox](#159-the-rest-of-the-toolbox)
+  - [15.10 Okkama among other languages](#1510-okkama-among-other-languages)
+  - [15.11 What does not work yet](#1511-what-does-not-work-yet)
+  - [15.12 What this design costs](#1512-what-this-design-costs)
 - [Chapter 16. Enums and pattern matching](#chapter-16-enums-and-pattern-matching)
   - [16.1 A closed set of names](#161-a-closed-set-of-names)
   - [16.2 Cases that carry data](#162-cases-that-carry-data)
@@ -10860,7 +10861,9 @@ direction of conformance:
 Okkama takes Kotlin's side, and it costs `Table` one word, `async`. In
 return, one rule covers parameters, results and waiting alike: an
 implementation repeats the role's signature exactly. A reader who sees one
-implementation knows how every call through the role looks.
+implementation knows how every call through the role looks. Section 20.11
+gives the scheduler's side of the rule: an implementation cannot answer
+synchronously where the role promised to wait.
 
 ## 14.10 Where roles came from
 
@@ -11508,7 +11511,150 @@ No test names a call count or an argument list. If `Reminders` later caches
 behaviour is the same: what the tests pin is the service's contract, not its
 conversation with its collaborators.
 
-## 15.8 The rest of the toolbox
+## 15.8 Waiting without waiting: a retry policy
+
+Some code exists to wait. A retry policy tries, waits, and tries again with
+a longer wait. Section 20.11 builds a retry over a bound async action; this
+one adds the waits, and this section tests them. A suite that really waits for it would take seconds per
+test, and a flaky one at that. The policy below takes its clock as a
+`Timing` role, so the suite replaces the clock:
+
+```okkama
+module bible/backoff v1.0.0;
+
+// A retry policy with doubling waits, tested without waiting: the clock is a
+// fake that records each wait and returns at once, and the source is a stub
+// that answers from a script.
+import "time/clock" take Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
+import "testing/double" take RecordedCalls, Stub;
+
+enum Down is Error = (unavailable(attempt is int));
+
+role Source {
+    async read(attempt is int) is string;
+}
+
+object Backoff {
+    has timing is Timing;
+    has attempts is int;
+
+    Backoff(:timing, :attempts);
+
+    async fetched(source is Source) is string {
+        await self.attempt(source, 1, Duration(seconds: 1));
+    }
+
+    async attempt(source is Source, number is int, delay is Duration) is string {
+        try {
+            await source.read(number);
+        }
+        catch e is Down {
+            confirm number < attempts else throw e;
+            await timing.wait(delay);
+            await self.attempt(source, number + 1, delay.plus(delay));
+        };
+    }
+}
+
+// The clock never waits: it writes each wait down and returns.
+object Recording does Timing {
+    has waits is RecordedCalls<Duration>;
+
+    Recording(:waits);
+
+    instant() is Instant { Instant(Duration(seconds: 0)); }
+    monotonic_instant() is MonotonicInstant { MonotonicInstant(origin: Duration(seconds: 0)); }
+    async wait(duration is Duration) is void { waits.record(duration); }
+}
+
+// The source answers from a script: "down" fails that attempt.
+object Scripted does Source {
+    has answers is Stub<string>;
+
+    Scripted(:answers);
+
+    async read(attempt is int) is string {
+        let answer = answers.next();
+        confirm answer != "down" else throw Down.unavailable(attempt);
+        answer;
+    }
+}
+
+async test "two failures cost one and then two seconds" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 4);
+    let source = Scripted(answers: Stub(["down", "down", "ready"]));
+    test.is(await backoff.fetched(source), "ready");
+    test.is(waits.size(), 2);
+    test.is(waits.records().item(0).value(), Duration(seconds: 1));
+    test.is(waits.records().item(1).value(), Duration(seconds: 2));
+}
+
+async test "the first answer needs no wait" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 4);
+    test.is(await backoff.fetched(Scripted(answers: Stub(["ready"]))), "ready");
+    test.is(waits.size(), 0);
+}
+
+async test "after the last attempt the failure reaches the caller" {
+    let waits is RecordedCalls<Duration> = RecordedCalls();
+    let backoff = Backoff(timing: Recording(waits: waits), attempts: 3);
+    let outcome = try {
+        await backoff.fetched(Scripted(answers: Stub(["down", "down", "down", "ready"])));
+    }
+    catch e is Down {
+        e.text();
+    };
+    test.is(outcome, "Down.unavailable(3)");
+    test.is(waits.size(), 2);
+}
+```
+
+Output:
+
+```text
+=== RUN   two failures cost one and then two seconds
+--- PASS: two failures cost one and then two seconds
+=== RUN   the first answer needs no wait
+--- PASS: the first answer needs no wait
+=== RUN   after the last attempt the failure reaches the caller
+--- PASS: after the last attempt the failure reaches the caller
+PASS
+```
+
+- **The clock writes waits down.** `Recording` does `Timing`, and its
+  `wait` records the duration in a `RecordedCalls` and returns at once. The
+  three tests run in milliseconds, and the second test proves that a first
+  answer costs no wait at all.
+- **The source follows a script.** `Stub(["down", "down", "ready"])` hands
+  out its answers in order, and `Scripted` turns `"down"` into the typed
+  failure the policy catches. A stub that runs out throws `StubExhausted`,
+  so a policy that tried once too often would fail loudly instead of
+  reading a stale answer.
+- **The last failure is the caller's.** With three attempts the policy waits
+  twice and then rethrows `Down.unavailable(3)`. The fourth answer in the
+  script is never read.
+
+This suite counts calls, which Section 15.7 avoided, and here that is
+correct. A retry policy is its schedule: one second, then two. The waits
+are what it promises, not a conversation with a collaborator, so recording
+them is the specification and not a mock in disguise. The test still does
+not say how the policy is built. It could be a loop, recursion or a table
+of delays, and the suite would not change.
+
+`Recording` returns at once, which is right for code that waits in
+sequence. Code that waits *while* other tasks run, a timeout racing an
+answer for example, needs a clock that holds its waiters until the test
+moves it. That is `ManualClock` from `testing/time`, and Section 20.11
+uses it to time out a courier after thirty seconds that never pass.
+
+A failed comparison of two `Duration`s currently reports their heap
+identities (`Duration@52e44f14340`) instead of their values (#756). The
+check itself is exact, but the report does not say how the values differ.
+
+## 15.9 The rest of the toolbox
 
 The standard library adds a few more pieces, all usable only inside a
 running test:
@@ -11537,7 +11683,7 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
-## 15.9 Okkama among other languages
+## 15.10 Okkama among other languages
 
 Every language with a test culture answers the same four questions: where a
 test lives, how the runner finds it, what stands in for a collaborator, and
@@ -11567,7 +11713,7 @@ of a module while a test runs, has nothing to act on in a language whose
 objects never change. A collaborator is replaced the way it is in
 production, by passing a different object that does the role.
 
-## 15.10 What does not work yet
+## 15.11 What does not work yet
 
 - Report formats, seeds and parallel workers are not in the command line;
   they are planned with the rewritten standard library (#339).
@@ -11576,7 +11722,7 @@ Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
 `test.is(bottle.open().close(), bottle)` compares the two bottles.
 
-## 15.11 What this design costs
+## 15.12 What this design costs
 
 - **A fake must be written.** A mocking library generates a double from an
   interface in one line. A fake is code, and for a large role it is a lot
@@ -21754,7 +21900,7 @@ language is, argued where they appear:
 - ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);
-- a fake to write for every role a test replaces (Section 15.11);
+- a fake to write for every role a test replaces (Section 15.12);
 - no list of an enum's cases and no order between them (Section 16.10);
 - no module-level state, only compile-time constants (Section 19.6);
 - a fixed cleanup order: newest first, owner before fields (Section 11.15).
