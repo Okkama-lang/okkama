@@ -419,7 +419,7 @@ The third kind of extra failure is a **secondary**. When cleanup itself
 fails while a scope unwinds from a failure, the cleanup failure does not
 replace the original; it is attached to it as a secondary and reported
 after it. The first failure is usually the one worth reading, and cleanup
-code should not be able to hide it.
+code should not be able to hide it. Section 11.14 works through an example.
 
 ## 10.9 confirm: the contract inside the code
 

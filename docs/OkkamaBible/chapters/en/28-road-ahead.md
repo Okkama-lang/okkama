@@ -209,7 +209,7 @@ language is, argued where they appear:
 - a fake to write for every role a test replaces (Section 15.12);
 - no list of an enum's cases and no order between them (Section 16.10);
 - no module-level state, only compile-time constants (Section 19.6);
-- a fixed cleanup order: newest first, owner before fields (Section 11.15);
+- a fixed cleanup order: newest first, owner before fields (Section 11.16);
 - a field that only some paths of a constructor bind is found when such a
   path runs, not when the program compiles (Section 12.11);
 - patterns without backreferences or lookaround, the price of linear-time

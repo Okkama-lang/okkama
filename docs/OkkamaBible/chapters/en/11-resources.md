@@ -381,7 +381,73 @@ when the scope is left by an exception [@dscope]. Both depend on the caller
 writing the construct at every use. In Okkama the transaction carries the
 rule itself: there is no way to hold one that its scope will not settle.
 
-## 11.14 What is not promised
+## 11.14 When cleanup itself fails
+
+Releasing can fail as well. A journal that flushes its buffer when it is
+released may find the disk full, and a connection may fail to send its
+goodbye. Section 11.4 stated the rule in one sentence; this example shows
+what it means:
+
+{{example:11-cleanup-fails}}
+
+- **Every `destroy` runs.** Two of the three journals fail to flush, and
+  `audit` and `orders` are still flushed after `metrics` fails. A failed
+  release does not stop the others, so one full disk cannot leak a file
+  handle.
+- **On a normal exit, the first cleanup failure becomes the failure.**
+  `run` would have returned "3 rows". It throws `Unflushed.full("metrics")`
+  instead: `metrics` was released first, newest first, so its failure came
+  first. The other failure, from `orders`, is attached to it as a
+  secondary.
+- **On a failing exit, the original failure stays.** With no rows, `run`
+  throws `Rejected.empty`, and that is what the caller catches. Both flush
+  failures happened while unwinding from it, and they ride along as
+  secondaries instead of replacing it. A failure in cleanup cannot hide the
+  failure that caused the cleanup.
+- **Secondaries are for the reader, not the program.** A `catch` receives
+  only the primary failure. A program cannot list secondaries and decide by
+  them. The report of an uncaught failure prints them:
+
+```text
+Rejected: Rejected.empty
+Secondary cleanup failure:
+  Unflushed: Unflushed.full("metrics")
+Secondary cleanup failure:
+  Unflushed: Unflushed.full("orders")
+  --> cleanup.ok:33:9
+```
+
+The question is old, and languages have answered it in four ways.
+
+- **C++ forbids the failure.** A destructor that throws while the stack
+  unwinds from another exception ends the program with `std::terminate`.
+  Since C++11, destructors are `noexcept` unless they say otherwise.
+  Stroustrup's guarantees of exception safety assume destructors that do
+  not throw [@stroustrup2001]. A release that can fail must therefore
+  report it some other way, or not at all.
+- **Python keeps both by chaining.** An exception raised while another is
+  being handled keeps the first as its `__context__`, and the traceback
+  shows both [@pep3134]. But the new exception is the one that propagates.
+  A failing `__exit__` or `finally` replaces the original as the thing the
+  caller catches.
+- **Go leaves it to the programmer.** `defer f.Close()` discards the error
+  unless the code captures it. Since Go 1.20, `errors.Join` combines
+  several errors into one value, so the deferred close and the original
+  error can travel together, if the programmer writes it [@go120].
+- **Java suppresses.** `try`-with-resources closes resources in reverse
+  order, and a close does not stop the others. An exception from the body
+  propagates, and close failures are added to its suppressed list. When
+  only closes fail, the failure of the resource closed first propagates,
+  and the rest are suppressed on it (JLS §14.20.3 [@gosling2023]).
+
+Okkama's rule is Java's, with two differences. It applies to every owned
+resource at every scope end, not only inside a `try` that names the
+resource. And the suppressed list is not a value a program can read. Java's
+`getSuppressed()` lets a handler branch on a cleanup failure that was not
+the reason the code failed. Okkama keeps the handler on the reason, and it
+leaves the secondaries to the person reading the report.
+
+## 11.15 What is not promised
 
 Deterministic cleanup has limits, and they are worth knowing.
 
@@ -398,7 +464,7 @@ Deterministic cleanup has limits, and they are worth knowing.
 - **A `destroy` cannot be retried.** It runs at most once. If it fails, the
   failure is reported and the identity is considered released.
 
-## 11.15 What this design costs
+## 11.16 What this design costs
 
 - **Ownership is checked at run time, not at compile time.** Rust rejects a
   program that would release a value twice or use it after release. Okkama

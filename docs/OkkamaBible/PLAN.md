@@ -199,6 +199,11 @@ language.
 - 2026-11-16: 28.1 "What writing this book found" (#743, #754, #756); 28.4
   a synchronous answer to an async role (Swift's direction); 28.5 the path
   check of unbound fields and the regex dialect as accepted costs.
+- 2026-11-16: 11.14 when cleanup itself fails (`11-cleanup-fails`: every
+  destroy runs; normal exit makes the first cleanup failure the failure;
+  failing exit keeps the original with secondaries; secondaries only in the
+  report; C++ terminate, Python chaining (PEP 3134), Go errors.Join, Java
+  suppressed (JLS §14.20.3)); ch. 10 points to it.
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

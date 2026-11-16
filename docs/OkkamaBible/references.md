@@ -59,6 +59,7 @@ bibliographic data were checked are listed.
 - [@gabriel1991] Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - [@gamma1994] Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
 - [@go114] The Go Authors (2020). Go 1.14 Release Notes: Runtime ("Goroutines are now asynchronously preemptible"). https://go.dev/doc/go1.14
+- [@go120] The Go Authors (2023). Go 1.20 Release Notes. https://go.dev/doc/go1.20 {label: Go 1.20 Release Notes}
 - [@go14] The Go Authors (2014). Go 1.4 Release Notes: Runtime ("the default starting size for a goroutine's stack in 1.4 has been reduced from 8192 bytes to 2048 bytes"). https://go.dev/doc/go1.4
 - [@goldberg1983] Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - [@goldberg1991] David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
@@ -154,6 +155,7 @@ bibliographic data were checked are listed.
 - [@parnas1972] David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - [@pep237] Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/ {label: PEP 237}
 - [@pep308] Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/ {label: PEP 308}
+- [@pep3134] Ka-Ping Yee (2005). PEP 3134 – Exception Chaining and Embedded Tracebacks. *Python Enhancement Proposals*. https://peps.python.org/pep-3134/ {label: PEP 3134}
 - [@pep343] Guido van Rossum, Nick Coghlan (2005). PEP 343 — The "with" Statement. Python Enhancement Proposals. https://peps.python.org/pep-0343/
 - [@pep484] Guido van Rossum, Jukka Lehtosalo, Łukasz Langa (2014). PEP 484 — Type Hints. Python Enhancement Proposals. https://peps.python.org/pep-0484/
 - [@pep572] Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/ {label: PEP 572}

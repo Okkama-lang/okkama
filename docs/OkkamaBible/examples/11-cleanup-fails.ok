@@ -1,0 +1,59 @@
+module bible/cleanupfails v1.0.0;
+
+// A destroy that fails does not stop the others. On a normal exit the first
+// cleanup failure becomes the failure; on a failing exit the original stays,
+// and cleanup failures ride along as secondaries.
+import "io/stdout" take Stdout;
+
+enum Unflushed is Error = (full(name is string));
+enum Rejected is Error = (empty);
+
+// A journal flushes its buffer when it is released; a full disk refuses.
+object Journal {
+    has name is string;
+    has disk_full is bool;
+
+    Journal(:name, :disk_full);
+
+    destroy {
+        Stdout().writeln("flush " + name);
+        confirm !disk_full else throw Unflushed.full(name);
+    }
+}
+
+object Export {
+    has rows is int;
+
+    Export(:rows);
+
+    run() is string {
+        let orders = Journal(name: "orders", disk_full: true);
+        let audit = Journal(name: "audit", disk_full: false);
+        let metrics = Journal(name: "metrics", disk_full: true);
+        confirm rows > 0 else throw Rejected.empty;
+        rows.string() + " rows";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let quiet = try {
+        Export(rows: 3).run();
+    }
+    catch e is Unflushed {
+        "export failed: " + e.text();
+    };
+    out.writeln(quiet);
+    out.writeln("--");
+    let refused = try {
+        Export(rows: 0).run();
+    }
+    catch e is Rejected {
+        "export refused: " + e.text();
+    }
+    catch e is Unflushed {
+        "export failed: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}

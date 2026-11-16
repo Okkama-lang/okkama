@@ -159,8 +159,9 @@
   - [11.11 Замена ресурса: перепривязка держит, свёртка освобождает](#1111-замена-ресурса-перепривязка-держит-свёртка-освобождает)
   - [11.12 Разобранный пример: пул соединений](#1112-разобранный-пример-пул-соединений)
   - [11.13 Разобранный пример: подтвердить или откатить](#1113-разобранный-пример-подтвердить-или-откатить)
-  - [11.14 Чего не обещают](#1114-чего-не-обещают)
-  - [11.15 Чего стоит такой замысел](#1115-чего-стоит-такой-замысел)
+  - [11.14 Когда отказывает сама очистка](#1114-когда-отказывает-сама-очистка)
+  - [11.15 Чего не обещают](#1115-чего-не-обещают)
+  - [11.16 Чего стоит такой замысел](#1116-чего-стоит-такой-замысел)
 - [Глава 12. Объекты, поля и конструкторы](#глава-12-объекты-поля-и-конструкторы)
   - [12.1 Объявление объекта](#121-объявление-объекта)
   - [12.2 Поля частные и постоянные](#122-поля-частные-и-постоянные)
@@ -6589,6 +6590,7 @@ Caused by:
 после отказа проваливается сама уборка, отказ уборки не заменяет исходный, а
 присоединяется к нему как вторичный и печатается после него. Читать обычно
 стоит первый отказ, и код уборки не должен иметь возможности его спрятать.
+Разобранный пример — в разделе 11.14.
 
 ## 10.9 confirm: контракт внутри кода
 
@@ -8000,7 +8002,148 @@ Python, использованное как контекстный менедж�
 каждом использовании. В Okkama правило несёт сама транзакция: держать её
 так, чтобы область её не закрыла, невозможно.
 
-## 11.14 Чего не обещают
+## 11.14 Когда отказывает сама очистка
+
+Освобождение тоже может провалиться. Журнал, который сбрасывает буфер при
+освобождении, может обнаружить, что диск полон, а соединение — не суметь
+попрощаться. Раздел 11.4 сформулировал правило одной фразой; пример
+показывает, что оно значит:
+
+```okkama
+module bible/cleanupfails v1.0.0;
+
+// A destroy that fails does not stop the others. On a normal exit the first
+// cleanup failure becomes the failure; on a failing exit the original stays,
+// and cleanup failures ride along as secondaries.
+import "io/stdout" take Stdout;
+
+enum Unflushed is Error = (full(name is string));
+enum Rejected is Error = (empty);
+
+// A journal flushes its buffer when it is released; a full disk refuses.
+object Journal {
+    has name is string;
+    has disk_full is bool;
+
+    Journal(:name, :disk_full);
+
+    destroy {
+        Stdout().writeln("flush " + name);
+        confirm !disk_full else throw Unflushed.full(name);
+    }
+}
+
+object Export {
+    has rows is int;
+
+    Export(:rows);
+
+    run() is string {
+        let orders = Journal(name: "orders", disk_full: true);
+        let audit = Journal(name: "audit", disk_full: false);
+        let metrics = Journal(name: "metrics", disk_full: true);
+        confirm rows > 0 else throw Rejected.empty;
+        rows.string() + " rows";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let quiet = try {
+        Export(rows: 3).run();
+    }
+    catch e is Unflushed {
+        "export failed: " + e.text();
+    };
+    out.writeln(quiet);
+    out.writeln("--");
+    let refused = try {
+        Export(rows: 0).run();
+    }
+    catch e is Rejected {
+        "export refused: " + e.text();
+    }
+    catch e is Unflushed {
+        "export failed: " + e.text();
+    };
+    out.writeln(refused);
+    0;
+}
+```
+
+Вывод:
+
+```text
+flush metrics
+flush audit
+flush orders
+export failed: Unflushed.full("metrics")
+--
+flush metrics
+flush audit
+flush orders
+export refused: Rejected.empty
+```
+
+- **Выполняется каждый `destroy`.** Два журнала из трёх не могут сбросить
+  буфер, но `audit` и `orders` всё равно сбрасываются после отказа
+  `metrics`. Проваленное освобождение не останавливает остальные, так что
+  один полный диск не приводит к утечке дескриптора файла.
+- **При обычном выходе первый отказ очистки становится отказом.** `run`
+  вернул бы «3 rows», а вместо этого бросает `Unflushed.full("metrics")`:
+  `metrics` освобождался первым — новые первыми, — поэтому его отказ
+  случился первым. Второй отказ, от `orders`, прикреплён к нему как
+  вторичный.
+- **При выходе с ошибкой остаётся исходная ошибка.** Без строк `run`
+  бросает `Rejected.empty`, и именно её ловит вызывающий. Оба отказа сброса
+  случились при размотке после неё и едут вместе с ней вторичными, а не
+  заменяют её. Отказ очистки не может скрыть отказ, из-за которого очистка
+  началась.
+- **Вторичные — для читателя, не для программы.** `catch` получает только
+  основной отказ. Программа не может перечислить вторичные и решить что-то
+  по ним. Их печатает отчёт о неперехваченном отказе:
+
+```text
+Rejected: Rejected.empty
+Secondary cleanup failure:
+  Unflushed: Unflushed.full("metrics")
+Secondary cleanup failure:
+  Unflushed: Unflushed.full("orders")
+  --> cleanup.ok:33:9
+```
+
+Вопрос старый, и языки ответили на него четырьмя способами.
+
+- **C++ запрещает отказ.** Деструктор, бросивший исключение, пока стек
+  разматывается после другого, завершает программу через `std::terminate`.
+  С C++11 деструкторы `noexcept`, если не сказано иное. Гарантии
+  безопасности исключений у Страуструпа исходят из деструкторов, которые не
+  бросают [[Stroustrup 2001](#ref-stroustrup2001)]. Освобождение, которое может провалиться,
+  должно сообщать об этом иначе или не сообщать вовсе.
+- **Python сохраняет оба цепочкой.** Исключение, возникшее во время
+  обработки другого, хранит первое в `__context__`, и traceback показывает
+  оба [[PEP 3134](#ref-pep3134)]. Но распространяется новое исключение: проваленный
+  `__exit__` или `finally` заменяет исходное в том, что ловит вызывающий.
+- **Go оставляет это программисту.** `defer f.Close()` отбрасывает ошибку,
+  если код её не перехватит. С Go 1.20 `errors.Join` объединяет несколько
+  ошибок в одно значение, так что отложенное закрытие и исходная ошибка
+  могут путешествовать вместе — если программист это напишет [[Go 1.20 Release Notes](#ref-go120)].
+- **Java подавляет.** `try`-with-resources закрывает ресурсы в обратном
+  порядке, и одно закрытие не останавливает остальные. Исключение тела
+  распространяется, а отказы закрытия добавляются в его список подавленных.
+  Когда отказывают только закрытия, распространяется отказ ресурса,
+  закрытого первым, а остальные подавляются на нём (JLS §14.20.3
+  [[Gosling 2023](#ref-gosling2023)]).
+
+Правило Okkama — это правило Java с двумя отличиями. Оно действует для
+каждого владеемого ресурса в конце каждой области, а не только внутри
+`try`, который называет ресурс. И список подавленных — не значение, которое
+программа может прочитать. `getSuppressed()` в Java позволяет обработчику
+ветвиться по отказу очистки, который не был причиной сбоя кода. Okkama
+держит обработчик на причине, а вторичные оставляет человеку, читающему
+отчёт.
+
+## 11.15 Чего не обещают
 
 У детерминированной уборки есть пределы, и их стоит знать.
 
@@ -8017,7 +8160,7 @@ Python, использованное как контекстный менедж�
 - **`destroy` нельзя повторить.** Он выполняется не больше одного раза. Если
   он провалился, отказ сообщается, а идентичность считается освобождённой.
 
-## 11.15 Чего стоит такой замысел
+## 11.16 Чего стоит такой замысел
 
 - **Владение проверяется во время исполнения, а не при компиляции.** Rust
   отвергает программу, которая освободила бы значение дважды или
@@ -22272,7 +22415,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - нет состояния уровня модуля, только константы времени компиляции (раздел
   19.6);
 - фиксированный порядок очистки: новые первыми, владелец раньше полей
-  (раздел 11.15);
+  (раздел 11.16);
 - поле, которое связывают лишь некоторые пути конструктора, обнаруживается,
   когда такой путь выполняется, а не при компиляции (раздел 12.11);
 - шаблоны без обратных ссылок и заглядывания — цена сопоставления за
@@ -22358,6 +22501,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-fahndrich2003"></a>Manuel Fähndrich, K. Rustan M. Leino (2003). Declaring and Checking Non-null Types in an Object-Oriented Language. In *Proceedings of OOPSLA 2003*: 302–312. ACM. https://doi.org/10.1145/949305.949332
 - <a id="ref-gabriel1991"></a>Richard P. Gabriel (1991). The Rise of "Worse is Better". In *Lisp: Good News, Bad News, How to Win Big*. https://www.dreamsongs.com/RiseOfWorseIsBetter.html
 - <a id="ref-gamma1994"></a>Erich Gamma, Richard Helm, Ralph Johnson, John Vlissides (1994). *Design Patterns: Elements of Reusable Object-Oriented Software*. Addison-Wesley.
+- <a id="ref-go120"></a>The Go Authors (2023). Go 1.20 Release Notes. https://go.dev/doc/go1.20
 - <a id="ref-gotesting"></a>The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
 - <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
@@ -22445,6 +22589,7 @@ async-действие (раздел 14.9). Swift допускает обрат�
 - <a id="ref-parnas1972"></a>David L. Parnas (1972). On the Criteria To Be Used in Decomposing Systems into Modules. *Communications of the ACM* 15(12): 1053–1058. https://doi.org/10.1145/361598.361623
 - <a id="ref-pep237"></a>Moshe Zadka, Guido van Rossum (2001). PEP 237 — Unifying Long Integers and Integers. Python Enhancement Proposals. https://peps.python.org/pep-0237/
 - <a id="ref-pep308"></a>Guido van Rossum, Raymond Hettinger (2003). PEP 308 — Conditional Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0308/
+- <a id="ref-pep3134"></a>Ka-Ping Yee (2005). PEP 3134 – Exception Chaining and Embedded Tracebacks. *Python Enhancement Proposals*. https://peps.python.org/pep-3134/
 - <a id="ref-pep572"></a>Chris Angelico, Tim Peters, Guido van Rossum (2018). PEP 572 — Assignment Expressions. Python Enhancement Proposals. https://peps.python.org/pep-0572/
 - <a id="ref-peters2004"></a>Tim Peters (2004). *PEP 20 — The Zen of Python*. https://peps.python.org/pep-0020/
 - <a id="ref-pierce2002"></a>Benjamin C. Pierce (2002). *Types and Programming Languages*. MIT Press.
