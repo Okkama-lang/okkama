@@ -19,10 +19,16 @@ pub(crate) const FRAME_LINEAR: &str = "SPB_FRAME_LINEAR";
 pub(crate) const RESUME_TABLE: &str = "SPB_RESUME_TABLE";
 /// Every suspending operation is bracketed by its continuation's `frame.save`; nothing else is.
 pub(crate) const SUSPEND_BRACKET: &str = "SPB_SUSPEND_BRACKET";
-/// The task and receipt of an await's unwind reach only one `await.unwind`, together.
+/// The task and receipt of an await's unwind reach only one `await.unwind`, together. A spawned task's duty (D24.1)
+/// is never one: it is saved across suspensions, settled by its owner's close, rehomed or absorbed, and never
+/// reaches `await.unwind`; no location holds both kinds.
 pub(crate) const TASK_RECEIPT: &str = "SPB_TASK_RECEIPT";
-/// Each scheduled duty is settled once, in schedule order, by the scope that owns it.
+/// Each scheduled duty is settled once, in schedule order, by the scope that owns it; a spawned Future's task duty
+/// before its cache duty (D24.2, ABI §6.3).
 pub(crate) const SCHEDULE: &str = "SPB_SCHEDULE";
+/// `fut.spawn` takes the cache duty its Future's `fut.new` just gave; between them the Future is only observed
+/// (`deps.of`, `fut.done`, `fut.cancelled`, `fut.cancel`) and no edge enters that run (D24.1, `d24-spawn-not-fresh`).
+pub(crate) const SPAWN: &str = "SPB_SPAWN";
 /// Across a suspension the frame holds every value the body keeps: nothing but the operands of the step
 /// lives past it outside the frame, and each slot holds one value of its declared type.
 pub(crate) const ROOTS_SUSPEND: &str = "SPB_ROOTS_SUSPEND";
@@ -245,9 +251,12 @@ pub(crate) fn check_structure(p: &Program, f: &Function) -> Check {
 }
 
 /// The `fut.new` that produced each cache token, through edges and through each continuation's save to its
-/// resumes. `None` marks a token that two creations can reach.
+/// resumes. `None` marks a token that two creations can reach. A `fut.spawn` passes its cache duty's origin to
+/// both its outputs: the cache duty it gives back and the task duty of the same Future (D24.1), so a task-state
+/// location has an origin exactly when a spawn can reach it.
 pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Option<u32>> {
-    let tracked = |location: Location| kind(f, location) == Some(ServiceKind::CacheState);
+    let tracked = |location: Location| matches!(kind(f, location),
+        Some(ServiceKind::CacheState | ServiceKind::TaskState));
     let mut flows = BTreeMap::<Location, Vec<Location>>::new();
     let mut seeds = Vec::new();
     let layout = p.frame_layout(f);
@@ -264,6 +273,9 @@ pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Opt
         let Instruction::Champ { op, arguments, flow: Flow::Next(outputs) } = instruction else { continue };
         if *op == Opcode::FutureNew && let Some(&cache) = outputs.get(1) {
             seeds.push((cache, pc as u32));
+        }
+        if *op == Opcode::FutureSpawn && let Some(&cache) = locations(arguments).get(1) {
+            flows.entry(cache).or_default().extend(outputs.iter().copied().filter(|&output| tracked(output)));
         }
         if *op == Opcode::FrameResume
             && let Some(continuation) = continuation_of(arguments)
@@ -298,6 +310,77 @@ pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Opt
     origin
 }
 
+/// The task-state locations an await's unwind outcome can reach through edges: the waiter's handles (C-3).
+fn await_handles(f: &Function) -> BTreeSet<Location> {
+    let task = |location: Location| kind(f, location) == Some(ServiceKind::TaskState);
+    let mut flows = BTreeMap::<Location, Vec<Location>>::new();
+    let mut handles = BTreeSet::new();
+    for instruction in &f.code {
+        let produced = matches!(instruction, Instruction::Champ { op: Opcode::Await | Opcode::AwaitTake, .. });
+        for edge in allocation::outgoing(instruction) {
+            for assignment in edge.assignments.iter().filter(|assignment| task(assignment.destination)) {
+                match assignment.source {
+                    Source::ProducedSlot(_) if produced => {
+                        handles.insert(assignment.destination);
+                    }
+                    Source::Location(source) => flows.entry(source).or_default().push(assignment.destination),
+                    Source::ProducedSlot(_) => {}
+                }
+            }
+        }
+    }
+    let mut work: Vec<_> = handles.iter().copied().collect();
+    while let Some(location) = work.pop() {
+        for &destination in flows.get(&location).into_iter().flatten() {
+            if handles.insert(destination) {
+                work.push(destination);
+            }
+        }
+    }
+    handles
+}
+
+/// `SPB_SPAWN` (D24.1): each `fut.spawn` takes the Future and the cache duty that a `fut.new` earlier in the same
+/// run of straight-line code produced. Between them the Future is only observed, and no edge enters the run, so
+/// the Future is not awaited, stored or offered before its task starts.
+fn check_spawns(f: &Function) -> Check {
+    let targets: BTreeSet<usize> = f.code.iter().flat_map(allocation::outgoing)
+        .map(|edge| edge.target_pc as usize).collect();
+    for (pc, instruction) in f.code.iter().enumerate() {
+        let Instruction::Champ { op: Opcode::FutureSpawn, arguments, .. } = instruction else { continue };
+        let operands = locations(arguments);
+        let (Some(&future), Some(&cache)) = (operands.first(), operands.get(1)) else {
+            return Err(violation(SPAWN, "fut.spawn takes a Future and its cache duty"));
+        };
+        let mut fresh = false;
+        for earlier in (0..pc).rev() {
+            // An edge into the run between the creation and the spawn.
+            if targets.contains(&(earlier + 1)) {
+                break;
+            }
+            let instruction = &f.code[earlier];
+            if let Instruction::Champ { op: Opcode::FutureNew, flow: Flow::Next(outputs), .. } = instruction
+                && outputs.first() == Some(&future)
+            {
+                fresh = outputs.get(1) == Some(&cache);
+                break;
+            }
+            let straight = matches!(instruction,
+                Instruction::Data { .. } | Instruction::Champ { flow: Flow::Next(_), .. });
+            let observes = matches!(instruction, Instruction::Champ { op: Opcode::DepsOf | Opcode::FutureDone
+                | Opcode::FutureCancelled | Opcode::FutureCancel, .. });
+            let reads = allocation::direct_uses(f, earlier).contains(&future) && !observes;
+            let defines = allocation::definitions(instruction).iter()
+                .any(|&location| location == future || location == cache);
+            if !straight || reads || defines {
+                break;
+            }
+        }
+        enforce(fresh, SPAWN, "fut.spawn takes the Future and the cache duty its fut.new just gave (D24.1)")?;
+    }
+    Ok(())
+}
+
 /// Join a producer into a token's lineage; whether the lineage changed.
 fn merge(origin: &mut BTreeMap<Location, Option<u32>>, location: Location, value: Option<u32>) -> bool {
     let next = match origin.get(&location) {
@@ -314,16 +397,34 @@ fn merge(origin: &mut BTreeMap<Location, Option<u32>>, location: Location, value
 pub(crate) fn check_flow(p: &Program, f: &Function) -> Check {
     // Only await.unwind consumes them; edges may forward them. Nothing else may read, save or settle them.
     // Since no token lives across a suspension outside the frame, the pair it takes on any path belongs to
-    // the one await of that path.
+    // the one await of that path. A spawned task's duty is a task-state too, told apart by its lineage (D24.1).
+    let origins = cache_origins(p, f);
+    let handles = await_handles(f);
+    for location in &handles {
+        enforce(!origins.contains_key(location), TASK_RECEIPT,
+            "one location holds an await's task and a spawned task's duty")?;
+    }
     for instruction in &f.code {
         let Instruction::Champ { op, arguments, .. } = instruction else { continue };
         for (index, location) in locations(arguments).into_iter().enumerate() {
-            if matches!(kind(f, location), Some(ServiceKind::TaskState | ServiceKind::Receipt)) {
+            let spawned = kind(f, location) == Some(ServiceKind::TaskState) && origins.contains_key(&location);
+            if spawned {
+                // The duty is saved across suspensions, settled by its owner's close, or leaves with its cache
+                // duty through a rehome or an absorb (D24.2, C-4, D25.2).
+                let duty = match op {
+                    Opcode::FrameSave | Opcode::ServiceAbsorb => index > 0,
+                    Opcode::CleanupSettle => index == 1,
+                    Opcode::CacheRehome => index == 2,
+                    _ => false,
+                };
+                enforce(duty, TASK_RECEIPT, &format!("a spawned task's duty reaches {}", op.name()))?;
+            } else if matches!(kind(f, location), Some(ServiceKind::TaskState | ServiceKind::Receipt)) {
                 enforce(*op == Opcode::AwaitUnwind && matches!(index, 2 | 3), TASK_RECEIPT,
                     &format!("an await's task or receipt reaches {}", op.name()))?;
             }
         }
     }
+    check_spawns(f)?;
     if let Some(layout) = p.frame_layout(f) {
         // Uses only: proof maps and dependency edges never keep a token alive past its frame.save.
         let mut bare = f.clone();

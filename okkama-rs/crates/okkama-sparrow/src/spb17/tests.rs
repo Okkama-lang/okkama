@@ -170,15 +170,16 @@ fn s1_registry_has_exact_p1_ids_and_normative_schemas() {
     let reserved = [0, 19, 25, 34, 35, 36];
     // P1 and the synchronous lanes take 57 IDs with the ten async IDs of #601 V6 (64..=95), and #676 adds
     // the dispatch ids 96 and 97 and the dynamic transfer 98; #678 adds the sort dispatch 99. #601 R4 assigns
-    // take, its proof and rehome, and #601 D25 the dynamic settle and service materialize/absorb.
-    assert_eq!(Opcode::ALL.len(), 67);
+    // take, its proof and rehome, and #601 D25 the dynamic settle and service materialize/absorb; #601 P1 assigns
+    // spawn (65).
+    assert_eq!(Opcode::ALL.len(), 68);
     for id in 0..47 {
         assert_eq!(Opcode::from_id(id).is_err(), reserved.contains(&id));
     }
     // #622: builders and lookup take 56..=61; plain await takes 64, 66 and 70..=77, resources 67..=69 and
-    // 84..=86 (Champ draft 3 §14.1).
+    // 84..=86, spawn 65 (Champ draft 3 §14.1).
     for id in 47..96 {
-        let assigned = (56..=61).contains(&id) || matches!(id, 64 | 66..=77 | 84..=86);
+        let assigned = (56..=61).contains(&id) || matches!(id, 64..=77 | 84..=86);
         assert_eq!(Opcode::from_id(id).is_ok(), assigned, "{id}");
     }
     assert_eq!(Opcode::from_id(96).unwrap(), Opcode::InvokeDispatch);

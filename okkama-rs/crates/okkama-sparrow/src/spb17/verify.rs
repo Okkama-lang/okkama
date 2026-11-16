@@ -790,8 +790,10 @@ fn check_proofs(p: &Program, f: &Function) -> Check {
     for schedule in &f.proofs.schedules {
         let mut seen = BTreeSet::new();
         for &duty in &schedule.services {
-            enforce(loc_type(f, duty)? == ProducedType::Service(ServiceKind::CacheState), suspension::SCHEDULE,
-                "a scheduled duty is not a cache-state")?;
+            // A Future's cache duty, or a spawned Future's task duty (D24.2).
+            let kind = loc_type(f, duty)?;
+            enforce(matches!(kind, ProducedType::Service(ServiceKind::CacheState | ServiceKind::TaskState)),
+                suspension::SCHEDULE, "a scheduled duty is not a cache-state or a task-state")?;
             enforce(seen.insert(duty), suspension::SCHEDULE, "a schedule names one duty twice")?;
         }
     }
@@ -1134,8 +1136,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
         CleanupSettle => {
             input(0, Cleanup)?;
             if let Some(&duty) = locations.get(1) {
-                enforce(loc_type(f, duty)? == ProducedType::Service(CacheState), suspension::SCHEDULE,
-                    "a settled duty is not a cache-state")?;
+                // A cache duty, or a spawned Future's task duty (D24.2).
+                enforce(matches!(loc_type(f, duty)?, ProducedType::Service(CacheState | TaskState)),
+                    suspension::SCHEDULE, "a settled duty is not a cache-state or a task-state")?;
             }
         }
         FutureNew => {
@@ -1197,7 +1200,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 ctx.may_fail = true;
             }
         }
-        CacheRehome if locations.len() == 3 => {
+        // D24.1: the Future and the cache duty its fut.new gave (`SPB_SPAWN`).
+        FutureSpawn => {
+            enforce(matches!(loc_type(f, locations[0])?, ProducedType::Value(Type::Future(_))), FUTURE_TYPES,
+                "fut.spawn needs a Future")?;
+            input(1, CacheState)?;
+        }
+        CacheRehome if locations.len() == 3 && loc_type(f, locations[1])? == ProducedType::Service(ScopeState) => {
             // The state form (C-4): the reserve, the owner state and the Future whose entry it holds.
             input(0, Pending)?;
             input(1, ScopeState)?;
@@ -1205,9 +1214,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 "the state form of cache.rehome names a Future")?;
             ctx.between = true;
         }
+        // The token form: the reserve, the cache duty and, for a spawned Future, its task duty (D24.1).
         CacheRehome => {
             input(0, Pending)?;
             input(1, CacheState)?;
+            if locations.len() == 3 {
+                input(2, TaskState)?;
+            }
         }
         // ABI D25.2: a packet and the Future whose cache duty's entry leaves it.
         ServiceMaterialize => {
@@ -1494,8 +1507,10 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         Await | FutureCancel | FutureDone | FutureCancelled | CleanupDeliverCancel | UniqueCacheProof => shape == "l",
         // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
         AwaitTake => shape == "lls",
-        // The exit's destination, the pending reserve and the cache duty (C-4, token form), or the owner state and
-        // the Future whose admitted entry moves (state form).
+        // The Future and its cache duty (D24.1).
+        FutureSpawn => shape == "ll",
+        // The exit's destination, the pending reserve and the cache duty with a spawned Future's task duty (C-4,
+        // token form), or the owner state and the Future whose admitted entry moves (state form).
         CacheRehome => shape == "xll" || shape == "xlll",
         // The closing scope's cleanup state (D25.3); a packet and the holder or the token (D25.2).
         CleanupSettleDynamic => shape == "l",

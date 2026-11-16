@@ -1261,6 +1261,9 @@ mod rules_tests;
 mod budget_tests;
 #[cfg(test)]
 mod async_tests;
+
+#[cfg(test)]
+mod spawn_tests;
 #[cfg(test)]
 mod async_resources_tests;
 #[cfg(test)]

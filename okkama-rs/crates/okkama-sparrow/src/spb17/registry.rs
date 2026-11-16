@@ -112,8 +112,9 @@ registry! {
     61 => Lookup, "lookup";
     // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
     // await, wave 2 the temporary take, its proof and the rehome (#601 R4), the dynamic settle and service
-    // materialize/absorb (#601 D25); spawn (65), pins (78–80) and workers (81–83) stay reserved.
+    // materialize/absorb (#601 D25), wave 3 spawn (#601 P1, D24); pins (78–80) and workers (81–83) stay reserved.
     64 => FutureNew, "fut.new";
+    65 => FutureSpawn, "fut.spawn";
     66 => Await, "await";
     67 => AwaitTake, "await.take";
     68 => UniqueCacheProof, "unique_cache.proof";
@@ -255,6 +256,8 @@ impl Opcode {
             (CacheRehome, Tag::Normal) if context.between => vec![S(ScopeState), S(Pending)],
             (CacheRehome, Tag::Normal) => vec![S(Pending)],
             (FuturePublish | FutureCancel, Tag::Normal) => vec![],
+            // D24.1: the cache duty back, unchanged, and the spawned task's duty.
+            (FutureSpawn, Tag::Normal) => vec![S(CacheState), S(TaskState)],
             (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],
             (FrameSave, Tag::Normal) => vec![S(Frame)],
             (FrameResume, Tag::Normal) => {
@@ -334,6 +337,8 @@ impl Opcode {
         use HelperClass::*;
         Some(match self {
             Self::FutureNew => G,
+            // D24.1: the start runs the body on this stack until its first suspension.
+            Self::FutureSpawn => X,
             Self::Await | Self::AwaitTake | Self::AwaitUnwind => S,
             Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
                 | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome
@@ -498,6 +503,7 @@ impl Opcode {
                 // Champ draft 3 §14.4. `fut.done`, `frame.save` and `frame.resume` are inline, and
                 // `unique_cache.proof` has no helper.
                 Self::FutureNew => "champ_future_new",
+                Self::FutureSpawn => "champ_future_spawn",
                 Self::Await => "champ_await_view",
                 Self::AwaitTake => "champ_await_take",
                 Self::CacheRehome => "champ_cache_rehome",
@@ -603,6 +609,8 @@ helper_registry! {
         // The async helpers of Champ draft 3 §14.4 (#601 V8). `fut.done`, `frame.save` and `frame.resume` are
         // inline; the nonempty `cleanup.settle` settles one scheduled duty.
         "champ_future_new" => &[C, P, P], COLLECTING, Some(O::FutureNew);
+        // D24.1 (#601 P1): the Future, its cache duty in, the cache duty and the task duty out.
+        "champ_future_spawn" => &[C, W, P, P], X, Some(O::FutureSpawn);
         "champ_await_view" => &[C, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::Await);
         "champ_await_take" => &[C, W, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::AwaitTake);
         "champ_cache_rehome" => &[C, P, P, P, P, W, W, P], L, Some(O::CacheRehome);
