@@ -253,12 +253,13 @@
   - [18.3 Types are exact](#183-types-are-exact)
   - [18.4 Action values as data](#184-action-values-as-data)
   - [18.5 Bound actions: an object's action as a value](#185-bound-actions-an-objects-action-as-a-value)
-  - [18.6 Closures or objects](#186-closures-or-objects)
-  - [18.7 Resources and failure reports](#187-resources-and-failure-reports)
-  - [18.8 Where closures came from](#188-where-closures-came-from)
-  - [18.9 Okkama among other languages](#189-okkama-among-other-languages)
-  - [18.10 Limits](#1810-limits)
-  - [18.11 What this design costs](#1811-what-this-design-costs)
+  - [18.6 Closures in the standard library](#186-closures-in-the-standard-library)
+  - [18.7 Closures or objects](#187-closures-or-objects)
+  - [18.8 Resources and failure reports](#188-resources-and-failure-reports)
+  - [18.9 Where closures came from](#189-where-closures-came-from)
+  - [18.10 Okkama among other languages](#1810-okkama-among-other-languages)
+  - [18.11 Limits](#1811-limits)
+  - [18.12 What this design costs](#1812-what-this-design-costs)
 - [Chapter 19. Modules, imports, packages and blade](#chapter-19-modules-imports-packages-and-blade)
   - [19.1 A module is a file](#191-a-module-is-a-file)
   - [19.2 Three forms of import](#192-three-forms-of-import)
@@ -14264,7 +14265,7 @@ The compiler answers:
   #322).
 - **Equality is identity.** `pick == retail.of` is `false`. Each `.of`
   makes a new value, and two action values are equal only when they are
-  the same value (Section 18.10).
+  the same value (Section 18.11).
 - **An async action binds the same way.** `endpoint.fetch` of an `async`
   action is a value of type `async (int) is string`. Section 20.11 passes
   one to a retry policy.
@@ -14285,7 +14286,102 @@ Other languages bind methods too, and differ on the points above.
 Okkama's rule is the Java and C# one: a bound action exists only where its
 type is written. Its receiver travels with it, as in Python.
 
-## 18.6 Closures or objects
+## 18.6 Closures in the standard library
+
+The library asks for behaviour in a few places, and it takes it as an
+action value. The most common is a sort key.
+
+```okkama
+module bible/std_closures v1.0.0;
+
+// Closures where the library asks for behaviour: a sort key written in place,
+// a key that captures a local limit, and an object's action passed as the key.
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+import "collections/ordering" take SortedBy;
+import "collections/iteration" take Iterating;
+
+object Job {
+    has name is string;
+    has team is string;
+    has hours is int;
+    Job(:name, :team, :hours);
+    name() is string { name; }
+    team() is string { team; }
+    hours() is int { hours; }
+}
+
+// A ranking of teams; unknown teams go last.
+object Priorities {
+    has rank is %string:int;
+    Priorities(:rank);
+    of(job is Job) is int { rank[job.team()] else 99; }
+}
+
+object Listing {
+    Listing() {}
+    // The names in walking order, gathered in a Cell (synchronous code).
+    names(jobs is Iterating<Job>) is string {
+        let shown = Cell("");
+        for jobs -> job {
+            shown.replace(shown.value() + " " + job.name());
+        }
+        shown.value();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let list = Listing();
+    let jobs = [
+        Job(name: "deploy", team: "ops", hours: 2),
+        Job(name: "refund", team: "billing", hours: 1),
+        Job(name: "reindex", team: "search", hours: 5),
+        Job(name: "backup", team: "ops", hours: 3)
+    ];
+    out.writeln("by hours:" + list.names(SortedBy(origin: jobs, key: (job is Job) is int { job.hours(); })));
+    let limit = 2;
+    let quick = SortedBy(origin: jobs, key: (job is Job) is int { if job.hours() <= limit { 0; } else { 1; } });
+    out.writeln("quick first:" + list.names(quick));
+    let priorities = Priorities(rank: ["billing": 1, "ops": 2]);
+    out.writeln("by team:" + list.names(SortedBy(origin: jobs, key: priorities.of)));
+    0;
+}
+```
+
+Output:
+
+```text
+by hours: refund deploy backup reindex
+quick first: deploy refund reindex backup
+by team: refund deploy backup reindex
+```
+
+- **A key written in place.** `SortedBy(origin: jobs, key: (job is Job) is
+  int { job.hours(); })` sorts by hours. The key's type is written in the
+  parameter, `(T) is K`, so the anonymous action needs no annotation beyond
+  its own signature.
+- **A key that captures.** The `quick` key compares each job's hours with
+  `limit`, a local of `main`, and puts the quick jobs first. The capture is
+  a snapshot (Section 18.2): changing `limit` later would not change this
+  sort. The sort is stable, so jobs with equal keys keep their input order:
+  `deploy` before `refund`, `reindex` before `backup`.
+- **A bound action as the key.** `priorities.of` passes an object's action,
+  and the parameter's written type is the boundary the bound action needs
+  (Section 18.5). The ranking lives in an object with a name and a test,
+  and the sort call stays one line.
+- **A `Cell` gathers the names.** `Listing.names` walks any `Iterating<Job>`
+  and appends to a `Cell`, the mutable value of synchronous code. A `for`
+  block is not a closure, so it may update the cell. A `Cell` cannot be
+  captured into an action value that outlives the call (Section 18.2).
+
+The same shape recurs across the library: keys in `SortedBy`, mappings
+and conditions in the lazy views of `collections/views`, and the condition
+a test check such as `Eventually` polls. Where the behaviour needs state, a
+name or its own tests, the library takes a role instead, and Section 18.7
+gives the rule for choosing.
+
+## 18.7 Closures or objects
 
 An anonymous action and a small object can do the same job. The pipeline of
 the first example could hold `Step` objects with an `apply` action instead
@@ -14398,7 +14494,7 @@ does not suspend. Kotlin draws the same line in its types with `suspend`
 function types, and JavaScript with `async` functions, but both also allow
 anonymous functions that suspend; Okkama does not.
 
-## 18.7 Resources and failure reports
+## 18.8 Resources and failure reports
 
 ### Closures and resources
 
@@ -14443,7 +14539,7 @@ Stack trace (most recent call first):
 
 The report identifies the anonymous action as `lambda#0` and points into its body. It shows where the failure occurred, not where the closure was created; the creating call may have returned long before.
 
-## 18.8 Where closures came from
+## 18.9 Where closures came from
 
 Closures are older than objects. Church's lambda calculus of 1936 already
 treated functions as values [[Church 1936](#ref-church1936)], and McCarthy built LISP on it in
@@ -14477,7 +14573,7 @@ returns from that action, and `next` and `last` cannot reach an outer loop
 funarg problem, which variable a closure shares with its creator, has no
 room to arise.
 
-## 18.9 Okkama among other languages
+## 18.10 Okkama among other languages
 
 | | Captures | Assigning a captured name | Typing |
 |---|---|---|---|
@@ -14495,7 +14591,7 @@ variable, and with Java on the declaration being explicit. It is stricter
 than all of them on types: an action value has exactly its declared
 signature, and nothing converts it to a role or to a wider function type.
 
-## 18.10 Limits
+## 18.11 Limits
 
 - **No recursion by name.** A `let` becomes visible only after its
   initializer, so an anonymous action cannot call itself through the `let`
@@ -14513,7 +14609,7 @@ signature, and nothing converts it to a role or to a wider function type.
   (Section 18.5) or as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
 
-## 18.11 What this design costs
+## 18.12 What this design costs
 
 Explicit signatures make short closures longer than in languages that infer
 them: `(value is int) is int { value * 2; }` where Kotlin writes `{ it * 2 }`.

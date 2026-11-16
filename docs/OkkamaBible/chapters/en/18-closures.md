@@ -274,7 +274,7 @@ receiver `retail`, so calling it later uses that object's rate.
   #322).
 - **Equality is identity.** `pick == retail.of` is `false`. Each `.of`
   makes a new value, and two action values are equal only when they are
-  the same value (Section 18.10).
+  the same value (Section 18.11).
 - **An async action binds the same way.** `endpoint.fetch` of an `async`
   action is a value of type `async (int) is string`. Section 20.11 passes
   one to a retry policy.
@@ -295,7 +295,38 @@ Other languages bind methods too, and differ on the points above.
 Okkama's rule is the Java and C# one: a bound action exists only where its
 type is written. Its receiver travels with it, as in Python.
 
-## 18.6 Closures or objects
+## 18.6 Closures in the standard library
+
+The library asks for behaviour in a few places, and it takes it as an
+action value. The most common is a sort key.
+
+{{example:18-std}}
+
+- **A key written in place.** `SortedBy(origin: jobs, key: (job is Job) is
+  int { job.hours(); })` sorts by hours. The key's type is written in the
+  parameter, `(T) is K`, so the anonymous action needs no annotation beyond
+  its own signature.
+- **A key that captures.** The `quick` key compares each job's hours with
+  `limit`, a local of `main`, and puts the quick jobs first. The capture is
+  a snapshot (Section 18.2): changing `limit` later would not change this
+  sort. The sort is stable, so jobs with equal keys keep their input order:
+  `deploy` before `refund`, `reindex` before `backup`.
+- **A bound action as the key.** `priorities.of` passes an object's action,
+  and the parameter's written type is the boundary the bound action needs
+  (Section 18.5). The ranking lives in an object with a name and a test,
+  and the sort call stays one line.
+- **A `Cell` gathers the names.** `Listing.names` walks any `Iterating<Job>`
+  and appends to a `Cell`, the mutable value of synchronous code. A `for`
+  block is not a closure, so it may update the cell. A `Cell` cannot be
+  captured into an action value that outlives the call (Section 18.2).
+
+The same shape recurs across the library: keys in `SortedBy`, mappings
+and conditions in the lazy views of `collections/views`, and the condition
+a test check such as `Eventually` polls. Where the behaviour needs state, a
+name or its own tests, the library takes a role instead, and Section 18.7
+gives the rule for choosing.
+
+## 18.7 Closures or objects
 
 An anonymous action and a small object can do the same job. The pipeline of
 the first example could hold `Step` objects with an `apply` action instead
@@ -355,7 +386,7 @@ does not suspend. Kotlin draws the same line in its types with `suspend`
 function types, and JavaScript with `async` functions, but both also allow
 anonymous functions that suspend; Okkama does not.
 
-## 18.7 Resources and failure reports
+## 18.8 Resources and failure reports
 
 ### Closures and resources
 
@@ -400,7 +431,7 @@ Stack trace (most recent call first):
 
 The report identifies the anonymous action as `lambda#0` and points into its body. It shows where the failure occurred, not where the closure was created; the creating call may have returned long before.
 
-## 18.8 Where closures came from
+## 18.9 Where closures came from
 
 Closures are older than objects. Church's lambda calculus of 1936 already
 treated functions as values [@church1936], and McCarthy built LISP on it in
@@ -434,7 +465,7 @@ returns from that action, and `next` and `last` cannot reach an outer loop
 funarg problem, which variable a closure shares with its creator, has no
 room to arise.
 
-## 18.9 Okkama among other languages
+## 18.10 Okkama among other languages
 
 | | Captures | Assigning a captured name | Typing |
 |---|---|---|---|
@@ -452,7 +483,7 @@ variable, and with Java on the declaration being explicit. It is stricter
 than all of them on types: an action value has exactly its declared
 signature, and nothing converts it to a role or to a wider function type.
 
-## 18.10 Limits
+## 18.11 Limits
 
 - **No recursion by name.** A `let` becomes visible only after its
   initializer, so an anonymous action cannot call itself through the `let`
@@ -470,7 +501,7 @@ signature, and nothing converts it to a role or to a wider function type.
   (Section 18.5) or as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
 
-## 18.11 What this design costs
+## 18.12 What this design costs
 
 Explicit signatures make short closures longer than in languages that infer
 them: `(value is int) is int { value * 2; }` where Kotlin writes `{ it * 2 }`.

@@ -221,6 +221,8 @@ language.
   action type is required, the receiver travels, equality is identity, async
   binds too; JavaScript, Python, Java/Kotlin, C#); later sections → 18.6–18.11;
   the async limit now names bound async actions.
+- 2026-11-16: 18.6 closures in the standard library (`18-std`: SortedBy keys in
+  place, capturing and bound; stable order; a Cell in a `for`); ch. 18 at its floor.
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,
