@@ -88,8 +88,10 @@ impl Declarations {
             if !object.params.is_empty() {
                 return Err(LowerError::unsupported(decl.span, "generic object"));
             }
+            // A registered Atomic keeps its dotted name with a role value's name in its suffix (#764).
+            let registered = reg.modules[object.module].name == "async/atomic" && object.name.starts_with("Atomic_");
             let id = this.builder.declare(ir::Declaration {
-                name: if object.name.contains('<') {
+                name: if object.name.contains('<') && !registered {
                     format!("{}::{}", reg.modules[object.module].name, object.name)
                 } else {
                     format!("{}.{}", reg.modules[object.module].name.replace('/', "."), object.name)
@@ -97,8 +99,7 @@ impl Declarations {
                 type_params: vec![],
                 kind: ir::DeclarationKind::Object {
                     fields: vec![], witnesses: vec![], destroy: None,
-                    builtin: super::drivers::builtin(&reg.modules[object.module].name, &object.name)
-                        || reg.modules[object.module].name == "async/atomic" && object.name.starts_with("Atomic_"),
+                    builtin: super::drivers::builtin(&reg.modules[object.module].name, &object.name) || registered,
                 },
                 loc: None,
             })?;
@@ -113,11 +114,7 @@ impl Declarations {
             if role.decl.is_none() || !role.params.is_empty() {
                 continue;
             }
-            let name = if role.name.contains('<') {
-                format!("{}::{}", reg.modules[role.module].name, role.name)
-            } else {
-                format!("{}.{}", reg.modules[role.module].name.replace('/', "."), role.name)
-            };
+            let name = super::specialize::role_declaration_name(&reg.modules[role.module].name, &role.name);
             let declaration = this.builder.declare(ir::Declaration {
                 name, type_params: vec![], loc: None,
                 kind: ir::DeclarationKind::Role { methods: vec![], builtin: false },

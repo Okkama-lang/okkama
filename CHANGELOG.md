@@ -20,6 +20,54 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A holder of a closure that captures a resource builds on Champ (#777,
+  structural build).** An action value's role is implemented by the
+  closure layouts the backend adds, not by module declarations, so the
+  object layouts missed that a holder of such a value reaches the captured
+  resource and the loader refused it (`OBJECT_RETENTION`). The layouts now
+  count, for each action type, what its closures capture. The program runs
+  as on Tomato; the full ownership verifier still reports B104 for it (see
+  #777).
+- **Cell and Atomic over other closed plain data run on Champ (#778).**
+  After #764 the producer still refused Atomic/Cell over maps, variants of
+  plain objects, arrays of native handles or of plain roles and generic role
+  instances. Such a value now registers `async.atomic.Atomic_t_<type>`: its
+  operations name the value type, the storage holds it and the closed
+  flag, and an array of role values carries its deps as own elaborates it.
+  The SPB 17 loader admits it only as closed plain data by its whole graph
+  (`ATOMIC_PLAIN`); the producer refuses a value that may reach a resource
+  by name. Futures stay out (D25). `L04.fakes.failing-assertion` runs; the
+  other cases stop next on #780, #781, the allocation checker
+  (`L09.db.row-readers`), `spawn` (`L08.db.query-lifetime`) and Futures in
+  arrays (`L11.sqlite.prepared-pool-query`).
+- **A holder of action values is no identity when their closures own
+  nothing (#723).** Own classified a function type by the runtime-managed
+  dictionary of its open calls, so any object that held an action value
+  (`OrderedSet` through `Filtered`'s condition) counted as owning a
+  resource. It got a fresh creation summary that the SPB 17 layout, which
+  gives an identity only to an object with a destroy, has no identity for
+  (`FRESH_ORIGIN`, `L09.collections.ordered-sets`). Now a function type
+  inside another type's graph counts by the closed set of closures the
+  module creates of it, as a role counts by its implementations (P2.4 §4.1:
+  a closure owns a captured resource only when it captured a fresh one);
+  a function type a value from outside the module may have (an entry
+  parameter, a bodyless function's result) keeps its dictionary, and so
+  does the function type itself. The full verifier's obligation formula
+  counts function types the same way. The case runs; #777 is the
+  remaining defect of holders whose closures capture a resource.
+- **Cell and Atomic over a plain role run on Champ (#764).** The OIR-2
+  specializer registered Atomic/Cell only for plain scalars and arrays, so
+  `std/config/ini.ok`'s `Cell<List<string>>` stopped `L09.ini.native-
+  equivalence` ("std object cell.Cell<[Role(..)]>"). Per the decision in
+  P2.4 §4.8, a role value is admitted when the role is plain: every
+  implementation in the program (object witnesses and the builtin adapters
+  of #757) is closed plain data without destroy and without a resource in
+  its graph. The registered `async.atomic.Atomic_role_<role>` holds a traced
+  role reference and its closed flag; its operations are the registered P1
+  entries, with the role value's deps as for an object. The SPB 17 loader
+  checks the closure by the witness tables (`ATOMIC_ROLE`); the producer
+  refuses a role with a resource implementation by name ("Atomic/Cell over
+  the role … plain roles only"). The case runs (220 cases, 0 mismatches).
 - **A loop scope of a resource holder closes on Champ (#753).** The SPB 17
   loader (`D18_EXECUTOR`) checks a merge close's envelope against the
   destroys its inventory may see. When it cannot reconstruct the inventory

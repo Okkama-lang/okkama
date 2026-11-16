@@ -935,3 +935,91 @@ fn missing_scope_state_is_a_flow_diagnostic() {
     env.scopes.insert(scope, state);
     assert_eq!(env.state(scope).unwrap(), state);
 }
+
+/// #723 (P2.4 §4.1): a holder of action values owns what the closures of their function types may own, as a
+/// holder of role values owns what the role's implementations may own; the runtime-managed dictionary of a
+/// function type's open calls stays with the function type itself. `Kept` holds a function type whose only closure
+/// captures plain data: it holds no obligation. `Leased` holds one whose closure captures a resource, and
+/// `Foreign` one that the entry may receive from outside the module: both may own.
+#[test]
+fn a_holder_of_action_values_counts_their_closures() {
+    let source = r#"oir 2 high
+module closure_holders
+summary Mc call-boundary parameters [parameter_effect(convention=take, destination=none)]
+    contract call_contract(publication=atomic)
+func @cleanup(%arg0: fn() -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Mc);
+func @cleanup_leased(%arg0: fn(int) -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Mc);
+func @cleanup_foreign(%arg0: fn(bool) -> int) -> void [intrinsic "oir.sync_closure.cleanup"] summary(Mc);
+object R {
+    destroy @destroy
+}
+object Plain {
+    field n: int
+}
+object Kept {
+    field f: fn() -> int
+}
+object Leased {
+    field g: fn(int) -> int
+}
+object Foreign {
+    field h: fn(bool) -> int
+}
+scope SD action in @destroy
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+scope SP action in @plain
+func @plain(%captured: Plain) -> int [lambda captures 1] {
+    ^entry in SP:
+    %n: int = const 1
+    ret %n
+}
+scope SR action in @leasing
+func @leasing(%captured: R, %x: int) -> int [lambda captures 1] {
+    ^entry in SR:
+    ret %x
+}
+scope SM action in @main
+func @main(%h: fn(bool) -> int) -> int [entry] {
+    ^entry in SM:
+    %n: int = const 0
+    ret %n
+}
+scope SF action in @f
+func @f(%p: Plain, %r: R) -> int {
+    ^entry in SF:
+    %kept_dictionary: type = type.of ty fn() -> int, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@cleanup, summary=Mc)
+    %leased_dictionary: type = type.of ty fn(int) -> int, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@cleanup_leased, summary=Mc)
+    %foreign_dictionary: type = type.of ty fn(bool) -> int, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@cleanup_foreign, summary=Mc)
+    %kept: fn() -> int = fn.closure @plain, [%p], ty fn() -> int
+    %leased: fn(int) -> int = fn.closure @leasing, [%r], ty fn(int) -> int
+    %n: int = const 0
+    ret %n
+}
+"#;
+    let mut module = crate::text::parse(source).unwrap();
+    for name in ["Kept", "Leased", "Foreign", "R"] {
+        let decl = module.declarations.iter().find(|(_, decl)| decl.name == name).unwrap().0;
+        module.types.intern(Type::Object { decl, args: vec![] }).unwrap();
+    }
+    let classes = classify_test(&module, &OwnOptions::default());
+    let object = |name: &str| module.types.iter().find(|(_, ty)| matches!(ty, Type::Object { decl, .. }
+        if module.declarations.get(*decl).unwrap().name == name)).unwrap().0;
+    let kept = &classes[&object("Kept")];
+    assert!(!kept.may_own(), "{kept:?}");
+    assert_eq!(kept.class, Classification::Plain);
+    assert!(kept.references, "an action value is still a reference with deps");
+    assert!(classes[&object("Leased")].may_own());
+    assert!(classes[&object("Leased")].reachable_resources.contains(&object("R")));
+    assert!(classes[&object("Foreign")].may_own(), "a value from outside the module keeps its dictionary");
+    // The function type itself keeps the dictionary of its open calls.
+    let function = module.types.iter().find(|(_, ty)| matches!(ty, Type::Fn(function) if function.params.is_empty()))
+        .unwrap().0;
+    assert_eq!(classes[&function].descriptors.len(), 1);
+    assert!(classes[&function].may_own());
+}

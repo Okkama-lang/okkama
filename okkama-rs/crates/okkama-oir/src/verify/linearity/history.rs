@@ -515,6 +515,74 @@ func @uses(%a: Square, %b: CapHolder, %c: ShapeHolder, %d: OwnedHolder) -> void 
         });
     }
 
+    /// #723: a function type holds an obligation only when one of the module's closures of it captures one, or a
+    /// value of it may come from outside the module (an entry parameter); a holder holds one through such a field.
+    /// Managedness is unchanged: every function type stays managed.
+    #[test]
+    fn obligations_of_function_types_follow_their_closures() {
+        let module = text::parse("oir 2 own
+module closures
+object Res {
+    destroy @destroy
+}
+object Plain {
+    field n: int
+}
+object Kept {
+    field f: fn() -> int
+}
+object Leased {
+    field g: fn(int) -> int
+}
+object Foreign {
+    field h: fn(bool) -> int
+}
+scope S action in @destroy
+func @destroy(%self: Res) -> void [destroy Res] {
+^entry in S:
+    ret
+}
+scope SP action in @plain
+func @plain(%captured: Plain) -> int [lambda captures 1] {
+^entry in SP:
+    %n: int = const 1
+    ret %n
+}
+scope SR action in @leasing
+func @leasing(%captured: Res, %x: int) -> int [lambda captures 1] {
+^entry in SR:
+    ret %x
+}
+scope SM action in @main
+func @main(%h: fn(bool) -> int) -> int [entry] {
+^entry in SM:
+    %n: int = const 0
+    ret %n
+}
+scope SU action in @uses
+func @uses(%p: Plain, %r: Res, %a: Kept, %b: Leased, %c: Foreign) -> void {
+^entry in SU:
+    %kept: fn() -> int = fn.closure @plain, [%p], ty fn() -> int
+    %leased: fn(int) -> int = fn.closure @leasing, [%r], ty fn(int) -> int
+    ret
+}
+").unwrap_or_else(|error| panic!("{error}"));
+        with_state(&module, |state| {
+            let module = state.module;
+            let obligations = obligation_types(module, state);
+            let managed = managed_types(module, state);
+            let classified = |name: &str| {
+                let (decl, _) = module.declarations.iter().find(|(_, declaration)| declaration.name == name).unwrap();
+                let (ty, _) = module.types.iter().find(|(_, ty)| matches!(ty, Type::Object { decl: object, .. }
+                    if *object == decl)).unwrap();
+                (obligations[ty.as_u32() as usize], managed[ty.as_u32() as usize])
+            };
+            assert_eq!(classified("Kept"), (false, true));
+            assert_eq!(classified("Leased"), (true, true));
+            assert_eq!(classified("Foreign"), (true, true));
+        });
+    }
+
     fn module() -> Module {
         text::parse("oir 2 own
 module history
