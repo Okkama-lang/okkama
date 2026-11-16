@@ -176,16 +176,22 @@ fn oir2_c6_structural_protocol_is_rejected_by_frontend() {
     assert!(errors.iter().any(|error| error.message.contains("For source")));
 }
 
+/// #757: no object or adapter witnesses `Iterating<int>`, so no source value exists and the walk never
+/// starts: the producer lowers it as unreachable (it was an Unsupported diagnostic before #757).
 #[test]
-fn oir2_c6_protocol_without_witness_is_unsupported() {
+fn oir2_c6_protocol_without_witness_is_unreachable() {
     with_analysis(concat!(
         "module app; import \"collections/iteration\" take Iterating; ",
         "object Run { Run(); run(source is Iterating<int>) is int { for source -> x { x; } } } ",
         "main() is int { 0; }",
     ), |analysis| {
-        let error = super::lower_to_oir2(analysis).unwrap_err();
-        assert!(matches!(error, super::LowerError::Unsupported { span, .. } if !span.is_empty()));
-        assert!(error.to_string().contains("role has no reachable implementation"));
+        let module = super::lower_to_oir2(analysis).unwrap();
+        ir::verify::verify_high(&module).unwrap();
+        let run = module.functions.iter().find(|(_, function)| function.symbol == "app.Run.run#0").unwrap().1;
+        let body = run.body.as_ref().unwrap();
+        assert!(body.blocks.iter().any(|(_, block)| block.term.kind == ir::TermKind::Unreachable));
+        assert!(!body.insts.iter().any(|(_, instruction)| matches!(instruction.op,
+            ir::Operation::Call(ir::CallOp::Role { .. }))));
     });
 }
 

@@ -2146,3 +2146,58 @@ fn oir2_char_conversions_lower_to_cvt() {
     assert_eq!(conversions, [(N::Char, N::Int), (N::Int, N::Char), (N::Char, N::Str), (N::Char, N::Str)]);
 }
 
+
+/// An early self (`self` handed out before every field is bound, language §12.10) whose body may leave a field
+/// unbound completes behind the check of that field's bound flag, which fails as Tomato does (#746): the
+/// construction self-check and the verifier (A2) take the field as initialized on the check's passing edge.
+#[test]
+fn oir2_early_self_checks_fields_bound_on_some_paths() {
+    let module = high_of(concat!("module app; object Gate { has a is int; has b is int; ",
+        "Gate(flag is bool) { let alias = self; if flag { self.a = 1; } self.b = 2; } } ",
+        "main() is int { Gate(true); 0; }"));
+    assert_eq!(unbound_traps(&module, "app.Gate"), ["Object \"Gate\" field \"a\" was not initialized"]);
+    super::structure::check(&module).unwrap();
+    let ctor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Gate.new")).unwrap().1;
+    let incomplete = ctor.body.as_ref().unwrap().insts.iter().any(|(_, inst)| matches!(inst.op,
+        ir::Operation::Core(ir::CoreOp::ObjNew { construction: ir::ConstructionStatus::Incomplete, .. })));
+    assert!(incomplete, "the early-self form");
+}
+
+/// The construction self-check completes an early self with a field that may be unbound only behind the check
+/// of that field's flag (#746): a check of another field, a failing edge that is not an unbound-field trap, or
+/// no check at all is refused.
+#[test]
+fn oir2_early_self_completion_requires_the_bound_check_of_each_maybe_unbound_field() {
+    let module = high_of(concat!("module app; object Gate { has a is int; Gate(flag is bool) { ",
+        "let alias = self; if flag { self.a = 1; } } } main() is int { Gate(true); 0; }"));
+    super::structure::check(&module).unwrap();
+    let ctor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Gate.new")).unwrap().0;
+    let trap = |module: &ir::Module| module.functions.get(ctor).unwrap().body.as_ref().unwrap().blocks.iter()
+        .find(|(_, block)| matches!(block.term.kind, ir::TermKind::Trap { code: ir::TrapCode::Unbound, .. }))
+        .unwrap().0;
+    for mutation in 0..3 {
+        let mut broken = module.clone();
+        let block = trap(&broken);
+        let body = broken.functions.get_mut(ctor).unwrap().body.as_mut().unwrap();
+        let term = &mut body.blocks.get_mut(block).unwrap().term.kind;
+        match mutation {
+            // The check names another field.
+            0 => *term = ir::TermKind::Trap { code: ir::TrapCode::Unbound,
+                message: "Object \"Gate\" field \"b\" was not initialized".into() },
+            // The failing edge is not an unbound-field trap.
+            1 => *term = ir::TermKind::Trap { code: ir::TrapCode::Confirm,
+                message: "Object \"Gate\" field \"a\" was not initialized".into() },
+            // No check: the completion is reached from both edges.
+            _ => {
+                let source = body.blocks.iter().find(|(_, data)| matches!(&data.term.kind,
+                    ir::TermKind::Cond { no, .. } if no.block == block)).unwrap().0;
+                let ir::TermKind::Cond { yes, .. } = body.blocks.get(source).unwrap().term.kind.clone() else {
+                    unreachable!()
+                };
+                body.blocks.get_mut(source).unwrap().term.kind = ir::TermKind::Br(yes);
+            }
+        }
+        let error = super::structure::check(&broken).expect_err("an unchecked maybe-unbound field");
+        assert!(error.to_string().contains("completion before field initialization"), "{mutation}: {error}");
+    }
+}

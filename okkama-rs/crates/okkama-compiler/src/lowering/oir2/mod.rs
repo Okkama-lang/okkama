@@ -66,6 +66,8 @@ mod specialization_tests;
 #[cfg(test)]
 mod role_tests;
 #[cfg(test)]
+mod builtin_role_tests;
+#[cfg(test)]
 mod case_tests;
 
 use crate::analysis::{Analysis, thir};

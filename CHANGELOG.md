@@ -20,6 +20,50 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Tomato: `e.text()` on a cancellation caught as `Error` no longer
+  crashes (#744).** A catch of the Error role binds a `Cancelled` value,
+  which Sparrow builds from the system `Cancelled` object; the OIR-1
+  lowering brought that object into the program only when a body named
+  `Cancelled`, so `rt_catch` bound an unbound word and the role call
+  `text()` read through it (SIGSEGV; 0.5.8's `sparrow` crashes on its own
+  bytecode of the program too). Every catch of the Error role now brings the
+  system object along, and the program prints `error: Operation was
+  cancelled`. Without the object (only a crafted SPB lacks it) the Error
+  catch no longer matches a cancellation, which keeps unwinding, instead of
+  binding the unbound word.
+- **An early-self constructor that may leave a field unbound runs on Champ
+  (#746).** #708 checks a maybe-unbound field's flag before a complete
+  `obj.new`; a constructor that hands out `self` first (language §12.10)
+  completes through `obj.init $pending = false` instead, and both the
+  producer's construction self-check and the verifier's construction rule
+  (A2) joined the field's state over paths and refused the completion
+  ("completion before field initialization"). Both now take the field as
+  initialized on the passing edge of its bound-flag check: a `cond` whose
+  failing target traps with `TrapCode::Unbound` and Tomato's message for
+  that field, directly or through empty `br` blocks (own splits the edges).
+  The program fails as on Tomato, `Object "Gate" field "a" was not
+  initialized`. Verifier fixtures: two valid (direct and split check) and
+  four invalid (another field's check, a non-Unbound trap, completion on the
+  failing edge, an instruction on the split edge).
+- **Builtin values behind roles on Champ (#757).** The OIR-2 producer
+  adapted an array only to `Iterating<T>` and refused the other forms, so
+  nine conformance cases stopped with "builtin role adapter outside the C3
+  ByteSource bridge" or "role has no reachable implementation". An array
+  now gets one adapter object per array type and role element, as Tomato's
+  `ArraySequence<S, T>`: it witnesses every `Sequencing<T>`, `Iterating<T>`
+  and `Sizing` of the module, with `size`, `item`, `first`, `last` (an
+  empty array fails with Tomato's "Cannot read first item of an empty
+  sequence") and `cursor`. An element crosses into the role element as on
+  Tomato: an object or variant is wrapped into its role, and an inner array
+  goes through its own adapter, at any depth (#488). Wraps inside closure
+  bodies get their adapters too. A call or walk of a role that no object or
+  adapter witnesses joins an empty set of implementations and lowers as
+  `unreachable`: no value of such a role can exist. The SPB 17 backend
+  admits an array or map of objects that hold role, cap, action or `any`
+  values as a view of closed plain data (own tracks those as references;
+  the loader keeps checking `ARRAY_PLAIN`). Eight cases pass;
+  `L08.collect.race-empty` stops next on an array of futures in an object
+  field (#758). The Champ case harness passes a case's `args`.
 - **Collections of native handles on Champ (#751).** SPB 17 had no array
   leaf for a native handle and no builder of handles, so OIR-2 code
   generation stopped on json's parsed nodes (`Array(Handle(_))`,

@@ -110,11 +110,17 @@ pub struct Run {
 }
 
 pub fn run(bytes: Vec<u8>) -> Result<Run, String> {
+    run_with_arguments(bytes, Vec::new())
+}
+
+/// [`run`] with program arguments (a case's `args`).
+pub fn run_with_arguments(bytes: Vec<u8>, arguments: Vec<Vec<u8>>) -> Result<Run, String> {
     let limits = sparrow_core::budget::Limits {
         steps: Some(10_000_000),
         ..sparrow_core::budget::Limits::default()
     };
-    let run = sparrow_core::run_captured(bytes, limits).map_err(|error| format!("load: {error}"))?;
+    let run = sparrow_core::run_captured_with_arguments(bytes, arguments, limits)
+        .map_err(|error| format!("load: {error}"))?;
     Ok(Run {
         stdout: String::from_utf8_lossy(&run.stdout).into_owned(),
         result: run.result.map_err(|error| error.0),
@@ -139,7 +145,10 @@ pub fn run_case(id: &str) -> Result<(), String> {
         let text = std::fs::read_to_string(&file).unwrap();
         sources.push(SourceFile::new(file.to_string_lossy(), text).unwrap());
     }
-    let run = run(compile(&sources)?)?;
+    let arguments = case["args"].as_array()
+        .map(|args| args.iter().map(|arg| arg.as_str().unwrap().as_bytes().to_vec()).collect())
+        .unwrap_or_default();
+    let run = run_with_arguments(compile(&sources)?, arguments)?;
     let stdout = run.stdout;
     let expect = &case["expect"];
     let expected_stdout = expect["stdout"]["text"].as_str().unwrap_or("");

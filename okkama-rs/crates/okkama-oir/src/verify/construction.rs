@@ -11,6 +11,8 @@ struct Creation<'a> {
     layout: &'a [Field],
     pending_layout: bool,
     aliases: BTreeSet<ValueId>,
+    /// The object's name as a failure message gives it: without its module, or its generic instance.
+    name: &'a str,
 }
 fn undef(body: &Body, value: ValueId) -> bool {
     body.values.get(value).is_ok_and(|v| match v.def {
@@ -40,9 +42,13 @@ pub(super) fn check(module: &Module, function: FuncId, body: &Body, state: &mut 
         seeds.extend(&origin_values);
         let pending_layout = layout.last().is_some_and(|field| field.name == "$pending"
             && module.types.get(field.ty) == Ok(&Type::Bool));
+        let name = match decl.name.rsplit_once("::") {
+            Some((_, instance)) => instance,
+            None => decl.name.rsplit('.').next().unwrap_or(&decl.name),
+        };
         let mut creation = Creation {
             origin, initial: fields, status: *construction, layout, pending_layout,
-            aliases: origin_values.into_iter().collect(),
+            aliases: origin_values.into_iter().collect(), name,
         };
         let mut changed = true;
         while changed {
@@ -128,6 +134,11 @@ fn analyze(
             if let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind
                 && !edge.entry && edge.target == normal.block && edge.args == normal.args {
                 transfer(body, op, Origin::Invoke(block_id), c, &mut next, None);
+            }
+            if !edge.entry && next[c.layout.len()] == 1 {
+                for index in bound_behind(body, &block.term.kind, edge.target, c) {
+                    next[index] = 2;
+                }
             }
             let slot = &mut inputs[edge.target.as_u32() as usize];
             let changed = match slot {
@@ -217,6 +228,32 @@ fn transfer(
     }
     values[index] = 2;
     if is_pending { values[c.layout.len()] = 2; }
+}
+/// The fields of an incomplete self that the `yes` edge of a bound-flag check into `target` proves initialized
+/// (A2, #746): the check's `no` target traps with `TrapCode::Unbound` and the program failure for that field,
+/// `Object "X" field "y" was not initialized`, directly or through empty `br` blocks (own splits the edges).
+/// The producer keeps a flag per field that a path may leave unbound and checks it before the completion, as
+/// Tomato checks its field flags after the body.
+fn bound_behind(body: &Body, term: &TermKind, target: BlockId, c: &Creation<'_>) -> Vec<usize> {
+    let TermKind::Cond { yes, no, .. } = term else { return vec![]; };
+    if yes.block != target || no.block == target { return vec![]; }
+    let Some(message) = unbound_trap(body, no.block) else { return vec![]; };
+    c.layout.iter().enumerate().filter(|(_, field)| {
+        *message == format!("Object \"{}\" field \"{}\" was not initialized", c.name, field.name)
+    }).map(|(index, _)| index).collect()
+}
+/// The message of the `TrapCode::Unbound` trap that `block` reaches through empty `br` blocks, if it does.
+fn unbound_trap(body: &Body, mut block: BlockId) -> Option<&String> {
+    let mut seen = BTreeSet::new();
+    while seen.insert(block) {
+        let data = body.blocks.get(block).ok()?;
+        match &data.term.kind {
+            TermKind::Trap { code: TrapCode::Unbound, message } => return Some(message),
+            TermKind::Br(next) if data.insts.is_empty() => block = next.block,
+            _ => return None,
+        }
+    }
+    None
 }
 pub(super) fn is_false(body: &Body, value: ValueId) -> bool {
     body.values.get(value).is_ok_and(|v| match v.def {

@@ -85,8 +85,42 @@ pub(crate) fn view_array(module: &o::Module, mut ty: o::TypeId) -> Result<bool, 
         ty = *element;
         depth += 1;
     }
-    Ok(depth > 0 && matches!(module.types.get(ty)?,
-        o::Type::Role { .. } | o::Type::Cap { .. } | o::Type::Fn(_) | o::Type::Any))
+    Ok(depth > 0 && holds_reference(module, ty)?)
+}
+
+/// Whether a value of `ty` is, or holds somewhere in its object graph, a role, cap, action or `any` value:
+/// own tracks those as references, so an array or map of such objects is managed even when nothing in it
+/// reaches a resource (#757: an array of TOML members, each holding a role value). The loader admits the
+/// collection only as closed plain data (`ARRAY_PLAIN`, `MAP_PLAIN`).
+fn holds_reference(module: &o::Module, ty: o::TypeId) -> Result<bool, GenerateError> {
+    let mut pending = vec![ty];
+    let mut seen = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        match module.types.get(ty)? {
+            o::Type::Role { .. } | o::Type::Cap { .. } | o::Type::Fn(_) | o::Type::Any => return Ok(true),
+            o::Type::Array(element) => pending.push(*element),
+            o::Type::Map(key, value) => pending.extend([*key, *value]),
+            o::Type::Object { decl, .. } => {
+                if let o::DeclarationKind::Object { fields, .. } = &module.declarations.get(*decl)?.kind {
+                    pending.extend(fields.iter().map(|field| field.ty));
+                }
+            }
+            o::Type::Variant(decl) => {
+                if let o::DeclarationKind::Variant { cases, .. } = &module.declarations.get(*decl)?.kind {
+                    for case in cases {
+                        if let o::DeclarationKind::Object { fields, .. } = &module.declarations.get(case.layout)?.kind {
+                            pending.extend(fields.iter().map(|field| field.ty));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
 }
 
 fn sync_fn(ty: &o::Type) -> bool {

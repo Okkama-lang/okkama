@@ -606,6 +606,11 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             }
             thir::CatchType::Role(role, args) => {
                 let args = args.iter().map(|arg| arg.subst(&self.env)).collect();
+                // A cancellation caught by the Error role binds a `Cancelled` value, which Sparrow builds from the
+                // system object's descriptor: the program has it even when no body names `Cancelled` (#744).
+                if *role == self.ctx.reg.system.error {
+                    self.ctx.object_instance(self.ctx.reg.system.cancelled, Vec::new(), span)?;
+                }
                 CatchType::Role(self.ctx.role_instance(*role, args, span)?)
             }
             // Значение error enum в OIR — вариант, каждый случай которого делает Error.
