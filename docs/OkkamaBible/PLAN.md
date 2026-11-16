@@ -217,6 +217,10 @@ language.
   read in three cities, the New York gap as MissingLocalTime, tzdata 2026c;
   Kazakhstan's 2024a change; Python zoneinfo/PEP 495, Java tzdb and gap shift,
   Go tzdata).
+- 2026-11-16: 18.5 bound actions (`18-bound`, `18-bound-rejected`: a written
+  action type is required, the receiver travels, equality is identity, async
+  binds too; JavaScript, Python, Java/Kotlin, C#); later sections → 18.6–18.11;
+  the async limit now names bound async actions.
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

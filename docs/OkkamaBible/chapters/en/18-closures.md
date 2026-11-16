@@ -247,7 +247,55 @@ composition as one operator, `.`; in Okkama it is an action of an object
 with a full signature, `((int) is int, (int) is int) is (int) is int`. That
 is longer, and it leaves nothing to infer.
 
-## 18.5 Closures or objects
+## 18.5 Bound actions: an object's action as a value
+
+An action of an object can be taken as a value without calling it.
+`retail.of` is a *bound action*: the action `of` together with the
+receiver `retail`, so calling it later uses that object's rate.
+
+{{example:18-bound}}
+
+- **It goes where an action type is written.** `pick` is declared
+  `(int) is int`, the map's value type is `(int) is int`, and so is
+  `Report`'s field. A bound action fits any of them, because its signature
+  is the action's signature without the receiver.
+- **The type must be written before it can be called.** Without the
+  declared type on `pick`, the compiler refuses:
+
+{{example:18-bound-rejected}}
+
+  The rule keeps the action's full signature visible at the point where
+  the value is made. The same holds for every action value in Okkama
+  (Section 18.3).
+- **It carries its receiver.** `rules["wholesale"]` computes with
+  `wholesale`'s rate, 9, though `Report` never sees a `Price`. The receiver
+  is borrowed like any capture (Section 18.2), and an action whose
+  receiver must be consumed carries that obligation too (Section 18.2,
+  #322).
+- **Equality is identity.** `pick == retail.of` is `false`. Each `.of`
+  makes a new value, and two action values are equal only when they are
+  the same value (Section 18.10).
+- **An async action binds the same way.** `endpoint.fetch` of an `async`
+  action is a value of type `async (int) is string`. Section 20.11 passes
+  one to a retry policy.
+
+Other languages bind methods too, and differ on the points above.
+
+- **JavaScript** detaches: `const f = obj.method` loses `this`, and calling
+  `f()` reads `undefined` fields unless the code writes `obj.method.bind(obj)`.
+- **Python** binds automatically: `obj.method` is a bound method object.
+  Unlike Okkama, two bound methods of the same object and function compare
+  equal with `==`, though they are different objects.
+- **Java and Kotlin** write a method reference, `retail::of`, and need a
+  target type, a functional interface or a function type, much like
+  Okkama's written action type.
+- **C#** converts a method group to a delegate only where a delegate type
+  is expected (`Func<int, int> f = retail.Of;`).
+
+Okkama's rule is the Java and C# one: a bound action exists only where its
+type is written. Its receiver travels with it, as in Python.
+
+## 18.6 Closures or objects
 
 An anonymous action and a small object can do the same job. The pipeline of
 the first example could hold `Step` objects with an `apply` action instead
@@ -307,7 +355,7 @@ does not suspend. Kotlin draws the same line in its types with `suspend`
 function types, and JavaScript with `async` functions, but both also allow
 anonymous functions that suspend; Okkama does not.
 
-## 18.6 Resources and failure reports
+## 18.7 Resources and failure reports
 
 ### Closures and resources
 
@@ -352,7 +400,7 @@ Stack trace (most recent call first):
 
 The report identifies the anonymous action as `lambda#0` and points into its body. It shows where the failure occurred, not where the closure was created; the creating call may have returned long before.
 
-## 18.7 Where closures came from
+## 18.8 Where closures came from
 
 Closures are older than objects. Church's lambda calculus of 1936 already
 treated functions as values [@church1936], and McCarthy built LISP on it in
@@ -386,7 +434,7 @@ returns from that action, and `next` and `last` cannot reach an outer loop
 funarg problem, which variable a closure shares with its creator, has no
 room to arise.
 
-## 18.8 Okkama among other languages
+## 18.9 Okkama among other languages
 
 | | Captures | Assigning a captured name | Typing |
 |---|---|---|---|
@@ -404,7 +452,7 @@ variable, and with Java on the declaration being explicit. It is stricter
 than all of them on types: an action value has exactly its declared
 signature, and nothing converts it to a role or to a wider function type.
 
-## 18.9 Limits
+## 18.10 Limits
 
 - **No recursion by name.** A `let` becomes visible only after its
   initializer, so an anonymous action cannot call itself through the `let`
@@ -418,10 +466,11 @@ signature, and nothing converts it to a role or to a wider function type.
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
-  `async` action, passed as an object that does a role.
+  `async` action. It travels as a bound action of type `async (…) is R`
+  (Section 18.5) or as an object that does a role.
 - **No `any`, no native ABI, no conversion to a role.**
 
-## 18.10 What this design costs
+## 18.11 What this design costs
 
 Explicit signatures make short closures longer than in languages that infer
 them: `(value is int) is int { value * 2; }` where Kotlin writes `{ it * 2 }`.
