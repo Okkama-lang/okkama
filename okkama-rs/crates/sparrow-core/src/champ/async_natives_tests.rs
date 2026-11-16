@@ -147,6 +147,8 @@ fn champ_n1_the_declaration_view_agrees_with_every_native_driver() {
     // Audit item 4 of the slice: Tomato's declaration view and the SPB 17 entry agree on the driver's register count
     // and kinds; a handle register is a Ref, as Tomato traces it. A native's legacy function resolves its provider.
     let runtime = load(false);
+    // Tomato's resource tracking stays compiled out: a Champ runtime never tracks (Q1 audit A2).
+    assert!(!runtime.resources.enabled);
     let source = runtime.champ.machine.as_ref().unwrap().source.clone();
     let legacy = &runtime.loaded.program.functions;
     let mut drivers = 0;

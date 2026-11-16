@@ -872,6 +872,6 @@ fn n1_a_bodyless_async_function_needs_an_external_driver() {
     let mut module = golden("async-plain-await");
     let (id, _) = module.functions.iter().find(|(_, function)| function.symbol == "work").unwrap();
     module.functions.get_mut(id).unwrap().body = None;
-    let error = translate(&module).err().expect("a bodyless async function without an external driver");
+    let error = translate(&module).expect_err("a bodyless async function without an external driver");
     assert!(error.to_string().contains("work: a bodyless async function without an external driver"), "{error}");
 }
