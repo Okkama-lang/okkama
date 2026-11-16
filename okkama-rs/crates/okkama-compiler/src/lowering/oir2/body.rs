@@ -588,6 +588,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             E::Closure { .. } => self.anonymous(expr),
             E::CallValue { .. } => self.invoke_anonymous(expr),
             E::Await(operand) => self.await_value(operand, result_ty, expr.span),
+            E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) => self.spawn_value(target),
             E::Call { callee: thir::Callee::Builtin { receiver, op: op @ (thir::Builtin::FutureDone
                 | thir::Builtin::FutureCancel | thir::Builtin::FutureCancelled) }, .. } => {
                 self.future_builtin(op, receiver, expr.span)

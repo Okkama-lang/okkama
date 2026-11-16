@@ -796,3 +796,36 @@ fn d25_the_state_form_of_rehome_takes_the_state_and_the_future() {
     assert_eq!(token[0].1[0], A::Destination(s::ExitDestination::Caller));
     assert_eq!(types(make, &token[0].1[1..]), [P::Service(K::Pending), P::Service(K::CacheState)]);
 }
+
+/// #601 P1 (D24.1): `fut.spawn` is opcode 65 over the Future and its cache duty, giving back the cache duty and the
+/// spawned task's duty; the close settles the task duty, then the cache duty (ABI §6.3). Each P1 Low golden passes
+/// the executable gate.
+#[test]
+fn p1_spawn_takes_the_future_and_its_cache_duty_and_its_close_settles_the_task_first() {
+    for name in ["p1-spawn-awaited", "p1-spawn-detached", "p1-sync-owner-spawn", "p1-spawn-returned"] {
+        compile(&golden(name)).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+    let p = translated(&golden("p1-spawn-detached"));
+    let main = function(&p, "main");
+    let [(_, arguments, flow)] = sites(main, O::FutureSpawn)[..] else { panic!("one spawn") };
+    assert_eq!(types(main, arguments), [P::Value(FUTURE_INT), P::Service(K::CacheState)]);
+    let produced = outputs(flow);
+    assert_eq!(produced.iter().map(|&location| ty(main, location)).collect::<Vec<_>>(),
+        [P::Service(K::CacheState), P::Service(K::TaskState)]);
+    let settled: Vec<_> = sites(main, O::CleanupSettle).into_iter().filter_map(|(_, arguments, _)| match arguments {
+        [A::Location(_), A::Schedule(_), A::Location(duty)] => Some(*duty),
+        _ => None,
+    }).collect();
+    assert_eq!(settled, [produced[1], produced[0]], "the task duty settles first");
+}
+
+/// #601 P1, C-4: a spawned Future returned through its owner's exit leaves with both duties: the token rehome
+/// takes the reserve, the cache duty and the task duty.
+#[test]
+fn p1_a_returned_spawned_future_rehomes_its_task_duty_with_its_cache_duty() {
+    let p = translated(&golden("p1-spawn-returned"));
+    let start = p.functions.iter().find(|function| function.symbol.contains("Starter.start")).unwrap();
+    let [(_, arguments, _)] = sites(start, O::CacheRehome)[..] else { panic!("one rehome") };
+    assert!(matches!(arguments[0], A::Destination(s::ExitDestination::Caller)), "{arguments:?}");
+    assert_eq!(types(start, arguments), [P::Service(K::Pending), P::Service(K::CacheState), P::Service(K::TaskState)]);
+}

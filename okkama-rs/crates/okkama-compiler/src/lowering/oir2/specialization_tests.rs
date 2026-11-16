@@ -213,11 +213,23 @@ fn oir2_generic_open_types_are_explicit_diagnostics() {
 
 #[test]
 fn oir2_generic_later_constructs_keep_source_diagnostics() {
-    // Plain async lowers since P2.5 V5; spawn stays outside it (plan §4 P1).
+    // Plain async lowers since P2.5 V5 and spawn of an async action since P1; a process worker of a generic
+    // object stays outside it (slice X1).
     let source = concat!("module app; object Box<T> { has value is T; Box(:value); ",
-        "async get() is T { value; } } async main() is int { await spawn Box(value: 1).get(); }");
+        "get() is T { value; } } async main() is int { await spawn Box(value: 1).get(); }");
     with_analysis(source, |analysis| {
         let error = lower_to_oir2(analysis).unwrap_err();
         assert!(matches!(error, LowerError::Unsupported { span, .. } if !span.is_empty()), "{error}");
+        assert!(error.to_string().contains("proc.spawn"), "{error}");
     });
+}
+
+#[test]
+fn oir2_p1_spawn_reaches_the_constructor_of_a_generic_target() {
+    // #601 P1: the specializer walks the target of a spawn, so the generic constructor and action it calls are
+    // specialized like those of any call.
+    let source = concat!("module app; object Box<T> { has value is T; Box(:value); ",
+        "async get() is T { value; } } async main() is int { await spawn Box(value: 1).get(); }");
+    let text = print_oir2(source).unwrap_or_else(|error| panic!("{error}"));
+    assert!(text.contains("fut.spawn %"), "{text}");
 }

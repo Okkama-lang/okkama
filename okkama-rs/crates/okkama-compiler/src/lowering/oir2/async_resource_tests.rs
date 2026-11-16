@@ -414,16 +414,23 @@ fn oir2_r3_a_module_without_awaits_in_defers_keeps_sync_defer_entries() {
 }
 
 #[test]
-fn oir2_r3_spawn_keeps_its_diagnostic_inside_defer_await() {
-    // Spawn belongs to slice P1 in a defer entry too.
-    assert_names(
-        &source(concat!(
-            "object W { W(); async run() is void { } } ",
-            "async main() is int { defer await spawn W().run(); 0; }",
-        )),
-        "spawn of an async action (P2.5 slice P1, fut.spawn)",
-        Some("spawn W().run()"),
-    );
+fn oir2_p1_spawn_inside_defer_await_is_spawned_in_the_defer_entry() {
+    // D24.1, C-6 (#601 P1): `defer await spawn W().run();` is an async defer entry whose body creates, spawns and
+    // awaits the Future; own accepts it with the task duty in the entry's own scope.
+    let module = lower(&source(concat!(
+        "object W { W(); async run() is void { } } ",
+        "async main() is int { defer await spawn W().run(); 0; }",
+    )));
+    let entry = function(&module, "main.defer#0");
+    assert!(entry.attrs.contains(&ir::FunctionAttr::Async));
+    let ops = async_ops(entry);
+    assert!(matches!(ops.as_slice(), [ir::AsyncOp::FutureSpawn { state: None, future: spawned },
+        ir::AsyncOp::Await { future: awaited, result: None }] if spawned == awaited), "{ops:?}");
+    let own = high_to_own(module);
+    let spawns = own.functions.iter().flat_map(|(_, function)| function.body.iter())
+        .flat_map(|body| body.insts.iter()).filter(|(_, instruction)| matches!(instruction.op,
+            ir::Operation::Async(ir::AsyncOp::FutureSpawn { state: Some(_), .. }))).count();
+    assert_eq!(spawns, 1);
 }
 
 /// A resource that keeps a borrowed Atomic, returned from a sync action (#731; the same shape as its async form).
