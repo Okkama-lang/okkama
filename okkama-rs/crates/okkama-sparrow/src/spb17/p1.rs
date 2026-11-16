@@ -19,6 +19,8 @@ pub struct P1Contracts {
     handles: BTreeMap<String, u32>,
     /// The `fn` roles: one owning slot named `call`.
     callables: Vec<u32>,
+    /// The declarations each std async primitive entry creates or throws (#601 Q1, `drivers`).
+    related: BTreeMap<String, Vec<u32>>,
 }
 
 /// The failure mask of a native entry: a provider refusal (`NativeFailure`, Native = 8) or a program failure of
@@ -74,6 +76,12 @@ impl P1Contracts {
             }
         }
         entries.push(entry("okkama.Error.text", vec![Type::Error], vec![Type::Str], false, 0));
+        // The std async primitives (#601 Q1, D22): synchronous entries and drivers.
+        let mut related = BTreeMap::new();
+        for (function, objects) in super::drivers::entries(objects) {
+            related.insert(function.symbol.clone(), objects);
+            entries.push(function);
+        }
         // Test intrinsics of the test profile (`check_tests`). Each observes plain values and fails with a
         // program failure outside a running case; `skip` always fails, ending its case with the skip marker.
         for (name, params) in [
@@ -115,12 +123,17 @@ impl P1Contracts {
         let callables = objects.iter().enumerate().filter(|(_, object)| object.role.as_ref().is_some_and(|role| {
             matches!(role.slots.as_slice(), [slot] if slot.name == "call" && slot.entry_abi == EntryAbi::Owned)
         })).map(|(id, _)| id as u32).collect();
-        Ok(Self { core: entries, natives, mapped, handles, callables })
+        Ok(Self { core: entries, natives, mapped, handles, callables, related })
     }
 
-    /// The finite P1 entries: Atomic operations, `Error.text` and the test intrinsics.
+    /// The finite P1 entries: Atomic operations, `Error.text`, the test intrinsics and the std async primitives.
     pub fn entries(&self) -> &[Function] {
         &self.core
+    }
+
+    /// The declarations a std async primitive entry creates or throws, in Tomato's order (#601 Q1).
+    pub fn related(&self, name: &str) -> Option<&[u32]> {
+        self.related.get(name).map(Vec::as_slice)
     }
 
     /// The trusted entry of a native of the runtime table.
