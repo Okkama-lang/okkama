@@ -1802,3 +1802,40 @@ fn champ_d25_a_split_that_reaches_a_future_takes_its_entries() {
         assert!(state.all().services.is_empty());
     }
 }
+
+/// PR-B (OIR-2 async remaining §2.2, #784): service entries follow the journals of identities. A bound Future's
+/// entry stays when an admissible split (an argument offer, a constructor's staging) reaches it; an exit's split
+/// takes it.
+#[test]
+fn champ_d25_an_admissible_split_leaves_a_bound_future_s_entry() {
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let Escape { mut s, f, .. } = escape(&mut ctx, 0);
+        // F's entry joins S's bound journal (`own.accept`, as `own.bind` of F classifies it).
+        let mut packet = empty(&mut ctx);
+        let mut absorbed = PacketSlot::default();
+        assert_eq!(rt_service_absorb(&mut ctx, &mut packet, f, SERVICE_CACHE, &mut absorbed), NORMAL);
+        let mut accepted = ScopeSlot::default();
+        assert_eq!(rt_own_accept(&mut ctx, &mut s, &mut absorbed, &mut accepted), NORMAL);
+        let mut s = accepted;
+        unsafe { &mut *ctx.runtime }.roots.push((s.record, Repr::Ref));
+        let roots = [f];
+        let selection = Selection { roots: roots.as_ptr(), count: 1 };
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split_admissible(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        assert!(super::super::helpers::packet(runtime, post.selected.record).unwrap().services.is_empty());
+        let state = super::super::helpers::scope(runtime, post.state.record).unwrap();
+        assert_eq!(state.bound.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
+        let mut s = post.state;
+        runtime.roots.push((s.record, Repr::Ref));
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        let selected = super::super::helpers::packet(runtime, post.selected.record).unwrap();
+        assert_eq!(selected.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
+    }
+}

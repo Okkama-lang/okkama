@@ -684,15 +684,3 @@ fn a_rehome_after_a_store_is_refused() {
     let error = lower(&d25_rehomed_after_store()).unwrap_err();
     assert!(error.to_string().contains("rehomed after its duty was stored"), "{error}");
 }
-
-/// PR-B (OIR-2-async-remaining §2.2, §10), #784: `c` is bound (`let c = Child(n).run();`), so an aggregate only
-/// borrows it: neither store takes its duty, which stays with its lexical owner and leaves through `cache.rehome`.
-/// Today coro absorbs the bound Future's static token at the first store's admissible split.
-#[test]
-#[ignore = "#784: PR-B, a bound Future is not absorbed"]
-fn a_bound_future_is_not_absorbed_by_a_store() {
-    let module = lowered("d25-stored-twice",
-        include_str!("../../tests/fixtures/async/own/d25-stored-twice.oir"));
-    let make = body(&module, "app.Maker.make#0");
-    assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
-}

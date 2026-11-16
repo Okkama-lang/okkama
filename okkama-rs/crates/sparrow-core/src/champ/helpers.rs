@@ -838,10 +838,12 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
         // retains them; the runtime packet contains only this scope's selected identities.
         selection_walk(runtime, &all, unsafe { &*selection }, Authority::Any)?;
         if admissible {
-            let eligible = scope.admission.words().collect::<HashSet<_>>();
-            // A Future the walk reached is a holder, not a journal identity: its entries move as in any split.
-            selected.retain(|object| eligible.contains(object)
-                || heap::kind(runtime.heap.header_of(*object)) == heap::FRAME);
+            // PR-B (OIR-2 async remaining §2.2, #784): service entries follow the journals of identities. An
+            // admissible split takes an identity or a Future's entries only from the admission journal; a bound
+            // Future is borrowed by the aggregate and keeps its entry with its lexical owner.
+            let mut eligible = scope.admission.words().collect::<HashSet<_>>();
+            eligible.extend(scope.admission.services.iter().map(|service| service.holder));
+            selected.retain(|object| eligible.contains(object));
         }
         let (_, output) = split(runtime, &all, &selected)?;
         scope_partition(runtime, &mut scope, &selected);
@@ -955,14 +957,16 @@ fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *cons
         let all = source.all();
         let authority = if filter == TransferFilter::Strict { Authority::Source } else { Authority::Any };
         let mut selected = checked_selection(runtime, &all, unsafe { &*selection }, authority)?;
+        // PR-B (#784): a Future's entries move only from the journals the filter admits, as identities do.
+        let holders = |packet: &Packet| packet.services.iter().map(|service| service.holder).collect::<Vec<_>>();
         let eligible: Option<HashSet<_>> = match filter {
             TransferFilter::Strict => None,
-            TransferFilter::Admitted => Some(source.admission.words().collect()),
-            TransferFilter::Held => Some(source.admission.words().chain(source.bound.words()).collect()),
+            TransferFilter::Admitted => Some(source.admission.words().chain(holders(&source.admission)).collect()),
+            TransferFilter::Held => Some(source.admission.words().chain(source.bound.words())
+                .chain(holders(&source.admission)).chain(holders(&source.bound)).collect()),
         };
         if let Some(eligible) = eligible {
-            selected.retain(|object| eligible.contains(object)
-                || heap::kind(runtime.heap.header_of(*object)) == heap::FRAME);
+            selected.retain(|object| eligible.contains(object));
         }
         if same {
             return Ok((from, 0));
