@@ -55,7 +55,7 @@ impl P1NativeSummaries {
     pub fn for_profile(module: &ir::Module, profile: ir::Profile) -> Result<Self, NativeSummaryError> {
         let runtime = ir::catalogue::RuntimeCatalogue::for_profile(module, profile);
         let mut catalog = Self { runtime, ..Self::default() };
-        for (_, function) in module.functions.iter() {
+        for (id, function) in module.functions.iter() {
             for attr in &function.attrs {
                 let (native, name) = match attr {
                     ir::FunctionAttr::Extern(name) => (true, name),
@@ -80,8 +80,12 @@ impl P1NativeSummaries {
                 let summary = contract(module, name, native, &language)?;
                 if module.profile != ir::Profile::High {
                     let mut expected = language.clone();
-                    let managed = language.params.iter().filter(|ty| matches!(module.types.get(**ty),
-                        Ok(ir::Type::Object { .. } | ir::Type::Role { .. }))).count();
+                    let managed = if !native && super::drivers::known(name) {
+                        super::drivers::deps(module, id, &language.params)
+                    } else {
+                        language.params.iter().filter(|ty| matches!(module.types.get(**ty),
+                            Ok(ir::Type::Object { .. } | ir::Type::Role { .. }))).count()
+                    };
                     if managed != 0 {
                         let deps = module.types.iter().find_map(|(id, ty)| {
                             (*ty == ir::Type::Service(ir::ServiceType::Deps)).then_some(id)
@@ -126,8 +130,10 @@ impl P1NativeSummaries {
                 _ => continue,
             };
             let decl = module.declarations.get(decl).map_err(|err| error(err.to_string()))?;
-            let atomic = decl.name.strip_prefix("async.atomic.Atomic_")
-                .and_then(|suffix| atomic_value(module, suffix)).is_some()
+            // The Event cell (#601 Q1) is a builtin capability of the same kind: plain, nothing to close.
+            let cell = decl.name.strip_prefix("async.atomic.Atomic_")
+                .and_then(|suffix| atomic_value(module, suffix)).is_some() || decl.name == super::drivers::EVENT;
+            let atomic = cell
                 && matches!(&decl.kind, ir::DeclarationKind::Object {
                     builtin: true, destroy: None, fields, witnesses,
                 } if fields.is_empty() && witnesses.is_empty());
@@ -202,6 +208,10 @@ impl ir::verify::ExternalContracts for P1NativeSummaries {
 
 pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature: &ir::Signature)
     -> Result<ir::Summary, NativeSummaryError> {
+    // The std async primitives (#601 Q1, D22): the body summary of a driver, the entry summary otherwise.
+    if !native && let Some(summary) = super::drivers::contract(module, name, signature)? {
+        return Ok(summary);
+    }
     let find = |ty: ir::Type| module.types.iter().find_map(|(id, value)| (*value == ty).then_some(id));
     let string = || find(ir::Type::Str).ok_or_else(|| error("missing string"));
     let mut kind = ir::EntryKind::CallBoundary;
@@ -406,6 +416,9 @@ fn adapter_type(module: &ir::Module, id: ir::TypeId, prefix: &str) -> bool {
 /// The constructor allocates Self; value/replace construct AtomicClosed.closed.
 pub(super) fn intrinsic_objects(module: &ir::Module, name: &str, signature: &ir::Signature)
     -> Result<Vec<ir::DeclId>, NativeSummaryError> {
+    if let Some(objects) = super::drivers::objects(module, name)? {
+        return Ok(objects);
+    }
     if name.starts_with("okkama.atomic.Atomic.new_value$") {
         let result = signature.results.first().ok_or_else(|| error("Atomic constructor needs Self"))?;
         return match module.types.get(*result) {

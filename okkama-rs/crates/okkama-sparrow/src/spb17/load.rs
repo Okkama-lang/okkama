@@ -197,6 +197,11 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
         {
+            // D22 (#601 Q1): a driver resolves only to a trusted catalogue driver, and a catalogue driver is never
+            // declared as a synchronous entry.
+            let driver = contracts.entry(name).is_some_and(|trusted| trusted.entry_abi == EntryAbi::AsyncExternal);
+            enforce(driver == (f.entry_abi == EntryAbi::AsyncExternal), drivers::EXTERNAL_ASYNC,
+                &format!("external {name}: an async external resolves to a catalogue driver, and a driver is async"))?;
             let adapter;
             let trusted = match contracts.entry(name) {
                 Some(trusted) => trusted,

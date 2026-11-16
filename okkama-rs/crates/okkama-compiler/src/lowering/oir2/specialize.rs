@@ -353,9 +353,16 @@ impl Specializer<'_, '_> {
         if imported && (source.decl.is_none() || generic && !plain_value) {
             return Err(LowerError::unsupported(span, format!("std object {module}.{}<{args:?}>", source.name)));
         }
-        if module == "async/atomic" {
+        // The errors the runtime throws for a std object's intrinsics are declared with it: AtomicClosed, and
+        // BrokenBarrier of the std async primitives (#601 Q1).
+        let thrown = match module {
+            "async/atomic" => Some("AtomicClosed"),
+            "async/barrier" => Some("BrokenBarrier"),
+            _ => None,
+        };
+        if let Some(thrown) = thrown {
             for (index, enumeration) in self.input.registry.enums.iter().enumerate() {
-                if enumeration.module == source.module && enumeration.name == "AtomicClosed" {
+                if enumeration.module == source.module && enumeration.name == thrown {
                     self.registry.enums[index].span = enumeration.span;
                 }
             }

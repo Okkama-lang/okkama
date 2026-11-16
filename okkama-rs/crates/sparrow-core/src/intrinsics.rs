@@ -238,6 +238,32 @@ pub extern "C" fn rt_intrinsic(ctx: *mut Ctx, function: u64, arguments: *const W
     }
 }
 
+/// A synchronous intrinsic of a Champ program (#601 Q1): `rt_intrinsic` without its safepoint, since the Champ
+/// adapter that calls it keeps its own roots. A failure is left in the context.
+#[cfg(feature = "champ-abi")]
+pub(crate) fn champ_call(ctx: *mut Ctx, function: usize, args: &[Word]) -> Word {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let outcome = match runtime.intrinsics[function] {
+        Some(intrinsic) => call(ctx, runtime, function, intrinsic, args),
+        None => Fatal(format!("intrinsic of {} is not available", runtime.loaded.program.functions[function].symbol)),
+    };
+    let ctx = unsafe { &mut *ctx };
+    match outcome {
+        Value(result, _) => result,
+        Fail(kind) => {
+            ctx.failure = runtime.failure_new(kind);
+            ctx.status = FAILED;
+            0
+        }
+        Raise(failure) => {
+            ctx.failure = failure;
+            ctx.status = FAILED;
+            0
+        }
+        Fatal(message) => crate::runtime::fatal(ctx, runtime, message),
+    }
+}
+
 /// The object descriptors an intrinsic names (results and thrown errors).
 fn related(runtime: &Runtime, function: usize, index: usize) -> u32 {
     runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[index].0
@@ -253,6 +279,16 @@ pub(crate) fn thrown(runtime: &mut Runtime, function: usize, index: usize, field
 /// enum lowers to `[$tag, $<case>_<name>: array…]`; the runtime raises its
 /// first case, whose payload values go into one-element arrays.
 fn raised(runtime: &mut Runtime, descriptor: u32, values: &[Word]) -> Word {
+    // A Champ Error enum is the object of its first case: its case number, then its payload (#601 Q1).
+    #[cfg(feature = "champ-abi")]
+    if let Some(machine) = runtime.champ.machine.as_ref() {
+        let object = &machine.source.objects[descriptor as usize];
+        if object.fields.is_empty() && object.layout.storage_fields == [okkama_sparrow::spb17::Type::Int] {
+            let tag = runtime.heap.int(0);
+            return runtime.heap.object_new(descriptor, &[tag]);
+        }
+        return runtime.heap.object_new(descriptor, values);
+    }
     let program = &runtime.loaded.program;
     let fields = &program.objects[descriptor as usize].fields;
     if fields.first().is_none_or(|(name, _)| name != "$tag") {

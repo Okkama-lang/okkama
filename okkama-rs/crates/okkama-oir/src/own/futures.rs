@@ -34,6 +34,13 @@ pub(super) fn is_async(module: &Module, function: FuncId) -> bool {
         && !function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })))
 }
 
+/// An async intrinsic (D22, #601 Q1): a bodyless `[async, intrinsic]` whose call creates a driver Future.
+pub(super) fn is_async_intrinsic(module: &Module, function: FuncId) -> bool {
+    module.functions.get(function).is_ok_and(|function| function.body.is_none()
+        && function.attrs.contains(&FunctionAttr::Async)
+        && function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Intrinsic { .. })))
+}
+
 /// The language result of an async entry: the value its Future publishes.
 pub(super) fn outcome(module: &Module, function: &Function) -> Result<Option<TypeId>, OwnError> {
     let results = language(module, &function.signature.results);
@@ -64,17 +71,18 @@ pub(super) fn future_type(module: &Module, result: Option<TypeId>) -> Result<Typ
         .ok_or_else(|| flow_error("async entry has no interned Future type"))
 }
 
-/// An async entry that plain async cannot elaborate at all: async natives and
-/// intrinsics arrive with the D22 driver bridge (Q1), async role slots with F1.
-/// Only async entries pay for the check.
+/// An async entry that plain async cannot elaborate at all: async natives arrive
+/// with slice N1, async role slots with F1. An async intrinsic is a D22 driver
+/// (#601 Q1): its call creates a Future in the `external` environment, and its
+/// body summary is the trusted catalogue entry. Only async entries pay for the check.
 pub(super) fn check_boundary(module: &Module, id: FuncId, budget: &mut Budget<'_>) -> Result<(), OwnError> {
     let function = module.functions.get(id).map_err(arena)?;
     if !function.attrs.contains(&FunctionAttr::Async) {
         return Ok(());
     }
-    if function.body.is_none() {
+    if function.body.is_none() && !is_async_intrinsic(module, id) {
         return Err(unsupported_async(format!(
-            "async native or intrinsic {}: driver Futures arrive with D22 (Q1)", function.symbol,
+            "async native or external {}: driver Futures of natives arrive with slice N1 (D22)", function.symbol,
         )));
     }
     for (_, declaration) in module.declarations.iter() {

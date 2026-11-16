@@ -76,6 +76,23 @@ pub(super) fn external(module: &o::Module, f: &o::Function) -> Result<s::Functio
         params: vec![], results: vec![], blocks: vec![], code: vec![], proofs: s::FunctionProofs::default(),
     };
     function.proofs.entry = Some(contract);
+    // An async external (D22, #601 Q1) is a driver: its language arguments are its registers, in order, and it has
+    // no service; its creation packet goes to `fut.new` and its deps are the caller's proofs.
+    if f.attrs.contains(&o::FunctionAttr::Async) {
+        function.entry_abi = s::EntryAbi::AsyncExternal;
+        for &ty in &f.signature.params {
+            if let P::Value(ty) = kind(module, ty)? {
+                function.params.push(L::Register(function.registers.len() as u32));
+                function.registers.push(ty);
+            }
+        }
+        for &ty in &f.signature.results {
+            if let P::Value(ty) = kind(module, ty)? {
+                function.results.push(ty);
+            }
+        }
+        return Ok(function);
+    }
     function.entry_abi = if f.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. })) {
         s::EntryAbi::Defer { labels: labels(module, f)? }
     } else if matches!(f.signature.ownership_abi, o::OwnershipAbi::Explicit { .. })

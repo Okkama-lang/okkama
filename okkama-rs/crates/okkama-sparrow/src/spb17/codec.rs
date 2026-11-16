@@ -549,6 +549,7 @@ impl Wire for EntryAbi {
                 w.number(4);
                 layout.put(w);
             }
+            Self::AsyncExternal => w.number(5),
         }
     }
     fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
@@ -558,6 +559,7 @@ impl Wire for EntryAbi {
             2 => Ok(Self::Defer { labels: Vec::get(r)? }),
             3 => Ok(Self::AsyncBody { layout: u32::get(r)? }),
             4 => Ok(Self::AsyncDefer { layout: u32::get(r)? }),
+            5 => Ok(Self::AsyncExternal),
             _ => Err(r.fail("unknown entry ABI")),
         }
     }

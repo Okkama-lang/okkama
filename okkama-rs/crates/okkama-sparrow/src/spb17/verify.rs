@@ -1149,9 +1149,15 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             let entry = args.iter().find_map(|arg| match arg { Argument::Entry(id) => Some(*id), _ => None })
                 .ok_or_else(|| error("fut.new requires an entry"))?;
             let callee = at(&p.functions, entry)?;
-            let layout = p.frame_layout(callee).filter(|_| matches!(callee.entry_abi, EntryAbi::AsyncBody { .. }))
-                .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
-            let start = layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?;
+            // An async external (D22, #601 Q1): its driver takes the language arguments as its registers.
+            let start = if callee.entry_abi == EntryAbi::AsyncExternal {
+                drivers::arguments(callee)
+            } else {
+                let layout = p.frame_layout(callee)
+                    .filter(|_| matches!(callee.entry_abi, EntryAbi::AsyncBody { .. }))
+                    .ok_or_else(|| violation(suspension::ASYNC_ENTRY, "fut.new must name an async body"))?;
+                layout.saved_types(0).ok_or_else(|| error("async body without a start continuation"))?
+            };
             // A fixed root starts without a packet: only the root driver starts it (#667).
             enforce(!suspension::fixed_root(p, entry), suspension::ASYNC_ENTRY,
                 "fut.new cannot create a fixed root")?;
@@ -1167,6 +1173,10 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 FUTURE_TYPES, "the Future type differs from the async body's result")?;
             require(locations.len() >= inputs + 2, "fut.new needs its arguments, input packet and owner state")?;
             for (&location, expected) in locations.iter().zip(&start[..inputs]) {
+                if callee.entry_abi == EntryAbi::AsyncExternal {
+                    enforce(loc_type(f, location)? == *expected, drivers::EXTERNAL_ASYNC,
+                        "fut.new of an async external passes an argument of another type")?;
+                }
                 require(loc_type(f, location)? == *expected, "fut.new argument type mismatch")?;
             }
             input(inputs, Packet)?;
@@ -1921,6 +1931,7 @@ fn uses(inst: &Instruction) -> Vec<Location> {
 
 fn verify_function(p: &Program, f: &Function) -> Check {
     check_proofs(p, f)?;
+    drivers::check_declaration(f)?;
     suspension::check_entry(f)?;
     if f.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
         enforce(f.code.is_empty() && f.blocks.is_empty(), "EXTERNAL_SIGNATURE", "external entry cannot carry code")?;

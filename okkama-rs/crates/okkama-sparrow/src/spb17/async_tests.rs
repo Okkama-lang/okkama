@@ -1046,8 +1046,8 @@ fn async_codec_refuses_reserved_opcodes_and_unknown_tags() {
     let at = pinned.windows(2).position(|window| window == marker).unwrap();
     pinned[at + 1] = 78;
     assert!(decode(&pinned).unwrap_err().message.contains("reserved"));
-    // Tags 0..=4 are assigned (4 is the async defer entry of #601 R4).
-    let unknown = text.replacen("entry_abi 3 ", "entry_abi 5 ", 1);
+    // Tags 0..=5 are assigned (4 is the async defer entry of #601 R4, 5 the async external of #601 Q1).
+    let unknown = text.replacen("entry_abi 3 ", "entry_abi 6 ", 1);
     assert!(assemble(&unknown).unwrap_err().message.contains("entry ABI"));
 }
 

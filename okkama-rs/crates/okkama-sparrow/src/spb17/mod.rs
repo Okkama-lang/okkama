@@ -5,6 +5,7 @@ mod codec;
 pub mod layout;
 mod registry;
 pub mod p1;
+pub mod drivers;
 mod verify;
 mod load;
 mod evidence;
@@ -525,6 +526,10 @@ pub enum EntryAbi {
     /// a shielded child. Its success publication continues the caller, its failure unwinds it. It has no
     /// replacement labels in 0.6.0 (`SPB_ASYNC_DEFER_LABELS` holds by construction).
     AsyncDefer { layout: u32 },
+    /// An async external (async ABI D22, #601 Q1): a driver of the trusted catalogue. It has no body; only `fut.new`
+    /// names it, and the runtime runs its Future with the driver its external name resolves to
+    /// (`SPB_EXTERNAL_ASYNC`). The name is the entry contract's `external`.
+    AsyncExternal,
 }
 
 impl EntryAbi {
@@ -1267,6 +1272,8 @@ mod rules_tests;
 mod budget_tests;
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod drivers_tests;
 
 #[cfg(test)]
 mod spawn_tests;

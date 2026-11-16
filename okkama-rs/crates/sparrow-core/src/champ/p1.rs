@@ -27,6 +27,10 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
         value
     } else if let Some(check) = name.strip_prefix(s::TEST_INTRINSIC_PREFIX) {
         super::testing::intrinsic(ctx, check, args)
+    } else if runtime.intrinsics[function].is_some() {
+        // A synchronous member of the std async primitives (#601 Q1): only those have a Tomato intrinsic in the
+        // declaration view. It works on the cell or on the state the runtime keeps for the object.
+        crate::intrinsics::champ_call(ctx, function, args)
     } else if name == "okkama.Error.text" {
         let text = error_text(runtime, &source, args[0]);
         runtime.heap.allocate_text(&text)

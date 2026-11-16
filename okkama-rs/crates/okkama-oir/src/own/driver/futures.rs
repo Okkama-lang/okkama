@@ -25,7 +25,8 @@ impl Driver<'_, '_> {
                 they arrive with R1";
             return Err(unsupported_async(message));
         }
-        let Operation::Call(CallOp::Direct { call: original_call, .. }) = &instruction.op else {
+        let (Operation::Call(CallOp::Direct { call: original_call, .. })
+            | Operation::Call(CallOp::Intrinsic { call: original_call, .. })) = &instruction.op else {
             return Err(flow_error("Future creation is a direct call of the async entry"));
         };
         let originals: Vec<_> = original_call.args.iter().map(|argument| argument.value).collect();
@@ -44,7 +45,8 @@ impl Driver<'_, '_> {
         let deps;
         let mut packet;
         if !managed.is_empty() {
-            let (next, offered) = self.offered(point, &originals)?;
+            // Only the managed inputs are offered: a Future input's cache is borrowed and no selection names it.
+            let (next, offered) = self.offered(point, &managed)?;
             point = next;
             let mut parts = vec![];
             for original in &managed {
@@ -78,16 +80,20 @@ impl Driver<'_, '_> {
         let mut op = instruction.op.clone();
         let mut missing = false;
         op.rewrite(&mut Rename { env: &point.env, missing: &mut missing });
-        let Operation::Call(CallOp::Direct { call, .. }) = op else {
+        let (Operation::Call(CallOp::Direct { call, .. }) | Operation::Call(CallOp::Intrinsic { call, .. })) = op else {
             return Err(flow_error("Future creation is a direct call of the async entry"));
         };
         if missing {
             return Err(flow_error("Future creation operand has no reaching SSA definition"));
         }
-        let environment = FutureEnvironment::Deferred {
-            function,
-            arguments: call.args.iter().map(|argument| argument.value).collect(),
-            descriptors: call.descriptors.clone(),
+        let arguments = call.args.iter().map(|argument| argument.value).collect();
+        let descriptors = call.descriptors.clone();
+        // D22 (#601 Q1): an async intrinsic's Future is run by its runtime driver; own treats the environment as
+        // `deferred`, and coro keeps it unchanged.
+        let environment = if crate::own::futures::is_async_intrinsic(self.module, function) {
+            FutureEnvironment::External { function, arguments, descriptors }
+        } else {
+            FutureEnvironment::Deferred { function, arguments, descriptors }
         };
         let owner_state = point.env.scopes[&owner];
         point = self.emit(point, Operation::Async(AsyncOp::FutureNew {
