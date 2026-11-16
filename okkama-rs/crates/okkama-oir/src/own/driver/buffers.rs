@@ -30,22 +30,29 @@ impl Driver<'_, '_> {
             let inserted = self.inserted_values(&point, &instruction.op)?;
             // #802 (Fable's ruling in OIR-2-async-abi.md): a fresh Future inserted into a builder is stored. Its duty
             // leaves the owner's state in the builder's journal (a split that coro absorbs), so no rehome takes it.
-            // A bound Future is an alias (PR-B1): `offered` leaves it out, and it keeps its token and rehome.
-            let (stored, moved): (Vec<_>, Vec<_>) = inserted.into_iter().partition(|original| {
-                self.high.values.get(*original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty))
-            });
+            // A bound Future is an alias (PR-B1): no split names it, and it keeps its token and rehome. A push from a
+            // retained scope nested in the builder's owner keeps the `held` transfer of every inserted value (#815).
+            let nested = self.nested_push(&point, buffer)?;
+            let (futures, moved): (Vec<_>, Vec<_>) = inserted.into_iter().partition(|original| !nested
+                && self.high.values.get(*original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty)));
             point = self.rehome(point, buffer, &moved)?;
+            let mut stored = Vec::new();
+            let fresh: Vec<_> = futures.iter().copied().filter(|original| !self.bound_future(*original)).collect();
+            for original in &fresh {
+                let future = point.env.value(*original)?.value;
+                // A failed store split moves the token to its owner's dynamic step (the follow-up ruling), so the
+                // owner of the Future's `fut.new` settles entries at run time.
+                if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| *created == future) {
+                    self.dynamic_owners.insert(*owner);
+                }
+                if !stored.contains(&future) {
+                    stored.push(future);
+                }
+            }
             let mut selected = None;
             if !stored.is_empty() {
-                // If the store split fails, coro moves the Future's token into its owner's dynamic inventory (the
-                // follow-up to the #802 ruling), so the owner of its `fut.new` settles entries at run time.
-                for original in &stored {
-                    let future = point.env.value(*original)?.value;
-                    if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| *created == future) {
-                        self.dynamic_owners.insert(*owner);
-                    }
-                }
-                let (next, packet) = self.offered(point, &stored)?;
+                // The store is not an offer that a snapshot may elide: the Future's duty must leave the state.
+                let (next, packet) = self.offered_values(point, stored)?;
                 point = next;
                 selected = Some(packet);
             }
@@ -119,7 +126,9 @@ impl Driver<'_, '_> {
             if !self.managed(self.high.values.get(original).map_err(arena)?.ty) {
                 continue;
             }
-            if self.elide_offers && !self.may_offer(point, original) {
+            // A Future is stored, never offered: elision does not drop it (#802).
+            let future = self.high.values.get(original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty));
+            if self.elide_offers && !future && !self.may_offer(point, original) {
                 continue;
             }
             if !values.contains(&original) {
@@ -127,6 +136,19 @@ impl Driver<'_, '_> {
             }
         }
         Ok(values)
+    }
+
+    /// Whether a transition of `buffer` runs in a retained scope nested in the builder's owner (a loop body that pushes
+    /// into a builder made outside it): its inserted values move by `held` transfers (#697).
+    fn nested_push(&self, point: &Landing, buffer: ValueId) -> Result<bool, OwnError> {
+        let owner = *self.builder_owners.get(&buffer)
+            .ok_or_else(|| flow_error("builder transition has no builder.new owner"))?;
+        let Some(outer) = stack(self.module, owner)?.into_iter().rev()
+            .find(|scope| point.env.scopes.contains_key(scope)) else {
+            return Ok(false);
+        };
+        let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+        Ok(arrays::inner_scopes(self.module, scope, outer)?.into_iter().any(|scope| point.env.scopes.contains_key(&scope)))
     }
 
     /// Move what every retained scope inside the builder's owner holds of `originals` into the nearest retained

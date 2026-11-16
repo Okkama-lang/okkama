@@ -379,7 +379,8 @@ async main() is int {
 
 /// #802: fresh Futures in an array literal of eight parts (built through a builder) are stored in the builder's
 /// journal; the array holds them, they run when awaited, and the ones never awaited are settled cold at the owner's
-/// close. Also a bound Future with one fresh, and the array returned by a synchronous action. Tomato (okkama 0.5.8)
+/// close. Also a bound Future with one fresh, the array returned by a synchronous action, and a function whose role
+/// call makes own elide offers. Tomato (okkama 0.5.8)
 /// prints the same; each runs under the Full verifier too.
 #[test]
 fn futures_in_an_eight_part_literal_are_stored_in_the_builder() {
@@ -435,6 +436,26 @@ async main() is int {
     0;
 }
 "#, "made\nchild 2\nchild 7\n9\n"),
+        // A role call in the same function elides offers (own's snapshot slice); a Future is stored all the same.
+        (r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+role Labeled { label() is string; }
+object Tag does Labeled { Tag(); label() is string { "tag"; } }
+async main() is int {
+    let labeled is Labeled = Tag();
+    Stdout().writeln(labeled.label());
+    let fs = [Child(n: 1).run(), Child(n: 2).run(), Child(n: 3).run(), Child(n: 4).run(), Child(n: 5).run(),
+        Child(n: 6).run(), Child(n: 7).run(), Child(n: 8).run()];
+    Stdout().writeln("built");
+    Stdout().writeln(((await fs[0]) + (await fs[7])).string());
+    0;
+}
+"#, "tag\nbuilt\nchild 1\nchild 8\n9\n"),
     ] {
         for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
             let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
