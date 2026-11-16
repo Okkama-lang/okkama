@@ -96,8 +96,11 @@ impl Driver<'_, '_> {
             FutureEnvironment::Deferred { function, arguments, descriptors }
         };
         let owner_state = point.env.scopes[&owner];
+        // PR-B1 (#784): a Future that High binds in its owner scope is bound from its creation.
+        let binding = self.future_bindings.get(original).copied()
+            .filter(|binding| self.high.bindings.get(*binding).is_ok_and(|data| data.scope == owner));
         point = self.emit(point, Operation::Async(AsyncOp::FutureNew {
-            packet, deps, owner_state, environment, result, owner,
+            packet, deps, owner_state, environment, result, owner, binding,
         }))?;
         let future = point.result(SlotName::Value)?;
         // A temporary Future has no use but its take: naming its deps would be another use of
@@ -248,6 +251,42 @@ impl Driver<'_, '_> {
             }
         }
         temporaries
+    }
+
+    /// PR-B1 (#784): whether the High value is the Future an async call of this function creates (its `fut.new`).
+    pub(super) fn created_by_call(&self, original: ValueId) -> bool {
+        let Ok(Definition::InstResult { inst, .. }) = self.high.values.get(original).map(|value| value.def) else {
+            return false;
+        };
+        self.high.insts.get(inst).is_ok_and(|instruction| matches!(instruction.op,
+            Operation::Call(CallOp::Direct { function, .. } | CallOp::Intrinsic { function, .. })
+                if crate::own::futures::is_async(self.module, function)))
+    }
+
+    /// PR-B1 (#784): an admitted Future, whose duty is an entry of its scope's admission journal at run time: the
+    /// result of a synchronous call (D25.1) or a value a nested scope's exit rehomed (a block parameter after the
+    /// exit). Neither a Future created here nor a parameter of this function is one.
+    pub(super) fn admitted_future(&self, original: ValueId) -> bool {
+        match self.high.values.get(original).map(|value| value.def) {
+            Ok(Definition::InstResult { .. }) => !self.created_by_call(original),
+            Ok(Definition::BlockParam { block, .. }) => block != self.high.entry,
+            Err(_) => false,
+        }
+    }
+
+    /// PR-B1 (#784): High Future → the binding of its `bind` or `rebind`, for every Future value this function
+    /// binds: one an async call creates here, or one admitted with a packet.
+    pub(super) fn bound_futures(&self) -> BTreeMap<ValueId, BindingId> {
+        let mut bindings = BTreeMap::new();
+        for (_, instruction) in self.high.insts.iter() {
+            if let Operation::Lexical(LexicalOp::Bind { binding, value } | LexicalOp::Rebind { binding, value, .. })
+                = &instruction.op
+                && self.high.values.get(*value).is_ok_and(|data| is_future(self.module, data.ty))
+            {
+                bindings.insert(*value, *binding);
+            }
+        }
+        bindings
     }
 
     /// `@oir.await.unwind` on an await's exceptional landing (async ABI C-3).

@@ -14,6 +14,9 @@ struct Duty {
     token: ValueId,
     scope: ScopeId,
     task: Option<ValueId>,
+    /// PR-B1 (#784): `fut.new … binding` — a binding holds the Future from its creation, so no store takes its
+    /// duty: both tokens stay scheduled or leave by `cache.rehome`.
+    bound: bool,
 }
 
 impl Duty {
@@ -249,7 +252,7 @@ impl Lowering<'_, '_> {
         let blocks: Vec<_> = self.body.blocks.iter().map(|(_, block)| block.insts.clone()).collect();
         for inst in blocks.into_iter().flatten() {
             self.budget.step(1)?;
-            let Operation::Async(AsyncOp::FutureNew { owner, .. }) = self.body.insts.get(inst)?.op else {
+            let Operation::Async(AsyncOp::FutureNew { owner, binding, .. }) = self.body.insts.get(inst)?.op else {
                 continue;
             };
             let ty = self.intern(Type::Service(ServiceType::CacheState))?;
@@ -261,7 +264,7 @@ impl Lowering<'_, '_> {
                 let index = u16::try_from(index).map_err(|_| CoroError::LimitExceeded("results"))?;
                 self.body.values.get_mut(*value)?.def = Definition::InstResult { inst, index };
             }
-            duties.push(Duty { future: results[0], token, scope: owner, task: None });
+            duties.push(Duty { future: results[0], token, scope: owner, task: None, bound: binding.is_some() });
         }
         self.spawns(&mut duties)?;
         let mut ordered = Vec::with_capacity(duties.len());
@@ -357,7 +360,8 @@ impl Lowering<'_, '_> {
     }
 
     /// D25.2, revision of 2026-11-16 (#771, #758): own moves the entry of a Future that is stored in a field or an
-    /// array with a `scope.split` whose selection names the Future (key `service_of(%f, cache)`). In coro the duty of
+    /// array with a `scope.split` whose selection names the Future (key `service_of(%f, cache)`). Under PR-B1
+    /// (#784) that is a fresh temporary only: a `fut.new` with `binding` is never absorbed. In coro the duty of
     /// a Future created here is its token, so the token moves with the selected packet: `service.absorb` of the
     /// task duty of a spawned Future, then of its cache duty, at the start of the split's normal block. The
     /// selection keeps naming the Future, whose entry is not in the state. Each absorbed token leaves the schedule
@@ -396,6 +400,11 @@ impl Lowering<'_, '_> {
                 let Some(duty) = duties.iter().find(|duty| Some(duty.future) == origin && duty.scope == owner) else {
                     continue;
                 };
+                // PR-B1 (#784): only a fresh temporary is stored; a bound Future's store is an alias. The attribute
+                // is tested before either token, so a spawned and bound Future keeps its task token too.
+                if duty.bound {
+                    continue;
+                }
                 for token in duty.tokens() {
                     let kills = consumed.get(&token).cloned().unwrap_or_default();
                     let (must, may) = self.available(token, &kills, &predecessors)?;

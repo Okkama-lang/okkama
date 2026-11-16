@@ -125,7 +125,7 @@ func @main() -> int [entry] abi observation summary(M9) {
     %16: own = own.join [%12]
     (%17: own, %18: own, %19: deps) = own.split %16, s2
     %20: own = own.join [%17, %18]
-    (%21: future<int> facts(managed(deps=d2)), %22: scope<S3>) = fut.new %20, %19, %11, environment deferred(function=@consume, arguments=[%14]), result int, owner S3
+    (%21: future<int> facts(managed(deps=d2)), %22: scope<S3>) = fut.new %20, %19, %11, environment deferred(function=@consume, arguments=[%14]), result int, owner S3, binding b0
     %23: deps = deps.of %21
     %24: int = const 0
     %25: closed = scope.end %22, effects scope_effects(failures=[], suspends=false, cancel=false)

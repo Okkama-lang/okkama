@@ -673,7 +673,7 @@ fn operand_families_accept_builders_and_reject_each_changed_operand() {
             26 => (vec![frame], Operation::Async(AsyncOp::FrameLoad { frame: v(0), slot: 0, ty: int })),
             27 => (vec![frame, own, deps, scope_ty], Operation::Async(AsyncOp::FutureNew {
                 environment: FutureEnvironment::Frame(v(0)), packet: v(1), deps: v(2), owner: scope,
-                    owner_state: v(3), result: Some(int),
+                    owner_state: v(3), result: Some(int), binding: None,
             })),
             28 => (vec![pending], Operation::Exit(ExitOp::Commit {
                 pending: v(0), destination: ExitDestination::Caller, result: Some(int),

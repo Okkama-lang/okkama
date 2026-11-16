@@ -89,7 +89,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %4: own = own.empty
     (%5: own, %6: own, %7: deps) = own.split %4, s0
     %8: own = own.join [%5, %6]
-    (%9: future<int> facts(managed(deps=d5)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@fail), result int, owner S1
+    (%9: future<int> facts(managed(deps=d5)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@fail), result int, owner S1, binding b0
     %12: deps = deps.of %9
     br ^b2(%9, %12, %11)
     ^b2(%13: future<int> facts(managed(deps=d0)), %14: deps, %15: scope<S1>) in S2:

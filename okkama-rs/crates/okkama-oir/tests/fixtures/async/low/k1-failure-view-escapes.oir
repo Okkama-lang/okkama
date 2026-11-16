@@ -505,7 +505,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     [i3] %7: deps = deps.of %4
     [i4] (%8: future<int> facts(managed(deps=d0)), %9: cache-state,
         %10: scope<S1>) = fut.new %6, %7, %5, environment deferred(function=@app.Work.run#0,
-        arguments=[%4]), result int, owner S1
+        arguments=[%4]), result int, owner S1, binding b0
     [i5] %11: deps = deps.of %8
     [i6] %12: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%10, mode=consume), frame_slot(slot=1,
         value=%11, mode=borrow), frame_slot(slot=2, value=%9, mode=consume)], continuation 1

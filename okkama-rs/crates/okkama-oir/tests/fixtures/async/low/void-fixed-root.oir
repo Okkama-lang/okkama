@@ -459,7 +459,7 @@ func @check(%0: frame<@check>) -> void [async] abi observation summary(M9) async
     [i5] %7: own = own.empty
     [i6] %8: deps = deps.of %6
     [i7] (%9: future<void> facts(managed(deps=d0)), %10: cache-state,
-        %11: scope<S1>) = fut.new %7, %8, %5, environment deferred(function=@note, arguments=[%6]), owner S1
+        %11: scope<S1>) = fut.new %7, %8, %5, environment deferred(function=@note, arguments=[%6]), owner S1, binding b0
     [i8] %12: deps = deps.of %9
     [i9] %13: frame<@check> = frame.save %1, slots [frame_slot(slot=0, value=%11, mode=consume), frame_slot(slot=1,
         value=%12, mode=borrow), frame_slot(slot=2, value=%10, mode=consume), frame_slot(slot=3, value=%3,

@@ -180,7 +180,7 @@ func @f(%0: frame<@f>) -> void [async] summary(M8) async-creation(M10) async-bod
     %23: own = own.empty
     (%24: own, %25: own, %26: deps) = own.split %23, s1
     %27: own = own.join [%24, %25]
-    (%28: future<void> facts(managed(deps=d2)), %29: cache-state, %30: scope<S4>) = fut.new %27, %26, %22, environment deferred(function=@task), owner S4
+    (%28: future<void> facts(managed(deps=d2)), %29: cache-state, %30: scope<S4>) = fut.new %27, %26, %22, environment deferred(function=@task), owner S4, binding b1
     %31: deps = deps.of %28
     %32: frame<@f> = frame.save %1, slots [frame_slot(slot=3, value=%20, mode=borrow), frame_slot(slot=4, value=%21, mode=borrow), frame_slot(slot=1, value=%30, mode=consume), frame_slot(slot=5, value=%31, mode=borrow), frame_slot(slot=6, value=%29, mode=consume)], continuation 2
     invoke.own await %28

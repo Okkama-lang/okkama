@@ -47,6 +47,118 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
     if async_body && let Some(layout) = &body.frame_layout {
         Layout { module, function, data, body, layout, state, sites: BTreeMap::new(), started: false }.check();
     }
+    bound_futures(module, function, body, state);
+}
+
+/// PR-B1 (#784, OIR-2 §10.2, В9): a binding marks a Future's duty bound and moves nothing.
+/// - `b9-binding-attribute`: `fut.new … binding b` names a binding of the Future's owner scope and of its type.
+/// - `b9-bound-future-named` (own): no admissible selection names a bound Future directly: the result of a
+///   `fut.new` with `binding`, the resource of an `own.bind`/`own.rebind` of a Future, or a block parameter that
+///   every edge passes one of these.
+/// - `b9-bound-future-absorbed` (coro, low): no `service.absorb` takes the cache token of a bound `fut.new`, or the
+///   task token of its spawn.
+fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut State<'_>) {
+    let future = |value: ValueId| body.values.get(value).ok()
+        .is_some_and(|data| matches!(module.types.get(data.ty), Ok(Type::Future(_))));
+    let mut bound = std::collections::BTreeSet::new();
+    let mut tokens = std::collections::BTreeSet::new();
+    let mut insts = Vec::new();
+    for (block_id, block) in body.blocks.iter() {
+        for &instruction in &block.insts {
+            if let Ok(inst) = body.insts.get(instruction) {
+                insts.push((L::Instruction { function, instruction }, inst.loc, &inst.op, inst.results.as_slice()));
+            }
+        }
+        if let TermKind::InvokeOwn { op, .. } = &block.term.kind {
+            insts.push((L::Terminator { function, block: block_id }, block.term.loc, op.as_ref(), &[][..]));
+        }
+    }
+    for (location, loc, op, results) in &insts {
+        if !state.step(1) {
+            return;
+        }
+        match op {
+            Operation::Async(AsyncOp::FutureNew { owner, binding: Some(binding), .. }) => {
+                let declared = body.bindings.get(*binding).ok();
+                let ty = results.first().and_then(|value| body.values.get(*value).ok()).map(|value| value.ty);
+                if !declared.is_some_and(|declared| declared.scope == *owner && Some(declared.ty) == ty) {
+                    state.at(location.clone(), *loc);
+                    state.error(R::B9BindingAttribute,
+                        "fut.new binds its Future to a binding of its owner scope and of its type (PR-B1)");
+                }
+                bound.extend(results.first().copied());
+                tokens.extend(results.get(1).copied().filter(|_| results.len() == 3));
+            }
+            Operation::Ownership(OwnershipOp::Bind { binding } | OwnershipOp::Rebind { binding })
+                if future(binding.resource.value) => {
+                bound.insert(binding.resource.value);
+            }
+            _ => {}
+        }
+    }
+    // A spawn forwards the cache token and adds the task token of the same duty (D24.1).
+    for (_, _, op, results) in &insts {
+        if let Operation::Async(AsyncOp::FutureSpawn { state: Some(cache), .. }) = op
+            && tokens.contains(cache)
+        {
+            tokens.extend(results.iter().copied());
+        }
+    }
+    // Block parameters that every edge passes a bound Future.
+    let mut incoming: BTreeMap<(BlockId, usize), Vec<Option<ValueId>>> = BTreeMap::new();
+    for (_, block) in body.blocks.iter() {
+        for (target, arguments) in super::own_async::forwarding_edges(block) {
+            for (index, argument) in arguments.into_iter().enumerate() {
+                incoming.entry((target, index)).or_default().push(argument);
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for ((target, index), arguments) in &incoming {
+            let Some(&param) = body.blocks.get(*target).ok().and_then(|block| block.params.get(*index)) else {
+                continue;
+            };
+            if !bound.contains(&param) && future(param)
+                && arguments.iter().all(|argument| argument.is_some_and(|value| bound.contains(&value)))
+            {
+                bound.insert(param);
+                changed = true;
+            }
+        }
+    }
+    for (location, loc, op, _) in &insts {
+        match op {
+            Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }
+                | OwnershipOp::ScopeTransfer { selection, .. }) if module.profile == Profile::Own => {
+                let Ok(SelectionExpr::Admissible(inner)) = body.selections.get(*selection) else {
+                    continue;
+                };
+                let mut pending = vec![*inner];
+                let mut named = false;
+                while let Some(selection) = pending.pop() {
+                    match body.selections.get(selection) {
+                        Ok(SelectionExpr::Union(items)) => pending.extend(items),
+                        Ok(SelectionExpr::Admissible(inner)) => pending.push(*inner),
+                        Ok(SelectionExpr::Value(value)) => named |= bound.contains(value),
+                        _ => {}
+                    }
+                }
+                if named {
+                    state.at(location.clone(), *loc);
+                    state.error(R::B9BoundFutureNamed,
+                        "an admissible selection names a bound Future; a binding keeps its duty (PR-B1, В9)");
+                }
+            }
+            Operation::Async(AsyncOp::ServiceAbsorb { token, .. }) if tokens.contains(token) => {
+                state.at(location.clone(), *loc);
+                state.error(R::B9BoundFutureAbsorbed,
+                    "service.absorb takes the token of a bound Future; only a fresh one is stored (PR-B1, D25.2)");
+            }
+            _ => {}
+        }
+    }
 }
 
 fn operation(module: &Module, op: &Operation, token_profile: bool, state: &mut State<'_>) {

@@ -170,7 +170,7 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     %2: own = own.empty
     (%3: own, %4: own, %5: deps) = own.split %2, s0
     %6: own = own.join [%3, %4]
-    (%7: future<Res> facts(managed(deps=d2)), %8: scope<S4>) = fut.new %6, %5, %1, environment deferred(function=@work), result Res, owner S4
+    (%7: future<Res> facts(managed(deps=d2)), %8: scope<S4>) = fut.new %6, %5, %1, environment deferred(function=@work), result Res, owner S4, binding b0
     %9: deps = deps.of %7
     %10: scope<S5> = scope.begin S5
     br ^b2(%7, %9, %8, %10)

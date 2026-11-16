@@ -906,7 +906,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     [i20] %61: deps = deps.of %58
     [i21] (%62: future<int> facts(managed(deps=d7)), %63: cache-state,
         %64: scope<S1>) = fut.new %60, %61, %59, environment deferred(function=@app.Job.run#0,
-        arguments=[%58]), result int, owner S1
+        arguments=[%58]), result int, owner S1, binding b0
     [i22] %65: deps = deps.of %62
     [i23] fut.cancel %62
     [i24] fut.cancel %62

@@ -29,6 +29,10 @@ impl Driver<'_, '_> {
             if self.elide_offers && !self.may_offer(&point, *original) {
                 continue;
             }
+            // PR-B1 (#784): own never names a bound Future in an admissible selection for a store or an offer.
+            if self.bound_future(&point, *original) {
+                continue;
+            }
             if self.managed(self.high.values.get(*original).map_err(arena)?.ty) {
                 values.insert(point.env.value(*original)?.value);
             }
@@ -55,6 +59,21 @@ impl Driver<'_, '_> {
         values: Vec<ValueId>,
     ) -> Result<(Landing, ValueId), OwnError> {
         self.extract_values(point, values, false)
+    }
+
+    /// PR-B1 (#784): a High Future that a binding of this function holds while the binding's scope is open. A
+    /// binding marks its duty bound, so no admissible selection takes it: storing or offering it is an alias, and
+    /// the duty stays with its owner. The Future counts as bound from its creation (a store before the `let` would
+    /// borrow); a Future carried out of the binding's scope is unbound until bound again.
+    pub(super) fn bound_future(&self, point: &Landing, original: ValueId) -> bool {
+        let Some(binding) = self.future_bindings.get(&original) else {
+            return false;
+        };
+        let Ok(scope) = self.high.bindings.get(*binding).map(|data| data.scope) else {
+            return false;
+        };
+        self.body.blocks.get(point.block)
+            .is_ok_and(|block| stack(self.module, block.lexical_scope).is_ok_and(|open| open.contains(&scope)))
     }
 
     fn extract_values(

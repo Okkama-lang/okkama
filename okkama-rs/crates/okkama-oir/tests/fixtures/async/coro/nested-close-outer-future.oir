@@ -136,7 +136,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     %21: int = const 2
     %22: own = own.empty
     %23: deps = deps.of %19
-    (%24: future<int> facts(managed(deps=d3)), %25: cache-state, %26: scope<S1>) = fut.new %22, %23, %20, environment deferred(function=@app.Inner.run#0, arguments=[%19, %21]), result int, owner S1
+    (%24: future<int> facts(managed(deps=d3)), %25: cache-state, %26: scope<S1>) = fut.new %22, %23, %20, environment deferred(function=@app.Inner.run#0, arguments=[%19, %21]), result int, owner S1, binding b0
     %27: deps = deps.of %24
     %28: bool = const true
     cond %28, ^b7, ^b8
@@ -153,7 +153,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     %38: int = const 1
     %39: own = own.empty
     %40: deps = deps.of %33
-    (%41: future<int> facts(managed(deps=d5)), %42: cache-state, %43: scope<S2>) = fut.new %39, %40, %37, environment deferred(function=@app.Inner.run#0, arguments=[%33, %38]), result int, owner S2
+    (%41: future<int> facts(managed(deps=d5)), %42: cache-state, %43: scope<S2>) = fut.new %39, %40, %37, environment deferred(function=@app.Inner.run#0, arguments=[%33, %38]), result int, owner S2, binding b1
     %44: deps = deps.of %41
     %45: frame<@main> = frame.save %1, slots [frame_slot(slot=4, value=%34, mode=borrow), frame_slot(slot=1, value=%35, mode=borrow), frame_slot(slot=2, value=%36, mode=consume), frame_slot(slot=5, value=%43, mode=consume), frame_slot(slot=6, value=%44, mode=borrow), frame_slot(slot=3, value=%25, mode=consume), frame_slot(slot=7, value=%42, mode=consume)], continuation 2
     invoke.own await %41, result int

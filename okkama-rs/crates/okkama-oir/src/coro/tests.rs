@@ -61,6 +61,8 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("p1-sync-owner-spawn"),
     // C-4: a returned spawned Future's rehome takes its task duty with its cache duty (token form, `task`).
     golden!("p1-spawn-returned"),
+    // #771 (D25.2): a fresh Future stored in a field; its token is absorbed into the constructor's packet (PR-B1).
+    variant!("d25-stored-cold"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
@@ -683,4 +685,58 @@ fn a_stored_spawned_future_absorbs_its_task_then_its_cache() {
 fn a_rehome_after_a_store_is_refused() {
     let error = lower(&d25_rehomed_after_store()).unwrap_err();
     assert!(error.to_string().contains("rehomed after its duty was stored"), "{error}");
+}
+
+/// The token forms of the rehomes of a coro body: the cache token and the task token, if any.
+fn token_rehomes(body: &Body) -> Vec<(ValueId, Option<ValueId>)> {
+    body.blocks.iter().flat_map(|(_, block)| block.insts.iter()).filter_map(|inst| {
+        match &body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Token { cache, task, .. }, .. }) => {
+                Some((*cache, *task))
+            }
+            _ => None,
+        }
+    }).collect()
+}
+
+/// PR-B1 (OIR-2-async-remaining §2.2a), #784: `c` is bound (`let c = Child(n).run();`), so `fut.new` carries
+/// `binding` and an aggregate only borrows it: neither store takes its duty, which stays with its lexical owner
+/// and leaves through `cache.rehome` when `make` returns the second Holder. The verifiers accept the result.
+#[test]
+fn a_bound_future_is_not_absorbed_by_a_store() {
+    let module = lowered("d25-stored-twice", include_str!("../../tests/fixtures/async/own/d25-stored-twice.oir"));
+    let make = body(&module, "app.Maker.make#0");
+    assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
+    let token = cache_tokens(make)[0];
+    assert_eq!(token_rehomes(make), [(token, None)], "the bound Future leaves make with its token");
+    let low = crate::low::lower_cleanup(module.clone(), &crate::low::LowOptions::default()).unwrap();
+    crate::verify_low_with(&low, &options(), VerifyContext::default()).unwrap_or_else(|report| panic!("{report:?}"));
+}
+
+/// PR-B1, §2.2a danger 1 (D24.1, #765): `let t = spawn Child(n).run(); Holder(f: t);`. The attribute marks the
+/// Future, so both duties are bound: neither the task token nor the cache token is absorbed, and both leave `make`
+/// together through the token rehome.
+#[test]
+fn a_bound_spawned_future_keeps_both_tokens_when_stored() {
+    let module = lowered("d25-stored-spawned-bound",
+        include_str!("../../tests/fixtures/async/own/d25-stored-spawned-bound.oir"));
+    let make = body(&module, "app.Maker.make#0");
+    assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
+    let rehomes = token_rehomes(make);
+    assert_eq!(rehomes.len(), 1, "{rehomes:?}");
+    assert!(rehomes[0].1.is_some(), "the task token leaves with the cache token: {rehomes:?}");
+}
+
+/// PR-B1: coro tests the attribute itself. Even where a split names a bound Future (input that own never produces
+/// and that verify_own refuses as `b9-bound-future-named`), the split takes no token: the absorb is only for a fresh
+/// temporary.
+#[test]
+fn a_split_never_absorbs_a_bound_token() {
+    let source = include_str!("../../tests/fixtures/async/own/d25-stored-twice.oir").replacen(
+        "    selection s0: selection = admissible(selection(%19))\n",
+        "    selection s9: selection = union([selection(%19), selection(%22)])\n    selection s0: selection = \
+admissible(s9)\n", 1);
+    let module = lower_coro(parsed(&source), &CoroOptions::default()).unwrap();
+    let make = body(&module, "app.Maker.make#0");
+    assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
 }

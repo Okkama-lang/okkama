@@ -1763,3 +1763,27 @@ fn removed_exit_forms_are_not_in_the_codec() {
         assert!(!Operation::opcode_inventory().contains(&opcode));
     }
 }
+
+/// PR-B1 (#784): `fut.new … binding b` is an optional attribute printed last. The text round trip keeps it, and a
+/// `fut.new` without it reads as an unbound creation.
+#[test]
+fn fut_new_binding_attribute_roundtrips() {
+    let source = include_str!("own/tests/async-goldens/async-plain-await.oir");
+    let creations = |module: &Module| -> Vec<Option<BindingId>> {
+        module.functions.iter().filter_map(|(_, function)| function.body.as_ref()).flat_map(|body| {
+            body.insts.iter().filter_map(|(_, inst)| match inst.op {
+                Operation::Async(AsyncOp::FutureNew { binding, .. }) => Some(binding),
+                _ => None,
+            }).collect::<Vec<_>>()
+        }).collect()
+    };
+    let module = text::parse(source).unwrap();
+    assert_eq!(creations(&module), [Some(BindingId::from_u32(0))]);
+    let printed = text::print(&module).unwrap();
+    let line = printed.lines().find(|line| line.contains("fut.new")).unwrap();
+    assert!(line.ends_with(", owner S1, binding b0"), "{line}");
+    assert_eq!(text::parse(&printed).unwrap(), module);
+    let unbound = text::parse(&source.replace(", owner S1, binding b0", ", owner S1")).unwrap();
+    assert_eq!(creations(&unbound), [None]);
+    assert!(!text::print(&unbound).unwrap().lines().any(|line| line.contains("fut.new") && line.contains("binding")));
+}

@@ -163,7 +163,7 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     %5: own = own.empty
     (%6: own, %7: own, %8: deps) = own.split %5, s0
     %9: own = own.join [%6, %7]
-    (%10: future<Res> facts(managed(deps=d1)), %11: scope<S5>) = fut.new %9, %8, %4, environment deferred(function=@work), result Res, owner S5
+    (%10: future<Res> facts(managed(deps=d1)), %11: scope<S5>) = fut.new %9, %8, %4, environment deferred(function=@work), result Res, owner S5, binding b0
     %12: deps = deps.of %10
     invoke.own await %10, result Res
         normal ^b4($value, $deps, %3, %10, %11, %12)

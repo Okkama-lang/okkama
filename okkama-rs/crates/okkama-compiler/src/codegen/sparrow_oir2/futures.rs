@@ -204,7 +204,9 @@ impl Emitter<'_> {
         use o::AsyncOp as X;
         let location = |value: o::ValueId| self.loc(value).map(A::Location);
         let (opcode, arguments) = match op {
-            X::FutureNew { packet, deps, owner_state, environment, result, owner } => {
+            // PR-B1 (#784): SPB 17 does not carry `binding`. A created Future's duty is a token at run time, and no
+            // selection can reach a token.
+            X::FutureNew { packet, deps, owner_state, environment, result, owner, binding: _ } => {
                 // An async external's Future is run by its driver (D22, #601 Q1); `fut.new` names it the same way.
                 let (o::FutureEnvironment::Deferred { function, arguments, descriptors }
                     | o::FutureEnvironment::External { function, arguments, descriptors }) = environment else {

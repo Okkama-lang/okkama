@@ -6,6 +6,9 @@
 //! packet only, through the exit selection of the value that holds it, so own emits no `cache.rehome` for it:
 //! `rehome_caches` marks every escaping duty, and this pass drops the rehomes that a store precedes on every path.
 //! A rehome that a store precedes on some paths only has no single form and is refused.
+//!
+//! PR-B1 (#784): only a fresh temporary is stored. A Future that a binding holds (`fut.new … binding`) is aliased by
+//! the holder and keeps its rehome; a split that names it is a driver defect.
 use super::*;
 use crate::coro::graph;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,10 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<usize, OwnError> {
     let mut created = BTreeMap::new();
     for (inst, instruction) in body.insts.iter() {
-        if let Operation::Async(AsyncOp::FutureNew { owner, .. }) = instruction.op
+        if let Operation::Async(AsyncOp::FutureNew { owner, binding, .. }) = instruction.op
             && let Some(&future) = instruction.results.first()
         {
-            created.insert(future, (owner, inst));
+            created.insert(future, (owner, inst, binding.is_some()));
         }
     }
     if created.is_empty() {
@@ -33,7 +36,12 @@ pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<us
         let owner = scope_of(module, body, state)?;
         for value in named(body, selection)? {
             let Some(future) = origin(body, value, &predecessors)? else { continue };
-            if created.get(&future).is_some_and(|(scope, _)| *scope == owner) {
+            if created.get(&future).is_some_and(|(scope, _, _)| *scope == owner) {
+                // PR-B1 (#784): a store takes a fresh temporary only. Own never names a bound Future in a split, so
+                // such a split is a defect of the driver, not a store.
+                if created[&future].2 {
+                    return Err(flow_error("a split names a bound Future (PR-B1): a store takes a fresh one only"));
+                }
                 if predecessors[normal.block.as_u32() as usize].len() != 1 {
                     return Err(flow_error("a split that stores a Future has a shared normal block"));
                 }
@@ -51,7 +59,7 @@ pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<us
             };
             let owner = scope_of(module, body, state)?;
             if let Some(future) = origin(body, future, &predecessors)?
-                && created.get(&future).is_some_and(|(scope, _)| *scope == owner)
+                && created.get(&future).is_some_and(|(scope, _, _)| *scope == owner)
                 && stores.contains_key(&future)
             {
                 rehomes.push((*inst, future));
@@ -212,4 +220,53 @@ fn held_before(body: &Body, predecessors: &[Vec<BlockId>], definition: InstId, s
         Some(held) => (held, held),
         None => (must[index], may[index]),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TWICE: &str = include_str!("../../tests/fixtures/async/own/d25-stored-twice.oir");
+    const FIRST_STORE: &str = "    selection s0: selection = admissible(selection(%19))\n";
+    const NAMES_C: &str = concat!("    selection s9: selection = union([selection(%19), selection(%22)])\n",
+        "    selection s0: selection = admissible(s9)\n");
+
+    /// `make` of d25-stored-twice after `edit`, and the result of `drop_stored_rehomes` on it.
+    fn dropped(edit: impl Fn(String) -> String) -> (Result<usize, OwnError>, usize) {
+        let module = crate::text::parse(&edit(TWICE.to_string())).unwrap();
+        let (_, make) = module.functions.iter().find(|(_, function)| function.symbol == "app.Maker.make#0").unwrap();
+        let mut body = make.body.clone().unwrap();
+        let result = drop_stored_rehomes(&module, &mut body);
+        let left = body.blocks.iter().flat_map(|(_, block)| block.insts.iter())
+            .filter(|inst| matches!(body.insts.get(**inst).unwrap().op, Operation::Async(AsyncOp::CacheRehome { .. })))
+            .count();
+        (result, left)
+    }
+
+    /// PR-B1 (#784): a bound Future is aliased by its holders, so the rehome of `c` that the returned Holder needs
+    /// stays.
+    #[test]
+    fn a_bound_future_keeps_its_rehome() {
+        let (result, left) = dropped(|text| text);
+        assert_eq!((result.unwrap(), left), (0, 1));
+    }
+
+    /// A store of a fresh Future (no `binding`) moves its duty into the holder's packet: the rehome a store precedes
+    /// on every path is dropped (D25.2 revision, "How a stored Future leaves").
+    #[test]
+    fn a_stored_fresh_future_loses_its_rehome() {
+        let (result, left) = dropped(|text| text.replacen(", owner S2, binding b1", ", owner S2", 1)
+            .replacen(FIRST_STORE, NAMES_C, 1));
+        assert_eq!((result.unwrap(), left), (1, 0));
+    }
+
+    /// PR-B1: own never names a bound Future in a split. A split that does is a defect of the driver, never a store:
+    /// counting it as one would drop the rehome of `c` that the returned Holder needs.
+    #[test]
+    fn a_split_that_names_a_bound_future_is_an_internal_error() {
+        let (result, left) = dropped(|text| text.replacen(FIRST_STORE, NAMES_C, 1));
+        let Err(OwnError::Diagnostics { diagnostics, .. }) = result else { panic!("{result:?}") };
+        assert!(diagnostics[0].message.contains("names a bound Future"), "{diagnostics:?}");
+        assert_eq!(left, 1);
+    }
 }

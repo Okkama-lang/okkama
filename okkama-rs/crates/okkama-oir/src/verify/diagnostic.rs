@@ -114,6 +114,11 @@ rule_ids! {
     // D24 (slice P1): `fut.spawn` of a fresh Future; a spawned Future's task duty settles before its cache duty.
     D24SpawnNotFresh => "d24-spawn-not-fresh",
     D24ScheduleTaskFirst => "d24-schedule-task-first",
+    // PR-B1 (#784): the `binding` attribute of `fut.new`; a bound Future is never named by an admissible selection,
+    // and its token is never absorbed into a packet.
+    B9BindingAttribute => "b9-binding-attribute",
+    B9BoundFutureNamed => "b9-bound-future-named",
+    B9BoundFutureAbsorbed => "b9-bound-future-absorbed",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }
