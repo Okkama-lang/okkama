@@ -35,6 +35,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   Tomato, the reference, returns how many bytes were appended, and
   `io/buffer` relies on that (`written == bytes.size()`). The Champ handle
   test now checks the returned count too.
+- **`tally --help` reads on a command with subcommands (#637).** A branch
+  command refused every invocation without a child ("child command
+  required"), so its own `--help` could not be asked for. Now a branch stops
+  at one of its own flags and is the selected command, so the program can
+  print `usage()`. Without arguments, with only an option, or with only a
+  parent's flag before a child branch, it still refuses.
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the
