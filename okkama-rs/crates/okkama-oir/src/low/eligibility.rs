@@ -198,6 +198,8 @@ impl Context<'_> {
             }
             // D24.1 (slice P1): the coro form, the cache duty in and out with the new task duty.
             AsyncOp::FutureSpawn { state: Some(_), .. } => Ok(()),
+            // PR-E: a spawn that takes and gives no duty passes through.
+            AsyncOp::FutureSpawnBound { .. } => Ok(()),
             AsyncOp::FutureSpawn { state: None, .. } => Err(LowError::InvalidInput {
                 function: Some(function), message: "High's fut.spawn is not coro input (D24.1)".into(),
             }),

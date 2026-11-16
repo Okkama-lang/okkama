@@ -214,15 +214,16 @@ fn a_counting_primitive_reads_its_amount() {
 }
 
 #[test]
-fn a_role_slot_receiver_takes_its_deps() {
-    // LockGuard does Closing: its close is a slot of the role, so its receiver is a witness with deps.
+fn a_role_slot_receiver_takes_no_deps() {
+    // LockGuard does Closing: its close is a slot of the role, reached through an adapter of the slot's ABI and never
+    // named by the witness table (ruling PR-D, #773), so its receiver is a plain argument.
     let mut closing = object("io.stream.Closing", vec![], &[]);
     closing.role = Some(RoleDecl { slots: vec![RoleSlot { name: "close".into(), entry_abi: EntryAbi::Observation,
         params: vec![], results: vec![] }] });
     let mut guard = object("async.lock.LockGuard", vec![], &[]);
     guard.implements = vec![RoleImpl { role: 0, slots: vec![0] }];
     let contracts = p1::P1Contracts::new(&[closing, guard]).unwrap();
-    assert_eq!(entry(&contracts, "okkama.lock.LockGuard.close").unwrap().services, vec![ServiceKind::Deps]);
+    assert!(entry(&contracts, "okkama.lock.LockGuard.close").unwrap().services.is_empty());
     assert!(entry(&contracts, "okkama.lock.LockGuard.closed").unwrap().services.is_empty());
 }
 

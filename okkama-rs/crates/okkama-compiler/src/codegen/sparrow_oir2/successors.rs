@@ -16,6 +16,24 @@ fn is_successor(ty: s::Type) -> bool {
     taken(ty).is_some()
 }
 
+/// Adds to `needed` the source of every edge assignment `(destination, source)` whose destination it holds,
+/// transitively (#779): each location is followed once, where passes over every edge took as many passes as the
+/// longest chain of forwarded parameters.
+fn close_needed(needed: &mut BTreeSet<s::Location>, feeds: Vec<(s::Location, s::Location)>) {
+    let mut sources = BTreeMap::<s::Location, Vec<s::Location>>::new();
+    for (destination, source) in feeds {
+        sources.entry(destination).or_default().push(source);
+    }
+    let mut pending = needed.iter().copied().collect::<Vec<_>>();
+    while let Some(location) = pending.pop() {
+        for &source in sources.get(&location).into_iter().flatten() {
+            if needed.insert(source) {
+                pending.push(source);
+            }
+        }
+    }
+}
+
 pub(super) fn prune_dead_aliases(function: &mut s::Function) {
     let mut needed = function.params.iter().copied().collect::<BTreeSet<_>>();
     for instruction in &function.code {
@@ -40,21 +58,17 @@ pub(super) fn prune_dead_aliases(function: &mut s::Function) {
             _ => {}
         }
     }
-    loop {
-        let before = needed.len();
-        for instruction in &function.code {
-            for edge in edges(instruction) {
-                for assignment in &edge.assignments {
-                    if needed.contains(&assignment.destination)
-                        && let s::Source::Location(source) = assignment.source
-                    {
-                        needed.insert(source);
-                    }
+    let mut feeds = Vec::new();
+    for instruction in &function.code {
+        for edge in edges(instruction) {
+            for assignment in &edge.assignments {
+                if let s::Source::Location(source) = assignment.source {
+                    feeds.push((assignment.destination, source));
                 }
             }
         }
-        if needed.len() == before { break; }
     }
+    close_needed(&mut needed, feeds);
     let mut removed = BTreeSet::new();
     for block in &mut function.blocks {
         block.params.retain(|location| {
@@ -447,4 +461,46 @@ fn taken_forwards(function: &s::Function) -> Option<Round> {
         params.contains(&destination).then_some((pc, ordinal, position, object?))
     }).collect();
     Some((sources, params, retakes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `close_needed` reaches what repeated passes over the assignments reached before #779. Random chains,
+    /// cycles and repeated assignments over a few locations.
+    #[test]
+    fn needed_sources_close_as_the_passes_did() {
+        let mut random = 0x0779_a11a_0779_a11au64;
+        let mut next = |bound: u32| {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            (random % u64::from(bound)) as u32
+        };
+        let mut added = 0;
+        for _ in 0..2000 {
+            let count = 1 + next(30);
+            let location = |id: u32| {
+                if id.is_multiple_of(2) { s::Location::Register(id) } else { s::Location::Service(id) }
+            };
+            let feeds: Vec<_> = (0..next(50)).map(|_| (location(next(count)), location(next(count)))).collect();
+            let initial: BTreeSet<_> = (0..count).filter(|_| next(5) == 0).map(location).collect();
+            let mut expected = initial.clone();
+            loop {
+                let before = expected.len();
+                for &(destination, source) in &feeds {
+                    if expected.contains(&destination) {
+                        expected.insert(source);
+                    }
+                }
+                if expected.len() == before { break; }
+            }
+            let mut actual = initial.clone();
+            close_needed(&mut actual, feeds.clone());
+            assert_eq!(actual, expected, "{initial:?} {feeds:?}");
+            added += actual.len() - initial.len();
+        }
+        assert!(added > 1000, "{added}");
+    }
 }

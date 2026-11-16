@@ -549,6 +549,41 @@ fn k1_low_goldens_compile_and_load() {
     }
 }
 
+/// #747: a generic async body carries its descriptor in continuation 0 and reloads it at each resume (C-2). A
+/// binding of plain data needs no SPB 17 form, so the descriptor-start golden compiles and loads.
+#[test]
+fn b0_descriptor_start_golden_compiles_and_loads() {
+    loads("coro-start-descriptors");
+    let program = translated(&golden("coro-start-descriptors"));
+    let get = function(&program, "Box.get");
+    let layout = program.frame_layout(get).unwrap();
+    assert_eq!(layout.slots[2], value(s::Type::Descriptor));
+    assert_eq!(layout.continuations[0].saved, vec![0, 1, 2, 3]);
+}
+
+/// #747: a binding that manages values through its descriptor has no SPB 17 transport, a synchronous body's neither,
+/// and a binding must name a descriptor.
+#[test]
+fn b0_descriptor_bindings_outside_plain_async_starts_are_refused() {
+    let mut managed = golden("coro-start-descriptors");
+    edit(&mut managed, "Box.get", |get| {
+        get.body.as_mut().unwrap().descriptor_bindings[0].contract.managed = o::DescriptorManaged::Managed;
+    });
+    rejected(&managed, "descriptor binding of managed values");
+    let mut wrong = golden("coro-start-descriptors");
+    edit(&mut wrong, "Box.get", |get| {
+        let body = get.body.as_mut().unwrap();
+        let frame = body.blocks.get(body.entry).unwrap().params[0];
+        body.descriptor_bindings[0].dictionary = frame;
+    });
+    rejected(&wrong, "names a value that is not a descriptor");
+    let mut synchronous = golden("coro-start-descriptors");
+    let binding = synchronous.functions.iter().find(|(_, f)| f.symbol == "Box.get").unwrap().1
+        .body.as_ref().unwrap().descriptor_bindings[0].clone();
+    edit(&mut synchronous, "Box.new", |new| new.body.as_mut().unwrap().descriptor_bindings.push(binding));
+    rejected(&synchronous, "descriptor bindings of a synchronous body");
+}
+
 /// A catch of the Error role binds the system Cancelled for a cancellation (#738), so a module that catches the role
 /// without declaring Cancelled gets its descriptor last, with Cancelled's exact shape; every other descriptor keeps
 /// its index. A module without such a catch gets none.

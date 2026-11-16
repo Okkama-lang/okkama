@@ -24,6 +24,8 @@ pub(super) struct BodyContext<'t> {
     pub key: super::callables::BodyKey,
     pub calls: &'t std::cell::RefCell<super::open_calls::CallSpans>,
     pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
+    /// The creation thunk of each async method bound as a value (ruling PR-D item 3).
+    pub async_thunks: &'t HashMap<ir::FuncId, ir::FuncId>,
     pub lambdas: &'t [super::anonymous::Lambda],
     pub globals: &'t HashMap<usize, ir::DeclId>,
     pub test_intrinsics: &'t HashMap<String, ir::FuncId>,
@@ -966,10 +968,14 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             condition: ran,
             yes: ir::Target { block: yes, args: vec![] }, no: ir::Target { block: no, args: vec![] },
         })?;
+        // As for the pending check (#780): inside a try the trap block takes fresh carried locals, and the value
+        // continues from the locals of the check's own block.
+        let env = self.env.clone();
         self.switch(no)?;
         self.terminate(ir::TermKind::Trap {
             code: ir::TrapCode::Empty, message: "A void result cannot be used as a value".into(),
         })?;
+        self.env = env;
         self.switch(yes)
     }
 }

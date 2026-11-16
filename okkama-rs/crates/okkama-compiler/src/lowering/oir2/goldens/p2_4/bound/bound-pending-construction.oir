@@ -53,22 +53,23 @@ func @app.Parent.new#0(%0: int) -> app.Parent [ctor app.Parent] {
     %2: app.Child = undef ty app.Child
     bind %0, binding b0
     stage %0, action S3, field field_ref(declaration=app.Parent, index=0)
-    %3: bool = undef ty bool
-    %4: app.Parent = obj.new app.Parent { n: %0, child: %2, $pending: %3 } construction incomplete
-    bind %4, binding b1
-    %5: fn() -> int = fn.bind %4, @app.Parent.read#0, ty fn() -> int
-    [i8] %6: app.Child = call @app.Child.new#0(%5)
-    stage %6, action S3, field field_ref(declaration=app.Parent, index=1)
-    obj.init %4, %6, field field_ref(declaration=app.Parent, index=1)
-    %7: bool = const false
-    obj.init %4, %7, field field_ref(declaration=app.Parent, index=2)
-    want %4
-    [i14] exit.prepare return %4 at B0
-    result.exit edge normal(0), value %4, demand want, prepare #14
-    high.effects at #8 failures [thrown, program, panic, native, cancelled], suspends true
-    ret %4
-    ^b1(%8: failure) in S3:
-    raise %8
+    %3: app.Child = undef ty app.Child
+    %4: bool = undef ty bool
+    %5: app.Parent = obj.new app.Parent { n: %0, child: %3, $pending: %4 } construction incomplete
+    bind %5, binding b1
+    %6: fn() -> int = fn.bind %5, @app.Parent.read#0, ty fn() -> int
+    [i9] %7: app.Child = call @app.Child.new#0(%6)
+    stage %7, action S3, field field_ref(declaration=app.Parent, index=1)
+    obj.init %5, %7, field field_ref(declaration=app.Parent, index=1)
+    %8: bool = const false
+    obj.init %5, %8, field field_ref(declaration=app.Parent, index=2)
+    want %5
+    [i15] exit.prepare return %5 at B0
+    result.exit edge normal(0), value %5, demand want, prepare #15
+    high.effects at #9 failures [thrown, program, panic, native, cancelled], suspends true
+    ret %5
+    ^b1(%9: failure) in S3:
+    raise %9
 }
 
 func @app.Parent.read#0(%0: app.Parent) -> int [method app.Parent] {

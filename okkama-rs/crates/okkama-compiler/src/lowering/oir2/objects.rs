@@ -218,6 +218,14 @@ impl BodyLowerer<'_, '_> {
         let pending = pending_index(&layout).ok_or_else(|| {
             LowerError::invalid(self.source.span, "early self requires a pending field")
         })?;
+        // An unbound field enters the allocation as an `undef` of its own, defined next to it (#780): the
+        // constructor's prologue `undef` may reach this point through block parameters once own splits the
+        // body (a resource binding between them), and A2 reads only a directly defined `undef` as unbound.
+        for (index, value) in fields.iter_mut().enumerate() {
+            if super::construction::direct_undef(self.b.body(), *value) {
+                *value = self.core(ir::CoreOp::Undef { ty: layout[index].ty })?;
+            }
+        }
         let ty = layout[pending].ty;
         fields.push(self.core(ir::CoreOp::Undef { ty })?);
         let value = self.core(ir::CoreOp::ObjNew {
@@ -450,8 +458,12 @@ impl BodyLowerer<'_, '_> {
         self.terminate(ir::TermKind::Cond {
             condition, yes: ir::Target { block: stop, args: vec![] }, no: ir::Target { block: go, args: vec![] },
         })?;
+        // Inside a try the stop block takes fresh carried locals for its unwind edge (#780); the go block
+        // continues from the values of the guard's own block, not from the stop block's parameters.
+        let env = self.env.clone();
         self.switch(stop)?;
         self.terminate(ir::TermKind::Trap { code: ir::TrapCode::Pending, message })?;
+        self.env = env;
         self.switch(go)
     }
 }

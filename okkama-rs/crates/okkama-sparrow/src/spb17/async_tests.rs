@@ -884,13 +884,15 @@ fn async_block_ids_follow_draft3() {
         (77, O::CleanupDeliverCancel, "cleanup.deliver_cancel"), (67, O::AwaitTake, "await.take"),
         (68, O::UniqueCacheProof, "unique_cache.proof"), (69, O::CacheRehome, "cache.rehome"),
         (84, O::CleanupSettleDynamic, "cleanup.settle.dynamic"), (85, O::ServiceMaterialize, "service.materialize"),
-        (86, O::ServiceAbsorb, "service.absorb"), (65, O::FutureSpawn, "fut.spawn")];
+        (86, O::ServiceAbsorb, "service.absorb"), (65, O::FutureSpawn, "fut.spawn"),
+        (87, O::FutureSpawnBound, "fut.spawn.bound")];
     for (id, op, name) in assigned {
         assert_eq!((op.id(), op.name()), (id, name));
         assert_eq!(Opcode::from_id(id).unwrap(), op);
     }
-    // Pins, workers and the unassigned tail stay reserved until their slices (spawn is assigned by #601 P1).
-    for id in (78..=83).chain(87..=95) {
+    // Pins, workers and the unassigned tail stay reserved until their slices (spawn is assigned by #601 P1, the
+    // bound spawn by #601 F1, ruling PR-E).
+    for id in (78..=83).chain(88..=95) {
         assert!(Opcode::from_id(id).unwrap_err().message.contains("reserved"), "{id}");
     }
     assert_eq!(Opcode::CleanupSettle.id(), 21);
@@ -902,7 +904,7 @@ fn async_classes_and_suspension_sites_follow_draft3() {
     let classes = [(O::FutureNew, G), (O::Await, S), (O::FuturePublish, L), (O::FutureCancel, L),
         (O::FutureDone, L), (O::FutureCancelled, L), (O::FrameSave, L), (O::FrameResume, L), (O::AwaitUnwind, S),
         (O::CleanupDeliverCancel, L), (O::CleanupSettle, L), (O::AwaitTake, S), (O::CacheRehome, L),
-        (O::FutureSpawn, X)];
+        (O::FutureSpawn, X), (O::FutureSpawnBound, X)];
     for (op, class) in classes {
         assert_eq!(op.helper_class(), Some(class), "{}", op.name());
         assert_eq!(op.suspends(), class == S, "{}", op.name());

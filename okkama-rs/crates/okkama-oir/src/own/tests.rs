@@ -1023,3 +1023,61 @@ func @f(%p: Plain, %r: R) -> int {
     assert_eq!(classes[&function].descriptors.len(), 1);
     assert!(classes[&function].may_own());
 }
+
+/// #777: a holder's function type that its closures resolve keeps the type's dictionary in `closures`, not in
+/// `descriptors`: the holder owns what the closures capture (#723), and the scope that owns the holder cleans
+/// them up through that dictionary, so its envelope counts the dictionary's effects (here `program`, which
+/// neither `R` nor the holder has otherwise).
+#[test]
+fn a_holder_of_action_values_keeps_their_closure_dictionaries() {
+    let source = r#"oir 2 high
+module closure_dictionaries
+summary Mf call-boundary parameters [parameter_effect(convention=take, destination=none)]
+    contract call_contract(failures=[program], publication=atomic)
+func @cleanup(%arg0: fn(int) -> int) -> void [intrinsic "test.closure.cleanup"] summary(Mf);
+object R {
+    destroy @destroy
+}
+object Holder {
+    field g: fn(int) -> int
+}
+scope SD action in @destroy
+func @destroy(%self: R) -> void [destroy R] {
+    ^entry in SD:
+    ret
+}
+scope SR action in @leasing
+func @leasing(%captured: R, %x: int) -> int [lambda captures 1] {
+    ^entry in SR:
+    ret %x
+}
+scope SF action in @f
+func @f(%r: R) -> int {
+    ^entry in SF:
+    %dictionary: type = type.of ty fn(int) -> int, descriptor descriptor_contract(managed=runtime,
+        retention=owner_graph(0), cleanup=@cleanup, summary=Mf)
+    %leased: fn(int) -> int = fn.closure @leasing, [%r], ty fn(int) -> int
+    %n: int = const 0
+    ret %n
+}
+"#;
+    let mut module = crate::text::parse(source).unwrap();
+    let decl = module.declarations.iter().find(|(_, decl)| decl.name == "Holder").unwrap().0;
+    let holder = module.types.intern(Type::Object { decl, args: vec![] }).unwrap();
+    let function = module.types.iter().find(|(_, ty)| matches!(ty, Type::Fn(_))).unwrap().0;
+    let classes = classify_test(&module, &OwnOptions::default());
+    let facts = &classes[&holder];
+    assert!(facts.descriptors.is_empty(), "{facts:?}");
+    assert!(facts.may_own(), "{facts:?}");
+    let dictionary = facts.closures.get(&function).cloned().flatten().expect("the closure type's dictionary");
+    assert_eq!(module.functions.get(dictionary.cleanup).unwrap().symbol, "cleanup");
+    let cleanup = module.summaries.iter().find(|(_, summary)| summary.contract.failures == [FailureKind::Program])
+        .unwrap().1.clone();
+    let natives = TestNatives {
+        named: BTreeMap::from([("test.closure.cleanup".to_owned(), cleanup)]),
+        ..TestNatives::default()
+    };
+    let output = elaborate_ownership(module, &natives, &OwnOptions::default()).unwrap();
+    assert!(output.analysis.cleanup_effects[&holder].failures.contains(&FailureKind::Program),
+        "{:?}", output.analysis.cleanup_effects[&holder]);
+}

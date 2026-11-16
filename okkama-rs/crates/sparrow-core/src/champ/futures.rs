@@ -836,6 +836,31 @@ pub extern "C" fn rt_future_spawn(ctx: *mut Ctx, future: Word, cache: *mut Cache
     NORMAL
 }
 
+/// `fut.spawn.bound` (SPB 87), class X (ruling PR-E, #766): spawn of a Future that was not created on the spot, as
+/// Tomato's `spawn` of any Future (`tasks.rs`). A cold Future becomes a task of its own exactly as `fut.spawn` makes
+/// it: SPAWNED, its own TASK, registered in the root registry, started on this stack until its first suspension. A
+/// Future that is no longer cold is left as it is. No duty moves: the cache duty stays where it is, and the
+/// SPAWNED flag keeps a later detach from registering it twice (I-F4, I-F5). The caller keeps the Future rooted.
+pub extern "C" fn rt_future_spawn_bound(ctx: *mut Ctx, future: Word) -> Outcome {
+    if !bridge_clear(ctx) {
+        return stop(ctx, error("X helper entered with an active bridge failure"));
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    if let Err(failure) = runtime.champ_cache(future) {
+        return stop(ctx, failure);
+    }
+    runtime.count(|_| "spawn".into());
+    if get(future, tasks::STATE) == tasks::COLD {
+        set(future, tasks::FLAGS, get(future, tasks::FLAGS) | flags::SPAWNED);
+        runtime.spawned.push(future);
+        runtime.champ_future_start(ctx, 0, future);
+        if unsafe { (*ctx).status } != OK {
+            return OUTCOME_STOP;
+        }
+    }
+    NORMAL
+}
+
 /// What the common half of `await` and `await.take` found.
 enum Awaited {
     /// A settled or running Future: the caller reads its state.

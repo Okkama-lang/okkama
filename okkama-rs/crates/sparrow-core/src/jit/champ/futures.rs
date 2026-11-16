@@ -211,6 +211,11 @@ impl Emit<'_, '_> {
                 let cache = self.pointer(locations[1]);
                 ("champ_future_spawn", self.checked("champ_future_spawn", &[ctx, future, cache, post]))
             }
+            // Ruling PR-E (#766), class X: a cold Future starts on this stack; no duty moves.
+            O::FutureSpawnBound => {
+                let future = self.word(locations[0]);
+                ("champ_future_spawn_bound", self.checked("champ_future_spawn_bound", &[ctx, future]))
+            }
             O::Await => {
                 let future = self.word(locations[0]);
                 ("champ_await_view", self.suspending("champ_await_view", &[ctx, body, future, post], locations))

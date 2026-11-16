@@ -83,6 +83,8 @@ impl super::body::BodyLowerer<'_, '_> {
         let op = match &expr.kind {
             thir::ExprKind::BoundAction { object, method, .. } => {
                 let function = self.context.functions[&thir::BodyOwner::Method { object: *object, method: *method }];
+                // A bound async action binds its creation thunk (ruling PR-D item 3).
+                let function = self.context.async_thunks.get(&function).copied().unwrap_or(function);
                 ir::CoreOp::FnBind { receiver, function, ty, packet: None }
             }
             thir::ExprKind::BoundRoleAction { role, slot, .. } => {

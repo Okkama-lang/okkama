@@ -123,7 +123,7 @@ pub(super) fn short_name(name: &str) -> String {
     }
 }
 
-fn direct_undef(body: &ir::Body, value: ir::ValueId) -> bool {
+pub(super) fn direct_undef(body: &ir::Body, value: ir::ValueId) -> bool {
     body.values.get(value).is_ok_and(|data| matches!(data.def, ir::Definition::InstResult { inst, .. }
         if body.insts.get(inst).is_ok_and(|inst| matches!(inst.op, ir::Operation::Core(ir::CoreOp::Undef { .. })))))
 }

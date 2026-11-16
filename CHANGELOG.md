@@ -20,6 +20,131 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An accepted holder of closures binds their dictionary (#786, part).** An
+  explicit entry that accepts a holder of action values (`Wrapped.value`)
+  now binds the function type's dictionary even when the closures can own
+  nothing: the full verifier counts the accepted input's cleanup through it
+  and no longer rejects the envelope (`B104`, `B112`). The `B51` summary
+  rejections of the same program remain open.
+
+- **A constructor that binds a role parameter passes the load check (#785).**
+  When a constructor binds a parameter whose role may reach a resource (the
+  parent of `TemporaryDirectory`), the binding's checked split asked for the
+  parameter's identity, which lies in the opaque accepted input run. The
+  loader then had no inventory for the scope and refused the fresh return
+  (`FRESH_PACKET`). A checked split selects only from the admission, and an
+  empty admission yields nothing whatever the selected values are; an
+  unchecked split of an entry parameter still proves nothing.
+
+- **Large functions compile and load faster on Champ (#779).** The SPB 17
+  load check computed dominance with bitsets of blocks² / 64 words per pass
+  and closed dependency sets by walking every record until nothing changed;
+  it now uses a dominator tree (Cooper, Harvey and Kennedy) and the
+  obligations table, as the codegen's root anchors do. The OIR-2 construction
+  check and codegen's dead-alias pruning propagate along a worklist instead
+  of repeated passes, and the pipeline no longer verifies the Low module a
+  second time inside codegen. In a debug build `L09.ini.native-equivalence`
+  takes about 11 s of CPU instead of 14 s (codegen and the load check 2.3 s
+  instead of 4.2 s), `L09.db.row-readers` 25 s, and
+  `L04.once.generic-std-instantiation` 18 s.
+
+- **A holder of a closure that captures a resource passes full verification
+  (#777).** Since #723 a holder's function type is resolved by the closures
+  the module creates, so its classification no longer carried the type's
+  dictionary, and own bound no `type.of` in the function that owns the
+  holder. The verifier cleans a `fn` value up only through a dictionary
+  bound in that function (P2.4 §5.1), took the unknown branch and rejected
+  the scope's envelope (`B104`, `B112`). The classification now keeps these
+  closure types with their dictionaries: own binds them where it owns the
+  holder, and the scope's envelope counts their cleanup effects.
+
+- **Large std instantiations and row readers build on Champ (#781).** An
+  observation entry that returned a managed value which cannot own from a
+  retained inner scope committed a reserve and returned its packet, beyond
+  its one declared result (`T2`); own now closes those scopes without a
+  reserve. The SPB 17 allocation checker kept every dead alias that edge
+  copies coalesced into a slot, so its stored states grew with PCs times
+  aliases (about 1 400 entries per PC in `main` of `L09.db.row-readers`, past
+  the 8 Mi bound); with the function's liveness it now forgets the
+  locations that are not live (22 entries per PC at most there, 60 611 in
+  all), which can only make it reject, never accept.
+  `L04.once.generic-std-instantiation` and `L09.db.row-readers` pass on
+  Champ.
+
+- **An early-self constructor that fails after handing out `self` builds on
+  Champ (#780).** A pending check, and the check that a valued `for` ran,
+  inside `try` continued from the trap block's carried locals instead of the
+  values that reached the check, which broke SSA (`SSA2`). An early self now
+  takes each field that is still unbound as an `undef` defined next to its
+  allocation, so own's split at a resource binding between the prologue and
+  the allocation no longer turns the later `obj.init` into a second binding
+  (`A2`). `L04.invariant.escaped-self-failed-constructor` and
+  `L04.invariant.escaped-self-in-block-failed-constructor` pass on Champ.
+
+- **A role call that reaches a std primitive's intrinsic member runs on
+  Champ (#773, ruling PR-D).** LockGuard and Permit do `Closing`, and the
+  cancellation token does `Cancelling`, with catalogue externals as their
+  members; a witness table named the external, whose trusted entry ABI is
+  not the slot's, so generation stopped ("dynamic call packet differs from
+  its ABI"). A slot now reaches a catalogue external through an adapter of
+  the slot's signature, as an async implementation does, and the catalogue
+  rule that gave such a member's receiver a deps proof (in the producer and
+  in SPB 17) is gone with it.
+- **SPB 17 generation takes an async body with descriptor bindings (#747).**
+  A generic async body keeps the descriptors of its inputs in continuation 0
+  and reloads them at each resume (async ABI C-2); a binding of plain data
+  needs nothing more, so the descriptor-start golden now compiles and loads.
+  A binding that manages values through its descriptor, or one in a
+  synchronous body, is still refused by name. The OIR-2 producer specializes
+  generic actions, so source programs did not reach this path.
+- **Async bodies with an unreachable handler load on Champ (#741, ruling
+  PR-M).** Codegen lowers some operations as total and drops their unwind
+  edge; it removed the handler behind such an edge only in synchronous
+  functions, so an async body's dead handler, which reads the frame, failed
+  the loader's dominance check (`SPB_STRUCTURE`). Async bodies are now pruned
+  too: the continuation sites of the D21 frame layout follow the code, and a
+  continuation whose suspension was unreachable goes with it. The loader stays
+  strict. A `try` with a payload `catch` over a throwing constructor in
+  `async main` runs as on Tomato. With the loader's successor rule fixed for
+  `cleanup.deliver_cancel` (it gives the cleanup state back with the
+  successor it holds), `L12.future-successor-obligation` runs too.
+- **A successor Future must be awaited or handed on (#754).** The checker
+  rejected only an awaited successor whose result was dropped. Now a call of
+  an async successor gives its `Future<^C>` the successor's obligation, as the
+  Book says: a binding that can leave its scope without awaiting it, or reads
+  it only for `done()`, gets the synchronous must-use error at the binding; a
+  dropped call and `spawn` of one are rejected too. Awaiting it, aliasing it,
+  storing it in an aggregate, giving it as a block value, spawning and
+  awaiting the task, or cancelling it explicitly consumes or transfers it.
+  New case `L12.future-successor-bound-dropped`. Handing it on through a typed
+  parameter, field or result is not expressible yet (#790).
+- **`buffer_state_append` is documented as returning the bytes appended
+  (#674).** Its doc comment in `std/runtime/buffer` said "the new size";
+  Tomato, the reference, returns how many bytes were appended, and
+  `io/buffer` relies on that (`written == bytes.size()`). The Champ handle
+  test now checks the returned count too.
+- **A failed `test.is` shows objects by value (#756).** Unequal objects in
+  a test report printed heap identities (`Duration@52e44f14340`). Tomato and
+  Champ now show an object as its source writes it: `Duration(origin: 2)`,
+  `Point(x: 1, label: "a\"b")`, a variant case as `Shape.rect(1, 2)` or
+  `Maybe.none`, an Error as `Down.unavailable(3)`, nested values and arrays
+  of objects likewise; `once let` slots stay out, as in `==`. Both engines
+  give the same text: type names drop their module and the engines'
+  internal spellings (`okkama_runtime_core::testing::display_name`).
+  Showing an object by its `string()` needs compiler support (#793); Champ's
+  case texts of generic variant instances are wrong (#792).
+- **The outcome of a spawned task that nobody awaits is released at its
+  owner's close, on both engines (#768).** 0.5.8's Tomato never destroyed it;
+  since #581 (a Future owns its cached outcome) Tomato releases it when the
+  scope that owns the Future closes, once, in reverse creation order, which
+  is Champ's moment (ABI D24.2). New case
+  `L08.spawn.unawaited-outcome-released` and a Tomato test pin it.
+- **`tally --help` reads on a command with subcommands (#637).** A branch
+  command refused every invocation without a child ("child command
+  required"), so its own `--help` could not be asked for. Now a branch stops
+  at one of its own flags and is the selected command, so the program can
+  print `usage()`. Without arguments, with only an option, or with only a
+  parent's flag before a child branch, it still refuses.
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the
@@ -617,6 +742,38 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **`spawn` of any Future on Champ: `fut.spawn.bound`, SPB 17 opcode 87
+  (#601 F1, ruling PR-E; closes #766).** A spawn of a Future that its
+  creating call did not just give (a synchronous action that returns a
+  Future, a bound async action value's call) starts the Future if it is cold
+  and registers it, as Tomato's `spawn` does; it moves no duty, and the
+  Future's cache duty stays where it is. The duty form of D24.1 stays for
+  the Future a creating call just gave. New helper
+  `champ_future_spawn_bound` (class X); loader rule `SPB_SPAWN` gains: the
+  bound form takes its Future and names no service.
+
+- **Async role slots and bound async action values on Champ (#601 F1,
+  ruling PR-D).** An async action of a role (`role Loader { async load() is
+  int; }`) is a synchronous slot that returns the Future of its outcome. Each
+  implementation is reached through a creation thunk: a synchronous function
+  with the slot's signature that calls the async action, whose cold Future
+  own returns through `cache.rehome … target caller`. An implementation by an
+  async intrinsic (`Cancelling.wait` by the cancellation token) gets the same
+  thunk. An async action type `async (A) is T` is a synchronous `Fn` that
+  returns the Future; binding an async method binds its thunk, and calling the
+  value creates the cold Future. No new ABI. `L08.role-shape.async-dispatch`
+  runs; the other cases of the slice stop next on N1, G1, #775, #759 and
+  #735.
+
+- **Variadic role slots on Champ (#601 F1, ruling PR-D item 5).** A role
+  action with a variadic tail (`WritingText.write(values is ...string)`) is an
+  ordinary slot whose last parameter is the array the checker packs at every
+  call site; the producer refused it ("async or variadic role slot"). Std's
+  P1 direct-call objects (Stdout, Utf8Encoded) now get their witnesses when a
+  value of them becomes a role value, as `fs/temp` does with `ByteSource`.
+  `L00.stderr.basic` and five `L10.fs` cases run; the two temporary-directory
+  cases stop next on #785.
 
 - **Champ runs the std async primitives (#601 Q1, OIR-2 async ABI D22).**
   Event, Lock, Semaphore, Barrier and the cancellation token are a trusted

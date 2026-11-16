@@ -81,6 +81,9 @@ pub(crate) fn post_uses(f: &Function) -> Vec<Set> {
     sites
 }
 
+/// The reference closure over every dependency record, kept for the reference algorithms and the tests; the
+/// checks use the `Obligations` table.
+#[cfg(any(test, feature = "liveness-reference"))]
 pub(crate) fn close_dependencies(f: &Function, live: &mut Set) {
     loop {
         let previous = live.len();
@@ -880,6 +883,21 @@ fn allocate_live(f: &Function, live: &Liveness) -> Result<Allocation, Error> {
 /// The fixed point is the greatest one whatever the visiting order (every transfer is monotone and joins
 /// intersect), so the worklist visits in reverse postorder, each queued PC once (#701).
 pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Error> {
+    check(f, allocation, None)
+}
+
+/// [`check_allocation`] over the function's liveness (`Liveness::of`), which only prunes: the state kept for a PC
+/// forgets the locations that are not live before it (#781). Without it a slot keeps every dead alias that edge
+/// copies coalesced into it, and the stored states grow with PCs times aliases. A forgotten location can only
+/// fail a later use, so a wrong liveness makes the check reject, never accept.
+pub fn check_allocation_with(f: &Function, allocation: &Allocation, live: &Liveness) -> Result<(), Error> {
+    if live.parts != Parts::ALL || live.index != Index::new(f) || live.len() != f.code.len() {
+        return Err(error("allocation: liveness of another function"));
+    }
+    check(f, allocation, Some(live))
+}
+
+fn check(f: &Function, allocation: &Allocation, live: Option<&Liveness>) -> Result<(), Error> {
     let index = Index::new(f);
     let obligations = Obligations::of(f, index, true)?;
     if allocation.roots != allocated_roots_with(f, allocation, &obligations)? {
@@ -970,6 +988,11 @@ pub fn check_allocation(f: &Function, allocation: &Allocation) -> Result<(), Err
                     work.push(target);
                 }
             } else {
+                let mut next = next;
+                if let Some(live) = live {
+                    let row = live.row(target);
+                    next.retain(|item| row.binary_search(&item).is_ok());
+                }
                 stored = stored.saturating_add(next.size());
                 enforce(stored <= 8 * 1024 * 1024, "ALLOCATION_MEMORY", "allocation checker storage exceeded")?;
                 *previous = Some(next);

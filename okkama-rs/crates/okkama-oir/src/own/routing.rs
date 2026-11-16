@@ -281,6 +281,7 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | AsyncOp::UniqueCacheProof { .. }
             | AsyncOp::CacheRehome { .. }
             | AsyncOp::FutureSpawn { .. }
+            | AsyncOp::FutureSpawnBound { .. }
             | AsyncOp::FutureCancel { .. }
             | AsyncOp::FutureDone { .. }
             | AsyncOp::FutureCancelled { .. }

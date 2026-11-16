@@ -82,8 +82,8 @@ pub(super) fn spawn_freshness<'a>(module: &'a Module, selected: Option<FuncId>, 
     }
 }
 
-/// D24.1 (`d24-spawn-not-fresh`): `fut.spawn` starts a Future created earlier in the same block, by a call of an
-/// async entry in High and by `fut.new` after it. Between the creation and the spawn the Future is only observed
+/// D24.1 (`d24-spawn-not-fresh`): the duty form of `fut.spawn` starts a Future created earlier in the same block by
+/// `fut.new` (own, coro, low; ruling PR-E). Between the creation and the spawn the Future is only observed
 /// (`deps.of`, `fut.done`, `fut.cancelled`, `fut.cancel`), so it is not awaited, does not escape and joins no
 /// group first. Outside High the spawn forwards the creation's second result, the owner state (own) or the cache
 /// duty (coro/low), so the duty it starts is the one that creation gave.
@@ -99,6 +99,12 @@ fn spawn_fresh(module: &Module, function: FuncId, body: &Body, state: &mut State
             let Operation::Async(AsyncOp::FutureSpawn { future, state: forwarded }) = &inst.op else {
                 continue;
             };
+            // Ruling PR-E: only the duty form requires freshness. High's `fut.spawn %f` may name any Future: own keeps
+            // the duty form for the Future its creating call just gave and gives every other one
+            // `fut.spawn.bound`, which moves no duty.
+            if forwarded.is_none() && module.profile == Profile::High {
+                continue;
+            }
             state.at(L::Instruction { function, instruction }, inst.loc);
             let creation = block.insts[..position].iter().position(|earlier| {
                 body.insts.get(*earlier).is_ok_and(|earlier| earlier.results.first() == Some(future))
@@ -107,16 +113,8 @@ fn spawn_fresh(module: &Module, function: FuncId, body: &Body, state: &mut State
                 let Ok(created) = body.insts.get(block.insts[creation]) else {
                     return false;
                 };
-                let origin = match &created.op {
-                    Operation::Async(AsyncOp::FutureNew { .. }) => {
-                        forwarded.is_some() && created.results.get(1) == forwarded.as_ref()
-                    }
-                    Operation::Call(CallOp::Direct { function, .. }) => forwarded.is_none()
-                        && module.functions.get(*function).is_ok_and(|callee| {
-                            callee.attrs.contains(&FunctionAttr::Async)
-                        }),
-                    _ => false,
-                };
+                let origin = matches!(&created.op, Operation::Async(AsyncOp::FutureNew { .. }))
+                    && forwarded.is_some() && created.results.get(1) == forwarded.as_ref();
                 origin && block.insts[creation + 1..position].iter().all(|between| {
                     body.insts.get(*between).is_ok_and(|between| {
                         matches!(between.op, Operation::Ownership(OwnershipOp::Dependencies { .. })

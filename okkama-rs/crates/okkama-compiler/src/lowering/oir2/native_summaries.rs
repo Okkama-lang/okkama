@@ -55,7 +55,7 @@ impl P1NativeSummaries {
     pub fn for_profile(module: &ir::Module, profile: ir::Profile) -> Result<Self, NativeSummaryError> {
         let runtime = ir::catalogue::RuntimeCatalogue::for_profile(module, profile);
         let mut catalog = Self { runtime, ..Self::default() };
-        for (id, function) in module.functions.iter() {
+        for (_, function) in module.functions.iter() {
             for attr in &function.attrs {
                 let (native, name) = match attr {
                     ir::FunctionAttr::Extern(name) => (true, name),
@@ -81,7 +81,7 @@ impl P1NativeSummaries {
                 if module.profile != ir::Profile::High {
                     let mut expected = language.clone();
                     let managed = if !native && super::drivers::known(name) {
-                        super::drivers::deps(module, id, &language.params)
+                        super::drivers::deps(module, &language.params)
                     } else {
                         language.params.iter().filter(|ty| carries_deps(module, **ty)).count()
                     };

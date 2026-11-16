@@ -150,6 +150,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let walked: Vec<_> = analysis.bodies.iter()
         .chain(prepared.callables.bodies.iter().map(|discovered| &discovered.body)).collect();
     let globals = declarations.declare_globals(constants, &constant_names, &walked)?;
+    let async_thunks = roles::declare_thunks(&mut declarations, &prepared.callables)?;
     let bound_entries = bound::entries(declarations.builder.module(), &prepared.callables,
         &declarations.functions, &declarations.types)?;
     let calls = std::cell::RefCell::new(open_calls::CallSpans::new());
@@ -203,6 +204,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
                 deferred: None,
                 key: callables::BodyKey { root: body.owner.clone(), path: vec![] },
                 lambdas: &declarations.lambdas, globals: &globals, calls: &calls, bound_entries: &bound_entries,
+                async_thunks: &async_thunks,
                 test_intrinsics: &declarations.test_intrinsics,
             };
             let lowered = body::BodyLowerer::lower(builder, body, root, &declarations.types, context)
@@ -226,7 +228,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
             constructors: &declarations.constructors,
             given: vec![], listed: None, defers: &declarations.defers, deferred: None,
             key: lambda.source.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
-            calls: &calls, bound_entries: &bound_entries,
+            calls: &calls, bound_entries: &bound_entries, async_thunks: &async_thunks,
             test_intrinsics: &declarations.test_intrinsics,
         };
         let lowered = body::BodyLowerer::lower(builder, &lambda.source.body, root, &declarations.types, context)
@@ -250,7 +252,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
             given: vec![], listed: None, defers: &declarations.defers,
             deferred: Some(deferred.receiver),
             key: deferred.key.clone(), lambdas: &declarations.lambdas, globals: &globals,
-            calls: &calls, bound_entries: &bound_entries,
+            calls: &calls, bound_entries: &bound_entries, async_thunks: &async_thunks,
             test_intrinsics: &declarations.test_intrinsics,
         };
         let lowered = body::BodyLowerer::lower(builder, &deferred.source, root, &declarations.types, context)

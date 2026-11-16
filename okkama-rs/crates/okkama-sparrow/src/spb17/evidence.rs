@@ -703,6 +703,12 @@ impl<'a> Evidence<'a> {
         if self.resolve(input, false).is_some_and(|keys| keys.is_empty()) {
             return Some(BTreeSet::new());
         }
+        // A checked split selects only from the admission. With none, it selects nothing, whatever identities
+        // the selected values have: an entry parameter's lie in its accepted input run, which is no admission
+        // (#785, a role parameter that may reach a resource bound in a constructor).
+        if args.contains(&Argument::Flag(true)) && self.query(input, 2).is_some_and(|admission| admission.is_empty()) {
+            return if selected { Some(Inventory::new()) } else { self.resolve(input, false) };
+        }
         let mut keys = Inventory::new();
         for &location in &selection.locations {
             keys.extend(self.selected_identities(location)?);

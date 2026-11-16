@@ -347,6 +347,13 @@ fn check_spawns(f: &Function) -> Check {
     let targets: BTreeSet<usize> = f.code.iter().flat_map(allocation::outgoing)
         .map(|edge| edge.target_pc as usize).collect();
     for (pc, instruction) in f.code.iter().enumerate() {
+        // Ruling PR-E: the bound form takes its Future and names no service location; it moves no duty.
+        if let Instruction::Champ { op: Opcode::FutureSpawnBound, arguments, .. } = instruction {
+            let future = matches!(locations(arguments).as_slice(), [location @ Location::Register(_)]
+                if matches!(verify::loc_type(f, *location), Ok(ProducedType::Value(Type::Future(_)))));
+            enforce(future, SPAWN, "fut.spawn.bound takes its Future and no service (PR-E)")?;
+            continue;
+        }
         let Instruction::Champ { op: Opcode::FutureSpawn, arguments, .. } = instruction else { continue };
         let operands = locations(arguments);
         let (Some(&future), Some(&cache)) = (operands.first(), operands.get(1)) else {

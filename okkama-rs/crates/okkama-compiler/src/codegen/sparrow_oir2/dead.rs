@@ -8,6 +8,12 @@
 //! admits a use in an unreachable block only when that block defines it. Such code never runs, so the
 //! emitter removes it: its blocks, their closes and cleanup evidence, and every record at its pcs. Reachable
 //! code is kept instruction for instruction; only its pcs move.
+//!
+//! An async body is pruned the same way (#741, ruling PR-M), and the loader stays strict. Its D21 frame
+//! layout names each suspension by pc (`Continuation::site`), so the sites move with the code. Every
+//! successor of a suspension resumes it (`RESUME_TABLE`), so the edges from the entry reach each resume
+//! block whose site is reachable. A continuation whose site was unreachable goes with its code, and the
+//! continuations after it are renumbered in the `frame.save` and `frame.resume` operands that remain.
 
 use super::*;
 
@@ -50,12 +56,15 @@ pub(super) fn unreachable_blocks(function: &s::Function) -> Result<Vec<usize>, G
 }
 
 /// Remove the unreachable blocks of a function (module docs). A close whose `cleanup.begin` is removed goes
-/// with its cleanup evidence; other tables keep their indices.
-pub(super) fn prune_unreachable(function: &mut s::Function) -> Result<(), GenerateError> {
-    // An async body's frame layout names suspension pcs from the program tables; it is left as emitted.
-    if matches!(function.entry_abi, s::EntryAbi::AsyncBody { .. }) {
-        return Ok(());
-    }
+/// with its cleanup evidence; other tables keep their indices. `frames` are the program's D21 frame layouts:
+/// an async body's own layout follows the removal.
+pub(super) fn prune_unreachable(function: &mut s::Function, frames: &mut [s::FrameLayout])
+    -> Result<(), GenerateError>
+{
+    let layout = match function.entry_abi {
+        s::EntryAbi::AsyncBody { layout } | s::EntryAbi::AsyncDefer { layout } => Some(layout),
+        _ => None,
+    };
     let dead = unreachable_blocks(function)?;
     if dead.is_empty() {
         return Ok(());
@@ -164,6 +173,45 @@ pub(super) fn prune_unreachable(function: &mut s::Function) -> Result<(), Genera
     // A witness of removed creations orders nothing that runs.
     for witness in &mut proofs.order_witnesses {
         witness.creation_pcs = witness.creation_pcs.iter().filter_map(|&pc| at(pc)).collect();
+    }
+    if let Some(layout) = layout {
+        let layout = frames.get_mut(layout as usize).ok_or_else(|| GenerateError("unknown frame layout".into()))?;
+        prune_continuations(layout, &mut function.code, at)?;
+    }
+    Ok(())
+}
+
+/// Moves each continuation's site to its new pc (#741). A continuation whose site was removed is dropped, and the
+/// continuation operands of the kept `frame.save`/`frame.resume` follow; the start (continuation 0) has no site.
+fn prune_continuations(layout: &mut s::FrameLayout, code: &mut [s::Instruction], at: impl Fn(u32) -> Option<u32>)
+    -> Result<(), GenerateError>
+{
+    let mut renamed = BTreeMap::new();
+    let mut kept = Vec::new();
+    for (index, mut continuation) in std::mem::take(&mut layout.continuations).into_iter().enumerate() {
+        match continuation.site {
+            Some(site) => match at(site) {
+                Some(moved) => continuation.site = Some(moved),
+                None => continue,
+            },
+            None if index == 0 => {}
+            None => return Err(GenerateError(format!("continuation {index} without its site"))),
+        }
+        renamed.insert(index as u32, kept.len() as u32);
+        kept.push(continuation);
+    }
+    layout.continuations = kept;
+    for instruction in code {
+        let s::Instruction::Champ { op: s::Opcode::FrameSave | s::Opcode::FrameResume, arguments, .. } = instruction
+        else {
+            continue;
+        };
+        for argument in arguments {
+            if let s::Argument::Continuation(id) = argument {
+                *id = *renamed.get(id)
+                    .ok_or_else(|| GenerateError(format!("live frame operation of removed continuation {id}")))?;
+            }
+        }
     }
     Ok(())
 }

@@ -1359,6 +1359,8 @@ fn exit_carry_follows_the_exit_service_of_each_schema() {
     assert_eq!(exit_carry(Opcode::ExitDispatch, Tag::Success), Carry::Lost);
     assert_eq!(exit_carry(Opcode::ExitDispatch, Tag::Pending), Carry::Slot(1));
     assert_eq!(exit_carry(Opcode::ExitCommit, Tag::Normal), Carry::Commit);
+    // D18: the final exit's delivery step gives the cleanup state back, with the successor it holds (#741).
+    assert_eq!(exit_carry(Opcode::CleanupDeliverCancel, Tag::Normal), Carry::Slot(0));
     assert_eq!(exit_carry(Opcode::ExitReplace, Tag::Normal), Carry::Lost);
     assert_eq!(exit_carry(Opcode::InvokeCallOwn, Tag::Normal), Carry::Lost);
 }

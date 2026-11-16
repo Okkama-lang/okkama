@@ -124,7 +124,7 @@ pub(super) fn entries(objects: &[Object]) -> Vec<(Function, Vec<u32>)> {
         let (Some(registers), Some(results), Some(related)) = (registers, results, related) else {
             continue;
         };
-        let deps = deps(objects, name, &registers);
+        let deps = deps(objects, &registers);
         let function = match abi {
             Abi::Observation => entry(name, registers, deps, results, false, failures),
             Abi::Owned => entry(name, registers, deps, results, true, failures),
@@ -136,23 +136,16 @@ pub(super) fn entries(objects: &[Object]) -> Vec<(Function, Vec<u32>)> {
 }
 
 /// The deps proofs of an entry, as the producer's elaboration gives them: one for each Event cell parameter (a
-/// builtin capability: a reference with deps) and one for the receiver of a member that is a role slot of the
-/// object implementing that role. The other declarations of the catalogue are plain values without references.
+/// builtin capability: a reference with deps). The other declarations of the catalogue are plain values without
+/// references. A member that is a role slot of its object (LockGuard's `close` for `Closing`) is never named by a
+/// witness table: the slot reaches it through an adapter of the slot's ABI (ruling PR-D, #773), so its receiver is
+/// an ordinary plain argument.
 ///
 /// The producer gives its declarations the same deps (`okkama-compiler`, `lowering/oir2/drivers.rs`, `deps`), as own
 /// elaborates external signatures: change both together.
-fn deps(objects: &[Object], name: &str, registers: &[Type]) -> usize {
+fn deps(objects: &[Object], registers: &[Type]) -> usize {
     let event = declaration(objects, EVENT);
-    let cells = registers.iter().filter(|&&ty| Some(ty) == event.map(Type::Object)).count();
-    let member = name.rsplit('.').next().unwrap_or(name);
-    let slot = match registers.first() {
-        Some(&Type::Object(id)) if Some(id) != event => objects[id as usize].implements.iter().any(|table| {
-            objects.get(table.role as usize).and_then(|role| role.role.as_ref())
-                .is_some_and(|role| role.slots.iter().any(|slot| slot.name == member))
-        }),
-        _ => false,
-    };
-    cells + usize::from(slot)
+    registers.iter().filter(|&&ty| Some(ty) == event.map(Type::Object)).count()
 }
 
 /// A synchronous entry: its registers, then its deps proofs, then the input packet of an owning entry
