@@ -645,6 +645,16 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
 
+- **`spawn` of any Future on Champ: `fut.spawn.bound`, SPB 17 opcode 87
+  (#601 F1, ruling PR-E; closes #766).** A spawn of a Future that its
+  creating call did not just give (a synchronous action that returns a
+  Future, a bound async action value's call) starts the Future if it is cold
+  and registers it, as Tomato's `spawn` does; it moves no duty, and the
+  Future's cache duty stays where it is. The duty form of D24.1 stays for
+  the Future a creating call just gave. New helper
+  `champ_future_spawn_bound` (class X); loader rule `SPB_SPAWN` gains: the
+  bound form takes its Future and names no service.
+
 - **Async role slots and bound async action values on Champ (#601 F1,
   ruling PR-D).** An async action of a role (`role Loader { async load() is
   int; }`) is a synchronous slot that returns the Future of its outcome. Each

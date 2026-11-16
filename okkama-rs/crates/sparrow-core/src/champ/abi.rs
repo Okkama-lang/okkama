@@ -201,6 +201,7 @@ pub fn helper_abi(name: &str) -> Option<HelperAbi> {
         "champ_destroy_finish" | "champ_failure_capture" => ("", None),
         "champ_future_new" => ("FutureNewPost", Some(O::FutureNew)),
         "champ_future_spawn" => ("SpawnPost", Some(O::FutureSpawn)),
+        "champ_future_spawn_bound" => ("", Some(O::FutureSpawnBound)),
         "champ_await_view" => ("AwaitPost", Some(O::Await)),
         "champ_await_take" => ("AwaitTakePost", Some(O::AwaitTake)),
         "champ_cache_rehome" => ("RehomePost", Some(O::CacheRehome)),

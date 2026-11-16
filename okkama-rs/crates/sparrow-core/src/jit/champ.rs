@@ -1031,7 +1031,8 @@ impl Emit<'_, '_> {
             }
             // Futures, suspension brackets and duty settles (#601 V9, `futures.rs`).
             O::FutureNew | O::Await | O::FuturePublish | O::FutureCancel | O::FutureDone | O::FutureCancelled
-                | O::FrameSave | O::FrameResume | O::AwaitUnwind | O::CleanupDeliverCancel | O::FutureSpawn => {
+                | O::FrameSave | O::FrameResume | O::AwaitUnwind | O::CleanupDeliverCancel | O::FutureSpawn
+                | O::FutureSpawnBound => {
                 return self.future_operation(op, arguments, &locations, flow);
             }
             O::CleanupSettle if locations.len() > 1 => {

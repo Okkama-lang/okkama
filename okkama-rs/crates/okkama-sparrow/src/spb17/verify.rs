@@ -1558,6 +1558,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         AwaitTake => shape == "lls",
         // The Future and its cache duty (D24.1).
         FutureSpawn => shape == "ll",
+        // PR-E: locations only; SPB_SPAWN requires exactly the Future (`suspension::check_spawns`).
+        FutureSpawnBound => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         // The exit's destination, the pending reserve and the cache duty with a spawned Future's task duty (C-4,
         // token form), or the owner state and the Future whose admitted entry moves (state form).
         CacheRehome => shape == "xll" || shape == "xlll",

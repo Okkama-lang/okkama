@@ -205,3 +205,82 @@ fn f1_variadic_slot_file_cases() {
         .collect::<Vec<_>>();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Ruling PR-E, #766: `spawn` of a synchronous action that returns a Future, and of a bound async action value's call,
+/// start the Future at once, as Tomato's `spawn` of a cold Future.
+#[test]
+fn f1_a_spawn_of_a_future_not_created_on_the_spot_starts_it() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job {
+    has n is int;
+    Job(:n);
+    async run() is int { Stdout().writeln("job " + n.string()); n; }
+    async add(k is int) is int { Stdout().writeln("add " + k.string()); n + k; }
+}
+object Starter {
+    Starter();
+    start(n is int) is Future<int> { Job(n: n).run(); }
+}
+role Running { async go(n is int) is int; }
+object Runner does Running {
+    Runner();
+    async go(n is int) is int { Stdout().writeln("go " + n.string()); n * 10; }
+}
+async main() is int {
+    let f = spawn Starter().start(4);
+    Stdout().writeln("after spawn");
+    let r is Running = Runner();
+    let g = r.go(2);
+    let action is async (int) is int = Job(n: 7).add;
+    let h = spawn action(3);
+    Stdout().writeln("after value spawn");
+    Stdout().writeln("sum " + (await f + await g + await h).string());
+    0;
+}
+"#, "job 4\nafter spawn\nadd 3\nafter value spawn\ngo 2\nsum 34\n");
+}
+
+/// Ruling PR-E: a bound-spawned Future whose synchronous owner closes while it waits detaches and still runs; one that
+/// fails unobserved is reported at shutdown and the run fails, as on Tomato.
+#[test]
+fn f1_a_bound_spawned_future_detaches_and_its_unobserved_failure_is_reported() {
+    let run = run_source(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+enum Broken is Error = (broken);
+object Job {
+    has gate is Event;
+    Job(:gate);
+    async run() is int { await gate.wait(); Stdout().writeln("job ran"); 1; }
+    async fail() is int { Stdout().writeln("failing"); throw Broken.broken; }
+}
+object Starter {
+    has gate is Event;
+    Starter(:gate);
+    start() is Future<int> { Job(gate: gate).run(); }
+    failing() is Future<int> { Job(gate: gate).fail(); }
+}
+object Scope {
+    Scope();
+    detach(gate is Event) is void {
+        let f = spawn Starter(gate: gate).start();
+        Stdout().writeln("detached " + f.done().string());
+    }
+}
+async main() is int {
+    let gate = Event();
+    Scope().detach(gate);
+    Stdout().writeln("closed");
+    let failing = spawn Starter(gate: gate).failing();
+    Stdout().writeln("spawned failing");
+    gate.set();
+    let waiter = Starter(gate: gate).start();
+    Stdout().writeln("waited " + (await waiter).string());
+    0;
+}
+"#).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.stdout, "detached false\nclosed\nfailing\nspawned failing\njob ran\nwaited 1\n");
+    let report = run.result.unwrap_err();
+    assert!(report.starts_with("Broken: Broken.broken"), "{report}");
+}

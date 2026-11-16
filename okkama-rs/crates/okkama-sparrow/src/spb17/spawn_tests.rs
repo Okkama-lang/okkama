@@ -22,6 +22,12 @@ enum Spawner {
     Awaited,
     /// As `Awaited`, but the await's adapter takes the spawned task's duty instead of the await's task.
     UnwindTakesDuty,
+    /// `fut.spawn.bound %f` (ruling PR-E): no duty goes in or comes out; the close settles the cache duty alone.
+    Bound,
+    /// The bound form naming the cache duty as well.
+    BoundWithService,
+    /// The bound form of a register that is not a Future.
+    BoundOfInt,
 }
 
 fn spawner(variant: Spawner) -> (Function, FrameLayout) {
@@ -45,8 +51,23 @@ fn spawner(variant: Spawner) -> (Function, FrameLayout) {
         b.br("spawn", vec![]);
         b.block("spawn", &[]);
     }
-    let [kept, task] = [b.service(K::CacheState), b.service(K::TaskState)];
-    b.next(O::FutureSpawn, vec![l(future), l(cache)], vec![kept, task]);
+    let bound = match variant {
+        Spawner::Bound => Some(vec![l(future)]),
+        Spawner::BoundWithService => Some(vec![l(future), l(cache)]),
+        Spawner::BoundOfInt => Some(vec![l(seven)]),
+        _ => None,
+    };
+    let [kept, task] = match bound.clone() {
+        Some(operands) => {
+            b.next(O::FutureSpawnBound, operands, vec![]);
+            [cache, cache]
+        }
+        None => {
+            let [kept, task] = [b.service(K::CacheState), b.service(K::TaskState)];
+            b.next(O::FutureSpawn, vec![l(future), l(cache)], vec![kept, task]);
+            [kept, task]
+        }
+    };
     let _ = deps;
     let mut continuations = vec![Continuation { site: None, saved: vec![0], operands: vec![] }];
     let (body, state, duties) = if matches!(variant, Spawner::Awaited | Spawner::UnwindTakesDuty) {
@@ -81,6 +102,8 @@ fn spawner(variant: Spawner) -> (Function, FrameLayout) {
         (resumed_body, resumed[0], vec![resumed[2], resumed[1]])
     } else if variant == Spawner::CacheFirst {
         (body, q2, vec![kept, task])
+    } else if bound.is_some() {
+        (body, q2, vec![kept])
     } else {
         (body, q2, vec![task, kept])
     };
@@ -160,4 +183,34 @@ fn spawn_forwards_the_cache_duty_and_adds_the_task_duty() {
     }]);
     // A round trip through the codec keeps the opcode.
     assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+}
+
+// --- fut.spawn.bound (ruling PR-E, #601 F1) -------------------------------------------------------------------
+
+#[test]
+fn a_bound_spawn_moves_no_duty_and_the_cache_settles_at_its_owner() {
+    // The Future stays the cache duty's only holder; the close settles that duty, and there is no task duty.
+    let p = spawner_program(Spawner::Bound);
+    verify_load(&p, &NoExternalContracts).unwrap();
+    let f = &p.functions[1];
+    let spawn = find(f, O::FutureSpawnBound);
+    let Instruction::Champ { arguments, flow: Flow::Next(outputs), .. } = &f.code[spawn] else { unreachable!() };
+    assert!(outputs.is_empty());
+    assert!(load::consumed(f, O::FutureSpawnBound, arguments).is_empty());
+    assert_eq!(O::FutureSpawnBound.id(), 87);
+    assert_eq!(O::FutureSpawnBound.helper_class(), Some(HelperClass::X));
+    assert!(!O::FutureSpawnBound.suspends() && !O::FutureSpawnBound.frame_bound());
+    assert_eq!(O::FutureSpawnBound.helper().map(|helper| helper.name), Some("champ_future_spawn_bound"));
+    // A round trip through the codec keeps the opcode.
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
+}
+
+#[test]
+fn a_bound_spawn_names_no_service() {
+    reject_with(&spawner_program(Spawner::BoundWithService), suspension::SPAWN, "no service");
+}
+
+#[test]
+fn a_bound_spawn_takes_a_future() {
+    reject_with(&spawner_program(Spawner::BoundOfInt), suspension::SPAWN, "no service");
 }

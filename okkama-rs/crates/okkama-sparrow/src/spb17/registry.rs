@@ -112,7 +112,8 @@ registry! {
     61 => Lookup, "lookup";
     // The async block, Champ draft 3 §14.1 (plan IDs 42–61 are superseded, CQ-1). Wave 1 assigns plain
     // await, wave 2 the temporary take, its proof and the rehome (#601 R4), the dynamic settle and service
-    // materialize/absorb (#601 D25), wave 3 spawn (#601 P1, D24); pins (78–80) and workers (81–83) stay reserved.
+    // materialize/absorb (#601 D25), wave 3 spawn (#601 P1, D24) and the bound spawn (#601 F1, ruling PR-E); pins
+    // (78–80) and workers (81–83) stay reserved.
     64 => FutureNew, "fut.new";
     65 => FutureSpawn, "fut.spawn";
     66 => Await, "await";
@@ -130,6 +131,7 @@ registry! {
     84 => CleanupSettleDynamic, "cleanup.settle.dynamic";
     85 => ServiceMaterialize, "service.materialize";
     86 => ServiceAbsorb, "service.absorb";
+    87 => FutureSpawnBound, "fut.spawn.bound";
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
     98 => OwnDynamic, "own.dynamic";
@@ -255,7 +257,8 @@ impl Opcode {
             // takes an entry the scope admitted (ABI D25.3) and gives the state back first, as own's form does.
             (CacheRehome, Tag::Normal) if context.between => vec![S(ScopeState), S(Pending)],
             (CacheRehome, Tag::Normal) => vec![S(Pending)],
-            (FuturePublish | FutureCancel, Tag::Normal) => vec![],
+            // PR-E: the bound spawn gives nothing back; no duty moves.
+            (FuturePublish | FutureCancel | FutureSpawnBound, Tag::Normal) => vec![],
             // D24.1: the cache duty back, unchanged, and the spawned task's duty.
             (FutureSpawn, Tag::Normal) => vec![S(CacheState), S(TaskState)],
             (FutureDone | FutureCancelled, Tag::Normal) => vec![Value(Type::Bool)],
@@ -338,7 +341,7 @@ impl Opcode {
         Some(match self {
             Self::FutureNew => G,
             // D24.1: the start runs the body on this stack until its first suspension.
-            Self::FutureSpawn => X,
+            Self::FutureSpawn | Self::FutureSpawnBound => X,
             Self::Await | Self::AwaitTake | Self::AwaitUnwind => S,
             Self::FuturePublish | Self::FutureCancel | Self::FutureDone | Self::FutureCancelled | Self::FrameSave
                 | Self::FrameResume | Self::CleanupDeliverCancel | Self::CleanupSettle | Self::CacheRehome
@@ -504,6 +507,7 @@ impl Opcode {
                 // `unique_cache.proof` has no helper.
                 Self::FutureNew => "champ_future_new",
                 Self::FutureSpawn => "champ_future_spawn",
+                Self::FutureSpawnBound => "champ_future_spawn_bound",
                 Self::Await => "champ_await_view",
                 Self::AwaitTake => "champ_await_take",
                 Self::CacheRehome => "champ_cache_rehome",
@@ -611,6 +615,8 @@ helper_registry! {
         "champ_future_new" => &[C, P, P], COLLECTING, Some(O::FutureNew);
         // D24.1 (#601 P1): the Future, its cache duty in, the cache duty and the task duty out.
         "champ_future_spawn" => &[C, W, P, P], X, Some(O::FutureSpawn);
+        // Ruling PR-E (#601 F1, #766): the Future only; it starts it if it is cold and registers it.
+        "champ_future_spawn_bound" => &[C, W], X, Some(O::FutureSpawnBound);
         "champ_await_view" => &[C, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::Await);
         "champ_await_take" => &[C, W, W, W, P], SUSPENDING | HELPER_UNWINDS, Some(O::AwaitTake);
         "champ_cache_rehome" => &[C, P, P, P, P, W, W, P], L, Some(O::CacheRehome);

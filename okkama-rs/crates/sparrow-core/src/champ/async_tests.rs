@@ -1055,6 +1055,14 @@ impl Activation {
                 self.write(operands[1], &[0]);
                 vec![vec![post.cache], vec![post.task]]
             }
+            // Ruling PR-E (#601 F1), class X: a cold Future starts on this stack; no duty moves.
+            O::FutureSpawnBound => {
+                let future = self.word(operands[0]);
+                if self.call(|ctx| rt_future_spawn_bound(ctx, future)) != NORMAL {
+                    return Err(Step::Stop);
+                }
+                vec![]
+            }
             O::InvokeCallOwn => return Err(self.call_owned(pc, arguments, &operands, flow)),
             O::Await => return Err(self.await_step(pc, operands[0], flow)),
             O::AwaitTake => return Err(self.take_step(pc, arguments, operands[0], flow)),

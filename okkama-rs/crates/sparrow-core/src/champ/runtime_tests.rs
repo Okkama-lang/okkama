@@ -129,8 +129,8 @@ fn champ_s2_registry_layouts_effects_and_single_outcome_channel() {
     // champ_scope_transfer_admissible and champ_scope_transfer_held; #601 V9 adds champ_body_reject; #601 R5
     // adds champ_await_take and champ_cache_rehome; #601 D25 adds champ_cleanup_settle_dynamic,
     // champ_service_materialize, champ_service_absorb and champ_invoke_defer_async; #678 adds champ_machine_order;
-    // #601 P1 adds champ_future_spawn.
-    assert_eq!(helpers.len(), 82);
+    // #601 P1 adds champ_future_spawn; #601 F1 (ruling PR-E) adds champ_future_spawn_bound.
+    assert_eq!(helpers.len(), 83);
     for &(name, effects) in helpers {
         let abi = helper_abi(name).unwrap();
         let class = abi.class;
