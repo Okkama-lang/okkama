@@ -11,6 +11,7 @@ impl Engine<'_, '_> {
         let mut rest = token.clone();
         let mut selected = Token::default();
         let futures = self.selects_futures(selection);
+        self.fresh_named = self.named_fresh_futures(flow, selection);
         for (keys, fresh, labels) in self.selection_terms(flow, selection) {
             let possible = self.possible(flow, &keys);
             let filter = Filter { keys, fresh, possible, labels, stale: false, whole_future: false, futures, state: 0 };
@@ -18,7 +19,35 @@ impl Engine<'_, '_> {
             rest = next;
             selected = self.union([selected, part], true);
         }
+        self.fresh_named.clear();
         (rest, selected)
+    }
+    /// PR-B1 (#784): the Futures created by a `fut.new` of this body without `binding` that a selection names
+    /// directly (by the identity of a value it names).
+    fn named_fresh_futures(&mut self, flow: &Flow, selection: SelectionId) -> BTreeSet<Origin> {
+        let mut named = BTreeSet::new();
+        let mut pending = vec![selection];
+        let mut seen = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !self.state.step(1) || !seen.insert(id) {
+                continue;
+            }
+            match self.body.selections.get(id) {
+                Ok(SelectionExpr::Admissible(inner) | SelectionExpr::Held(inner)) => pending.push(*inner),
+                Ok(SelectionExpr::Union(items)) => pending.extend(items.iter().copied()),
+                Ok(SelectionExpr::Value(value)) => {
+                    let Some(Some(origin)) = flow.identities.get(value.as_u32() as usize).copied() else { continue };
+                    let Origin::Instruction(inst, 0) = origin else { continue };
+                    if self.body.insts.get(inst).is_ok_and(|instruction| matches!(instruction.op,
+                        Operation::Async(AsyncOp::FutureNew { binding: None, .. })))
+                    {
+                        named.insert(origin);
+                    }
+                }
+                _ => {}
+            }
+        }
+        named
     }
     /// Whether a selection names a value that can hold a Future (D25.2 revision, #771).
     fn selects_futures(&mut self, selection: SelectionId) -> bool {
@@ -47,28 +76,13 @@ impl Engine<'_, '_> {
             matches!(instruction.op, Operation::Async(AsyncOp::FutureNew { .. }))
         })
     }
-    /// Whether a value of `ty` can hold a Future: a Future, or an object, successor or array whose fields or
-    /// elements can (ABI D25.1). Roles, `any` and type parameters are not followed.
+    /// Whether a value of `ty` can hold a Future (ABI D25.1), reaching the holders the runtime selection walk can:
+    /// a Future; an object, successor, array or builder through its fields or elements; a role through the fields
+    /// of every object with a witness for it; a map through its keys and values; a variant through its case
+    /// layouts. `any`, a type parameter and a closure (`Fn`) can be anything, so they can hold a Future when the
+    /// module has a Future type (PR-B item 4, #784).
     pub(super) fn holds_futures(&self, ty: TypeId) -> bool {
-        let mut pending = vec![ty];
-        let mut seen = BTreeSet::new();
-        while let Some(ty) = pending.pop() {
-            if !seen.insert(ty) {
-                continue;
-            }
-            match self.module.types.get(ty) {
-                Ok(Type::Future(_)) => return true,
-                Ok(Type::Array(element) | Type::Successor(element)) => pending.push(*element),
-                Ok(Type::Object { decl, .. }) => {
-                    if let Ok(DeclarationKind::Object { fields, .. }) = self.module.declarations.get(*decl)
-                        .map(|declaration| &declaration.kind) {
-                        pending.extend(fields.iter().map(|field| field.ty));
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
+        holds_futures(self.module, ty)
     }
     pub(super) fn partition_filter(&mut self, token: &Token, base: Filter) -> (Token, Token) {
         #[cfg(any(test, feature = "verifier-differential"))]
@@ -106,6 +120,15 @@ impl Engine<'_, '_> {
             // D25.2 revision (#771, #758): a selection of values that can hold a Future takes the whole holder graph
             // of each Future its keys reach (the cache duty and what the cache holds) into its packet.
             let reached = |holder: &Origin| keys.contains(holder) || possible.contains(holder);
+            // PR-B1 (#784): an admissible partition takes the graph of a Future created here only from a selection
+            // that names that Future directly, and only when no binding holds it; reach through another value (an
+            // aggregate that borrows it) leaves it with its owner, as the runtime's admission filter does.
+            if base.futures && *fresh && related && piece.holder.is_some_and(|holder| self.future_origin(holder)
+                && !self.fresh_named.contains(&holder))
+            {
+                rest.pieces.insert(piece.clone());
+                continue;
+            }
             if base.futures && related && eligible && !piece.channel && piece.holder.as_ref().is_some_and(reached) {
                 let mut moved = piece.clone();
                 if *fresh {
@@ -1121,4 +1144,55 @@ fn retention_values(retention: &Retention) -> Vec<ValueId> {
         Retention::TakenOutcome { future, .. } | Retention::AwaitFailure { future, .. } => vec![*future],
         Retention::Global(_) => vec![],
     }
+}
+
+/// See `Engine::holds_futures`; also the OIR half of the cross test against SPB 17's `reaches_holder`.
+pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
+    let any_future = || module.types.iter().any(|(_, ty)| matches!(ty, Type::Future(_)));
+    let fields = |decl: DeclId| -> Vec<TypeId> {
+        match module.declarations.get(decl).map(|declaration| &declaration.kind) {
+            Ok(DeclarationKind::Object { fields, .. }) => fields.iter().map(|field| field.ty).collect(),
+            _ => vec![],
+        }
+    };
+    let mut pending = vec![ty];
+    let mut seen = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        match module.types.get(ty) {
+            Ok(Type::Future(_)) => return true,
+            Ok(Type::Any | Type::Parameter(_) | Type::Fn(_)) => {
+                if any_future() {
+                    return true;
+                }
+            }
+            Ok(Type::Array(element) | Type::Successor(element) | Type::Builder(element)) => pending.push(*element),
+            Ok(Type::Map(key, value) | Type::MapBuilder(key, value)) => pending.extend([*key, *value]),
+            Ok(Type::Object { decl, .. }) => pending.extend(fields(*decl)),
+            Ok(Type::Variant(decl)) => {
+                if let Ok(DeclarationKind::Variant { cases, .. }) = module.declarations.get(*decl)
+                    .map(|declaration| &declaration.kind)
+                {
+                    for case in cases {
+                        pending.extend(fields(case.layout));
+                    }
+                }
+            }
+            Ok(Type::Role { decl, .. }) => {
+                for (object, declaration) in module.declarations.iter() {
+                    let DeclarationKind::Object { witnesses, .. } = &declaration.kind else { continue };
+                    let implements = witnesses.iter().any(|witness| {
+                        matches!(module.types.get(witness.role), Ok(Type::Role { decl: role, .. }) if role == decl)
+                    });
+                    if implements {
+                        pending.extend(fields(object));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }

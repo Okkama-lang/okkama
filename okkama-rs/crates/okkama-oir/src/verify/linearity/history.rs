@@ -555,6 +555,7 @@ func @f() -> void {
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+                fresh_named: Default::default(),
             };
             let mut flow = Flow::new(4, witnesses(module, body));
             flow.availability[1] = AVAILABLE;
@@ -695,6 +696,7 @@ func @f() -> void {
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+                fresh_named: Default::default(),
             };
             let before = flow.clone();
             let retired = Origin::RetiredInstruction(InstId::from_u32(1), 0);
@@ -723,6 +725,7 @@ func @f() -> void {
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+                fresh_named: Default::default(),
             };
             let value = ValueId::from_u32;
             let labels = |values: &[u32]| -> SharedSet<ValueId> { values.iter().map(|v| value(*v)).collect() };

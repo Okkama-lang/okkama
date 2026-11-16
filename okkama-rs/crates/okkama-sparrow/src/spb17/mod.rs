@@ -10,7 +10,7 @@ mod verify;
 mod load;
 mod evidence;
 pub use evidence::{static_selections, plain_inputs, plain_results, redundant_admission_filters};
-pub use services::identity_free;
+pub use services::{identity_free, reaches_holder};
 mod automaton;
 pub use automaton::infer_plan_reserves;
 mod suspension;

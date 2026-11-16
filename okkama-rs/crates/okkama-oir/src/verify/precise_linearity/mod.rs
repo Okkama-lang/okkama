@@ -50,6 +50,8 @@ struct Engine<'m, 's> {
     defer_stack: Vec<FuncId>,
     defer_outputs: Vec<defer::ReturnWitness>,
     defer_cache: std::collections::BTreeMap<FuncId, Vec<defer::ReturnWitness>>,
+    /// PR-B1 (#784): see the field of the linearity engine.
+    fresh_named: BTreeSet<Origin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +140,7 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
             witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+            fresh_named: Default::default(),
         };
         engine.solve();
     }

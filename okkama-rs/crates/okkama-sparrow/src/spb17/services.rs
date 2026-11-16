@@ -74,7 +74,7 @@ pub fn identity_free(objects: &[Object], ty: Type) -> bool {
 
 /// Whether a value of `ty` can reach a service holder (a Future), through object fields, variant cases, error
 /// cases, array and map elements, role implementations and any boxes. Unknown declarations can.
-pub(crate) fn reaches_holder(p: &Program, ty: Type) -> bool {
+pub fn reaches_holder(p: &Program, ty: Type) -> bool {
     let mut pending = vec![ty];
     let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
