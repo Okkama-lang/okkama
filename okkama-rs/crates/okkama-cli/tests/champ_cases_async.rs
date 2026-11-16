@@ -206,3 +206,37 @@ async main() is int {
     assert_eq!(run.result, Ok(0), "{}", run.stdout);
     assert_eq!(run.stdout, "made\nrunning\ngot Q\ndestroy Q\n");
 }
+
+/// #741 (ruling PR-M): a `try` with a payload `catch` in an async body over a throwing constructor and a total
+/// action. Codegen lowers the action as total and drops the unreachable unwind handler with the async body's frame
+/// layout; the loader stays strict. The expected stdout is Tomato's for the same programs (okkama 0.5.8).
+#[test]
+fn b0_payload_catch_in_async_main_over_a_total_action() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+enum Invalid is Error = (count(count is int));
+object Thrower {
+    has amount is int;
+    Thrower(n is int) { confirm n > 0 else throw Invalid.count(n); amount = n; }
+    value() is int { amount; }
+}
+async main() is int {
+    let bad = try { Thrower(0).value(); } catch Invalid.count(p) { p - 1; };
+    Stdout().writeln("bad " + bad.string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("bad -1\n", Ok(0)));
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/semaphore" take Semaphore, InvalidPermitCount;
+async main() is int {
+    let n = try { Semaphore(permits: 0 - 1).permits(); } catch InvalidPermitCount.permits(p) { p * 10; };
+    Stdout().writeln("permits " + n.string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("permits -10\n", Ok(0)));
+}

@@ -179,7 +179,7 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
     p.tables.summaries = summaries;
     p.functions.extend(trampolines);
     for function in &mut p.functions {
-        dead::prune_unreachable(function)?;
+        dead::prune_unreachable(function, &mut p.tables.frames)?;
         successors::forward_taken(function)?;
         successors::prune_dead_aliases(function);
         successors::close_unwind_permissions(function)?;

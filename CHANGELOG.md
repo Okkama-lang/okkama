@@ -20,6 +20,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Async bodies with an unreachable handler load on Champ (#741, ruling
+  PR-M).** Codegen lowers some operations as total and drops their unwind
+  edge; it removed the handler behind such an edge only in synchronous
+  functions, so an async body's dead handler, which reads the frame, failed
+  the loader's dominance check (`SPB_STRUCTURE`). Async bodies are now pruned
+  too: the continuation sites of the D21 frame layout follow the code, and a
+  continuation whose suspension was unreachable goes with it. The loader stays
+  strict. A `try` with a payload `catch` over a throwing constructor in
+  `async main` runs as on Tomato. With the loader's successor rule fixed for
+  `cleanup.deliver_cancel` (it gives the cleanup state back with the
+  successor it holds), `L12.future-successor-obligation` runs too.
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the
