@@ -350,14 +350,15 @@
   - [26.3 Change as a value: successor pipelines](#263-change-as-a-value-successor-pipelines)
   - [26.4 Refusals have names](#264-refusals-have-names)
   - [26.5 Every dependency is a role, every role has a fake](#265-every-dependency-is-a-role-every-role-has-a-fake)
-  - [26.6 Resources belong to scopes](#266-resources-belong-to-scopes)
-  - [26.7 Absence is a type](#267-absence-is-a-type)
-  - [26.8 Shared state has one owner](#268-shared-state-has-one-owner)
-  - [26.9 Anti-patterns the compiler refuses](#269-anti-patterns-the-compiler-refuses)
-  - [26.10 Anti-patterns the compiler allows](#2610-anti-patterns-the-compiler-allows)
-  - [26.11 A refactoring, step by step](#2611-a-refactoring-step-by-step)
-  - [26.12 The classic catalogue, read in Okkama](#2612-the-classic-catalogue-read-in-okkama)
-  - [26.13 What the patterns cost](#2613-what-the-patterns-cost)
+  - [26.6 A table of cases](#266-a-table-of-cases)
+  - [26.7 Resources belong to scopes](#267-resources-belong-to-scopes)
+  - [26.8 Absence is a type](#268-absence-is-a-type)
+  - [26.9 Shared state has one owner](#269-shared-state-has-one-owner)
+  - [26.10 Anti-patterns the compiler refuses](#2610-anti-patterns-the-compiler-refuses)
+  - [26.11 Anti-patterns the compiler allows](#2611-anti-patterns-the-compiler-allows)
+  - [26.12 A refactoring, step by step](#2612-a-refactoring-step-by-step)
+  - [26.13 The classic catalogue, read in Okkama](#2613-the-classic-catalogue-read-in-okkama)
+  - [26.14 What the patterns cost](#2614-what-the-patterns-cost)
 - [Chapter 27. Okkama Among Languages](#chapter-27-okkama-among-languages)
   - [27.1 The rules side by side](#271-the-rules-side-by-side)
   - [27.2 Java](#272-java)
@@ -19499,7 +19500,7 @@ DELETE /api/notes/:id    remove it; 204, or 404
 The previous chapter's habits carry over: decide in values, keep the outside
 world behind a role, test without the real thing. What is new is
 concurrency. Requests overlap, so state shared between them needs an owner
-(Section 26.8), and every endpoint is an `async` action (Chapter 20). The
+(Section 26.9), and every endpoint is an `async` action (Chapter 20). The
 chapter builds the service over memory first, then puts PostgreSQL behind
 the same role without touching a line of the API.
 
@@ -20037,13 +20038,13 @@ are arounds; translating a layer's errors is a scope.
 
 An around is where cross-cutting code goes, and only there. An endpoint that
 checks a token itself, or writes its own log line, is the "same `defer` around
-every use" smell of Section 26.6 in HTTP form.
+every use" smell of Section 26.7 in HTTP form.
 
 ## 25.8 State shared between requests
 
 Requests are served concurrently, so the store is shared by every task that
 serves a request. Okkama does not let objects change in place, and a `Cell`
-cannot cross into async code (Section 26.8). That leaves two shapes: an
+cannot cross into async code (Section 26.9). That leaves two shapes: an
 owner task that receives messages, or an `Atomic`, one value that tasks
 share and replace whole.
 
@@ -20074,7 +20075,7 @@ what notices that the shelf moved. The loop costs one comparison when it
 succeeds, and it keeps the store correct under a change that nobody will
 remember to review for concurrency.
 
-The owner-task shape of Section 26.8 suits stores that do slow work in
+The owner-task shape of Section 26.9 suits stores that do slow work in
 order, such as appending to a file. A store that already lives elsewhere,
 a database, needs neither: it is a role whose implementation sends queries,
 and the database is the owner.
@@ -21214,7 +21215,7 @@ failures that mean the program is broken. Okkama makes it hard: a typed
 at all, so they cannot be caught as one (Chapter 10). The other is the
 refusal that is not a refusal: an action that returns a default when it
 cannot do its work. When absence is a legitimate answer, the language has a
-type for it (Section 26.7); when it is not, the action should refuse.
+type for it (Section 26.8); when it is not, the action should refuse.
 
 At the scale of a module, the same rule makes refusals change their names at
 the boundary. A layer catches the refusals of the layer below that it
@@ -21448,9 +21449,157 @@ mail ada: paid 1620
 The same shape answers Observer in a language where objects do not change.
 An action does not notify listeners; it returns what happened, and its
 caller passes that on. Where the listeners are tasks, the values travel over
-a channel to their owner (Section 26.8).
+a channel to their owner (Section 26.9).
 
-## 26.6 Resources belong to scopes
+## 26.6 A table of cases
+
+Some actions have one rule and many inputs that matter. A tariff is the
+usual example: the price changes at fixed weights, and every change is a
+place where an off-by-one hides. One test per weight repeats the same three
+lines ten times, and the repetition hides the one thing that differs
+between them. The pattern turns the cases into data: a table with one row
+per case, and one loop that checks every row. Go programmers know it as
+table-driven tests [[Go Wiki](#ref-gotabledriven)]. The idea is older: Ward Cunningham's
+Fit let customers write business rules as tables of examples that ran as
+tests [[Mugridge 2005](#ref-mugridge2005)].
+
+```okkama
+module bible/postage v1.0.0;
+
+// Pattern: a table of cases. Each row is a value; one loop checks them all,
+// and the row's input travels with its answer, so a failure names the row.
+import "io/stdout" take Stdout;
+
+enum Postage = (
+    letter(cents is int),
+    parcel(cents is int),
+    refused(reason is string)
+);
+
+object Tariff {
+    Tariff();
+
+    priced(grams is int) is Postage {
+        if grams <= 0 { Postage.refused("no weight"); }
+        else if grams <= 20 { Postage.letter(85); }
+        else if grams <= 100 { Postage.letter(150); }
+        else if grams <= 500 { Postage.parcel(450); }
+        else if grams <= 2000 { Postage.parcel(900); }
+        else { Postage.refused("over 2 kg"); }
+    }
+}
+
+// What a test compares: the weight and the postage, together.
+object Priced {
+    has grams is int;
+    has postage is Postage;
+    Priced(:grams, :postage);
+}
+
+// One row of the table.
+object Case {
+    has grams is int;
+    has expected is Postage;
+    Case(:grams, :expected);
+
+    wanted() is Priced { Priced(grams: grams, postage: expected); }
+    got(tariff is Tariff) is Priced { Priced(grams: grams, postage: tariff.priced(grams)); }
+}
+
+test "postage at every boundary" {
+    let cases = [
+        Case(grams: 0, expected: Postage.refused("no weight")),
+        Case(grams: 1, expected: Postage.letter(85)),
+        Case(grams: 20, expected: Postage.letter(85)),
+        Case(grams: 21, expected: Postage.letter(150)),
+        Case(grams: 100, expected: Postage.letter(150)),
+        Case(grams: 101, expected: Postage.parcel(450)),
+        Case(grams: 500, expected: Postage.parcel(450)),
+        Case(grams: 501, expected: Postage.parcel(900)),
+        Case(grams: 2000, expected: Postage.parcel(900)),
+        Case(grams: 2001, expected: Postage.refused("over 2 kg"))
+    ];
+    let tariff = Tariff();
+    for cases -> row {
+        test.is(row.got(tariff), row.wanted());
+    }
+}
+
+main() is int {
+    match Tariff().priced(250) {
+        case Postage.letter(cents) { Stdout().writeln("letter, " + cents.string() + " cents"); }
+        case Postage.parcel(cents) { Stdout().writeln("parcel, " + cents.string() + " cents"); }
+        case Postage.refused(reason) { Stdout().writeln("refused: " + reason); }
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+=== RUN   postage at every boundary
+--- PASS: postage at every boundary
+PASS
+```
+
+- A row is an object with named fields, so the table reads as a table:
+  `Case(grams: 20, expected: Postage.letter(85))`. The named arguments are
+  the column headings, repeated on every line where a reader needs them.
+- The expected column holds values of the domain, here an enum with
+  payloads, not strings that describe them. `test.is` compares them
+  structurally (Section 15.2), so a refusal's reason and a parcel's price
+  are both checked.
+- One run reports every wrong row. A failed assertion does not stop the
+  test, so the loop goes on after the first mismatch. In Go the same choice
+  falls to the author, who must call `t.Errorf` rather than `t.Fatalf`.
+- The row brings its input along with its answer. `got` and `wanted` both
+  return a `Priced`, which holds the weight with the postage, and so the
+  report names the row.
+
+That last point is the one that is easy to skip. Suppose the row offered
+its two fields and the loop compared only the postage:
+`test.is(tariff.priced(row.grams()), row.expected())`. Then two wrong rows
+report this way:
+
+```text
+--- FAIL: postage at every boundary
+    expected Postage.parcel(450), got Postage.parcel(900)
+    expected Postage.refused("too heavy"), got Postage.refused("over 2 kg")
+```
+
+Two rows of the table expect `Postage.parcel(450)`, and the report does
+not say which of them failed. With the weight carried along, it does:
+
+```text
+--- FAIL: postage at every boundary
+    expected Priced(grams: 501, postage: Postage.parcel(450)), got Priced(grams: 501, postage: Postage.parcel(900))
+    expected Priced(grams: 2001, postage: Postage.refused("too heavy")), got Priced(grams: 2001, postage: Postage.refused("over 2 kg"))
+```
+
+The rows are chosen at the edges. Each tier is checked at its first and its
+last weight (20 and 21, 100 and 101, 500 and 501), and the table also
+holds one row on each side outside the range: 0 and 2001. This is boundary
+value analysis, which Myers described as one of the most useful ways to
+choose test cases, and also one of the easiest to do badly [[Myers 1979](#ref-myers1979)]. A
+table makes the edges visible. An edge without a row is a missing line,
+and a reviewer can see that it is missing.
+
+A table and a property (Section 15.6) answer different questions. The
+table holds the cases someone chose for a reason, and the reason is
+usually an edge. A property generates the cases nobody thought of, and
+checks a rule that holds for all of them: here, that the price never
+falls as the weight grows. A tariff deserves both.
+
+The cost is in the report. The whole table is one test, so it is one line
+when it passes, and a single row cannot be run on its own. Go's `t.Run`
+and JUnit's parameterized tests [[JUnit User Guide](#ref-junit5)] give every row its own name in
+the report and let the runner select it. Okkama's test runner has no such
+thing. A row names itself only when it fails, and only because the row
+carries its input. When one row needs to run alone, for example while
+debugging it, the remedy is to copy it into a test of its own.
+
+## 26.7 Resources belong to scopes
 
 A resource is an object with a `destroy` block. The scope that owns it
 destroys it when the scope ends, whatever way it ends, in reverse order of
@@ -21550,7 +21699,7 @@ then, and runs before the scope's resources are destroyed. A rule of thumb
 from code review: if the same `defer` appears around every use of an object,
 the object wants a `destroy`.
 
-## 26.7 Absence is a type
+## 26.8 Absence is a type
 
 Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
 the type system makes the caller decide what absence means: a fallback with
@@ -21642,7 +21791,7 @@ the honest answer. When a value is optional for a while and then becomes
 required, the change is visible in the types, and the compiler finds every
 caller that has to decide.
 
-## 26.8 Shared state has one owner
+## 26.9 Shared state has one owner
 
 Asynchronous code needs state that more than one task can see. Okkama's
 answer is structural: state shared between tasks lives in one task, the
@@ -21800,7 +21949,7 @@ the tasks still running are cancelled and their cleanup is awaited before
 the run ends. Work that runs "in the background, somewhere", outliving the
 program that started it, is not a shape the language provides.
 
-## 26.9 Anti-patterns the compiler refuses
+## 26.10 Anti-patterns the compiler refuses
 
 Several shapes that code review catches in other languages are diagnostics
 in Okkama. The table collects the ones the earlier chapters showed, with the
@@ -21824,7 +21973,7 @@ have to watch [[Bugayenko 2016](#ref-bugayenko2016); [Bugayenko 2017](#ref-bugay
 good design from bad, but it can make some bad designs impossible to write,
 and Okkama spends its rules there.
 
-## 26.10 Anti-patterns the compiler allows
+## 26.11 Anti-patterns the compiler allows
 
 The rest is judgement. These are the shapes that compile and still make a
 program worse, and the reasons Okkama code avoids them.
@@ -21865,7 +22014,7 @@ programs. They are listed because each of them was found in real Okkama
 code, and each was replaced, in the standard library review or in the
 examples of this book, by one of the patterns above.
 
-## 26.11 A refactoring, step by step
+## 26.12 A refactoring, step by step
 
 The anti-patterns of the previous section rarely come alone. The next
 program has three of them: a status that is a string, an urgency that is a
@@ -21994,7 +22143,7 @@ the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
 format is a change in one object, and the compiler finds every place a new
 state has to be handled.
 
-## 26.12 The classic catalogue, read in Okkama
+## 26.13 The classic catalogue, read in Okkama
 
 The 23 patterns of Gamma and his co-authors are a useful checklist of what a
 language makes easy, hard or unnecessary [[Gamma 1994](#ref-gamma1994)]. The table goes
@@ -22026,7 +22175,7 @@ first among them, are replaced by composition because there is no
 inheritance to work around. And Singleton, a pattern for global state, has
 no expression at all.
 
-## 26.13 What the patterns cost
+## 26.14 What the patterns cost
 
 The patterns of this chapter trade size for change. A decorator chain has
 more declarations than a flag object; a role and its fake are more text than
@@ -22835,6 +22984,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-gotzdata"></a>The Go Authors (2026). Package tzdata. *Go standard library*. https://pkg.go.dev/time/tzdata
 - <a id="ref-gotesting"></a>The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing
 - <a id="ref-gospec"></a>The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec
+- <a id="ref-gotabledriven"></a>The Go Authors. Go Wiki: TableDrivenTests. https://go.dev/wiki/TableDrivenTests
 - <a id="ref-goldberg1983"></a>Adele Goldberg, David Robson (1983). *Smalltalk-80: The Language and Its Implementation*. Addison-Wesley.
 - <a id="ref-goldberg1991"></a>David Goldberg (1991). What Every Computer Scientist Should Know About Floating-Point Arithmetic. *ACM Computing Surveys* 23(1): 5–48. https://doi.org/10.1145/103162.103163
 - <a id="ref-goodenough1975"></a>John B. Goodenough (1975). Exception Handling: Issues and a Proposed Notation. *Communications of the ACM* 18(12): 683–696. https://doi.org/10.1145/361227.361230
@@ -22908,6 +23058,8 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-cwe"></a>The MITRE Corporation (2026). *Common Weakness Enumeration (CWE)*, version 5.0. https://cwe.mitre.org/
 - <a id="ref-moseley2006"></a>Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - <a id="ref-moses1970"></a>Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
+- <a id="ref-mugridge2005"></a>Rick Mugridge, Ward Cunningham (2005). *Fit for Developing Software: Framework for Integrated Tests*. Prentice Hall.
+- <a id="ref-myers1979"></a>Glenford J. Myers (1979). *The Art of Software Testing*. John Wiley & Sons. Chapter 4: Test-Case Design.
 - <a id="ref-norvig1996"></a>Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/
 - <a id="ref-nygaard1978"></a>Kristen Nygaard, Ole-Johan Dahl (1978). The Development of the SIMULA Languages. *ACM SIGPLAN Notices* 13(8): 245–272 (HOPL I). https://doi.org/10.1145/960118.808391
 - <a id="ref-nystrom2015"></a>Bob Nystrom (2015). What Color is Your Function? Blog post, 1 February 2015. https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/

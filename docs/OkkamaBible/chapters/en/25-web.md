@@ -15,7 +15,7 @@ DELETE /api/notes/:id    remove it; 204, or 404
 The previous chapter's habits carry over: decide in values, keep the outside
 world behind a role, test without the real thing. What is new is
 concurrency. Requests overlap, so state shared between them needs an owner
-(Section 26.8), and every endpoint is an `async` action (Chapter 20). The
+(Section 26.9), and every endpoint is an `async` action (Chapter 20). The
 chapter builds the service over memory first, then puts PostgreSQL behind
 the same role without touching a line of the API.
 
@@ -271,13 +271,13 @@ are arounds; translating a layer's errors is a scope.
 
 An around is where cross-cutting code goes, and only there. An endpoint that
 checks a token itself, or writes its own log line, is the "same `defer` around
-every use" smell of Section 26.6 in HTTP form.
+every use" smell of Section 26.7 in HTTP form.
 
 ## 25.8 State shared between requests
 
 Requests are served concurrently, so the store is shared by every task that
 serves a request. Okkama does not let objects change in place, and a `Cell`
-cannot cross into async code (Section 26.8). That leaves two shapes: an
+cannot cross into async code (Section 26.9). That leaves two shapes: an
 owner task that receives messages, or an `Atomic`, one value that tasks
 share and replace whole.
 
@@ -308,7 +308,7 @@ what notices that the shelf moved. The loop costs one comparison when it
 succeeds, and it keeps the store correct under a change that nobody will
 remember to review for concurrency.
 
-The owner-task shape of Section 26.8 suits stores that do slow work in
+The owner-task shape of Section 26.9 suits stores that do slow work in
 order, such as appending to a file. A store that already lives elsewhere,
 a database, needs neither: it is a role whose implementation sends queries,
 and the database is the owner.

@@ -70,6 +70,7 @@ bibliographic data were checked are listed.
 - [@goruntime] The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
 - [@gosling2023] James Gosling, Bill Joy, Guy Steele, Gilad Bracha, Alex Buckley, Daniel Smith, Gavin Bierman (2023). *The Java Language Specification, Java SE 21 Edition*. Oracle. https://docs.oracle.com/javase/specs/jls/se21/html/
 - [@gospec] The Go Authors (2026). *The Go Programming Language Specification*, language version go1.27 (26 May 2026). https://go.dev/ref/spec {label: Go specification}
+- [@gotabledriven] The Go Authors. Go Wiki: TableDrivenTests. https://go.dev/wiki/TableDrivenTests {label: Go Wiki}
 - [@gotesting] The Go Authors (2026). Package testing. *Go standard library documentation*. https://pkg.go.dev/testing {label: Go package testing}
 - [@gotzdata] The Go Authors (2026). Package tzdata. *Go standard library*. https://pkg.go.dev/time/tzdata {label: Go documentation}
 - [@griesemer2020] Robert Griesemer, Raymond Hu, Wen Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko Yoshida (2020). Featherweight Go. *Proceedings of the ACM on Programming Languages* 4(OOPSLA): 149:1–149:29. https://doi.org/10.1145/3428217
@@ -147,6 +148,8 @@ bibliographic data were checked are listed.
 - [@milner1997] Robin Milner, Mads Tofte, Robert Harper, David MacQueen (1997). *The Definition of Standard ML (Revised)*. MIT Press.
 - [@moseley2006] Ben Moseley, Peter Marks (2006). Out of the Tar Pit. Software Practice Advancement (SPA) 2006. https://curtclifton.net/papers/MoseleyMarks06a.pdf
 - [@moses1970] Joel Moses (1970). The Function of FUNCTION in LISP, or Why the FUNARG Problem Should Be Called the Environment Problem. *ACM SIGSAM Bulletin* 15: 13–27. https://doi.org/10.1145/1093410.1093411
+- [@mugridge2005] Rick Mugridge, Ward Cunningham (2005). *Fit for Developing Software: Framework for Integrated Tests*. Prentice Hall.
+- [@myers1979] Glenford J. Myers (1979). *The Art of Software Testing*. John Wiley & Sons. Chapter 4: Test-Case Design.
 - [@nasa1999mco] Mars Climate Orbiter Mishap Investigation Board (1999). *Phase I Report*. NASA, 10 November 1999. https://llis.nasa.gov/llis_lib/pdf/1009464main1_0641-mr.pdf
 - [@nodeexit] OpenJS Foundation. Node.js documentation, Process: exit codes (code 13, unsettled top-level await). https://nodejs.org/api/process.html#exit-codes
 - [@norvig1996] Peter Norvig (1996). Design Patterns in Dynamic Programming. Presentation at Object World, Boston, May 1996. https://norvig.com/design-patterns/

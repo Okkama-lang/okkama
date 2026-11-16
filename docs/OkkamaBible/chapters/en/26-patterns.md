@@ -263,7 +263,7 @@ failures that mean the program is broken. Okkama makes it hard: a typed
 at all, so they cannot be caught as one (Chapter 10). The other is the
 refusal that is not a refusal: an action that returns a default when it
 cannot do its work. When absence is a legitimate answer, the language has a
-type for it (Section 26.7); when it is not, the action should refuse.
+type for it (Section 26.8); when it is not, the action should refuse.
 
 At the scale of a module, the same rule makes refusals change their names at
 the boundary. A layer catches the refusals of the layer below that it
@@ -332,9 +332,79 @@ natural shape in Okkama.
 The same shape answers Observer in a language where objects do not change.
 An action does not notify listeners; it returns what happened, and its
 caller passes that on. Where the listeners are tasks, the values travel over
-a channel to their owner (Section 26.8).
+a channel to their owner (Section 26.9).
 
-## 26.6 Resources belong to scopes
+## 26.6 A table of cases
+
+Some actions have one rule and many inputs that matter. A tariff is the
+usual example: the price changes at fixed weights, and every change is a
+place where an off-by-one hides. One test per weight repeats the same three
+lines ten times, and the repetition hides the one thing that differs
+between them. The pattern turns the cases into data: a table with one row
+per case, and one loop that checks every row. Go programmers know it as
+table-driven tests [@gotabledriven]. The idea is older: Ward Cunningham's
+Fit let customers write business rules as tables of examples that ran as
+tests [@mugridge2005].
+
+{{example:26-postage-tests}}
+
+- A row is an object with named fields, so the table reads as a table:
+  `Case(grams: 20, expected: Postage.letter(85))`. The named arguments are
+  the column headings, repeated on every line where a reader needs them.
+- The expected column holds values of the domain, here an enum with
+  payloads, not strings that describe them. `test.is` compares them
+  structurally (Section 15.2), so a refusal's reason and a parcel's price
+  are both checked.
+- One run reports every wrong row. A failed assertion does not stop the
+  test, so the loop goes on after the first mismatch. In Go the same choice
+  falls to the author, who must call `t.Errorf` rather than `t.Fatalf`.
+- The row brings its input along with its answer. `got` and `wanted` both
+  return a `Priced`, which holds the weight with the postage, and so the
+  report names the row.
+
+That last point is the one that is easy to skip. Suppose the row offered
+its two fields and the loop compared only the postage:
+`test.is(tariff.priced(row.grams()), row.expected())`. Then two wrong rows
+report this way:
+
+```text
+--- FAIL: postage at every boundary
+    expected Postage.parcel(450), got Postage.parcel(900)
+    expected Postage.refused("too heavy"), got Postage.refused("over 2 kg")
+```
+
+Two rows of the table expect `Postage.parcel(450)`, and the report does
+not say which of them failed. With the weight carried along, it does:
+
+```text
+--- FAIL: postage at every boundary
+    expected Priced(grams: 501, postage: Postage.parcel(450)), got Priced(grams: 501, postage: Postage.parcel(900))
+    expected Priced(grams: 2001, postage: Postage.refused("too heavy")), got Priced(grams: 2001, postage: Postage.refused("over 2 kg"))
+```
+
+The rows are chosen at the edges. Each tier is checked at its first and its
+last weight (20 and 21, 100 and 101, 500 and 501), and the table also
+holds one row on each side outside the range: 0 and 2001. This is boundary
+value analysis, which Myers described as one of the most useful ways to
+choose test cases, and also one of the easiest to do badly [@myers1979]. A
+table makes the edges visible. An edge without a row is a missing line,
+and a reviewer can see that it is missing.
+
+A table and a property (Section 15.6) answer different questions. The
+table holds the cases someone chose for a reason, and the reason is
+usually an edge. A property generates the cases nobody thought of, and
+checks a rule that holds for all of them: here, that the price never
+falls as the weight grows. A tariff deserves both.
+
+The cost is in the report. The whole table is one test, so it is one line
+when it passes, and a single row cannot be run on its own. Go's `t.Run`
+and JUnit's parameterized tests [@junit5] give every row its own name in
+the report and let the runner select it. Okkama's test runner has no such
+thing. A row names itself only when it fails, and only because the row
+carries its input. When one row needs to run alone, for example while
+debugging it, the remedy is to copy it into a test of its own.
+
+## 26.7 Resources belong to scopes
 
 A resource is an object with a `destroy` block. The scope that owns it
 destroys it when the scope ends, whatever way it ends, in reverse order of
@@ -369,7 +439,7 @@ then, and runs before the scope's resources are destroyed. A rule of thumb
 from code review: if the same `defer` appears around every use of an object,
 the object wants a `destroy`.
 
-## 26.7 Absence is a type
+## 26.8 Absence is a type
 
 Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
 the type system makes the caller decide what absence means: a fallback with
@@ -400,7 +470,7 @@ the honest answer. When a value is optional for a while and then becomes
 required, the change is visible in the types, and the compiler finds every
 caller that has to decide.
 
-## 26.8 Shared state has one owner
+## 26.9 Shared state has one owner
 
 Asynchronous code needs state that more than one task can see. Okkama's
 answer is structural: state shared between tasks lives in one task, the
@@ -441,7 +511,7 @@ the tasks still running are cancelled and their cleanup is awaited before
 the run ends. Work that runs "in the background, somewhere", outliving the
 program that started it, is not a shape the language provides.
 
-## 26.9 Anti-patterns the compiler refuses
+## 26.10 Anti-patterns the compiler refuses
 
 Several shapes that code review catches in other languages are diagnostics
 in Okkama. The table collects the ones the earlier chapters showed, with the
@@ -465,7 +535,7 @@ have to watch [@bugayenko2016; @bugayenko2017]. The language cannot tell
 good design from bad, but it can make some bad designs impossible to write,
 and Okkama spends its rules there.
 
-## 26.10 Anti-patterns the compiler allows
+## 26.11 Anti-patterns the compiler allows
 
 The rest is judgement. These are the shapes that compile and still make a
 program worse, and the reasons Okkama code avoids them.
@@ -506,7 +576,7 @@ programs. They are listed because each of them was found in real Okkama
 code, and each was replaced, in the standard library review or in the
 examples of this book, by one of the patterns above.
 
-## 26.11 A refactoring, step by step
+## 26.12 A refactoring, step by step
 
 The anti-patterns of the previous section rarely come alone. The next
 program has three of them: a status that is a string, an urgency that is a
@@ -541,7 +611,7 @@ the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
 format is a change in one object, and the compiler finds every place a new
 state has to be handled.
 
-## 26.12 The classic catalogue, read in Okkama
+## 26.13 The classic catalogue, read in Okkama
 
 The 23 patterns of Gamma and his co-authors are a useful checklist of what a
 language makes easy, hard or unnecessary [@gamma1994]. The table goes
@@ -573,7 +643,7 @@ first among them, are replaced by composition because there is no
 inheritance to work around. And Singleton, a pattern for global state, has
 no expression at all.
 
-## 26.13 What the patterns cost
+## 26.14 What the patterns cost
 
 The patterns of this chapter trade size for change. A decorator chain has
 more declarations than a flag object; a role and its fake are more text than

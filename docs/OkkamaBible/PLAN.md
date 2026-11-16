@@ -390,10 +390,15 @@ Updated with each chapter: `build.py --stats`.
   Fixed 2026-11-14: the chapter repeated each example's output in a manual
   `text` block after `{{example}}`, which already appends it.
 
-  Left for the floor: 26.13 (costs) and 26.1 are thin; candidates are a
-  pattern for tests (tables of cases) and the expression problem in
+  2026-11-16: 26.6 a table of cases (`26-postage-tests`: rows as objects,
+  the row's input carried with its answer so a failure names the row,
+  boundary rows after Myers; Go wiki, Fit), sections after it renumbered
+  (refs in ch. 25 too). The floor is reached: 14.2 pages EN, 14.3 RU.
+  Still thin: 26.14 (costs) and 26.1; candidate: the expression problem in
   practice. Found while writing: #594 (an enum case list rejects a trailing
-  comma).
+  comma); #809 (no named or selectable sub-cases for a table's rows,
+  POSTPONED). The failure reports quoted in 26.6 are the 0.6.0 form (#756);
+  0.5.8 prints `Priced@…`.
 
 ## Naming (owner, 2026-11-10)
 
