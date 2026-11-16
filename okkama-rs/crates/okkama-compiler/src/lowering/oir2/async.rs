@@ -80,6 +80,12 @@ fn language(module: &ir::Module, types: &[ir::TypeId]) -> Result<Vec<ir::TypeId>
     Ok(slots)
 }
 
+/// The High creation envelope of an async entry returning `future` (H6): what [`declare`] gives an async action,
+/// and the creation summary of an async intrinsic (#601 Q1, D22).
+pub(super) fn creation_envelope(parameters: usize, future: ir::TypeId) -> ir::Summary {
+    envelope(parameters, vec![future], true)
+}
+
 fn envelope(parameters: usize, results: Vec<ir::TypeId>, creation: bool) -> ir::Summary {
     let parameter = ir::ParameterEffect {
         convention: ir::FreshConvention::Borrow,
@@ -148,7 +154,8 @@ pub(super) fn check_owner(registry: &Registry<'_>, body: &thir::Body) -> Result<
 }
 
 /// A std body the runtime provides: `panic "… is a VM intrinsic";` first, or last after its
-/// preparation. Such a body is never lowered (plan §3.1); its catalogue entry arrives with Q1 (D22).
+/// preparation. Such a body is never lowered (plan §3.1). The std async primitives are the catalogue of
+/// slice Q1 (`drivers`, D22); channels arrive with slice Q2, groups, collectors and timeouts with G1 (D23).
 pub(super) fn check_intrinsic(registry: &Registry<'_>, body: &thir::Body) -> Result<()> {
     let thir::BodyOwner::Method { object, method } = body.owner else {
         return Ok(());
@@ -169,7 +176,12 @@ pub(super) fn check_intrinsic(registry: &Registry<'_>, body: &thir::Body) -> Res
     }
     let info = &registry.objects[object.0];
     let name = format!("{}.{}", info.name, info.methods[method].name);
-    Err(LowerError::unsupported(body.span, format!("std async intrinsic {name} (P2.5 slice Q1, D22)")))
+    let slice = match registry.modules[info.module].name.as_str() {
+        "async/channel" => "Q2, D23",
+        "async/scope" | "async/collect" | "async/timeout" => "G1, D23",
+        _ => "Q1, D22",
+    };
+    Err(LowerError::unsupported(body.span, format!("std async intrinsic {name} (P2.5 slice {slice})")))
 }
 
 /// The async native diagnostic: a native whose call creates a driver Future (D22).

@@ -43,6 +43,7 @@ mod async_tests;
 mod async_resource_tests;
 mod construction;
 mod declarations;
+mod drivers;
 mod defer;
 mod high;
 mod failures;

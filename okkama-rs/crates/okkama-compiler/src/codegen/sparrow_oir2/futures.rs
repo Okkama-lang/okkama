@@ -27,7 +27,11 @@ pub(super) fn async_body(module: &o::Module, id: o::FuncId, function: &o::Functi
         return Ok(None);
     }
     if function.body.is_none() {
-        return Err(later(&format!("{}: async external (D22)", function.symbol)));
+        // An async intrinsic is a driver of the trusted catalogue (D22, #601 Q1): `cleanup::external` declares it.
+        if function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::Intrinsic { .. })) {
+            return Ok(None);
+        }
+        return Err(later(&format!("{}: async native (D22, slice N1)", function.symbol)));
     }
     if layout.is_none() {
         return Err(error(format!("{}: async body without its D21 frame layout", function.symbol)));
@@ -201,8 +205,10 @@ impl Emitter<'_> {
         let location = |value: o::ValueId| self.loc(value).map(A::Location);
         let (opcode, arguments) = match op {
             X::FutureNew { packet, deps, owner_state, environment, result, owner } => {
-                let o::FutureEnvironment::Deferred { function, arguments, descriptors } = environment else {
-                    return Err(later("fut.new of an async external (D22) or an allocated frame"));
+                // An async external's Future is run by its driver (D22, #601 Q1); `fut.new` names it the same way.
+                let (o::FutureEnvironment::Deferred { function, arguments, descriptors }
+                    | o::FutureEnvironment::External { function, arguments, descriptors }) = environment else {
+                    return Err(later("fut.new of an allocated frame"));
                 };
                 let callee = self.module.functions.get(*function)?;
                 if !callee.attrs.contains(&o::FunctionAttr::Async) {
