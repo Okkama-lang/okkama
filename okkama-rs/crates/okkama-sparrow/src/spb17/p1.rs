@@ -13,6 +13,9 @@ use std::collections::BTreeMap;
 pub struct P1Contracts {
     core: Vec<Function>,
     natives: BTreeMap<String, Function>,
+    /// Admitted natives of the table with a map parameter or result (#752): their entries name the program's
+    /// map composites, so the data adapter rebuilds them per declaration.
+    mapped: BTreeMap<String, abi::Native>,
     handles: BTreeMap<String, u32>,
     /// The `fn` roles: one owning slot named `call`.
     callables: Vec<u32>,
@@ -88,6 +91,7 @@ impl P1Contracts {
                 "two native handle declarations share one name")?;
         }
         let mut natives = BTreeMap::new();
+        let mut mapped = BTreeMap::new();
         for &native in abi::Native::ALL {
             if catalogue::admitted(native.symbol()).is_err() {
                 continue;
@@ -99,16 +103,19 @@ impl P1Contracts {
                 abi::Type::Void => Some(vec![]),
                 ty => abi_type(ty, &prefix, &handles).map(|ty| vec![ty]),
             };
-            // An operation over a type this bridge does not carry (maps, char and rat arrays) has no entry yet.
+            // An operation over a type this bridge does not carry (char and rat arrays) has no entry yet; one over
+            // maps has its data adapter.
             if let (Some(registers), Some(results)) = (registers, results) {
                 let function = entry(native.symbol(), registers, results, true, NATIVE_FAILURES);
                 natives.insert(native.symbol().to_owned(), function);
+            } else if signature.params.iter().chain([&signature.result]).any(|ty| matches!(ty, abi::Type::Map(..))) {
+                mapped.insert(native.symbol().to_owned(), native);
             }
         }
         let callables = objects.iter().enumerate().filter(|(_, object)| object.role.as_ref().is_some_and(|role| {
             matches!(role.slots.as_slice(), [slot] if slot.name == "call" && slot.entry_abi == EntryAbi::Owned)
         })).map(|(id, _)| id as u32).collect();
-        Ok(Self { core: entries, natives, handles, callables })
+        Ok(Self { core: entries, natives, mapped, handles, callables })
     }
 
     /// The finite P1 entries: Atomic operations, `Error.text` and the test intrinsics.
@@ -121,26 +128,30 @@ impl P1Contracts {
         self.natives.get(symbol)
     }
 
-    /// The checked unresolved-provider adapter for `declared` (P2.4 §4.7): `None` unless its symbol is
-    /// canonical and absent from the runtime table and every type is data or a handle of its module.
-    pub fn adapter(&self, declared: &Function) -> Option<Function> {
+    /// The checked adapter for `declared` (P2.4 §4.7): an opaque cleanup, the data adapter of a table native with
+    /// a map parameter or result (#752), or the unresolved-provider adapter. `None` unless the symbol is canonical
+    /// and, for the unresolved provider, absent from the runtime table, with every type data or a handle of its
+    /// module. A map in the transport names one of `composites`; its key and value are plain data the adapter
+    /// carries ([`plain_data`]).
+    pub fn adapter(&self, declared: &Function, composites: &[Composite]) -> Option<Function> {
         if let Some(entry) = self.opaque_cleanup(declared) {
             return Some(entry);
         }
         let name = declared.proofs.entry.as_ref()?.external.as_deref()?;
         let symbol = catalogue::Symbol::parse(name)?;
+        if let Some(native) = self.mapped.get(name) {
+            return self.mapped_entry(*native, declared, composites);
+        }
         if catalogue::admitted(name) != Err(catalogue::Admission::Unknown) {
             return None;
         }
         let prefix = handle_prefix(symbol.module);
         let valid = |ty: &Type| match ty {
-            Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Str
-                | Type::Bytes => true,
-            Type::Array(shape) => matches!(shape.leaf, ArrayLeaf::Int | ArrayLeaf::Bool | ArrayLeaf::Str
-                | ArrayLeaf::Bytes),
             Type::Handle(id) => self.handles.iter().any(|(handle, &index)| index == *id
                 && handle.strip_prefix(&prefix).is_some_and(|name| !name.is_empty() && !name.contains('.'))),
-            _ => false,
+            Type::Map(id) => matches!(composites.get(*id as usize),
+                Some(Composite::Map { key, value }) if plain_data(*key) && plain_data(*value)),
+            ty => plain_data(*ty),
         };
         let registers = declared.registers.get(..symbol.arity)?;
         if declared.registers.len() != symbol.arity || declared.results.len() > 1
@@ -153,6 +164,38 @@ impl P1Contracts {
 }
 
 impl P1Contracts {
+    /// The data adapter of a table native whose signature has a map (#752): the table's signature, where each map
+    /// is the declaration's composite of exactly the table's key and value types, both plain data the adapter
+    /// carries. Every other type is the table's, as in a trusted entry.
+    fn mapped_entry(&self, native: abi::Native, declared: &Function, composites: &[Composite]) -> Option<Function> {
+        let prefix = handle_prefix(native.module());
+        let signature = native.signature();
+        let matches = |expected: &abi::Type, declared: &Type| match (expected, declared) {
+            (abi::Type::Map(key, value), Type::Map(id)) => {
+                let key = abi_type(key, &prefix, &self.handles);
+                let value = abi_type(value, &prefix, &self.handles);
+                match (key, value, composites.get(*id as usize)) {
+                    (Some(key), Some(value), Some(Composite::Map { key: declared_key, value: declared_value })) => {
+                        plain_data(key) && plain_data(value) && key == *declared_key && value == *declared_value
+                    }
+                    _ => false,
+                }
+            }
+            (expected, declared) => abi_type(expected, &prefix, &self.handles) == Some(*declared),
+        };
+        let results = match &signature.result {
+            abi::Type::Void => vec![],
+            ty => vec![ty.clone()],
+        };
+        if declared.registers.len() != signature.params.len() || declared.results.len() != results.len()
+            || !signature.params.iter().zip(&declared.registers).all(|(expected, ty)| matches(expected, ty))
+            || !results.iter().zip(&declared.results).all(|(expected, ty)| matches(expected, ty))
+        {
+            return None;
+        }
+        Some(entry(native.symbol(), declared.registers.clone(), declared.results.clone(), true, NATIVE_FAILURES))
+    }
+
     /// The opaque cleanup family, keyed by its first parameter (OIR-2 catalogue, #569 C3b and C6):
     /// `oir.sync_closure.cleanup` takes an action value (a `fn` role: one owning `call` slot) and
     /// `oir.any.cleanup` an `any` box, each with its deps and the packet of the value's complete owner graph.
@@ -247,6 +290,18 @@ pub fn atomic_value(suffix: &str) -> Option<Type> {
     })
 }
 
+/// Plain data a native adapter carries without a handle: a scalar, a string, a byte array, or an array of ints,
+/// bools, strings or byte arrays. A map's key and value are restricted to it (#752).
+fn plain_data(ty: Type) -> bool {
+    match ty {
+        Type::Int | Type::Bool | Type::Byte | Type::Float | Type::Char | Type::Rat | Type::Str | Type::Bytes => true,
+        Type::Array(shape) => {
+            matches!(shape.leaf, ArrayLeaf::Int | ArrayLeaf::Bool | ArrayLeaf::Str | ArrayLeaf::Bytes)
+        }
+        _ => false,
+    }
+}
+
 fn handle_prefix(module: &str) -> String {
     format!("{}.", module.replace('/', "."))
 }
@@ -290,8 +345,8 @@ impl ExternalContracts for P1Contracts {
             .or_else(|| self.natives.get(name))
     }
 
-    fn adapter(&self, declared: &Function) -> Option<Function> {
-        P1Contracts::adapter(self, declared)
+    fn adapter(&self, declared: &Function, composites: &[Composite]) -> Option<Function> {
+        P1Contracts::adapter(self, declared, composites)
     }
 }
 

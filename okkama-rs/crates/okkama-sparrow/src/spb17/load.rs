@@ -9,10 +9,10 @@ type Active = BTreeSet<Location>;
 pub trait ExternalContracts {
     fn entry(&self, name: &str) -> Option<&Function>;
 
-    /// The checked unresolved-provider adapter for a declaration whose name has no trusted entry
-    /// (P2.4 §4.7); `None` rejects it. The adapter is recomputed from the declaration's transport,
-    /// never taken from it, and the declaration must then equal it exactly.
-    fn adapter(&self, _declared: &Function) -> Option<Function> {
+    /// The checked adapter for a declaration whose name has no trusted entry (P2.4 §4.7); `None` rejects it.
+    /// The adapter is recomputed from the declaration's transport, never taken from it, and the declaration must
+    /// then equal it exactly. `composites` are the program's: a map in the transport names one of them (#752).
+    fn adapter(&self, _declared: &Function, _composites: &[Composite]) -> Option<Function> {
         None
     }
 }
@@ -199,7 +199,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
             let trusted = match contracts.entry(name) {
                 Some(trusted) => trusted,
                 None => {
-                    adapter = contracts.adapter(f).ok_or_else(|| violation("EXTERNAL_UNRESOLVED",
+                    adapter = contracts.adapter(f, &p.composites).ok_or_else(|| violation("EXTERNAL_UNRESOLVED",
                         format!("external {name} has no trusted entry and no data or handle adapter")))?;
                     &adapter
                 }

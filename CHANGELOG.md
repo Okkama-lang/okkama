@@ -34,6 +34,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   their trusted entries. Champ keeps handle elements as references to their
   registry cells, which the collector traces as it traces a handle field.
   Six of the cases pass; `L12.malformed-boundary-inputs` stops next on #753.
+- **Natives with map parameters or results on Champ (#752).** The SPB 17
+  loader built trusted native entries only from scalar and array
+  signatures, so `regex_state_prepare` (`%string:int`) and
+  `environment_normalize` (`%string:string`) had neither an entry nor an
+  adapter. A data adapter now rebuilds the table's signature over the
+  program's map composites: each map must have exactly the table's key and
+  value types, plain data the adapter carries. The unresolved-provider
+  adapter accepts such maps too. Champ hands its maps to Tomato's native
+  bridge and takes them back in key order, as Tomato does. The four regex
+  and environment cases pass.
 
 - **SPB 17 load is fast again (#750).** D25's scope analysis for state-form
   rehomes ran on every function and cloned a dense map of all locations at
