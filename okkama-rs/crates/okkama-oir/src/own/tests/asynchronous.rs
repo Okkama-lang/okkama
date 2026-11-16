@@ -75,6 +75,11 @@ const WITNESSES: &[&str] = &[
     // #730, C-6: async defers whose entry awaits, after a body failure and across a pending exit.
     "r2-defer-await-body-failure",
     "r2-defer-await-reserve",
+    // #601 P1, D24.1: spawn of a fresh Future forwards its owner state; awaited, never awaited, in a sync owner.
+    "p1-spawn-awaited",
+    "p1-spawn-detached",
+    "p1-sync-owner-spawn",
+    "p1-spawn-returned",
 ];
 
 #[test]

@@ -806,7 +806,7 @@ impl Specializer<'_, '_> {
             }
             E::Unary { operand: value, .. } | E::Coerce { value, .. } | E::Cast { value, .. }
             | E::Panic(value) | E::Unpack(value) | E::VariantTag(value) | E::VariantGet { value, .. }
-            | E::Await(value) => {
+            | E::Await(value) | E::Spawn(value) => {
                 self.expr(value, env)?;
             }
             E::Binary { left, right, .. } | E::Logical { left, right, .. }

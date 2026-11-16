@@ -386,13 +386,42 @@ fn oir2_v5_w1_high_goldens() {
 }
 
 #[test]
-fn oir2_v5_spawn_of_an_async_action_keeps_its_diagnostic() {
-    assert_names(
-        concat!("module app; object W { W(); async run() is int { 1; } } ",
-            "async main() is int { let f = spawn W().run(); await f; }"),
-        "spawn of an async action (P2.5 slice P1, fut.spawn)",
-        Some("spawn W().run()"),
-    );
+fn oir2_p1_spawn_of_an_async_action_is_its_call_then_fut_spawn() {
+    // D24.1 (#601 P1): the call creates the Future and `fut.spawn %f` follows it at once, with no state in High;
+    // the expression's value is that Future, so it is bound and awaited (Bible §20.4).
+    let module = lower(concat!("module app; object W { W(); async run() is int { 1; } } ",
+        "async main() is int { let f = spawn W().run(); await f; }"));
+    let main = function(&module, "main");
+    let body = main.body.as_ref().unwrap();
+    let ops: Vec<_> = instructions(main).into_iter().map(|(block, _, instruction)| (block, instruction)).collect();
+    let spawn = ops.iter().position(|(_, instruction)| matches!(instruction.op,
+        ir::Operation::Async(ir::AsyncOp::FutureSpawn { .. }))).expect("fut.spawn");
+    let (block, created) = ops[spawn - 1];
+    let run = function_id(&module, "app.W.run#0");
+    assert!(matches!(created.op, ir::Operation::Call(ir::CallOp::Direct { function, .. }) if function == run));
+    let future = created.results[0];
+    assert_eq!(ops[spawn].0, block, "the spawn follows its creation in the same block");
+    assert_eq!(ops[spawn].1.op, ir::Operation::Async(ir::AsyncOp::FutureSpawn { future, state: None }));
+    assert!(ops[spawn].1.results.is_empty());
+    assert_eq!(ty(&module, body.values.get(future).unwrap().ty), &ir::Type::Future(Some(int(&module))));
+    let awaited: Vec<_> = async_ops(main).into_iter().filter_map(|op| match op {
+        ir::AsyncOp::Await { future, .. } => Some(*future),
+        _ => None,
+    }).collect();
+    assert_eq!(awaited, [future], "the spawned Future is the one awaited");
+    verify_high(&module, "spawn");
+}
+
+fn int(module: &ir::Module) -> ir::TypeId {
+    module.types.iter().find(|(_, ty)| **ty == ir::Type::Int).map(|(id, _)| id).unwrap()
+}
+
+#[test]
+fn oir2_p1_spawn_of_a_bound_async_action_value_keeps_its_diagnostic() {
+    // A typed bound async action value is slice F1; spawn of it keeps that slice's diagnostic.
+    let (message, _) = diagnostic(concat!("module app; object R { R(); ",
+        "async run(work is async (int) is int) is int { await spawn work(1); } } main() is int { 0; }"));
+    assert!(message.contains("P2.5 slice F1"), "{message}");
 }
 
 #[test]

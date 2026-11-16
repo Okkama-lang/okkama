@@ -38,7 +38,7 @@ protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [pr
     from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
     protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
     normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
-    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
 func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(M12) {
     low.metadata cleanup_metadata(closes=[], schedules=[], plans=[], roots=[root_requirement(boundary=terminator(^b0),
         bindings=[root_binding(value=%0, trace=value(R)), root_binding(value=%1, trace=full_dependencies)]),

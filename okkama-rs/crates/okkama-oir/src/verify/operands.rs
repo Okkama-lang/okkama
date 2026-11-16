@@ -1230,11 +1230,12 @@ impl Checker<'_, '_> {
             },
             AsyncOp::FutureSpawn { future, state } => {
                 self.future(*future)?;
-                // D24.1: own forwards the scope state; coro/low forward the cache duty.
-                if matches!(self.module.profile, Profile::Coro | Profile::Low) {
-                    self.service(*state, ServiceType::CacheState)?;
-                } else {
-                    self.scope(*state)?;
+                // D24.1: High names only the Future; own forwards the scope state; coro/low forward the cache duty.
+                match (self.module.profile, state) {
+                    (Profile::High, None) => {}
+                    (Profile::Coro | Profile::Low, Some(state)) => self.service(*state, ServiceType::CacheState)?,
+                    (Profile::Own, Some(state)) => self.scope(*state)?,
+                    _ => return Err(TypeCheckError),
                 }
             }
             AsyncOp::FutureCancel { future }

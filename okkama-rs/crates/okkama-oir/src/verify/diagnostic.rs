@@ -111,6 +111,9 @@ rule_ids! {
     CoroSlotOverlap => "coro-slot-overlap",
     AsyncUnmodeledOp => "async-unmodeled-op",
     CoroMissingLayout => "coro-missing-layout",
+    // D24 (slice P1): `fut.spawn` of a fresh Future; a spawned Future's task duty settles before its cache duty.
+    D24SpawnNotFresh => "d24-spawn-not-fresh",
+    D24ScheduleTaskFirst => "d24-schedule-task-first",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }

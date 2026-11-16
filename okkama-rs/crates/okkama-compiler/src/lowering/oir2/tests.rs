@@ -154,12 +154,17 @@ fn oir2_byte_unsigned_shift_counts_in_int() {
 
 #[test]
 fn oir2_calls_and_async_do_not_enter_the_old_pipeline() {
-    // Plain async lowers since P2.5 V5; spawn stays outside it (plan §4 P1).
+    // Plain async lowers since P2.5 V5 and spawn of an async action since P1 (D24.1); a process worker stays
+    // outside it (slice X1).
     let source = concat!("module app; object W { W(); async run() is int { 1; } } ",
         "async main() is int { await spawn W().run(); }");
-    let error = print_oir2(source).expect_err("explicit unsupported diagnostic");
+    let text = print_oir2(source).unwrap_or_else(|error| panic!("{error}"));
+    assert!(text.contains("fut.spawn %"), "{text}");
+    let worker = concat!("module app; object W { W(); run() is int { 1; } } ",
+        "async main() is int { await spawn W().run(); }");
+    let error = print_oir2(worker).expect_err("explicit unsupported diagnostic");
     assert!(matches!(error, LowerError::Unsupported { .. }), "{error}");
-    assert!(error.to_string().contains("async"), "{error}");
+    assert!(error.to_string().contains("proc.spawn"), "{error}");
 }
 
 #[test]

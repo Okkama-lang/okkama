@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cancel.late-after-last-await",
+  "title": "a cancellation that arrives after a task's last await has settled leaves its result",
+  "purpose": "Observe asynchronous behaviour through causal events.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.STRUCTURED-AWAIT",
+      "aspects": [
+        "boundary"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "main observed 42\ncancel requested\nworker observed 42\nworker cleanup\nworker returned 42, cancelled false\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #739 from the #601 K2 probes; Sparrow (Tomato) is the reference behaviour",
+    "expected_basis": "#739, probe `20-late-cancel` (Bible 20.5): main cancels the worker after the child it awaits has settled; the worker has no later await, so it completes with 42, runs its defer and is not cancelled. With a later await the cancellation is delivered there (`cancel.after-await-settled`)."
+  },
+  "status": "mandatory"
+}

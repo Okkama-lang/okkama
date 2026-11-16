@@ -1,0 +1,50 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.cancel.final-async-destroy-shielded",
+  "title": "a cancellation during a task's final async destroy does not interrupt it and does not change the result",
+  "purpose": "Observe asynchronous behaviour through causal events.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.STRUCTURED-AWAIT",
+      "aspects": [
+        "boundary"
+      ]
+    },
+    {
+      "contract": "LIFE.ASYNC-DESTROY",
+      "aspects": [
+        "interaction"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "body done\ncancel requested\nconn closed\nresult 7 cancelled false\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18",
+    "docs/async-guide.md#4.6"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #739 from the #601 K2 probes; Sparrow (Tomato) is the reference behaviour",
+    "expected_basis": "#739, K2 probe `finaldestroy`: the task's body has produced 7 and its scope's async destroy waits on an event when main cancels the task. The async destroy is shielded: it completes, the task keeps its result and is not cancelled."
+  },
+  "status": "mandatory"
+}

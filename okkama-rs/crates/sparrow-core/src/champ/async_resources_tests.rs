@@ -388,7 +388,7 @@ fn close_with(ctx: &mut Ctx, state: &mut ScopeSlot, close: Close) -> FinishPost 
     runtime.roots.push((cleanup.record, Repr::Ref));
     match close.duties {
         Some(duties) => {
-            let schedule = runtime.champ_register_schedule(duties.len() as u64);
+            let schedule = runtime.champ_register_schedule(vec![SERVICE_CACHE; duties.len()]);
             if duties.is_empty() {
                 assert_eq!(rt_cleanup_settle_empty(ctx, &mut cleanup, &mut cleanup), NORMAL);
             }
@@ -735,7 +735,7 @@ fn champ_r5_rehome_refuses_a_second_custody_and_a_foreign_target() {
     let mut cleanup = CleanupSlot::default();
     assert_eq!(rt_cleanup_begin(&mut ctx, &begin, &mut cleanup), NORMAL);
     runtime.roots.push((cleanup.record, Repr::Ref));
-    let schedule = runtime.champ_register_schedule(1);
+    let schedule = runtime.champ_register_schedule(vec![SERVICE_CACHE]);
     let outcome = rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 0, f, &mut cleanup);
     stopped(&mut ctx, outcome, "settles with the reserve");
     // The receipt names S as its target: committing the exit to T is refused, and nothing changes.
@@ -912,7 +912,7 @@ fn champ_r5_dynamic_settle_runs_once_between_the_static_duties_and_the_plan() {
     assert_eq!(rt_cleanup_begin(&mut ctx, &begin, &mut cleanup), NORMAL);
     runtime.roots.push((cleanup.record, Repr::Ref));
     // Not inside an open static schedule.
-    let schedule = runtime.champ_register_schedule(2);
+    let schedule = runtime.champ_register_schedule(vec![SERVICE_CACHE; 2]);
     let other = {
         let mut owner = owner(&mut ctx);
         let inputs = empty(&mut ctx);

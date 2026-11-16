@@ -200,7 +200,10 @@ impl Engine<'_, '_> {
                 }
             }
             CleanupOp::Settle { holder, protocol, .. } => {
+                let spawned = before.tokens[holder.as_u32() as usize].service.is_some_and(|key| self.spawn_task(key));
                 let kind = match super::super::later::value_type(self.module, self.body, *holder) {
+                    // D24.2: a spawned task's duty settles through `frame → root`.
+                    Some(Type::Service(ServiceType::TaskState)) if spawned => HolderKind::Frame,
                     Some(Type::Service(ServiceType::TaskState)) => HolderKind::Group,
                     Some(Type::Service(ServiceType::Receipt)) => HolderKind::Receipt,
                     Some(Type::Service(ServiceType::Pin)) => HolderKind::Pin,
@@ -238,10 +241,23 @@ impl Engine<'_, '_> {
                         self.error(R::B106, "settlement is not one of this cleanup's outstanding service duties");
                     }
                 }
-                // D24.2: the settle of a cache duty releases its outcome or closes its unstarted inputs; it never
-                // fails in 0.6.0. Other holders keep a captured settle failure.
-                let cache = matches!(super::super::later::value_type(self.module, self.body, *holder),
+                // D24.2: the settle of a cache duty releases its outcome or closes its unstarted inputs, and a spawned
+                // task's duty detaches or closes; neither fails in 0.6.0. Other holders keep a captured settle failure.
+                let cache = spawned || matches!(super::super::later::value_type(self.module, self.body, *holder),
                     Some(Type::Service(ServiceType::CacheState)));
+                // D24.2, §6.3: the task duty of a Future is settled before its cache duty.
+                if let Some(key) = before.tokens[holder.as_u32() as usize].cache.filter(|_| !spawned) {
+                    let outstanding = before.token_values().any(|value| {
+                        let other = &before.tokens[value.as_u32() as usize];
+                        before.availability[value.as_u32() as usize] == AVAILABLE && other.cache == Some(key)
+                            && other.service.is_some_and(|service| self.spawn_task(service)
+                                && fact.services.contains(&service))
+                    });
+                    if outstanding {
+                        self.error(R::D24ScheduleTaskFirst,
+                            "a spawned Future's task duty settles before its cache duty (D24.2)");
+                    }
+                }
                 fact.may_fail |= !(cache && self.module.profile == Profile::Low);
                 let incoming = &before.tokens[holder.as_u32() as usize];
                 if incoming.frame.and_then(|key| before.frames.get(&key)).is_some_and(|layout| {
@@ -599,7 +615,7 @@ impl Engine<'_, '_> {
         // other service token keeps the unknown effects.
         let unknown = before.tokens.iter().enumerate().any(|(index, token)| {
             before.availability[index] == AVAILABLE
-                && token.service.is_some_and(|origin| !self.cache_state(origin))
+                && token.service.is_some_and(|origin| !self.cache_state(origin) && !self.spawn_task(origin))
         });
         if unknown {
             required.suspends = true;
@@ -804,10 +820,13 @@ impl Engine<'_, '_> {
         let mut effects = self.required_effects(&fact.inventory, flow);
         // D20 §2.6: in Low a close suspends or fails only through its steps. No cache settle waits or fails in
         // 0.6.0 (async ABI D24.2); the outcome identities a settle releases are in the inventory with their types.
-        // Any other service duty keeps the unknown effects, as in `scope_effects`.
+        // A spawned task's duty detaches or closes, without waiting or failing either (D24.2). Any other service
+        // duty keeps the unknown effects, as in `scope_effects`.
         let cache_only = self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == fact.close)
             .flat_map(|(_, schedule)| &schedule.holders)
-            .all(|value| flow.tokens[value.as_u32() as usize].service.is_some_and(|origin| self.cache_state(origin)));
+            .all(|value| flow.tokens[value.as_u32() as usize].service.is_some_and(|origin| {
+                self.cache_state(origin) || self.spawn_task(origin)
+            }));
         let services = fact.had_services && !(self.module.profile == Profile::Low && cache_only);
         effects.suspends |= services;
         if services {

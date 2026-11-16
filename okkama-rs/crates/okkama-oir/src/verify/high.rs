@@ -175,10 +175,11 @@ fn operation(
         Operation::Async(op) => {
             // Plan P2.5 §3.1 (#688): `f.done()`, `f.cancel()` and `f.cancelled()` lower to the
             // observing `fut.done`/`fut.cancel`/`fut.cancelled` in High; own elaborates them.
+            // D24.1 (slice P1): `spawn` of an async action is `fut.spawn %f` of the fresh Future, without a state.
             if !matches!(op, AsyncOp::Await { .. } | AsyncOp::WorkerBind { .. }
-                | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. }
+                | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. } | AsyncOp::FutureSpawn { state: None, .. }
                 | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancel { .. } | AsyncOp::FutureCancelled { .. }) {
-                state.error(R::H6, "high permits shared await, workers and fut.done/cancel/cancelled; \
+                state.error(R::H6, "high permits shared await, workers, fut.spawn and fut.done/cancel/cancelled; \
                     other Future ownership/state operations require own");
             }
         }

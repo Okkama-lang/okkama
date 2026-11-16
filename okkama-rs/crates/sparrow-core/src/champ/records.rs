@@ -191,6 +191,13 @@ pub struct FutureNewPost {
     pub cache: Word,
     pub state: ScopeSlot,
 }
+/// `fut.spawn` (SPB 65, draft 3 §7.1): the cache duty, given back, and the spawned task's duty; both are the Future.
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct SpawnPost {
+    pub cache: Word,
+    pub task: Word,
+}
 /// `await` (SPB 66). Normal writes the outcome value (zero for a void Future); Unwind writes the failure, the
 /// awaited Future as the task and the receipt.
 #[derive(Debug, Default)]

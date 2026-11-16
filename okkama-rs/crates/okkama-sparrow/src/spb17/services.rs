@@ -65,6 +65,12 @@ pub(crate) fn reaches_holder(p: &Program, ty: Type) -> bool {
     false
 }
 
+/// Whether `cache.rehome` with these location operands is the state form (reserve, scope state, Future): the token
+/// form takes the reserve, the cache duty and, for a spawned Future, its task duty (ABI C-4, D24.1).
+pub(crate) fn rehome_state_form(f: &Function, operands: &[Location]) -> bool {
+    operands.len() == 3 && kind(f, operands[1]) == Some(ServiceKind::ScopeState)
+}
+
 fn locations(arguments: &[Argument]) -> Vec<Location> {
     arguments.iter().filter_map(|argument| match argument {
         Argument::Location(location) => Some(*location),
@@ -471,7 +477,12 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
             facts[0].entries = union(&mut (0..2));
             facts[0].exit = read(0).exit;
         }
-        CacheRehome if operands.len() == 3 => {
+        // D24.1: the cache duty comes back and the task duty is new; both name the spawned Future.
+        FutureSpawn => {
+            facts[0].token = read(1).token;
+            facts[1].token = read(1).token;
+        }
+        CacheRehome if rehome_state_form(f, &operands) => {
             // The state form takes the entry of its Future out of a state that surely holds it.
             let holder = read(2).future;
             let mut held = read(1).entries;
@@ -713,7 +724,7 @@ pub(crate) fn fresh_futures(p: &Program) -> Result<Vec<bool>, Error> {
 pub(crate) fn check_materialize(p: &Program, f: &Function, fresh: &[bool]) -> Check {
     if !f.code.iter().any(|instruction| match instruction {
         Instruction::Champ { op: Opcode::ServiceMaterialize, .. } => true,
-        Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } => locations(arguments).len() == 3,
+        Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } => rehome_state_form(f, &locations(arguments)),
         _ => false,
     }) {
         return Ok(());
@@ -750,7 +761,7 @@ fn state_results(slots: &[bool], states: &[BTreeSet<u32>]) -> Vec<BTreeSet<u32>>
 pub(crate) fn rehome_scopes(p: &Program, f: &Function) -> Result<BTreeMap<usize, Option<u32>>, Error> {
     // Only a function with a state-form rehome has anything to report; the others skip the analysis (#750).
     let rehomes_state = f.code.iter().any(|instruction| matches!(instruction,
-        Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } if locations(arguments).len() == 3));
+        Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } if rehome_state_form(f, &locations(arguments))));
     if !rehomes_state {
         return Ok(BTreeMap::new());
     }
@@ -797,7 +808,7 @@ pub(crate) fn rehome_scopes(p: &Program, f: &Function) -> Result<BTreeMap<usize,
                 let operands = locations(arguments);
                 let read = |location: &Location| scopes.get(location).cloned().unwrap_or_default();
                 let states = operands.iter().filter(|location| state(**location)).map(read).collect::<Vec<_>>();
-                if *op == Opcode::CacheRehome && operands.len() == 3 {
+                if *op == Opcode::CacheRehome && rehome_state_form(f, &operands) {
                     let scope = read(&operands[1]);
                     let single = (scope.len() == 1).then(|| scope.first().copied()).flatten();
                     let entry = rehomes.entry(pc).or_insert(single);

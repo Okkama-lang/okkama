@@ -443,7 +443,7 @@ fn unsupported(operation: &Operation) -> OwnError {
 /// The slice of the P2.5 plan that lifts an async operation beyond plain async.
 fn async_phase(op: &AsyncOp) -> &'static str {
     match op {
-        AsyncOp::FutureSpawn { .. } => "spawn of an async action arrives with D24 (P1)",
+        AsyncOp::FutureSpawn { .. } => "own forwards a state only to its own fut.spawn (D24.1)",
         AsyncOp::WorkerBind { .. } | AsyncOp::WorkerSpawn { .. } | AsyncOp::ProcessSpawn { .. } => {
             "process workers arrive with X1"
         }

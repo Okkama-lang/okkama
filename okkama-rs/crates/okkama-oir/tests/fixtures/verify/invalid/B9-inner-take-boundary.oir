@@ -17,7 +17,7 @@ protocol P0 kind services holders [scope, cache, frame, receipt, root] rules [pr
     from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)),
     protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies],
     normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root,
-    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
+    checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running))]
 func @task(%0: frame<@task>) -> void [async] summary(M1) async-creation(M0) async-body(M1) {
     frame.layout {
         slot 0: own linear

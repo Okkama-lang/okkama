@@ -353,7 +353,7 @@ impl Runtime {
         if ctx.status == OK {
             self.schedule(ctx, root);
         }
-        if ctx.status == OK && let Some(failure) = self.shutdown(ctx) {
+        if ctx.status == OK && let Some(failure) = self.champ_shutdown(ctx)? {
             let message = self.describe(ctx, failure);
             return Err(Error(message));
         }
@@ -386,6 +386,80 @@ impl Runtime {
         }
     }
 
+    /// Shutdown after the root Future settled (draft 3 §7.3, ABI D24.2, #699): cancel every running registered task
+    /// and schedule until all have settled; close the outcome packets of the detached Futures that succeeded in one
+    /// serial plan at the root boundary, their packets' own service entries settled first (D25.4); report the first
+    /// unobserved, non-Cancelled spawned failure in spawn order. A closed packet can detach more running Futures
+    /// (an outcome that holds one), so the two steps repeat until nothing is left. Cleanup failures of the root
+    /// close are the report's secondaries, or the report when there is none. Async destroys arrive with slice D1;
+    /// until then the plan runs here rather than in a shielded root closer frame.
+    pub(crate) fn champ_shutdown(&mut self, ctx: *mut Ctx) -> Result<Option<Word>, Error> {
+        let mut cleanup = 0;
+        loop {
+            if !self.shutdown_drain(ctx) {
+                return Ok(None);
+            }
+            let mut outcome = Packet::default();
+            for task in self.spawned.clone() {
+                if !self.champ_retained(task) {
+                    continue;
+                }
+                let record = std::mem::take(&mut self.champ_cache_mut(task)?.packet);
+                self.champ_cache_mut(task)?.flags |= RELEASED;
+                outcome.append(packet(self, record)?);
+                consume(self, record);
+            }
+            if outcome.is_empty() {
+                break;
+            }
+            // The packets' own entries settle first, each cache for its own owner (draft 3 §6.3).
+            let services = std::mem::take(&mut outcome.services);
+            let mut plan = Vec::new();
+            let mut released = Packet::default();
+            self.champ_plan_services(&services, None, &mut plan, &mut released)?;
+            self.champ_apply_services(plan)?;
+            outcome.append(released);
+            let roots = self.roots.len();
+            let mut slot = PacketSlot { record: store(self, Data::Packet(outcome)) };
+            self.roots.push((slot.record, Repr::Ref));
+            if cleanup != 0 {
+                self.roots.push((cleanup, Repr::Ref));
+            }
+            let closed = super::cleanup::close_packet(ctx, &mut slot, 0);
+            self.roots.truncate(roots);
+            match closed {
+                Ok(0) => {}
+                Ok(failure) if cleanup == 0 => cleanup = failure,
+                Ok(failure) => {
+                    self.heap.payload_mut::<runtime::Failure>(cleanup).expect("failure").secondary.push(failure);
+                }
+                Err(_) if unsafe { (*ctx).status } != OK => return Ok(None),
+                Err(failure) => return Err(failure),
+            }
+        }
+        let report = self.shutdown_report();
+        self.spawned.clear();
+        Ok(match (report, cleanup) {
+            (Some(report), 0) => Some(report),
+            (Some(report), cleanup) => {
+                self.heap.payload_mut::<runtime::Failure>(report).expect("failure").secondary.push(cleanup);
+                Some(report)
+            }
+            (None, 0) => None,
+            (None, cleanup) => Some(cleanup),
+        })
+    }
+
+    /// KL-1 (draft 3 §7.2, #699): a detached Future that succeeded keeps its registry record, and with it its
+    /// outcome packet, until the root closer closes the packet at shutdown. An empty packet needs nothing.
+    pub(crate) fn champ_retained(&self, task: Word) -> bool {
+        if get(task, tasks::FLAGS) & (CHAMP | DETACHED) != CHAMP | DETACHED || get(task, tasks::STATE) != tasks::DONE {
+            return false;
+        }
+        self.champ_cache(task).is_ok_and(|cache| cache.flags & RELEASED == 0 && cache.packet != 0
+            && packet(self, cache.packet).is_ok_and(|outcome| !outcome.is_empty()))
+    }
+
     /// Settle-time view of a cache duty, with no change (draft 3 §6.2; ABI D24.2).
     pub(super) fn champ_cache_settlement(&self, duty: Word, closing: Option<OwnerId>) -> Result<CacheSettle, Error> {
         let packet_slot = self.champ_body(duty)?.packet();
@@ -403,6 +477,24 @@ impl Runtime {
         }
         let outcome = if state == tasks::DONE { cache.packet } else { 0 };
         Ok(CacheSettle::Release { inputs, outcome, cold: state == tasks::COLD })
+    }
+
+    /// Settle-time view of a spawned task's duty, with no change (draft 3 §6.2; ABI D24.2). A running task
+    /// detaches, and its cache duty, settled next, goes with it to the root; a settled task closes, and the
+    /// registry keeps its report entry while its failure is unobserved and not Cancelled. A task whose cache
+    /// another owner holds settles to nothing.
+    pub(super) fn champ_task_settlement(&self, duty: Word, closing: Option<OwnerId>) -> Result<CacheSettle, Error> {
+        let cache = self.champ_cache(duty)?;
+        if get(duty, tasks::FLAGS) & flags::SPAWNED == 0 {
+            return Err(error("a task duty of a Future that was not spawned"));
+        }
+        if cache.flags & RELEASED != 0 {
+            return Err(error("task duty settled after its cache duty"));
+        }
+        if Some(cache.owner) != closing || get(duty, tasks::STATE) != tasks::RUNNING {
+            return Ok(CacheSettle::Nothing);
+        }
+        Ok(CacheSettle::Detach)
     }
 
     /// The packet records a cache duty answers for: its success's outcome and, until its body starts, its inputs
@@ -521,8 +613,11 @@ impl Runtime {
                 self.champ_cache_mut(duty)?.owner = owner;
                 set(duty, tasks::FLAGS, get(duty, tasks::FLAGS) | DETACHED);
                 set(duty, tail + TASK, duty);
-                // The root registry: shutdown cancels it and waits for it, as Tomato does with spawned tasks.
-                self.spawned.push(duty);
+                // The root registry: shutdown cancels it and waits for it, as Tomato does with spawned tasks. A
+                // spawned Future joined it when it started (draft 3 §7.1).
+                if get(duty, tasks::FLAGS) & flags::SPAWNED == 0 {
+                    self.spawned.push(duty);
+                }
             }
             CacheSettle::Release { inputs, outcome, cold } => {
                 if let (Some(offset), true) = (packet_slot, inputs != 0) {
@@ -628,6 +723,45 @@ pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn,
         let state = (*io.owner).record;
         (*io.owner).record = 0;
         post.write(FutureNewPost { future, cache: future, state: ScopeSlot { record: state } });
+    }
+    NORMAL
+}
+
+/// `fut.spawn` (SPB 65), class X (draft 3 §7.1, ABI D24.1): a cold Future becomes a task of its own: SPAWNED, its
+/// own TASK, registered in the root registry, and started on this stack until its first suspension. The cache
+/// duty comes back unchanged, with the task duty: both are the Future's frame. A Future that is no longer cold is
+/// not started again. The caller keeps the Future rooted; the registry roots it while it runs.
+pub extern "C" fn rt_future_spawn(ctx: *mut Ctx, future: Word, cache: *mut CacheSlot, post: *mut SpawnPost)
+    -> Outcome
+{
+    if !bridge_clear(ctx) {
+        return stop(ctx, error("X helper entered with an active bridge failure"));
+    }
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let checked = runtime.champ_cache(future).and_then(|record| {
+        if unsafe { (*cache).record } != future {
+            return Err(error("fut.spawn: the cache duty names another Future"));
+        }
+        if record.flags & (RELEASED | REHOMED) != 0 {
+            return Err(error("fut.spawn of a settled or rehomed cache duty"));
+        }
+        Ok(())
+    });
+    if let Err(failure) = checked {
+        return stop(ctx, failure);
+    }
+    runtime.count(|_| "spawn".into());
+    if get(future, tasks::STATE) == tasks::COLD {
+        set(future, tasks::FLAGS, get(future, tasks::FLAGS) | flags::SPAWNED);
+        runtime.spawned.push(future);
+        runtime.champ_future_start(ctx, 0, future);
+        if unsafe { (*ctx).status } != OK {
+            return OUTCOME_STOP;
+        }
+    }
+    unsafe {
+        (*cache).record = 0;
+        post.write(SpawnPost { cache: future, task: future });
     }
     NORMAL
 }

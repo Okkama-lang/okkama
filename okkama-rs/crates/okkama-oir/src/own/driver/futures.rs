@@ -107,6 +107,20 @@ impl Driver<'_, '_> {
         Ok(point)
     }
 
+    /// D24.1 (slice P1): High's `fut.spawn %f` of the Future its creation just gave. Own forwards the state of the
+    /// scope that owns the Future's cache duty, which gains the spawned task's duty `ServiceOf{f, Frame}`; both
+    /// duties settle at that scope's close, the task's first (D24.2), or leave together through `cache.rehome`.
+    pub(super) fn spawn_future(&mut self, point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
+        let Operation::Async(AsyncOp::FutureSpawn { future: original, state: None }) = instruction.op else {
+            return Err(flow_error("expected High's fut.spawn"));
+        };
+        let future = point.env.value(original)?.value;
+        let owner = self.cache_duties.iter().rev().find(|(_, created)| *created == future).map(|(owner, _)| *owner)
+            .ok_or_else(|| unsupported_async("fut.spawn of a Future this function did not just create (D24.1)"))?;
+        let state = point.env.state(owner)?;
+        self.emit(point, Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state) }))
+    }
+
     /// A shared await (elaboration §13.2): `(value?, deps)` with deps the stable
     /// cache service key and the external outcome deps, and no packet. Its
     /// unwind and cancel edge flows into `await.unwind` (§13.3), which consumes
