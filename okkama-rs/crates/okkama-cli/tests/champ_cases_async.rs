@@ -465,3 +465,30 @@ async main() is int {
     assert_eq!(run.result, Ok(0), "{}", run.stdout);
     assert_eq!(run.stdout, "escaped\nseed\nread 1 2\n3\n");
 }
+
+/// #759: Futures created in a `for` body with `next` before and `last` after the creation; each iteration awaits
+/// or abandons its own (okkama 0.5.8: `job 1`, `got 1`, `job 3`, `got 3`, `main`).
+#[test]
+fn a_loop_body_future_with_next_and_last() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job {
+    has n is int;
+    Job(:n);
+    async run() is int { Stdout().writeln("job " + n.string()); n; }
+}
+async main() is int {
+    for 1..=4 -> i {
+        next if i == 2;
+        let f = Job(n: i).run();
+        last if i == 4;
+        Stdout().writeln("got " + (await f).string());
+    }
+    Stdout().writeln("main");
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "job 1\ngot 1\njob 3\ngot 3\nmain\n");
+}

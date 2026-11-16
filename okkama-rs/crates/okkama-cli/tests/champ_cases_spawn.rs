@@ -108,3 +108,46 @@ fn p1_an_unawaited_spawned_task_releases_its_outcome_at_the_owner_close() {
         "async main() is int { spawn Maker().make(); Stdout().writeln(\"main\"); 0; }\n",
     ), "main\ndestroy made\n", 0);
 }
+
+/// #759: a Future created in a `for` body belongs to the body's scope and settles at each iteration's close: never
+/// started, it is cancelled there, as on Tomato (okkama 0.5.8: `main`).
+#[test]
+fn p1_a_future_created_in_a_loop_body_settles_with_each_iteration() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job { has n is int; Job(:n); async run() is int { Stdout().writeln("job " + n.string()); n; } }
+async main() is int { for 1..=3 -> i { let f = Job(n: i).run(); } Stdout().writeln("main"); 0; }
+"#, "main\n", 0);
+}
+
+/// #759: spawn in a `for` body, awaited in the same iteration (okkama 0.5.8: `job 1`, `job 2`, `job 3`, `main`).
+#[test]
+fn p1_spawn_in_a_loop_body() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job { has n is int; Job(:n); async run() is int { Stdout().writeln("job " + n.string()); n; } }
+async main() is int { for 1..=3 -> i { let f = spawn Job(n: i).run(); await f; } Stdout().writeln("main"); 0; }
+"#, "job 1\njob 2\njob 3\nmain\n", 0);
+}
+
+/// #759: a spawned Future left unawaited in a `for` body runs at once and settles at the iteration's close
+/// (okkama 0.5.8: `job 11`, `spawned 1`, `job 12`, `spawned 2`, `main`).
+#[test]
+fn p1_an_unawaited_spawn_in_a_loop_body() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job {
+    has n is int;
+    Job(:n);
+    async run() is int { Stdout().writeln("job " + n.string()); n; }
+}
+async main() is int {
+    for 1..=2 -> k {
+        let t = spawn Job(n: 10 + k).run();
+        Stdout().writeln("spawned " + k.string());
+    }
+    Stdout().writeln("main");
+    0;
+}
+"#, "job 11\nspawned 1\njob 12\nspawned 2\nmain\n", 0);
+}

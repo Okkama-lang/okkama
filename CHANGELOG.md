@@ -20,6 +20,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future created in a `for` body runs on Champ, spawned or not (#759).**
+  OIR-2 coro refused such a body ("a cache duty that reaches its owner's
+  close on some paths only"): its duty token flowed along the loop's back
+  edge into the next iteration, where the unwind close before the creation
+  saw a token of an earlier iteration. The close of a duty's owner now
+  consumes its token, so each iteration settles its own Futures at its own
+  close, and spawn in a loop body (the server and worker pattern) compiles.
+  Two neighbouring defects found on the way are #805 (awaiting in a loop a
+  Future created outside it) and #806 (coro's step budget on three loops
+  that each suspend).
+
 - **The full OIR-2 verifier checks that a Future leaves with the Futures it
   reads (#776).** A cold Future borrows the cache of each Future argument of
   its creation. New rule `b9-borrowed-future-left`: a `cache.rehome` that

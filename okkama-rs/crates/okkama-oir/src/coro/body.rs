@@ -407,13 +407,13 @@ impl Lowering<'_, '_> {
                 }
                 for token in duty.tokens() {
                     let kills = consumed.get(&token).cloned().unwrap_or_default();
-                    let (must, may) = self.available(token, &kills, &predecessors)?;
+                    let (must, may) = self.available(token, &kills, duty.scope, &predecessors)?;
                     let index = block.as_u32() as usize;
                     let mut held = (must[index], may[index]);
                     for inst in &self.body.blocks.get(block)?.insts {
                         if self.body.insts.get(*inst)?.results.contains(&token) {
                             held = (true, true);
-                        } else if kills.contains(inst) {
+                        } else if self.consumes(*inst, &kills, duty.scope)? {
                             held = (false, false);
                         }
                     }
@@ -457,12 +457,16 @@ impl Lowering<'_, '_> {
         // stored Future leaves"), so a token absorbed before its rehome is invalid input.
         let predecessors = graph::predecessors(&self.body);
         for (token, insts) in consumed.clone() {
+            let Some(scope) = duties.iter().find(|duty| duty.tokens().any(|held| held == token)).map(|duty| duty.scope)
+            else {
+                return Err(self.invalid("a consumed token belongs to no duty"));
+            };
             for &inst in &insts {
                 if !matches!(self.body.insts.get(inst)?.op, Operation::Async(AsyncOp::CacheRehome { .. })) {
                     continue;
                 }
                 let others: Vec<_> = insts.iter().copied().filter(|other| *other != inst).collect();
-                if !self.held_at(token, &others, inst, &predecessors)?.0 {
+                if !self.held_at(token, &others, scope, inst, &predecessors)?.0 {
                     return Err(self.invalid("a Future rehomed after its duty was stored (D25.2)"));
                 }
             }
@@ -472,11 +476,11 @@ impl Lowering<'_, '_> {
 
     /// Whether `token` is held just before the instruction `at` (on every path, on some path), with `kills` the
     /// instructions that consume it.
-    fn held_at(&mut self, token: ValueId, kills: &[InstId], at: InstId, predecessors: &[Vec<BlockId>])
-        -> Result<(bool, bool), CoroError> {
+    fn held_at(&mut self, token: ValueId, kills: &[InstId], scope: ScopeId, at: InstId,
+        predecessors: &[Vec<BlockId>]) -> Result<(bool, bool), CoroError> {
         let block = self.body.blocks.iter().find(|(_, block)| block.insts.contains(&at)).map(|(id, _)| id)
             .ok_or_else(|| self.invalid("an instruction outside every block"))?;
-        let (must, may) = self.available(token, kills, predecessors)?;
+        let (must, may) = self.available(token, kills, scope, predecessors)?;
         let index = block.as_u32() as usize;
         let mut held = (must[index], may[index]);
         for inst in &self.body.blocks.get(block)?.insts {
@@ -485,7 +489,7 @@ impl Lowering<'_, '_> {
             }
             if self.body.insts.get(*inst)?.results.contains(&token) {
                 held = (true, true);
-            } else if kills.contains(inst) {
+            } else if self.consumes(*inst, kills, scope)? {
                 held = (false, false);
             }
         }
@@ -999,7 +1003,7 @@ impl Lowering<'_, '_> {
         let mut closes: BTreeMap<Site, Vec<ValueId>> = BTreeMap::new();
         for (token, scope) in duties.iter().flat_map(|duty| duty.tokens().map(|token| (token, duty.scope))) {
             let kills = rehomed.get(&token).cloned().unwrap_or_default();
-            let (must, may) = self.available(token, &kills, &predecessors)?;
+            let (must, may) = self.available(token, &kills, scope, &predecessors)?;
             for &(site, block, position, closed) in &sites {
                 if closed != scope {
                     continue;
@@ -1010,7 +1014,7 @@ impl Lowering<'_, '_> {
                 for &inst in &self.body.blocks.get(block)?.insts[..position] {
                     if self.body.insts.get(inst)?.results.contains(&token) {
                         here = (true, true);
-                    } else if kills.contains(&inst) {
+                    } else if self.consumes(inst, &kills, scope)? {
                         here = (false, false);
                     }
                 }
@@ -1026,6 +1030,11 @@ impl Lowering<'_, '_> {
         Ok(closes)
     }
 
+    /// Whether the instruction `inst` consumes a duty token of `scope`: one of `kills`, or a close of `scope`.
+    fn consumes(&self, inst: InstId, kills: &[InstId], scope: ScopeId) -> Result<bool, CoroError> {
+        Ok(kills.contains(&inst) || self.closed_scope(&self.body.insts.get(inst)?.op)? == Some(scope))
+    }
+
     fn closed_scope(&self, op: &Operation) -> Result<Option<ScopeId>, CoroError> {
         let Operation::Ownership(OwnershipOp::ScopeEnd { state, .. } | OwnershipOp::ScopeUnwind { state, .. }) = op
         else {
@@ -1038,23 +1047,33 @@ impl Lowering<'_, '_> {
     }
 
     /// Whether the token `value` is held at each block entry on every path, and on some path: defined and not
-    /// yet consumed by one of `kills`.
-    fn available(&mut self, value: ValueId, kills: &[InstId], predecessors: &[Vec<BlockId>])
+    /// yet consumed by one of `kills` or by a close of its owner `scope`.
+    ///
+    /// #759: the close of the owner settles the duty, so the token does not survive it. A duty of a loop body's
+    /// scope is created anew in each iteration; without this kill the token of one iteration would flow along the
+    /// back edge into the next, and the next iteration's close before the creation (an unwind) would see a duty
+    /// held on some paths only.
+    fn available(&mut self, value: ValueId, kills: &[InstId], scope: ScopeId, predecessors: &[Vec<BlockId>])
         -> Result<(Vec<bool>, Vec<bool>), CoroError> {
         let count = self.body.blocks.len();
         // A block's effect on the token: `Some(true)` when its last event defines it, `Some(false)` when that
         // event consumes it, `None` when it passes the entry state through.
-        let effects: Vec<Option<bool>> = self.body.blocks.iter().map(|(_, block)| {
+        let mut effects: Vec<Option<bool>> = Vec::with_capacity(count);
+        for (_, block) in self.body.blocks.iter() {
             let mut effect = block.params.contains(&value).then_some(true);
             for inst in &block.insts {
-                if self.body.insts.get(*inst).is_ok_and(|inst| inst.results.contains(&value)) {
+                if self.body.insts.get(*inst)?.results.contains(&value) {
                     effect = Some(true);
-                } else if kills.contains(inst) {
+                } else if self.consumes(*inst, kills, scope)? {
                     effect = Some(false);
                 }
             }
-            effect
-        }).collect();
+            if let TermKind::InvokeOwn { op, .. } = &block.term.kind
+                && self.closed_scope(op)? == Some(scope) {
+                effect = Some(false);
+            }
+            effects.push(effect);
+        }
         let entry = self.body.entry.as_u32() as usize;
         let mut must = vec![true; count];
         let mut may = vec![false; count];
