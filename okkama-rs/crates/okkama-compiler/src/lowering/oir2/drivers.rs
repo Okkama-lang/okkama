@@ -17,24 +17,11 @@ use crate::analysis::{registry::{CtorShape, Registry}, thir};
 use crate::oir2 as ir;
 use ir::own::NativeSummaryError;
 
-/// The std objects of the catalogue, by module and name.
-const OBJECTS: [(&str, &str); 9] = [
-    ("async/event", "Event"),
-    ("async/lock", "Lock"),
-    ("async/lock", "LockGuard"),
-    ("async/semaphore", "Semaphore"),
-    ("async/semaphore", "Permit"),
-    ("async/barrier", "Barrier"),
-    ("async/barrier", "BarrierState"),
-    ("async/cancellation", "Cancellation"),
-    ("async/cancellation", "CancellationToken"),
-];
-
 /// The OIR declaration of the Event cell, whose runtime layout replaces its source field.
 pub(super) const EVENT: &str = okkama_sparrow::spb17::drivers::EVENT;
 
 use okkama_sparrow::spb17::drivers::{self as catalogue, Abi, Row};
-use ir::FailureKind::{Cancelled, Program, Thrown};
+use ir::FailureKind::{Cancelled, Native, Panic, Program, Thrown};
 
 /// The catalogue entry `name`: the SPB 17 catalogue's row, the one source of the members, their failures and their
 /// deps (#774 D3). Program failures are the runtime's refusal of an object it did not create (Tomato's "Invalid
@@ -43,11 +30,16 @@ fn entry(name: &str) -> Option<&'static Row> {
     catalogue::row_named(name)
 }
 
+/// The failure kinds of an SPB 17 entry's failure mask, in bit order (the loader's `EntryContract::failures`).
+pub(super) fn mask_failures(mask: u32) -> Vec<ir::FailureKind> {
+    let bits = [(catalogue::THROWN, Thrown), (catalogue::PROGRAM, Program), (catalogue::PANIC, Panic),
+        (catalogue::NATIVE, Native)];
+    bits.iter().filter(|(bit, _)| mask & bit != 0).map(|(_, kind)| *kind).collect()
+}
+
 /// The failures of a member, from its row's mask; a cancellation has no bit and is listed last.
 fn failures(row: &Row) -> Vec<ir::FailureKind> {
-    let bits = [(catalogue::THROWN, Thrown), (catalogue::PROGRAM, Program)];
-    let mut failures = bits.iter().filter(|(bit, _)| row.failures & bit != 0).map(|(_, kind)| *kind)
-        .collect::<Vec<_>>();
+    let mut failures = mask_failures(row.failures);
     if row.cancels {
         failures.push(Cancelled);
     }
@@ -69,9 +61,10 @@ pub(super) fn builtin(module: &str, object: &str) -> bool {
     module == "async/event" && object == "Event"
 }
 
-/// The runtime name of the body's member when the runtime provides it, as Tomato names it: the catalogue
-/// objects' constructors (`new` and the parameter names, joined by `_`) and actions. None for an ordinary body.
-pub(super) fn intrinsic_name(registry: &Registry<'_>, body: &thir::Body) -> Option<String> {
+/// Tomato's name of a std member: `okkama.<family>.<Object>.<action>`, a constructor's action `new` and its
+/// parameter names joined by `_`, with the std declaration it belongs to (`async.<family>.<Object>`). None for a
+/// body of the program or one that is not a member.
+fn member_name(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, String)> {
     let (object, action) = match body.owner {
         thir::BodyOwner::Method { object, method } => (object, registry.objects[object.0].methods[method].name.clone()),
         thir::BodyOwner::Ctor { object, ctor } => {
@@ -90,11 +83,28 @@ pub(super) fn intrinsic_name(registry: &Registry<'_>, body: &thir::Body) -> Opti
         return None;
     }
     let module = registry.modules[info.module].name.as_str();
-    if !OBJECTS.contains(&(module, info.name.as_str())) {
+    let family = module.rsplit('/').next().unwrap_or(module);
+    // A specialization keeps its source name before its arguments (`Channel<int>`).
+    let object = info.name.split('<').next().unwrap_or(&info.name);
+    Some((format!("okkama.{family}.{object}.{action}"), format!("{}.{object}", module.replace('/', "."))))
+}
+
+/// The D23 holder row (slices Q2 and G1, `spb17::drivers::HOLDERS`) of a std member the runtime provides. Until
+/// those slices bring the runtime (`HOLDERS_READY`), the producer refuses the member by its row: its std body is
+/// a placeholder (`panic "… is a VM intrinsic"`, or `throw NoFutures.none` where Tomato's driver decides).
+pub(super) fn holder_row(registry: &Registry<'_>, body: &thir::Body) -> Option<&'static catalogue::Template> {
+    let (name, declaration) = member_name(registry, body)?;
+    catalogue::holder_named(&name).filter(|row| catalogue::member_of_holder(row) == declaration)
+}
+
+/// The runtime name of the body's member when the runtime provides it, as Tomato names it: the catalogue
+/// objects' constructors (`new` and the parameter names, joined by `_`) and actions. None for an ordinary body.
+pub(super) fn intrinsic_name(registry: &Registry<'_>, body: &thir::Body) -> Option<String> {
+    let (name, declaration) = member_name(registry, body)?;
+    // The SPB 17 rows name the objects (#799): `async/<family>`'s object whose members they are.
+    if !catalogue::has_members(&declaration) {
         return None;
     }
-    let family = module.rsplit('/').next().unwrap_or(module);
-    let name = format!("okkama.{family}.{}.{action}", info.name);
     known(&name).then_some(name)
 }
 

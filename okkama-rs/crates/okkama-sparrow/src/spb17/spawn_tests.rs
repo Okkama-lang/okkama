@@ -28,6 +28,14 @@ enum Spawner {
     BoundWithService,
     /// The bound form of a register that is not a Future.
     BoundOfInt,
+    /// A copy of the Future is read between its creation and its spawn (#791 W1).
+    ReadBetween,
+    /// The Future is spawned twice: the second spawn takes the cache duty the first gave back (#791 W1).
+    SpawnedTwice,
+    /// The spawn names the cache duty of another `fut.new` (#791 W1).
+    OtherState,
+    /// `fut.cancel` of the cold Future between its creation and its spawn: an observation (#791 W1).
+    CancelledBetween,
 }
 
 fn spawner(variant: Spawner) -> (Function, FrameLayout) {
@@ -47,6 +55,29 @@ fn spawner(variant: Spawner) -> (Function, FrameLayout) {
     // An observation of the Future may come between its creation and its spawn (D24.1).
     let deps = b.emit(O::DepsOf, vec![l(future)], K::Deps);
     b.f.proofs.dependencies.push(Dependency { value: deps, obligations: vec![future] });
+    let mut state = q2;
+    // The cache duty the spawn takes, and a duty a negative leaves over for the close to settle last.
+    let mut taken = cache;
+    let mut leftover = None;
+    match variant {
+        Spawner::ReadBetween => {
+            let copy = b.register(FUTURE_INT);
+            let (Location::Register(from), Location::Register(to)) = (future, copy) else { unreachable!() };
+            b.f.code.push(Instruction::Data { op: DataOp::Move, inputs: vec![from], output: Some(to),
+                immediate: Immediate::None });
+        }
+        Spawner::OtherState => {
+            let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+            let [second, other, q3] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
+            b.next(O::FutureNew, vec![A::Entry(0), A::Scope(MAIN), A::Result(Some(FUTURE_INT)), l(seven),
+                l(offered), l(q2)], vec![second, other, q3]);
+            state = q3;
+            taken = other;
+            leftover = Some(cache);
+        }
+        Spawner::CancelledBetween => b.next(O::FutureCancel, vec![l(future)], vec![]),
+        _ => {}
+    }
     if variant == Spawner::Branched {
         b.br("spawn", vec![]);
         b.block("spawn", &[]);
@@ -64,14 +95,20 @@ fn spawner(variant: Spawner) -> (Function, FrameLayout) {
         }
         None => {
             let [kept, task] = [b.service(K::CacheState), b.service(K::TaskState)];
-            b.next(O::FutureSpawn, vec![l(future), l(cache)], vec![kept, task]);
-            [kept, task]
+            b.next(O::FutureSpawn, vec![l(future), l(taken)], vec![kept, task]);
+            if variant == Spawner::SpawnedTwice {
+                let [again, second] = [b.service(K::CacheState), b.service(K::TaskState)];
+                b.next(O::FutureSpawn, vec![l(future), l(kept)], vec![again, second]);
+                leftover = Some(task);
+                [again, second]
+            } else {
+                [kept, task]
+            }
         }
     };
-    let _ = deps;
     let mut continuations = vec![Continuation { site: None, saved: vec![0], operands: vec![] }];
     let (body, state, duties) = if matches!(variant, Spawner::Awaited | Spawner::UnwindTakesDuty) {
-        let first = b.save(body, 1, &[q2, kept, task]);
+        let first = b.save(body, 1, &[state, kept, task]);
         b.outcomes(O::Await, vec![l(future)], vec![(Tag::Normal, "ok", vec![p(0), p(1)]),
             (Tag::Unwind, "bad", vec![p(0), p(1), p(2)])]);
         continuations.push(Continuation { site: None, saved: vec![1, 2, 3], operands: vec![4] });
@@ -101,11 +138,12 @@ fn spawner(variant: Spawner) -> (Function, FrameLayout) {
         let (resumed_body, resumed) = b.resume(first, 1, &slot_types(&slots, &[1, 2, 3]));
         (resumed_body, resumed[0], vec![resumed[2], resumed[1]])
     } else if variant == Spawner::CacheFirst {
-        (body, q2, vec![kept, task])
+        (body, state, vec![kept, task])
     } else if bound.is_some() {
-        (body, q2, vec![kept])
+        (body, state, vec![kept])
     } else {
-        (body, q2, vec![task, kept])
+        // A duty a negative leaves over (the other creation's cache, or the first spawn's task) settles last.
+        (body, state, [task, kept].into_iter().chain(leftover).collect())
     };
     let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
     let selection = b.selection();
@@ -150,6 +188,29 @@ fn a_spawned_task_crosses_an_await_in_the_frame() {
 #[test]
 fn spawn_takes_the_duty_its_fut_new_just_gave() {
     reject_with(&spawner_program(Spawner::Branched), suspension::SPAWN, "just gave");
+}
+
+/// #791 W1 (#767 C1): the mutations of `d24-spawn-not-fresh`. Between its creation and its spawn the Future is only
+/// observed; a copy hands it to another reader.
+#[test]
+fn spawn_refuses_a_read_between_creation_and_spawn() {
+    reject_with(&spawner_program(Spawner::ReadBetween), suspension::SPAWN, "just gave");
+}
+
+#[test]
+fn spawn_refuses_a_second_spawn_of_one_future() {
+    reject_with(&spawner_program(Spawner::SpawnedTwice), suspension::SPAWN, "just gave");
+}
+
+#[test]
+fn spawn_refuses_the_cache_duty_of_another_creation() {
+    reject_with(&spawner_program(Spawner::OtherState), suspension::SPAWN, "just gave");
+}
+
+/// `fut.cancel` of the cold Future is an observation: the spawn still takes the duty its `fut.new` just gave.
+#[test]
+fn spawn_after_a_cancel_of_the_cold_future_loads() {
+    verify_load(&spawner_program(Spawner::CancelledBetween), &NoExternalContracts).unwrap();
 }
 
 // --- SPB_SCHEDULE ---------------------------------------------------------------------------------------------
@@ -205,12 +266,28 @@ fn a_bound_spawn_moves_no_duty_and_the_cache_settles_at_its_owner() {
     assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
 }
 
+// #791 N1: `verify` alone types opcode 87, with the shape `l` and the Future operand of `fut.cancel`; the rule of
+// `SPB_SPAWN` for the bound form is then the operand check (ruling PR-E: the bound form names no service).
+
 #[test]
 fn a_bound_spawn_names_no_service() {
-    reject_with(&spawner_program(Spawner::BoundWithService), suspension::SPAWN, "no service");
+    let p = spawner_program(Spawner::BoundWithService);
+    let failure = verify(&p).unwrap_err();
+    assert_eq!(failure.rule, "SPB_STRUCTURE", "{failure}");
+    assert!(failure.message.contains("invalid operands for fut.spawn.bound"), "{failure}");
+    reject_with(&p, "SPB_STRUCTURE", "invalid operands for fut.spawn.bound");
 }
 
 #[test]
 fn a_bound_spawn_takes_a_future() {
-    reject_with(&spawner_program(Spawner::BoundOfInt), suspension::SPAWN, "no service");
+    let p = spawner_program(Spawner::BoundOfInt);
+    let failure = verify(&p).unwrap_err();
+    assert_eq!(failure.rule, verify::FUTURE_TYPES, "{failure}");
+    assert!(failure.message.contains("fut.spawn.bound needs a Future"), "{failure}");
+    reject_with(&p, verify::FUTURE_TYPES, "fut.spawn.bound needs a Future");
+}
+
+#[test]
+fn verify_alone_admits_a_bound_spawn_of_a_future() {
+    verify(&spawner_program(Spawner::Bound)).unwrap();
 }

@@ -499,9 +499,11 @@ fn transfer(
                         futures::CACHE_DUTY
                     }
                     // A returned Future brings its cache duty in the result packet (D25.1): the same
-                    // duty, never offered, and leaving a scope only by cache.rehome.
-                    Operation::Call(_) if instruction.results.iter().any(|result| {
+                    // duty, never offered, and leaving a scope only by cache.rehome. A borrowed alias (a getter
+                    // of a Future field) brings none (#801): its duty stays with the aliased holder.
+                    Operation::Call(call) if instruction.results.iter().enumerate().any(|(index, result)| {
                         body.values.get(*result).is_ok_and(|value| futures::is_future(module, value.ty))
+                            && !futures::borrowed_result(module, call, index)
                     }) => futures::CACHE_DUTY,
                     _ => 1,
                 };

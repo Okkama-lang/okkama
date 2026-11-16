@@ -119,6 +119,9 @@ rule_ids! {
     B9BindingAttribute => "b9-binding-attribute",
     B9BoundFutureNamed => "b9-bound-future-named",
     B9BoundFutureAbsorbed => "b9-bound-future-absorbed",
+    // #776: a Future leaves its owner only with the cache duties of the Futures its creation borrows, unless their
+    // owner outlives the destination.
+    B9BorrowedFutureLeft => "b9-borrowed-future-left",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }

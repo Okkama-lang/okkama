@@ -89,6 +89,11 @@ pub fn case_dir(id: &str) -> PathBuf {
 
 /// SPB 17 of the sources through the OIR-2 pipeline with structural verification.
 pub fn compile(sources: &[SourceFile]) -> Result<Vec<u8>, String> {
+    compile_with(sources, okkama_compiler::oir2::VerifyMode::Structural)
+}
+
+/// [`compile`] with the given verification of every OIR-2 phase (Full: the gate's ownership verifier).
+pub fn compile_with(sources: &[SourceFile], mode: okkama_compiler::oir2::VerifyMode) -> Result<Vec<u8>, String> {
     let mut programs = Vec::new();
     for source in sources {
         let program = syntax::parse(source, &ParseOptions::default()).map_err(|error| format!("parse: {error:?}"))?;
@@ -99,7 +104,6 @@ pub fn compile(sources: &[SourceFile]) -> Result<Vec<u8>, String> {
         .map(|(source, program)| RootFile { source, program })
         .collect::<Vec<_>>();
     let stdlib = std::fs::canonicalize(root().join("std")).unwrap();
-    let mode = okkama_compiler::oir2::VerifyMode::Structural;
     oir2::compile_linked_with(&roots, &mut CaseLoader { stdlib }, mode).map_err(|error| format!("compile: {error}"))
 }
 
@@ -129,9 +133,14 @@ pub fn run_with_arguments(bytes: Vec<u8>, arguments: Vec<Vec<u8>>) -> Result<Run
 
 /// An inline root module, named inside the crate so that std imports resolve.
 pub fn run_source(text: &str) -> Result<Run, String> {
+    run_source_with(text, okkama_compiler::oir2::VerifyMode::Structural)
+}
+
+/// [`run_source`] with the given verification of every OIR-2 phase.
+pub fn run_source_with(text: &str, mode: okkama_compiler::oir2::VerifyMode) -> Result<Run, String> {
     let name = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/champ_support/inline.ok");
     let source = SourceFile::new(name.to_string_lossy(), text.to_string()).unwrap();
-    run(compile(&[source])?)
+    run(compile_with(&[source], mode)?)
 }
 
 /// The High OIR module of inline roots, as the OIR-2 pipeline lowers them before its own pass.

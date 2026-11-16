@@ -30,9 +30,11 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
             if contract.async_destroy {
                 return Err(unsupported(id, ASYNC_DESTROY));
             }
-            // An async body of Coro may suspend and be cancelled (D20, D18); everything else is synchronous.
+            // An async body of Coro may suspend (D20, D18); everything else is synchronous. A thrown Cancelled
+            // (`Cancelling.check`) is an ordinary failure that passes through a synchronous body (PR-F, #775):
+            // delivery of a cancellation needs a suspending operation, which a synchronous body cannot hold.
             let async_body = coro && is_async;
-            if !async_body && (contract.suspends || contract.failures.contains(&FailureKind::Cancelled)) {
+            if !async_body && contract.suspends {
                 return Err(unsupported(id, "summary does not prove synchronous execution and owned cleanup"));
             }
         } else if function.body.is_some() {
@@ -143,8 +145,9 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
 fn call_summary(module: &Module, function: FuncId, call: &CallSite) -> Result<(), LowError> {
     let summary = call.summary.ok_or_else(|| unsupported(function, "call has no checked summary"))?;
     let contract = &module.summaries.get(summary)?.contract;
-    if contract.suspends || contract.async_destroy || contract.failures.contains(&FailureKind::Cancelled) {
-        return Err(unsupported(function, "call permits suspension, cancellation or async-owned cleanup"));
+    // PR-F (#775): a call that may throw Cancelled is an ordinary fallible call.
+    if contract.suspends || contract.async_destroy {
+        return Err(unsupported(function, "call permits suspension or async-owned cleanup"));
     }
     Ok(())
 }

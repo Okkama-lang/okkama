@@ -6,7 +6,7 @@
 
 mod champ_support;
 
-use champ_support::{run_case, run_source};
+use champ_support::{run_case, run_source, run_source_with};
 
 macro_rules! cases {
     ($($name:ident => $id:literal,)*) => {
@@ -25,7 +25,14 @@ cases! {
     d25_cancel_shared_awaited_survives => "L08.cancel.shared-awaited-survives",
     d25_cancel_nested_frame_next_await => "L08.cancel.nested-frame-next-await",
     d25_cancel_final_exit_window => "L08.cancel.final-exit-window",
-    d25_collect_race_empty => "L08.collect.race-empty",
+}
+
+/// A race of no Futures fails with NoFutures, as on Tomato. `Raced` is a D23 holder of slice G1: the producer refuses
+/// its members by their catalogue row until the slice brings the runtime (#810).
+#[test]
+#[ignore = "#810: Raced.winner is a G1 holder member, refused until the slice"]
+fn d25_collect_race_empty() {
+    run_case("L08.collect.race-empty").unwrap_or_else(|error| panic!("L08.collect.race-empty: {error}"));
 }
 
 fn expect(source: &str, stdout: &str, status: i64) {
@@ -214,4 +221,158 @@ async main() is int {
     0;
 }
 "#, "3\nend\ndestroy 3\n", 0);
+}
+
+/// #783: a bound Future stored on some paths only (PR-B1: each store is an alias, the duty stays with `make`'s
+/// binding and leaves by `cache.rehome` with the returned Holder). Tomato (okkama 0.5.8): `child 7`, `7`.
+#[test]
+fn a_bound_future_stored_on_some_paths_only() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Holder {
+    has f is Future<int>;
+    Holder(:f);
+    first() is Future<int> { f; }
+}
+object Maker {
+    Maker();
+    make(n is int) is Holder {
+        let c = Child(n: n).run();
+        if n > 0 { let first = Holder(f: c); }
+        Holder(f: c);
+    }
+}
+async main() is int {
+    let h = Maker().make(7);
+    let g = h.first();
+    Stdout().writeln((await g).string());
+    0;
+}
+"#, "child 7\n7\n", 0);
+}
+
+/// #783: a fresh Future that reaches a store on one branch only: it leaves the branch scope by `cache.rehome`, so
+/// the store after the join takes an admitted entry, never a token. Tomato (okkama 0.5.8): `child 1`, `1`,
+/// `child 2`, `2`.
+#[test]
+fn a_fresh_future_from_one_branch_is_stored_after_the_join() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Holder {
+    has f is Future<int>;
+    Holder(:f);
+    first() is Future<int> { f; }
+}
+async main() is int {
+    let g = Child(n: 2).run();
+    let flag = true;
+    let h = Holder(f: if flag { Child(n: 1).run(); } else { g; });
+    let r = h.first();
+    Stdout().writeln((await r).string());
+    Stdout().writeln((await g).string());
+    0;
+}
+"#, "child 1\n1\nchild 2\n2\n", 0);
+}
+
+/// #801 (S1): a fresh Future stored in a Holder and returned through its getter from the scope that stored it.
+/// The getter's result is a borrowed alias: no rehome takes it, and `pick`'s exit names it, which takes its entry
+/// out of the Holder. Tomato (okkama 0.5.8): `picked`, `child 1`, `1`.
+#[test]
+fn a_stored_future_returned_through_a_getter() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Holder {
+    has f is Future<int>;
+    Holder(:f);
+    first() is Future<int> { f; }
+}
+object Picker {
+    Picker();
+    pick() is Future<int> {
+        let h = Holder(f: Child(n: 1).run());
+        h.first();
+    }
+}
+async main() is int {
+    let f = Picker().pick();
+    Stdout().writeln("picked");
+    Stdout().writeln((await f).string());
+    0;
+}
+"#, "picked\nchild 1\n1\n", 0);
+}
+
+/// #801 (S3): a relay of a getter returns a borrowed alias of the Box's Future. Tomato (okkama 0.5.8): `child 5`, `5`.
+#[test]
+fn a_relay_of_a_future_getter() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Box {
+    has f is Future<int>;
+    Box(:f);
+    first() is Future<int> { f; }
+}
+object Relay {
+    Relay();
+    relay(b is Box) is Future<int> { b.first(); }
+}
+async main() is int {
+    let b = Box(f: Child(n: 5).run());
+    let g = Relay().relay(b);
+    Stdout().writeln((await g).string());
+    0;
+}
+"#, "child 5\n5\n", 0);
+}
+
+/// #801 (wave/18 review): a synchronous relay of a freshly created Future (`id(Seed(n: 1).run())`) at the top of the
+/// body, in each branch of an `if` whose value leaves its block, and returned from a synchronous action. The relay's
+/// result is a borrowed alias, so the duty of the Future it was given leaves with it. Under the Full verifier, with
+/// Tomato's output (okkama 0.5.8): the Futures run when awaited, in order.
+#[test]
+fn a_relay_of_a_fresh_future_under_the_full_verifier() {
+    let run = run_source_with(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Seed {
+    has n is int;
+    Seed(:n);
+    async run() is int { Stdout().writeln("seed " + n.string()); n; }
+}
+object Relay {
+    Relay();
+    id(f is Future<int>) is Future<int> { f; }
+    made(n is int) is Future<int> { self.id(Seed(n: n).run()); }
+}
+async main() is int {
+    let relay = Relay();
+    let f = relay.id(Seed(n: 1).run());
+    let g = if f.done() { relay.id(Seed(n: 0).run()); } else { relay.id(Seed(n: 2).run()); };
+    let h = relay.made(3);
+    Stdout().writeln("relayed");
+    Stdout().writeln(((await f) + (await g) + (await h)).string());
+    0;
+}
+"#, okkama_compiler::oir2::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("relayed\nseed 1\nseed 2\nseed 3\n6\n", Ok(0)));
 }

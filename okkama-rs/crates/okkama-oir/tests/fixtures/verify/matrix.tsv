@@ -65,3 +65,4 @@ OIR2-H7	valid/H7-SSA-binding.oir	invalid/H7-duplicate-binding.oir
 OIR2-H8	valid/H8-explicit-rebind-destination.oir	invalid/H8-wrong-rebind-destination.oir
 OIR2-H9	valid/H9-early-self.oir	invalid/H9-incomplete-with-bound-pending.oir
 b9-bound-future-named	valid/B9-own-store-names-fresh-future.oir	invalid/B9-bound-future-named.oir
+b9-borrowed-future-left	valid/B9-future-input-rehomed-first.oir	invalid/B9-borrowed-future-left.oir

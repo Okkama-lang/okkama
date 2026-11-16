@@ -153,6 +153,19 @@ pub(super) fn check_owner(registry: &Registry<'_>, body: &thir::Body) -> Result<
 /// preparation. Such a body is never lowered (plan §3.1). The std async primitives are the catalogue of
 /// slice Q1 (`drivers`, D22); channels arrive with slice Q2, groups, collectors and timeouts with G1 (D23).
 pub(super) fn check_intrinsic(registry: &Registry<'_>, body: &thir::Body) -> Result<()> {
+    // The D23 holders (#601 B3): every member with a catalogue row, constructors and placeholder bodies included,
+    // waits for its runtime slice; lowering its std body would run the placeholder (`Raced.winner` throwing
+    // NoFutures).
+    if let Some(row) = super::drivers::holder_row(registry, body)
+        && !okkama_sparrow::spb17::drivers::HOLDERS_READY
+    {
+        let slice = match row.slice {
+            okkama_sparrow::spb17::drivers::Slice::Q2 => "Q2",
+            okkama_sparrow::spb17::drivers::Slice::G1 => "G1",
+        };
+        return Err(LowerError::unsupported(body.span, format!("std async intrinsic {} (P2.5 slice {slice}, D23)",
+            row.name)));
+    }
     let thir::BodyOwner::Method { object, method } = body.owner else {
         return Ok(());
     };

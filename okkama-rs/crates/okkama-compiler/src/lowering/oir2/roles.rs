@@ -118,8 +118,14 @@ pub(super) fn adapter(declarations: &mut Declarations, declaration: ir::DeclId, 
             } else {
                 value
             };
-            if builder.body().values.get(value)?.ty == ty {
+            let produced = builder.body().values.get(value)?.ty;
+            if produced == ty {
                 Some(value)
+            } else if matches!(builder.module().types.get(produced)?, ir::Type::Future(_)) {
+                // A Future's outcome type is fixed at its creation: `role.wrap` does not convert the outcome of a cold
+                // Future, so an async body that narrows the slot's successor result (`^Self` for `^Role`, #791 D1)
+                // has no adapter here.
+                return Err(LowerError::unsupported(span, "covariant successor result of an async role slot"));
             } else {
                 Some(builder.emit_schema(ir::Operation::Core(ir::CoreOp::RoleWrap { value, ty }))?[0])
             }

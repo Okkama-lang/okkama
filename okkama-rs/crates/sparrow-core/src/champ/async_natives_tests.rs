@@ -14,6 +14,12 @@ const ROOT_OPEN: &str = "runtime/fs_root@1::file_root_open/1";
 const ROOT_ENTRY: &str = "runtime/fs_root@1::file_root_entry/2";
 const WATCH: &str = "runtime/fs@1::file_watch_event/1";
 const WATCH_CREATE: &str = "runtime/fs@1::file_watch_create/1";
+const SQLITE_CREATE: &str = "runtime/database@1::sqlite_create/7";
+const SQLITE_CONNECT: &str = "runtime/database@1::sqlite_connect/1";
+const SQLITE_SCRIPT: &str = "runtime/database@1::sqlite_script/2";
+const SQLITE_ROWS: &str = "runtime/database@1::sqlite_rows/4";
+const SQLITE_CLOSE: &str = "runtime/database@1::sqlite_close/1";
+const SQLITE_REPLY_OK: &str = "runtime/database@1::sqlite_reply_ok/1";
 /// The map composites of the two async natives with a map result (#752): `file_watch_event`, `process_state_exit`.
 const MAPS: [(s::Type, s::Type); 2] = [(s::Type::Str, s::Type::Str), (s::Type::Str, s::Type::Int)];
 
@@ -49,7 +55,8 @@ fn asynchronous() -> impl Iterator<Item = Native> {
 /// natives that open a rooted entry and a file watch.
 fn program() -> s::Program {
     let mut names = BTreeSet::new();
-    let opening = [Native::FsRootFileRootOpen, Native::FsRootFileRootEntry, Native::FsFileWatchCreate];
+    let opening = [Native::FsRootFileRootOpen, Native::FsRootFileRootEntry, Native::FsFileWatchCreate,
+        Native::DatabaseSqliteCreate, Native::DatabaseSqliteClose, Native::DatabaseSqliteReplyOk];
     for native in asynchronous().chain(opening) {
         let signature = native.signature();
         for ty in signature.params.iter().chain([&signature.result]) {
@@ -79,7 +86,7 @@ fn program() -> s::Program {
         });
         functions.push(function);
     }
-    for symbol in [ROOT_OPEN, ROOT_ENTRY, WATCH_CREATE] {
+    for symbol in [ROOT_OPEN, ROOT_ENTRY, WATCH_CREATE, SQLITE_CREATE, SQLITE_CLOSE, SQLITE_REPLY_OK] {
         functions.push(contracts.native(symbol).unwrap().clone());
     }
     let mut future_results = Vec::new();
@@ -367,6 +374,100 @@ fn champ_n1_a_pending_host_request_is_rooted_and_cancelled() {
         assert!(runtime.io.requests.is_empty());
         assert!(runtime.champ_cache(future).unwrap().packet == 0);
         let _ = std::fs::remove_dir(&directory);
+    }
+}
+
+/// An open in-memory SQLite connection: `sqlite_create` (`:memory:`), then its `sqlite_connect` driver settled.
+fn sqlite(ctx: &mut Ctx) -> Word {
+    let runtime = unsafe { &mut *ctx.runtime };
+    let path = runtime.heap.allocate_bytes(b"");
+    runtime.roots.push((path, Repr::Ref));
+    let journal = runtime.heap.allocate_text("memory");
+    runtime.roots.push((journal, Repr::Ref));
+    let create = index(runtime, SQLITE_CREATE);
+    // path, read_only, create, foreign_keys, busy_ms, journal, memory.
+    let arguments = [path, 0, 1, 0, word::small(0).unwrap(), journal, 1];
+    let state = crate::runtime::rt_native(ctx, create as u64, arguments.as_ptr(), arguments.len() as u64);
+    assert_eq!(ctx.status, OK);
+    runtime.roots.push((state, Repr::Ref));
+    let connect = driver(ctx, index(runtime, SQLITE_CONNECT), &[state]);
+    runtime.champ_future_start(ctx, 0, connect);
+    settle(ctx, connect);
+    assert_eq!(get(connect, tasks::STATE), tasks::DONE, "{:?}", runtime.fatal);
+    state
+}
+
+/// A `sqlite_script` driver of `sql` on `state`, started.
+fn script(ctx: &mut Ctx, state: Word, sql: &str) -> Word {
+    let runtime = unsafe { &mut *ctx.runtime };
+    let bytes = runtime.heap.allocate_bytes(sql.as_bytes());
+    runtime.roots.push((bytes, Repr::Ref));
+    let future = driver(ctx, index(runtime, SQLITE_SCRIPT), &[state, bytes]);
+    runtime.champ_future_start(ctx, 0, future);
+    future
+}
+
+/// A `sqlite_rows` driver of `sql` without parameters on `state`, started: on success it opens a cursor.
+fn rows(ctx: &mut Ctx, state: Word, sql: &str) -> Word {
+    let runtime = unsafe { &mut *ctx.runtime };
+    let bytes = runtime.heap.allocate_bytes(sql.as_bytes());
+    runtime.roots.push((bytes, Repr::Ref));
+    let kinds = runtime.heap.allocate_array(Repr::Int, &[]);
+    runtime.roots.push((kinds, Repr::Ref));
+    let values = runtime.heap.allocate_array(Repr::Ref, &[]);
+    runtime.roots.push((values, Repr::Ref));
+    let future = driver(ctx, index(runtime, SQLITE_ROWS), &[state, bytes, kinds, values]);
+    runtime.champ_future_start(ctx, 0, future);
+    future
+}
+
+/// #799 (§7.1 test list, the `host::cancel == true` branch): an SQLite request has a cleanup, so `host::cancel` asks
+/// the driver to keep polling. The cancel interrupts the connection's worker and waits for the request's reply;
+/// meanwhile the frame stays in `io.requests`, a root of the collector. The driver then settles Cancelled. A
+/// cancelled `rows` that still succeeded opened a cursor, which the cleanup releases before the driver settles, so
+/// the connection serves the next statement (Tomato's `drivers::native_io`, `host::cancel`, `cleanup_cancelled`).
+#[test]
+fn champ_n1_a_cancelled_request_with_a_cleanup_is_polled_until_it_ends() {
+    for stress in [false, true] {
+        let mut runtime = load(stress);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let ctx = &mut ctx;
+        let runtime = runtime_of(ctx);
+        let state = sqlite(ctx);
+        // More rows than one reply holds: a successful reply leaves its cursor open.
+        let future = rows(ctx, state,
+            "with recursive c(x) as (select 1 union all select x + 1 from c where x < 100000) select x from c");
+        assert_eq!(get(future, tasks::STATE), tasks::RUNNING);
+        assert!(runtime.io.requests.contains_key(&future));
+        assert_eq!(rt_cancel_request(ctx, future), NORMAL);
+        let mut steps = 0;
+        while get(future, tasks::STATE) == tasks::RUNNING {
+            // While the cleanup runs, the request keeps its frame rooted.
+            assert!(runtime.io.requests.contains_key(&future), "a running request is in io.requests");
+            match runtime.ready.pop_front() {
+                Some(frame) => {
+                    runtime.run_body(ctx, frame);
+                }
+                None => assert!(runtime.wait_external(), "the cleanup is a pending request"),
+            }
+            collect(ctx, &[future, state]);
+            steps += 1;
+            assert!(steps < 10_000, "the cleanup ends");
+        }
+        assert_eq!(get(future, tasks::STATE), tasks::FAILURE_STATE);
+        assert_eq!(kind(runtime, get(future, tasks::FAILURE)), "Cancelled");
+        assert!(runtime.io.requests.is_empty());
+        let next = script(ctx, state, "create table t(x integer); insert into t values (1);");
+        settle(ctx, next);
+        assert_eq!(get(next, tasks::STATE), tasks::DONE, "{:?}", runtime.fatal);
+        // The statement ran: no cursor of the cancelled request blocks the connection (SQLITE_READER_ACTIVE).
+        let reply = get(next, tasks::RESULT);
+        let ok = crate::runtime::rt_native(ctx, index(runtime, SQLITE_REPLY_OK) as u64, [reply].as_ptr(), 1);
+        assert_eq!((ctx.status, ok), (OK, 1));
+        let close = index(runtime, SQLITE_CLOSE);
+        crate::runtime::rt_native(ctx, close as u64, [state].as_ptr(), 1);
+        assert_eq!(ctx.status, OK);
     }
 }
 

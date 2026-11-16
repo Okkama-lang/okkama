@@ -428,7 +428,14 @@ impl Driver<'_, '_> {
     /// PR-B2 (#782): an escaping Future that reaches no cache duty of the closing scope, so `rehome_caches` takes
     /// nothing for it: a parameter, an element or a field read, borrowed from a holder. Its entry can still be in the
     /// scope when a carrier entry packet brought it, so the exit's selection names it.
+    ///
+    /// #801: a borrowed alias that a synchronous call returned (a getter of a Future field, a relay of one) is
+    /// borrowed even though it depends on the duty of the Future its holder stores: that duty is the holder's,
+    /// and the exit that names the alias takes its entry wherever the scope keeps it.
     pub(super) fn borrowed_future(&self, scope: ScopeId, original: ValueId) -> bool {
+        if self.borrowed_alias(original) {
+            return true;
+        }
         let Some(state) = self.flow.before_edges.get(&self.current_high) else {
             return false;
         };
@@ -440,6 +447,22 @@ impl Driver<'_, '_> {
                 && !matches!(quantity.presence, domain::Presence::Absent | domain::Presence::Bottom)
                 && state.provenance.get(&(*owner, *atom)).is_some_and(|mask| mask & CACHE_DUTY != 0)
         })
+    }
+
+    /// #801: whether the High value is a result of a synchronous call whose relation makes it a borrowed alias
+    /// (`futures::borrowed_result`).
+    fn borrowed_alias(&self, original: ValueId) -> bool {
+        let Ok(Definition::InstResult { inst, .. }) = self.high.values.get(original).map(|value| value.def) else {
+            return false;
+        };
+        let Ok(instruction) = self.high.insts.get(inst) else {
+            return false;
+        };
+        let Operation::Call(call) = &instruction.op else {
+            return false;
+        };
+        instruction.results.iter().position(|result| *result == original)
+            .is_some_and(|index| crate::own::futures::borrowed_result(self.module, call, index))
     }
 
     /// The High Futures whose cache duty a call gives the calling scope, in body order: Future creations

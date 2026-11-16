@@ -875,3 +875,57 @@ fn n1_a_bodyless_async_function_needs_an_external_driver() {
     let error = translate(&module).expect_err("a bodyless async function without an external driver");
     assert!(error.to_string().contains("work: a bodyless async function without an external driver"), "{error}");
 }
+
+/// #765, C-4 item 1: `SPB_REHOME` refuses a rehome that splits a spawned Future's duties: (a) the cache duty
+/// without its task duty, which stays in the close's schedule. `start` spawns `a` and `b` and returns `b`.
+#[test]
+fn spb_rehome_moves_a_spawned_futures_task_with_its_cache() {
+    let module = golden("d765-two-spawns-returned");
+    let program = compile(&module).unwrap_or_else(|error| panic!("{error}")).program;
+    let objects = with_composites(&module, || objects(&module, &layouts(&module))).unwrap();
+    let contracts = s::p1::P1Contracts::new(&objects).unwrap();
+    s::verify_load(&program, &contracts).unwrap();
+    let start = program.functions.iter().position(|function| function.symbol.contains("Starter.start")).unwrap();
+    let spawns: Vec<L> = sites(&program.functions[start], O::FutureSpawn).iter()
+        .map(|(_, _, flow)| outputs(flow)[1]).collect();
+    let [(_, arguments, _)] = sites(&program.functions[start], O::CacheRehome)[..] else { panic!("one rehome") };
+    let task = arguments.iter().rposition(|argument| matches!(argument, A::Location(_))).unwrap();
+    assert_eq!(arguments[task], A::Location(spawns[1]), "b's rehome takes b's task duty");
+    // (a) as own and coro never emit it: `b`'s cache leaves, its task duty stays in the close's schedule.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../okkama-oir/tests/fixtures/async/low-input/d765-two-spawns-returned.oir");
+    let coro = std::fs::read_to_string(path).unwrap();
+    let rehome = "cache.rehome %32, %29, task %30, target caller";
+    let schedule = "service.schedule Schedule0 owner S1, protocol P0, duties [%16, %15]";
+    assert!(coro.contains(rehome) && coro.contains(schedule));
+    let coro = coro.replace(rehome, "cache.rehome %32, %29, target caller")
+        .replace(schedule, "service.schedule Schedule0 owner S1, protocol P0, duties [%30, %16, %15]");
+    let low = o::low::lower_cleanup(o::text::parse(&coro).unwrap(), &o::low::LowOptions::default()).unwrap();
+    let split = translated(&low);
+    let without = s::verify_load(&split, &contracts).unwrap_err();
+    assert_eq!((without.rule, without.message.as_str()),
+        ("SPB_REHOME", "a spawned Future's cache duty leaves without its task duty"), "{without:?}");
+}
+
+/// #765 (b), C-4 item 1: a rehome's task duty is the one of the Future whose cache duty it moves. `b`'s rehome names
+/// `a`'s task, and the close's schedule keeps both tasks with `a`'s cache: own and coro never emit it, and the Full
+/// verifier refuses it (B94), so the coro text is edited and lowered without it; the loader is the trust boundary.
+#[test]
+fn spb_rehome_refuses_the_task_duty_of_another_future() {
+    let module = golden("d765-two-spawns-returned");
+    let objects = with_composites(&module, || objects(&module, &layouts(&module))).unwrap();
+    let contracts = s::p1::P1Contracts::new(&objects).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../okkama-oir/tests/fixtures/async/low-input/d765-two-spawns-returned.oir");
+    let coro = std::fs::read_to_string(path).unwrap();
+    let rehome = "cache.rehome %32, %29, task %30, target caller";
+    let schedule = "service.schedule Schedule0 owner S1, protocol P0, duties [%16, %15]";
+    assert!(coro.contains(rehome) && coro.contains(schedule));
+    let coro = coro.replace(rehome, "cache.rehome %32, %29, task %16, target caller")
+        .replace(schedule, "service.schedule Schedule0 owner S1, protocol P0, duties [%30, %16, %15]");
+    let low = o::low::lower_cleanup(o::text::parse(&coro).unwrap(), &o::low::LowOptions::default()).unwrap();
+    let swapped = translated(&low);
+    let error = s::verify_load(&swapped, &contracts).unwrap_err();
+    assert_eq!((error.rule, error.message.as_str()),
+        ("SPB_REHOME", "a rehome's task duty belongs to the Future of its cache duty"), "{error:?}");
+}

@@ -1349,6 +1349,17 @@ impl crate::lowering::ModuleLoader for StdLoader {
     }
 }
 
+/// The front end's analysis of a program with std imports, given to `test`.
+pub(super) fn with_std_analysis<T>(source: &str, test: impl FnOnce(&analysis::Analysis<'_>) -> T) -> T {
+    let file = SourceFile::new("oir2-std.ok", source).expect("small source");
+    let program = syntax::parse(&file, &ParseOptions::default()).expect("valid source syntax");
+    let roots = [(&program, "oir2-std.ok", Some(&file))];
+    let graph = crate::lowering::modules::load_graph(&roots, &mut StdLoader).expect("local std graph");
+    let modules = crate::lowering::modules::source_modules(&graph, &roots);
+    let analysis = analysis::analyze(modules).unwrap_or_else(|errors| panic!("std analysis: {errors:?}"));
+    test(&analysis)
+}
+
 pub(super) fn lower_std(source: &str) -> Result<ir::Module, LowerError> {
     let file = SourceFile::new("oir2-std.ok", source).expect("small source");
     let program = syntax::parse(&file, &ParseOptions::default()).expect("valid source syntax");

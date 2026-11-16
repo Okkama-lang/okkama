@@ -1,0 +1,145 @@
+oir 2 own
+// #759: spawn in a `for` body: `for 1..=3 -> i { let f = spawn Job(n: i).run(); await f; }`. S2 owns the task
+// and cache duties of each iteration's Future and settles them, task first, at that iteration's close; the back
+// edge carries neither token. Own's output of the program (OIR-2 pipeline).
+module app v1.0.0
+requires core, async
+entry @main
+
+object app.Job {
+    field n: int
+}
+scope S0 action in @app.Job.run#0
+scope S1 action in @main
+scope S2 iteration in @main parent S1
+scope S3 action in @app.Job.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Job], failures=[program], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[cancelled], suspends=true, publication=atomic)
+summary M6 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M7 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M8 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M9 internal contract call_contract(publication=atomic)
+summary M10 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Job], failures=[program], publication=atomic)
+summary M11 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @app.Job.new#0(%0: int) -> app.Job [ctor app.Job] abi observation summary(M10) {
+    binding b0 "n": int in S3
+    boundary B0 lexical in S3
+    ^b0 in S3:
+    br ^b1(%0)
+    ^b1(%1: int) in S3:
+    %2: int = undef ty int
+    invoke.own obj.new app.Job { n: %1 }
+        normal ^b2($value, %1)
+        unwind ^b3($failure)
+    ^b2(%3: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %4: int) in S3:
+    ret %3
+    ^b3(%5: failure) in S3:
+    raise %5
+}
+
+func @app.Job.run#0(%0: app.Job facts(plain(certificate=closed_graph(ty=app.Job))); %1: own) -> (int, own) [method app.Job, async] abi explicit(input_packet=1, output_packet=1) summary(M5) async-creation(M7) async-body(M5) {
+    boundary B0 lexical in S0
+    boundary B1 lexical in S0
+    ^b0 in S0:
+    %2: scope<S0> = scope.begin S0
+    %3: scope<S0> = own.accept %2, %1
+    br ^b1(%0, %3)
+    ^b1(%4: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %5: scope<S0>) in S0:
+    %6: int = obj.get %4, n
+    %7: own = own.empty
+    %8: deps = deps.of %6
+    %9: pending = exit.prepare return %6, %7, deps(%8) at B1
+    invoke.own scope.end %5, reserve %9, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b2($closed, $pending, %6)
+        unwind ^b3($closed, $failure)
+    ^b2(%10: closed, %11: pending, %12: int) in S0:
+    (%13: int, %14: own, %15: deps) = exit.commit %11, destination caller, result int
+    ret %13, %14
+    ^b3(%16: closed, %17: failure) in S0:
+    raise %17
+}
+
+func @main() -> int [entry, async] abi observation summary(M11) async-creation(M8) async-body(M11) {
+    service.schedule Schedule0 owner S2, protocol P0, duties [%39]
+    binding b0 "i": int in S2
+    binding b1 "f": future<int> in S2
+    boundary B0 lexical in S1
+    boundary B1 loop in S2
+    key k0: key = service_of(value=%39, kind=cache)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%53)
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    br ^b1(%0)
+    ^b1(%1: scope<S1>) in S1:
+    %2: int = const 1
+    %3: int = const 3
+    invoke.own range.new %2, %3, inclusive true
+        normal ^b7($value, %1, %2, %3)
+        unwind ^b8($failure, %1)
+    ^b2(%4: int, %5: int, %6: scope<S1>) in S1:
+    %7: bool = int.le %5, %4
+    cond %7, ^b9, ^b10
+    ^b3(%8: scope<S1>) in S1:
+    br ^b4(%8)
+    ^b4(%9: scope<S1>) in S1:
+    %10: int = const 0
+    invoke.own scope.end %9, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b11($closed, %10)
+        unwind ^b12($closed, $failure)
+    ^b5(%11: int, %12: int, %13: scope<S1>, %14: scope<S2>) in S2:
+    invoke.own call @app.Job.new#0(%12)
+        normal ^b13($value, %11, %12, %13, %14)
+        unwind ^b14($failure, %13, %14)
+    ^b6(%15: int, %16: int, %17: scope<S1>) in S1:
+    %18: int = const 1
+    %19: int = int.add %16, %18
+    br ^b2(%15, %19, %17)
+    ^b7(%20: range, %21: scope<S1>, %22: int, %23: int) in S1:
+    br ^b2(%23, %22, %21)
+    ^b8(%24: failure, %25: scope<S1>) in S1:
+    %26: failure = scope.unwind %25, %24, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %26
+    ^b9 in S1:
+    %27: scope<S2> = scope.begin S2
+    br ^b5(%4, %5, %6, %27)
+    ^b10 in S1:
+    br ^b3(%6)
+    ^b11(%28: closed, %29: int) in S1:
+    ret %29
+    ^b12(%30: closed, %31: failure) in S1:
+    raise %31
+    ^b13(%32: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %33: int, %34: int, %35: scope<S1>, %36: scope<S2>) in S2:
+    %37: own = own.empty
+    %38: deps = deps.of %32
+    (%39: future<int> facts(managed(deps=d0)), %40: scope<S2>) = fut.new %37, %38, %36, environment deferred(function=@app.Job.run#0, arguments=[%32]), result int, owner S2, binding b1
+    %41: deps = deps.of %39
+    %42: scope<S2> = fut.spawn %39, state %40
+    invoke.own await %39, result int
+        normal ^b15($value, $deps, %33, %34, %35, %39, %41, %42)
+        unwind ^b16($failure, $task, $receipt, %35, %42)
+    ^b14(%43: failure, %44: scope<S1>, %45: scope<S2>) in S2:
+    %46: failure = scope.unwind %45, %43, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b19
+    ^b15(%47: int, %48: deps, %49: int, %50: int, %51: scope<S1>, %52: future<int> facts(managed(deps=d1)), %53: deps, %54: scope<S2>) in S2:
+    %55: closed = scope.end %54, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b17
+    ^b16(%56: failure, %57: task-state, %58: receipt, %59: scope<S1>, %60: scope<S2>) in S2:
+    (%61: scope<S2>, %62: failure) = await.unwind %60, %56, %57, %58, protocol P0
+    %63: failure = scope.unwind %61, %62, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b18
+    ^b17 in S1:
+    br ^b6(%49, %50, %51)
+    ^b18 in S1:
+    %64: failure = scope.unwind %59, %63, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %64
+    ^b19 in S1:
+    %65: failure = scope.unwind %44, %46, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %65
+}
