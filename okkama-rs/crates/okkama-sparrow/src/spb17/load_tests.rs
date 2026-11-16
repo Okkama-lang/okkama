@@ -781,3 +781,29 @@ fn a_catch_may_name_the_system_cancelled() {
         reject(&p, &NoExternalContracts, "CATCH_TYPE");
     }
 }
+
+/// `catch e is Error` (#738, language spec 9.5): the Error role takes a cancellation and binds an object of the
+/// system Cancelled, as Tomato does, so a catch of the role loads only in a program that declares Cancelled; an
+/// object of its name but not its shape does not count.
+#[test]
+fn a_catch_of_the_error_role_needs_the_system_cancelled() {
+    let role = |object: Object| {
+        let mut p = cancelled_catch(object);
+        let f = &mut p.functions[0];
+        f.registers[1] = Type::Error;
+        let Instruction::Champ { arguments, .. } = &mut f.code[0] else { unreachable!() };
+        arguments[1] = Argument::Flag(true);
+        refresh(f);
+        p
+    };
+    verify_load(&role(cancelled_object()), &NoExternalContracts).unwrap();
+    let mut other = cancelled_object();
+    other.name = "app.Cancelled".into();
+    let mut fielded = cancelled_object();
+    fielded.fields = vec![Field { name: "reason".into(), storage: 0, once: false }];
+    fielded.layout.storage_fields = vec![Type::Str];
+    fielded.layout.trace_layout = vec![0];
+    for object in [other, fielded] {
+        reject(&role(object), &NoExternalContracts, "CATCH_TYPE");
+    }
+}

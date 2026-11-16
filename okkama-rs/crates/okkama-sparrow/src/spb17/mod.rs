@@ -366,7 +366,12 @@ pub const CANCELLED: &str = "Cancelled";
 /// roles, handle, destroy or resource. The runtime gives a caught cancellation an object of this descriptor, and
 /// `catch` may name it (`CATCH_TYPE`).
 pub fn cancelled(p: &Program) -> Option<u32> {
-    p.objects.iter().position(|object| {
+    cancelled_in(&p.objects)
+}
+
+/// [`cancelled`] over a list of declarations.
+pub fn cancelled_in(objects: &[Object]) -> Option<u32> {
+    objects.iter().position(|object| {
         let layout = &object.layout;
         object.name == CANCELLED && object.error_cases.is_empty() && object.enum_cases == 0
             && object.variant_cases.is_empty() && !object.handle && !object.any_box && object.role.is_none()

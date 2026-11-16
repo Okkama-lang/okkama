@@ -32,8 +32,8 @@ scope S7 action in @encoding.utf.Utf8Encoded.bytes#0
 scope S8 action in @io.stdout.Stdout.new#0
 scope S9 action in @encoding.utf.Utf8Encoded.new#0
 summary M0 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[str], publication=atomic)
-summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
-summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[native], publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
 
 func @okkama.Error.text(%arg0: Error) -> str [intrinsic "okkama.Error.text"] summary(M0);
 
@@ -163,7 +163,7 @@ func @io.stdout.Stdout.write_bytes#6(%0: io.stdout.Stdout, %1: array<byte>) -> v
     bind %2, binding b1
     %3: int = array.len %1
     %4: bool = int.eq %2, %3
-    high.effects at #1 failures [native], suspends false
+    high.effects at #1 failures [program, native], suspends false
     cond %4, ^b2(%1, %2), ^b3(%1, %2)
     ^b1(%5: failure) in S6:
     raise %5
@@ -199,7 +199,7 @@ func @encoding.utf.Utf8Encoded.bytes#0(%0: encoding.utf.Utf8Encoded) -> array<by
     want %2
     [i3] exit.prepare return %2 at B0
     result.exit edge normal(0), value %2, demand want, prepare #3
-    high.effects at #1 failures [native], suspends false
+    high.effects at #1 failures [program, native], suspends false
     ret %2
     ^b1(%3: failure) in S7:
     raise %3

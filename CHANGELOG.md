@@ -46,6 +46,36 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   continuation 0 (async ABI C-2, #691), was refused. `TEST_ENTRY` now also
   takes a void async body; as a fixed root its start must stay empty
   (`SPB_ASYNC_ENTRY`).
+- **A constructor that may leave a field unbound runs on Champ and fails as on Tomato (#708).** The
+  OIR-2 producer gives each constructor field that its body may leave unbound (no default, not given,
+  no top-level write) a bound flag that crosses joins as the fields do, and checks it before the complete
+  self with Tomato's failure, `Object "Gate" field "a" was not initialized`. The producer's construction
+  self-check takes a field that may be unbound into a complete self only behind that check.
+  `L04.ctor.unbound-field-dies-after-body` and `L12.constructor-nested-resource-failure` (bound fields
+  destroyed once when the body or a nested construction fails) run on Champ against their case.json;
+  `L09.csv.rows-and-round-trip` already ran after #702. The early-self form is #746.
+- **An async defer with owned inputs never starts when a cancellation is pending, as on Tomato
+  (#728).** Ruling #601 K2: a `defer await` is an unshielded await of the deferred call, and Tomato
+  raises a pending cancellation before the call starts. Champ did so only for an empty input packet;
+  with owned arguments it started the child, whose code ran up to its first await. Now the step closes
+  the inputs itself through the common cleanup executor, each destroyed once with the cancellation as
+  the primary failure (a failing destroy is its secondary), as a body that cannot start closes its
+  continuation-0 inputs, and unwinds with it. Inputs with an async destroy or a service entry still
+  start the child (#745).
+- **`catch e is Error` takes a cancellation on Champ, as on Tomato (#738).** Language spec 9.5: the
+  system `Cancelled` does the role `Error`. Champ's catch binds a new `Cancelled` object for a catch of
+  the Error role too, and its `text()` through the role is "Operation was cancelled". The OIR-2 → SPB 17
+  codegen adds the system `Cancelled` descriptor, after every other one, to a program that catches the
+  Error role without declaring it, and the SPB 17 loader admits such a catch only in a program that
+  declares `Cancelled` (`CATCH_TYPE`). A provider's `NativeFailure` already matched `catch e is Error`
+  on both engines; a test now holds it. Tomato's debug build crashes on this program when it does not
+  name `Cancelled` (#744).
+- **A native's program failure passes every catch on Champ, as on Tomato (#719).** Language spec 9.5:
+  only a native's own `NativeFailure` takes part in matching. Champ no longer rewrites a synchronous
+  native's program failure (a missing provider, a refused permission group) into a catchable
+  `NativeFailure`; it ends the run with Tomato's report and exit 1. The OIR-2 native contract and the
+  SPB 17 native entry mask (`NATIVE_FAILURES`, `EXTERNAL_SIGNATURE`) now declare Program besides Native;
+  a thrown value or a `Panic` failure from a provider stops the machine as a broken entry contract.
 - **`once let` keeps plain closures, plain role values and native handles on the OIR-2 path (#717).**
   Bible §13.13: a once value must not retain a resource, and a closure or role value is allowed when it
   cannot retain one in this program; P2.4 §4.7: a native handle has no Okkama destroy. The OIR-2

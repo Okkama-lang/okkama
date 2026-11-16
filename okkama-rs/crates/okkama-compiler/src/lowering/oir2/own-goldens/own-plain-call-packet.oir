@@ -9,11 +9,11 @@ object encoding.utf.Utf8Encoded {
 scope S0 action in @main
 scope S1 action in @encoding.utf.Utf8Encoded.bytes#0
 scope S2 action in @encoding.utf.Utf8Encoded.new#0
-summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
 summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
 summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[encoding.utf.Utf8Encoded], failures=[program], publication=atomic)
-summary M3 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
-summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
+summary M3 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
 summary M5 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
 summary M6 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[encoding.utf.Utf8Encoded], failures=[program], publication=atomic)
 

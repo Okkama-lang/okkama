@@ -19,6 +19,11 @@ fn pending_message(module: &ir::Module, declaration: ir::DeclId, action: ir::Fun
     Ok(format!("Action \"{action}\" on object \"{object}\" was called before its construction completed"))
 }
 
+/// Tomato's failure of a constructor that ends with field `field` of `object` unbound (object without its module).
+pub(super) fn unbound_message(object: &str, field: &str) -> String {
+    format!("Object \"{object}\" field \"{field}\" was not initialized")
+}
+
 pub(super) fn pending_index(fields: &[ir::Field]) -> Option<usize> {
     fields.len().checked_sub(1).filter(|&index| fields[index].name == PENDING_FIELD)
 }
@@ -120,6 +125,66 @@ impl BodyLowerer<'_, '_> {
             }))?;
         }
         self.env[self.field_base + index] = Some(value);
+        if let Some(flag) = self.field_flags.get(index).copied().flatten() {
+            self.env[flag] = Some(self.constant(ir::Literal::Bool(true))?);
+        }
+        Ok(())
+    }
+
+    /// A bound flag for each constructor field that is still unbound after the defaults and the given values and
+    /// that no top-level statement of the body writes (#708): a write under a condition, in a `try` or in a loop
+    /// may not happen. The flag is an env slot past the fields, so it crosses joins as the fields do; the
+    /// completion checks it, as Tomato does after the body. (A `return` before a top-level write leaves that field
+    /// undef without a flag, which the construction self-check refuses at compile time.)
+    pub fn initialize_field_flags(&mut self) -> Result<()> {
+        let undefined = super::construction::undefined_values(self.b.body())?;
+        let written: std::collections::HashSet<usize> = self.source.block.stmts.iter()
+            .filter_map(|stmt| match stmt.kind {
+                thir::StmtKind::BindField { field, .. } | thir::StmtKind::StageField { field, .. } => Some(field),
+                _ => None,
+            }).collect();
+        for index in 0..self.field_end - self.field_base {
+            let value = self.env[self.field_base + index].expect("field slot");
+            if !undefined.contains(&value) || written.contains(&index) {
+                continue;
+            }
+            let unbound = self.constant(ir::Literal::Bool(false))?;
+            self.env.push(Some(unbound));
+            self.bindings.push(None);
+            self.field_flags[index] = Some(self.env.len() - 1);
+        }
+        Ok(())
+    }
+
+    /// Before a constructor completes, each field that may be unbound on this path is checked through its flag:
+    /// an unbound one fails the construction with Tomato's program failure (#708, L04.ctor.unbound-field-dies-
+    /// after-body). Each check continues in a block of its own, so the completion follows the chain of checks.
+    fn check_bound_fields(&mut self) -> Result<()> {
+        let layout = self.layout()?;
+        let object = super::construction::short_name(&self.b.module().declarations.get(self.declaration()?)?.name);
+        for (index, field) in layout.iter().enumerate().take(self.field_end - self.field_base) {
+            let Some(flag) = self.field_flags[index] else { continue };
+            let value = self.env[self.field_base + index].expect("field slot");
+            if !super::construction::undefined_values(self.b.body())?.contains(&value) {
+                continue;
+            }
+            let condition = self.env[flag].expect("bound flag");
+            let scope = self.scope();
+            let locals = self.locals();
+            let types = self.local_types(&locals);
+            let bound = self.new_block(scope, &types)?;
+            let unbound = self.new_block(scope, &types)?;
+            let args = self.args(&locals);
+            self.terminate(ir::TermKind::Cond {
+                condition,
+                yes: ir::Target { block: bound, args: args.clone() },
+                no: ir::Target { block: unbound, args },
+            })?;
+            self.enter(unbound, &locals, 0)?;
+            self.terminate(ir::TermKind::Trap { code: ir::TrapCode::Unbound, message: unbound_message(&object,
+                &field.name) })?;
+            self.enter(bound, &locals, 0)?;
+        }
         Ok(())
     }
 
@@ -173,6 +238,7 @@ impl BodyLowerer<'_, '_> {
 
     pub fn finish_action(&mut self, value: Option<ir::ValueId>) -> Result<()> {
         if self.is_constructor() {
+            self.check_bound_fields()?;
             let pending = pending_index(&self.layout()?);
             let no = pending.map(|_| self.constant(ir::Literal::Bool(false))).transpose()?;
             let value = if let Some(object) = self.early_self {

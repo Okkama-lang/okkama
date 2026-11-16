@@ -940,7 +940,13 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 Some(Argument::Object(id)) if error_variant(p, *id) => Type::Variant(*id),
                 Some(Argument::Object(id)) if native_failure(p) == Some(*id) => Type::Object(*id),
                 Some(Argument::Object(id)) if cancelled(p) == Some(*id) => Type::Object(*id),
-                Some(Argument::Flag(true)) => Type::Error,
+                // The Error role takes a cancellation too and binds an object of the system Cancelled, as Tomato
+                // does (#738), so the program must declare it.
+                Some(Argument::Flag(true)) => {
+                    enforce(cancelled(p).is_some(), "CATCH_TYPE",
+                        "a catch of the Error role needs the system Cancelled")?;
+                    Type::Error
+                }
                 _ => return Err(violation("CATCH_TYPE", "catch target must be a declared plain Error")),
             });
         }

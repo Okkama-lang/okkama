@@ -18,8 +18,10 @@ pub struct P1Contracts {
     callables: Vec<u32>,
 }
 
-/// The failure mask of a native entry: a provider refusal (`NativeFailure`).
-pub const NATIVE_FAILURES: u32 = 8;
+/// The failure mask of a native entry: a provider refusal (`NativeFailure`, Native = 8) or a program failure of
+/// the call (Program = 2: a missing provider, a refused permission), which no catch takes (language spec 9.5,
+/// #719). A provider never throws an error value or panics: a Rust panic stops the run.
+pub const NATIVE_FAILURES: u32 = 2 | 8;
 
 /// The opaque cleanup intrinsic of an action value (OIR-2 catalogue, #569 C3b).
 pub const SYNC_CLOSURE_CLEANUP: &str = "oir.sync_closure.cleanup";
