@@ -20,6 +20,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A role call that reaches a std primitive's intrinsic member runs on
+  Champ (#773, ruling PR-D).** LockGuard and Permit do `Closing`, and the
+  cancellation token does `Cancelling`, with catalogue externals as their
+  members; a witness table named the external, whose trusted entry ABI is
+  not the slot's, so generation stopped ("dynamic call packet differs from
+  its ABI"). A slot now reaches a catalogue external through an adapter of
+  the slot's signature, as an async implementation does, and the catalogue
+  rule that gave such a member's receiver a deps proof (in the producer and
+  in SPB 17) is gone with it.
 - **SPB 17 generation takes an async body with descriptor bindings (#747).**
   A generic async body keeps the descriptors of its inputs in continuation 0
   and reloads them at each resume (async ABI C-2); a binding of plain data

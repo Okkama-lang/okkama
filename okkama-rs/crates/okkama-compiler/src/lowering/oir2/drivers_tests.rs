@@ -115,8 +115,9 @@ fn q1_a_catalogue_signature_is_exact() {
 
 #[test]
 fn q1_deps_follow_own_for_role_slots() {
-    // LockGuard does Closing: used through the role, its close and closed are witness slots whose receiver
-    // takes deps; the Event cell always does, and plain objects never.
+    // LockGuard does Closing: used through the role, its close and closed are reached through adapters of the slot's
+    // ABI (ruling PR-D, #773), never named by the witness table, so their receiver takes no deps; the Event cell
+    // always does, and plain objects never.
     let source = concat!(
         "module app; import \"async/lock\" take Lock, LockGuard; import \"io/stream\" take Closing; ",
         "import \"async/event\" take Event; ",
@@ -125,12 +126,12 @@ fn q1_deps_follow_own_for_role_slots() {
     );
     let module = lower_std(source).unwrap_or_else(|error| panic!("{error}"));
     let deps = |name| {
-        let (id, function) = module.functions.iter().find(|(_, function)| function.attrs.iter().any(|attr| {
+        let (_, function) = module.functions.iter().find(|(_, function)| function.attrs.iter().any(|attr| {
             matches!(attr, ir::FunctionAttr::Intrinsic { name: found, .. } if found == name)
         })).unwrap();
-        super::deps(&module, id, &function.signature.params)
+        super::deps(&module, &function.signature.params)
     };
-    assert_eq!(deps("okkama.lock.LockGuard.close"), 1);
+    assert_eq!(deps("okkama.lock.LockGuard.close"), 0);
     assert_eq!(deps("okkama.event.Event.set"), 1);
     assert_eq!(deps("okkama.lock.Lock.locked"), 0);
 }

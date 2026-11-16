@@ -1,4 +1,5 @@
-//! #601 F1 in the producer and own: async role slots and bound async action values (ruling PR-D).
+//! #601 F1 in the producer and own: async role slots, external witnesses (#773) and bound async action values
+//! (ruling PR-D).
 use crate::oir2 as ir;
 
 fn function<'m>(module: &'m ir::Module, symbol: &str) -> (ir::FuncId, &'m ir::Function) {
@@ -113,6 +114,29 @@ fn f1_an_async_slot_implemented_by_an_async_intrinsic_has_a_thunk() {
     let [ir::CallOp::Intrinsic { function: called, .. }] = calls(thunk).as_slice() else { panic!("an intrinsic") };
     let target = module.functions.get(*called).unwrap();
     assert!(target.attrs.contains(&ir::FunctionAttr::Async) && target.body.is_none());
+}
+
+/// #773: a synchronous catalogue external that is a role slot of its object (LockGuard's `close` for `Closing`) is
+/// reached through an adapter of the slot's signature; no witness table names an external.
+#[test]
+fn f1_an_external_witness_is_reached_through_an_adapter() {
+    let module = super::lower_std(concat!(
+        "module app v1.0.0; import \"io/stream\" take Closing; import \"async/lock\" take Lock, LockGuard; ",
+        "async main() is int { let lock = Lock(); let guard = await lock.guard(); let c is Closing = guard; ",
+        "c.close(); if c.closed() { 1; } else { 0; } }",
+    )).unwrap_or_else(|error| panic!("{error}"));
+    super::verify_high(&module, "external witness");
+    for (_, declaration) in module.declarations.iter() {
+        let ir::DeclarationKind::Object { witnesses, .. } = &declaration.kind else { continue };
+        for &slot in witnesses.iter().flat_map(|witness| &witness.slots) {
+            let named = module.functions.get(slot).unwrap();
+            assert!(named.body.is_some() && !named.attrs.iter().any(|attr| matches!(attr,
+                ir::FunctionAttr::Intrinsic { .. } | ir::FunctionAttr::Extern(_))), "{} names {}",
+                declaration.name, named.symbol);
+        }
+    }
+    let close = module.functions.get(witness(&module, "LockGuard", 1)).unwrap();
+    assert!(matches!(calls(close).as_slice(), [ir::CallOp::Intrinsic { .. }]), "{}", close.symbol);
 }
 
 const BOUND: &str = concat!(

@@ -33,10 +33,14 @@ pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Anal
                         LowerError::unsupported(span, "role slot has no reachable implementation")
                     })?;
                 let function = declarations.builder.module().functions.get(target)?;
-                // A slot names an implementation of its own ABI. An async action never has it: it is reached through
-                // its creation thunk, an adapter with the slot's signature that returns its cold Future (ruling PR-D).
+                // A slot names an implementation of its own ABI. Two kinds never have it, and are reached through an
+                // adapter with the slot's signature (ruling PR-D): an async action, whose adapter is the creation
+                // thunk that returns its cold Future, and a catalogue external (an intrinsic member, a native),
+                // whose entry ABI is the trusted one, not the slot's (#773).
+                let external = function.attrs.iter()
+                    .any(|attr| matches!(attr, ir::FunctionAttr::Extern(_) | ir::FunctionAttr::Intrinsic { .. }));
                 let asynchronous = function.attrs.contains(&ir::FunctionAttr::Async);
-                if !asynchronous && function.signature.results == method.signature.results
+                if !external && !asynchronous && function.signature.results == method.signature.results
                     && function.attrs.contains(&ir::FunctionAttr::Method(declaration)) {
                     slots.push(target);
                     continue;

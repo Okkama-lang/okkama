@@ -91,6 +91,25 @@ async main() is int {
         "destroy kept\n"));
 }
 
+/// #773: a role call that reaches a std primitive's intrinsic member (LockGuard as Closing) goes through an adapter of
+/// the slot's ABI.
+#[test]
+fn f1_a_role_call_reaches_an_intrinsic_member_through_its_adapter() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "io/stream" take Closing;
+import "async/lock" take Lock, LockGuard;
+async main() is int {
+    let lock = Lock();
+    let guard = await lock.guard();
+    let c is Closing = guard;
+    c.close();
+    Stdout().writeln("closed " + c.closed().string() + " locked " + lock.locked().string());
+    0;
+}
+"#, "closed true locked false\n");
+}
+
 /// PR-D item 3: a bound async action value, held in a local and in a field, called and awaited; and an async role slot
 /// bound as a value. Calling it creates the cold Future.
 #[test]
