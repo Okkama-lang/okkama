@@ -110,8 +110,9 @@
   - [8.8 Сортировка](#88-сортировка)
   - [8.9 Разобранный пример: подсчёт слов](#89-разобранный-пример-подсчёт-слов)
   - [8.10 Разобранный пример: группировка и соединение](#810-разобранный-пример-группировка-и-соединение)
-  - [8.11 Okkama среди других языков](#811-okkama-среди-других-языков)
-  - [8.12 Ограничения](#812-ограничения)
+  - [8.11 Не только массивы и словари: коллекции библиотеки](#811-не-только-массивы-и-словари-коллекции-библиотеки)
+  - [8.12 Okkama среди других языков](#812-okkama-среди-других-языков)
+  - [8.13 Ограничения](#813-ограничения)
 - [Глава 9. Выражения и управление потоком](#глава-9-выражения-и-управление-потоком)
   - [9.1 У блоков есть значения](#91-у-блоков-есть-значения)
   - [9.2 Имя связывается один раз](#92-имя-связывается-один-раз)
@@ -5110,7 +5111,131 @@ Oslo/2 1200
 каждая — типизированное выражение, результат которого можно назвать,
 протестировать и передать дальше.
 
-## 8.11 Okkama среди других языков
+## 8.11 Не только массивы и словари: коллекции библиотеки
+
+Массивы, словари и диапазоны встроены в язык. Всё остальное — объекты
+библиотеки, и коллекции библиотеки следуют тому же правилу, что и
+встроенные: ничего не меняется, и каждая операция, которая добавляет или
+убирает, даёт новую коллекцию.
+
+```okkama
+module bible/library_collections v1.0.0;
+
+// The library's persistent collections at work: a Deque as the queue of a
+// breadth-first search, an OrderedSet for the towns already reached, and a
+// Heap that hands out the most urgent delivery first.
+import "io/stdout" take Stdout;
+import "collections/deque" take Deque;
+import "collections/set" take Set, OrderedSet;
+import "collections/heap" take Heap;
+import "compare" take Comparing, Order;
+
+object Search {
+    has roads is %string:@string;
+    has queue is Deque<string>;
+    has reached is Set<string>;
+    has order is @string;
+
+    Search(:roads, :queue, :reached, :order);
+
+    done() is bool { queue.size() == 0; }
+
+    // The front town leaves the queue; its neighbours not reached yet join the back.
+    stepped() is ^Search {
+        let town = queue.first();
+        let fresh = (roads[town] else []).filter() -> n { !reached.membership(n); };
+        ^queue = fresh.reduce(queue.tail()) -> q, n { q.suffix(n); };
+        ^reached = fresh.reduce(reached) -> s, n { s.addition(n); };
+        ^order = order + fresh;
+    }
+
+    shown() is string { order.join(" > "); }
+}
+
+// A delivery is ordered by the hours left before its deadline.
+object Delivery does Comparing<Delivery> {
+    has town is string;
+    has hours is int;
+    Delivery(:town, :hours);
+    town() is string { town; }
+    hours() is int { hours; }
+    order(other is Delivery) is Order { hours.order(other.hours()); }
+}
+
+main() is int {
+    let out = Stdout();
+    let roads = [
+        "Kostanay": ["Astana", "Aktobe"],
+        "Astana": ["Kostanay", "Karaganda", "Pavlodar"],
+        "Aktobe": ["Kostanay"],
+        "Karaganda": ["Astana", "Almaty"],
+        "Pavlodar": ["Astana"],
+        "Almaty": ["Karaganda", "Shymkent"],
+        "Shymkent": ["Almaty"]
+    ];
+    let start is Set<string> = OrderedSet(values: ["Kostanay"]);
+    let search = Search(roads: roads, queue: Deque(values: ["Kostanay"]), reached: start, order: ["Kostanay"]);
+    loop {
+        last if search.done();
+        search = search.stepped();
+    }
+    out.writeln("reached: " + search.shown());
+
+    let pending = Heap(values: [
+        Delivery(town: "Almaty", hours: 48),
+        Delivery(town: "Astana", hours: 12),
+        Delivery(town: "Aktobe", hours: 30)
+    ]);
+    let later = pending.addition(Delivery(town: "Rudny", hours: 3));
+    out.writeln("most urgent now: " + pending.top().town() + ", after the new order: " + later.top().town());
+    out.writeln("still waiting before: " + pending.size().string() + ", after: " + later.size().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+reached: Kostanay > Astana > Aktobe > Karaganda > Pavlodar > Almaty > Shymkent
+most urgent now: Astana, after the new order: Rudny
+still waiting before: 3, after: 4
+```
+
+- **`Deque` — очередь поиска в ширину.** `first()` читает начало, `tail()`
+  его отбрасывает, а `suffix(n)` добавляет в конец. Каждая операция
+  возвращает новый deque, и добавление с любого конца стоит O(1) в
+  амортизированном смысле. Поиск продвигается, перепривязывая `search` к его
+  преемнику (раздел 13.5), и больше в нём ничего не меняется.
+- **`OrderedSet` помнит, куда уже дошли.** `membership` отвечает за время,
+  свойственное его виду, а `addition` даёт новое множество. Порядок
+  добавления сохраняется, так что обход множества никогда не зависит от
+  хеширования. `KeyedSet` вместо этого держит ключи словаря в порядке ключей.
+- **`Heap` выдаёт наименьшее значение по его собственному порядку.**
+  `Delivery` выполняет `Comparing<Delivery>` по оставшимся часам, так что
+  `top()` — самая срочная доставка. `addition` даёт новую кучу с ещё одним
+  значением, а `pending.top()` по-прежнему Astana после того, как из неё
+  сделали `later`.
+- **Старые версии остаются действительными и делят части.** И `pending`, и
+  `later` пригодны к работе, а вторая делит узлы дерева с первой. Это
+  персистентность из раздела 8.5, распространённая на структуры, которых нет
+  в языке.
+
+В библиотеке есть ещё `List` (персистентный связный список), `Frequencies`
+(подсчёт в порядке первого появления), `Sorted` с проекциями двоичного
+поиска, ленивые представления (`Mapped`, `Filtered`, `Chunked` и другие) и
+комбинаторные курсоры. Каждый — объект, который выполняет часть из
+`Iterating`, `Sizing` и `Sequencing`, поэтому `for`, `reduce` и другие
+операции раздела 8.2 принимают его так же, как массив.
+
+В примере видна одна шероховатость. `addition` у множества возвращает роль
+`Set<T>`, а роль не может заодно обещать `Iterating<T>`, потому что роли
+пока не составляются. Множество, прошедшее через `addition`, отвечает на
+`membership` и `size`, но `for` не может его обойти без приведения, которого
+в языке нет. Пример держит порядок в отдельном массиве. Исправление — дело
+языка (композиция ролей) или библиотеки (`addition`, возвращающий
+конкретное множество). Оно перечислено среди прочих пробелов в главе 28.
+
+## 8.12 Okkama среди других языков
 
 | | Коллекции по умолчанию | Порядок обхода словаря | `map`, `filter` |
 |---|---|---|---|
@@ -5141,7 +5266,7 @@ Oslo/2 1200
 (раздел 8.5); разница в том, что в Okkama рядом нет изменяемой коллекции,
 к которой можно отступить.
 
-## 8.12 Ограничения
+## 8.13 Ограничения
 
 - **Что всё ещё копируется.** Идиома с `map()` и `a + b` двух больших массивов стоят полного результата.
 - **Первое обновление большой карты стоит копии.** Последующие обновления могут быть дешевле; не считайте стоимость всех обновлений одинаковой.
@@ -22344,6 +22469,10 @@ ML, Rust или Haskell (раздел 16.7).
 - **Запуск тестов (#339).** У `okkama run -t` пока нет форматов отчёта,
   зёрен, параллельных исполнителей и сроков; отчёты библиотека строить уже
   умеет (раздел 15.1).
+- **Множество после `addition` нельзя обойти (раздел 8.11).** `addition`
+  и `difference` возвращают роль `Set<T>`, которая не может заодно обещать
+  `Iterating<T>`, пока роли не составляются. Закрыть это может композиция
+  ролей или `addition`, возвращающий конкретное множество.
 - **Пакеты (раздел 19.11).** У blade нет реестра и рабочих пространств, а
   программа не может зависеть от двух мажорных версий одного пакета.
 - **Полномочия мельче групп natives (раздел 21.8).** Хост может запретить

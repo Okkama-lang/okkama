@@ -334,7 +334,50 @@ Codd's relational model [@codd1970]. The operations are the same; what the
 program adds is that each one is a typed expression whose result can be
 named, tested and passed on.
 
-## 8.11 Okkama among other languages
+## 8.11 Beyond arrays and maps: the library's collections
+
+Arrays, maps and ranges are built in. Everything else is a library object,
+and the library's collections follow the same rule as the built-in ones:
+nothing changes, and every operation that adds or removes gives a new
+collection.
+
+{{example:08-library}}
+
+- **A `Deque` is the queue of a breadth-first search.** `first()` reads the
+  front, `tail()` drops it, and `suffix(n)` adds at the back. Each returns a
+  new deque, and adding at either end costs O(1) amortized. The search moves
+  forward by rebinding `search` to its successor (Section 13.5), and nothing
+  else in it changes.
+- **An `OrderedSet` remembers what was reached.** `membership` answers in
+  the time of its kind, and `addition` gives a new set. The order of
+  insertion is kept, so the traversal of a set never depends on hashing.
+  `KeyedSet` keeps map keys in key order instead.
+- **A `Heap` hands out the least value by its own order.** `Delivery` does
+  `Comparing<Delivery>` by the hours left, so `top()` is the most urgent
+  delivery. `addition` gives a new heap with one more value, and
+  `pending.top()` is still Astana after `later` was made from it.
+- **Old versions stay valid and share their parts.** `pending` and `later`
+  are both usable, and the second shares the tree nodes of the first. This
+  is the persistence of Section 8.5, extended to structures the language
+  does not build in.
+
+The library also has `List` (a persistent linked list), `Frequencies`
+(counts in first-occurrence order), `Sorted` and its binary-search
+projections, lazy views (`Mapped`, `Filtered`, `Chunked` and others), and
+combinatorial cursors. Each is an object that does some of `Iterating`,
+`Sizing` and `Sequencing`, so `for`, `reduce` and the other operations of
+Section 8.2 accept it as they accept an array.
+
+One wart shows in the example. `addition` on a set returns the role
+`Set<T>`, and the role cannot also promise `Iterating<T>`, because roles do
+not compose yet. A set that has gone through `addition` can answer
+`membership` and `size`, but `for` cannot walk it without a cast that the
+language does not have. The example keeps the order in an array of its own.
+The fix belongs to the language (role composition) or to the library (an
+`addition` that returns the concrete set). It is listed with the other gaps
+in Chapter 28.
+
+## 8.12 Okkama among other languages
 
 | | Default collections | Map iteration order | `map`, `filter` |
 |---|---|---|---|
@@ -364,7 +407,7 @@ share structure between versions, as Okkama's persistent library
 collections do (Section 8.5); the difference is that in Okkama there is no
 mutable collection beside them to fall back on.
 
-## 8.12 Limits
+## 8.13 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.

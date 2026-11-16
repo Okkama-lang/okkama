@@ -121,6 +121,10 @@ open items wait for that rewrite.
 - **The test runner (#339).** `okkama run -t` has no report formats, seeds,
   parallel workers or deadlines yet; the library can already render reports
   (Section 15.1).
+- **A set that has been added to cannot be walked (Section 8.11).**
+  `addition` and `difference` return the role `Set<T>`, which cannot also
+  promise `Iterating<T>` until roles compose. Either role composition or an
+  `addition` that returns the concrete set closes it.
 - **Packages (Section 19.11).** blade has no registry and no workspaces,
   and a program cannot depend on two major versions of one package.
 - **Authority below the native groups (Section 21.8).** A host can deny a

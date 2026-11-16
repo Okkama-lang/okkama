@@ -206,6 +206,9 @@ language.
   suppressed (JLS §14.20.3)); ch. 10 points to it.
 - 2026-11-16: 2.9 gains generic functions (CLOS 1988, Julia; why Okkama keeps
   single dispatch and closed `match`).
+- 2026-11-16: 8.11 the library's collections (`08-library`: BFS with a Deque
+  and an OrderedSet, a Heap of deadlines; the `Set.addition` wart, listed in
+  28.3).
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

@@ -110,8 +110,9 @@
   - [8.8 Sorting](#88-sorting)
   - [8.9 A worked example: counting words](#89-a-worked-example-counting-words)
   - [8.10 A worked example: grouping and joining](#810-a-worked-example-grouping-and-joining)
-  - [8.11 Okkama among other languages](#811-okkama-among-other-languages)
-  - [8.12 Limits](#812-limits)
+  - [8.11 Beyond arrays and maps: the library's collections](#811-beyond-arrays-and-maps-the-librarys-collections)
+  - [8.12 Okkama among other languages](#812-okkama-among-other-languages)
+  - [8.13 Limits](#813-limits)
 - [Chapter 9. Expressions and Control Flow](#chapter-9-expressions-and-control-flow)
   - [9.1 Blocks have values](#91-blocks-have-values)
   - [9.2 Names are bound once](#92-names-are-bound-once)
@@ -5048,7 +5049,131 @@ Codd's relational model [[Codd 1970](#ref-codd1970)]. The operations are the sam
 program adds is that each one is a typed expression whose result can be
 named, tested and passed on.
 
-## 8.11 Okkama among other languages
+## 8.11 Beyond arrays and maps: the library's collections
+
+Arrays, maps and ranges are built in. Everything else is a library object,
+and the library's collections follow the same rule as the built-in ones:
+nothing changes, and every operation that adds or removes gives a new
+collection.
+
+```okkama
+module bible/library_collections v1.0.0;
+
+// The library's persistent collections at work: a Deque as the queue of a
+// breadth-first search, an OrderedSet for the towns already reached, and a
+// Heap that hands out the most urgent delivery first.
+import "io/stdout" take Stdout;
+import "collections/deque" take Deque;
+import "collections/set" take Set, OrderedSet;
+import "collections/heap" take Heap;
+import "compare" take Comparing, Order;
+
+object Search {
+    has roads is %string:@string;
+    has queue is Deque<string>;
+    has reached is Set<string>;
+    has order is @string;
+
+    Search(:roads, :queue, :reached, :order);
+
+    done() is bool { queue.size() == 0; }
+
+    // The front town leaves the queue; its neighbours not reached yet join the back.
+    stepped() is ^Search {
+        let town = queue.first();
+        let fresh = (roads[town] else []).filter() -> n { !reached.membership(n); };
+        ^queue = fresh.reduce(queue.tail()) -> q, n { q.suffix(n); };
+        ^reached = fresh.reduce(reached) -> s, n { s.addition(n); };
+        ^order = order + fresh;
+    }
+
+    shown() is string { order.join(" > "); }
+}
+
+// A delivery is ordered by the hours left before its deadline.
+object Delivery does Comparing<Delivery> {
+    has town is string;
+    has hours is int;
+    Delivery(:town, :hours);
+    town() is string { town; }
+    hours() is int { hours; }
+    order(other is Delivery) is Order { hours.order(other.hours()); }
+}
+
+main() is int {
+    let out = Stdout();
+    let roads = [
+        "Kostanay": ["Astana", "Aktobe"],
+        "Astana": ["Kostanay", "Karaganda", "Pavlodar"],
+        "Aktobe": ["Kostanay"],
+        "Karaganda": ["Astana", "Almaty"],
+        "Pavlodar": ["Astana"],
+        "Almaty": ["Karaganda", "Shymkent"],
+        "Shymkent": ["Almaty"]
+    ];
+    let start is Set<string> = OrderedSet(values: ["Kostanay"]);
+    let search = Search(roads: roads, queue: Deque(values: ["Kostanay"]), reached: start, order: ["Kostanay"]);
+    loop {
+        last if search.done();
+        search = search.stepped();
+    }
+    out.writeln("reached: " + search.shown());
+
+    let pending = Heap(values: [
+        Delivery(town: "Almaty", hours: 48),
+        Delivery(town: "Astana", hours: 12),
+        Delivery(town: "Aktobe", hours: 30)
+    ]);
+    let later = pending.addition(Delivery(town: "Rudny", hours: 3));
+    out.writeln("most urgent now: " + pending.top().town() + ", after the new order: " + later.top().town());
+    out.writeln("still waiting before: " + pending.size().string() + ", after: " + later.size().string());
+    0;
+}
+```
+
+Output:
+
+```text
+reached: Kostanay > Astana > Aktobe > Karaganda > Pavlodar > Almaty > Shymkent
+most urgent now: Astana, after the new order: Rudny
+still waiting before: 3, after: 4
+```
+
+- **A `Deque` is the queue of a breadth-first search.** `first()` reads the
+  front, `tail()` drops it, and `suffix(n)` adds at the back. Each returns a
+  new deque, and adding at either end costs O(1) amortized. The search moves
+  forward by rebinding `search` to its successor (Section 13.5), and nothing
+  else in it changes.
+- **An `OrderedSet` remembers what was reached.** `membership` answers in
+  the time of its kind, and `addition` gives a new set. The order of
+  insertion is kept, so the traversal of a set never depends on hashing.
+  `KeyedSet` keeps map keys in key order instead.
+- **A `Heap` hands out the least value by its own order.** `Delivery` does
+  `Comparing<Delivery>` by the hours left, so `top()` is the most urgent
+  delivery. `addition` gives a new heap with one more value, and
+  `pending.top()` is still Astana after `later` was made from it.
+- **Old versions stay valid and share their parts.** `pending` and `later`
+  are both usable, and the second shares the tree nodes of the first. This
+  is the persistence of Section 8.5, extended to structures the language
+  does not build in.
+
+The library also has `List` (a persistent linked list), `Frequencies`
+(counts in first-occurrence order), `Sorted` and its binary-search
+projections, lazy views (`Mapped`, `Filtered`, `Chunked` and others), and
+combinatorial cursors. Each is an object that does some of `Iterating`,
+`Sizing` and `Sequencing`, so `for`, `reduce` and the other operations of
+Section 8.2 accept it as they accept an array.
+
+One wart shows in the example. `addition` on a set returns the role
+`Set<T>`, and the role cannot also promise `Iterating<T>`, because roles do
+not compose yet. A set that has gone through `addition` can answer
+`membership` and `size`, but `for` cannot walk it without a cast that the
+language does not have. The example keeps the order in an array of its own.
+The fix belongs to the language (role composition) or to the library (an
+`addition` that returns the concrete set). It is listed with the other gaps
+in Chapter 28.
+
+## 8.12 Okkama among other languages
 
 | | Default collections | Map iteration order | `map`, `filter` |
 |---|---|---|---|
@@ -5078,7 +5203,7 @@ share structure between versions, as Okkama's persistent library
 collections do (Section 8.5); the difference is that in Okkama there is no
 mutable collection beside them to fall back on.
 
-## 8.12 Limits
+## 8.13 Limits
 
 - **What still copies.** The `map()` idiom and `a + b` of two large arrays cost the full result.
 - **A large map’s first update costs a copy.** Subsequent updates can be cheaper; do not assume every update has the same cost.
@@ -22119,6 +22244,10 @@ open items wait for that rewrite.
 - **The test runner (#339).** `okkama run -t` has no report formats, seeds,
   parallel workers or deadlines yet; the library can already render reports
   (Section 15.1).
+- **A set that has been added to cannot be walked (Section 8.11).**
+  `addition` and `difference` return the role `Set<T>`, which cannot also
+  promise `Iterating<T>` until roles compose. Either role composition or an
+  `addition` that returns the concrete set closes it.
 - **Packages (Section 19.11).** blade has no registry and no workspaces,
   and a program cannot depend on two major versions of one package.
 - **Authority below the native groups (Section 21.8).** A host can deny a
