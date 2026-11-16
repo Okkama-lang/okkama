@@ -45,6 +45,8 @@ enum Take {
     PacketUnsaved,
     /// The same packet is saved in two slots.
     PacketTwice,
+    /// `fut.spawn.bound` of the Future before its proof: the registry is another holder (#791 W2).
+    SpawnedBound,
 }
 
 /// @take's slots: 0 inputs, 1 owner state, 2 the cache duty, 3 the Future, 4–6 the unwind operands, 7 the take
@@ -230,6 +232,9 @@ fn taker(variant: Take) -> (Function, FrameLayout) {
             duty_slots.push(8);
         }
         _ => {}
+    }
+    if variant == Take::SpawnedBound {
+        b.next(O::FutureSpawnBound, vec![l(future)], vec![]);
     }
     // Observations of the Future publish nothing.
     let done = b.register(Type::Bool);
@@ -427,6 +432,13 @@ fn proofs_of_the_future_on_each_path_reach_its_take() {
 fn box_f_has_no_take_capability() {
     reject_with(&taking(Take::Boxed), take::TAKE_CAPABILITY, "another holder can observe");
     reject_with(&taking(Take::CopyBoxed), take::TAKE_CAPABILITY, "another holder can observe");
+}
+
+/// #791 W2 (§4.8 item 2): a bound spawn registers the Future, and a spawned Future is observed by the registry and
+/// by whoever awaits its task, so `fut.new → fut.spawn.bound → unique_cache.proof → await.take` has no capability.
+#[test]
+fn a_bound_spawned_future_has_no_take_capability() {
+    reject_with(&taking(Take::SpawnedBound), take::TAKE_CAPABILITY, "another holder can observe");
 }
 
 #[test]

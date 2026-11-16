@@ -261,3 +261,44 @@ fn f1_a_covariant_successor_result_of_an_async_slot_is_refused_by_name() {
         Ok(_) => panic!("expected the named refusal"),
     }
 }
+
+const MANAGED: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "role Making { async make() is Res; } ",
+    "object Maker does Making { Maker(); async make() is Res { Res(l: \"made\"); } } ",
+    "async main() is int { let m is Making = Maker(); let r = await m.make(); ",
+    "let a is async () is Res = Maker().make; let s = await a(); r.n() + s.n(); }",
+);
+
+/// #791 W2 (§4.8 item 2): the Future of a role call and of an action value call is a dynamic entry of the awaiting
+/// scope (PR-D item 4), awaited shared. With a managed outcome own takes neither (no temporary take: no
+/// `unique_cache.proof`, no `await.take`), even where the producer marks the awaited call `temp` (OIR-2 §10.3): a
+/// Future this body did not create has no take capability, and its outcome is released by the dynamic step.
+#[test]
+fn f1_a_role_or_action_call_future_is_awaited_shared_without_a_take() {
+    let module = super::lower_std(MANAGED).unwrap_or_else(|error| panic!("{error}"));
+    super::verify_high(&module, "managed role call");
+    let (_, main) = function(&module, "main");
+    let body = main.body.as_ref().unwrap();
+    let futures = body.values.iter().filter(|(_, value)| {
+        matches!(module.types.get(value.ty).unwrap(), ir::Type::Future(_))
+    }).map(|(id, _)| id).collect::<Vec<_>>();
+    let awaited = body.insts.iter().filter(|(_, inst)| matches!(inst.op, ir::Operation::Async(ir::AsyncOp::Await {
+        future, .. }) if futures.contains(&future))).count();
+    assert_eq!(awaited, 2, "both Futures are awaited");
+    let (own, _) = super::own_case_tests::own_stage(MANAGED, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, main) = function(&own, "main");
+    let body = main.body.as_ref().unwrap();
+    let takes = body.insts.iter().map(|(_, inst)| &inst.op)
+        .chain(body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+            ir::TermKind::InvokeOwn { op, .. } => Some(&**op),
+            _ => None,
+        }))
+        .filter(|op| matches!(op, ir::Operation::Async(ir::AsyncOp::AwaitTake { .. }
+            | ir::AsyncOp::UniqueCacheProof { .. })))
+        .count();
+    assert_eq!(takes, 0);
+    full_low(MANAGED);
+}
