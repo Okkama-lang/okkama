@@ -375,3 +375,79 @@ fn s2_liveness_preserves_proof_and_state_only_roots() {
     clobbered.locations.insert(Location::Register(2), clobbered.locations[&Location::Register(0)]);
     assert!(check_allocation(&function, &clobbered).unwrap_err().message.contains("clobbered"));
 }
+
+/// The dominance of the load check (#779) is the greatest fixed point of `dom(b) = {b} ∪ ⋂ dom(predecessors)`
+/// over the blocks the entry reaches, as the bitsets before it computed; a block beyond the entry's reach
+/// dominates only itself. Random CFGs with loops, joins, duplicate edges and unreachable parts.
+#[test]
+fn dominance_agrees_with_the_bitset_fixed_point() {
+    fn bitsets(predecessors: &[Vec<usize>]) -> Vec<Vec<bool>> {
+        let count = predecessors.len();
+        let mut reachable = vec![false; count];
+        reachable[0] = true;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in 1..count {
+                if !reachable[block] && predecessors[block].iter().any(|&source| reachable[source]) {
+                    reachable[block] = true;
+                    changed = true;
+                }
+            }
+        }
+        let mut dom = vec![vec![true; count]; count];
+        for block in 0..count {
+            if block == 0 || !reachable[block] {
+                dom[block] = (0..count).map(|other| other == block).collect();
+            }
+        }
+        changed = true;
+        while changed {
+            changed = false;
+            for block in (1..count).filter(|&block| reachable[block]) {
+                let mut next = vec![true; count];
+                for &source in predecessors[block].iter().filter(|&&source| reachable[source]) {
+                    for (bit, &other) in next.iter_mut().zip(&dom[source]) {
+                        *bit &= other;
+                    }
+                }
+                next[block] = true;
+                if next != dom[block] {
+                    dom[block] = next;
+                    changed = true;
+                }
+            }
+        }
+        dom
+    }
+    let mut state = 0x0779_d0d0_0779_d0d0u64;
+    let mut next = |bound: usize| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % bound as u64) as usize
+    };
+    let mut checked = 0;
+    for _ in 0..3000 {
+        let count = 1 + next(24);
+        let mut predecessors = vec![Vec::new(); count];
+        for source in 0..count {
+            for _ in 0..next(4) {
+                // No edge enters the entry block (ENTRY_BLOCK_TARGET).
+                if count > 1 {
+                    predecessors[1 + next(count - 1)].push(source);
+                }
+            }
+        }
+        let expected = bitsets(&predecessors);
+        let dominance = super::verify::Dominance::of(&predecessors);
+        for (block, row) in expected.iter().enumerate() {
+            for (dominator, &dominates) in row.iter().enumerate() {
+                assert_eq!(dominance.dominates(dominator, block), dominates,
+                    "{dominator} over {block} in {predecessors:?}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100_000, "{checked}");
+}

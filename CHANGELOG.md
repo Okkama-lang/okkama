@@ -20,6 +20,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Large functions compile and load faster on Champ (#779).** The SPB 17
+  load check computed dominance with bitsets of blocks² / 64 words per pass
+  and closed dependency sets by walking every record until nothing changed;
+  it now uses a dominator tree (Cooper, Harvey and Kennedy) and the
+  obligations table, as the codegen's root anchors do. The OIR-2 construction
+  check and codegen's dead-alias pruning propagate along a worklist instead
+  of repeated passes, and the pipeline no longer verifies the Low module a
+  second time inside codegen. In a debug build `L09.ini.native-equivalence`
+  takes about 11 s of CPU instead of 14 s (codegen and the load check 2.3 s
+  instead of 4.2 s), `L09.db.row-readers` 25 s, and
+  `L04.once.generic-std-instantiation` 18 s.
+
 - **A holder of a closure that captures a resource passes full verification
   (#777).** Since #723 a holder's function type is resolved by the closures
   the module creates, so its classification no longer carried the type's

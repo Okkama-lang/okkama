@@ -137,7 +137,7 @@ pub fn compile_linked_tests_with(roots: &[RootFile<'_>], loader: &mut dyn Module
 }
 
 /// The phases after the producer: verify_high, own, verify_own, coro, verify_coro, low, verify_low, SPB 17 and
-/// its load check (inside `compile_low_with`).
+/// its load check (inside `compile_verified_low`).
 pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<Vec<u8>, PipelineError> {
     let execution = if high.tests.is_some() {
         o::verify::ExecutionMode::Tests
@@ -179,9 +179,10 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let objects = sparrow_oir2::with_composites(&low, || sparrow_oir2::objects(&low, &layouts))
         .map_err(|error| phase("layout", error))?;
     let contracts = s::p1::P1Contracts::new(&objects).map_err(|error| phase("spb_contracts", error))?;
-    let output = sparrow_oir2::compile_low_with(&low, &layouts, context(), &contracts, &options.verify)
+    // verify_low above has checked this module under these options and contracts (#779).
+    let output = sparrow_oir2::compile_verified_low(&low, &layouts, &contracts)
         .map_err(|error| phase("compile_low", error))?;
-    // `compile_low_with` has already passed this program through `verify_load` against these contracts;
+    // `compile_verified_low` has already passed this program through `verify_load` against these contracts;
     // a second identical check of the same program cannot fail and costs as much again (#701).
     stages.mark("codegen+verify_load");
     s::encode(&output.program).map_err(|error| phase("encode", error))

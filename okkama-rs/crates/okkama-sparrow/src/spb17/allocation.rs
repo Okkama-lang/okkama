@@ -81,6 +81,9 @@ pub(crate) fn post_uses(f: &Function) -> Vec<Set> {
     sites
 }
 
+/// The reference closure over every dependency record, kept for the reference algorithms and the tests; the
+/// checks use the `Obligations` table.
+#[cfg(any(test, feature = "liveness-reference"))]
 pub(crate) fn close_dependencies(f: &Function, live: &mut Set) {
     loop {
         let previous = live.len();
