@@ -501,6 +501,34 @@ async main() is int {
     assert!(refused.contains("D18_EXECUTOR"), "{refused}");
 }
 
+/// A group of groups: the element type is generic itself (`FutureGroup_t_object(…FutureGroup<…>)`), and a temporary
+/// group's `wait` is registered in the outer group while it runs; the member's outcome is destroyed once.
+#[test]
+fn a_group_of_groups() {
+    expect(&program("import \"async/scope\" take FutureGroup;\nimport \"async/event\" take Event;", r#"object Gated {
+    Gated();
+    async make(name is string, gate is Event) is Res { await gate.wait(); Stdout().writeln("make " + name); Res(name: name); }
+}
+object F {
+    F();
+    made(gate is Event) is FutureGroup<Res> {
+        let g is FutureGroup<Res> = FutureGroup();
+        g.start(Gated().make("member", gate));
+        g;
+    }
+}
+async main() is int {
+    let gate = Event();
+    let outer is FutureGroup<FutureGroup<Res>> = FutureGroup();
+    outer.start(F().made(gate).wait());
+    gate.set();
+    await outer.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#), "make member\nmain end\ndestroy member\n");
+}
+
 /// Not a group: a fresh Future offered from a nested scope together with a value of an enclosing one. The inner
 /// split runs first, so the enclosing split can fail with the Future's entry in flight; the Future's owner settles
 /// entries at run time (D25.3). The callee refuses and closes the packet: the cold Future never runs.

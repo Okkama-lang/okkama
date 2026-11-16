@@ -469,8 +469,12 @@ impl Runtime {
             let needed = match state {
                 COLD | RUNNING => true,
                 FAILURE_STATE => {
-                    get(task, FLAGS) & OBSERVED == 0
-                        && !matches!(self.failure(get(task, FAILURE)).map(|f| &f.kind), Some(FailureKind::Cancelled))
+                    let reported = get(task, FLAGS) & OBSERVED == 0
+                        && !matches!(self.failure(get(task, FAILURE)).map(|f| &f.kind), Some(FailureKind::Cancelled));
+                    // A detached Champ driver that failed keeps its record while its INPUTS wait for the root closer.
+                    #[cfg(feature = "champ-abi")]
+                    let reported = reported || self.champ_retained(task);
+                    reported
                 }
                 // Champ KL-1 (draft 3 §7.2, #699): a detached Future keeps its record while its outcome packet
                 // waits for the root closer at shutdown.

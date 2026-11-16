@@ -460,8 +460,18 @@ impl Runtime {
                 }
                 let record = std::mem::take(&mut self.champ_cache_mut(task)?.packet);
                 self.champ_cache_mut(task)?.flags |= RELEASED;
-                outcome.append(packet(self, record)?);
-                consume(self, record);
+                if record != 0 {
+                    outcome.append(packet(self, record)?);
+                    consume(self, record);
+                }
+                // A detached driver's INPUTS close with its outcome (T1).
+                let inputs = self.champ_driver_inputs(task)?;
+                if inputs != 0 {
+                    let offset = self.champ_body(task)?.packet().expect("a driver's INPUTS");
+                    set(task, offset, 0);
+                    outcome.append(packet(self, inputs)?);
+                    consume(self, inputs);
+                }
             }
             if outcome.is_empty() {
                 break;
@@ -505,13 +515,22 @@ impl Runtime {
     }
 
     /// KL-1 (draft 3 §7.2, #699): a detached Future that succeeded keeps its registry record, and with it its
-    /// outcome packet, until the root closer closes the packet at shutdown. An empty packet needs nothing.
+    /// outcome packet, until the root closer closes the packet at shutdown. An empty packet needs nothing. A detached
+    /// driver that settled, done or failed, is kept the same way while its INPUTS are not empty (memo §2.4, KL-1
+    /// extension; #810 review T1).
     pub(crate) fn champ_retained(&self, task: Word) -> bool {
-        if get(task, tasks::FLAGS) & (CHAMP | DETACHED) != CHAMP | DETACHED || get(task, tasks::STATE) != tasks::DONE {
+        let state = get(task, tasks::STATE);
+        if get(task, tasks::FLAGS) & (CHAMP | DETACHED) != CHAMP | DETACHED
+            || !matches!(state, tasks::DONE | tasks::FAILURE_STATE)
+        {
             return false;
         }
-        self.champ_cache(task).is_ok_and(|cache| cache.flags & RELEASED == 0 && cache.packet != 0
-            && packet(self, cache.packet).is_ok_and(|outcome| !outcome.is_empty()))
+        let Ok(cache) = self.champ_cache(task) else { return false };
+        if cache.flags & RELEASED != 0 {
+            return false;
+        }
+        let nonempty = |record: Word| record != 0 && packet(self, record).is_ok_and(|held| !held.is_empty());
+        (state == tasks::DONE && nonempty(cache.packet)) || self.champ_driver_inputs(task).is_ok_and(nonempty)
     }
 
     /// Settle-time view of a cache duty, with no change (draft 3 §6.2; ABI D24.2).
@@ -555,14 +574,24 @@ impl Runtime {
     }
 
     /// The packet records a cache duty answers for: its success's outcome and, until its body starts, its inputs
-    /// in continuation 0 (a running body's slot area is its own).
+    /// in continuation 0 (a running body's slot area is its own). A driver never consumes its INPUTS word: the duty
+    /// answers for them in every state, so an owner transition carries them while it runs (#810 review T1).
     fn champ_duty_packets(&self, future: Word) -> Result<[Word; 2], Error> {
-        let packet_slot = self.champ_body(future)?.packet();
-        let inputs = match packet_slot {
-            Some(offset) if get(future, tasks::STATE) != tasks::RUNNING => get(future, offset),
+        let map = self.champ_body(future)?;
+        let inputs = match map.packet() {
+            Some(offset) if map.driver.is_some() || get(future, tasks::STATE) != tasks::RUNNING => get(future, offset),
             _ => 0,
         };
         Ok([self.champ_cache(future)?.packet, inputs])
+    }
+
+    /// The INPUTS record of a driver frame, or 0.
+    fn champ_driver_inputs(&self, future: Word) -> Result<Word, Error> {
+        let map = self.champ_body(future)?;
+        Ok(match (map.driver.is_some(), map.packet()) {
+            (true, Some(offset)) => get(future, offset),
+            _ => 0,
+        })
     }
 
     /// Preflight of a cache duty taking `owner` (G1 §3 through ABI D25.1): a live duty, and every identity of
@@ -675,7 +704,9 @@ impl Runtime {
             CacheSettle::Nothing => {}
             CacheSettle::Detach => {
                 let owner = self.champ_root_owner()?;
-                self.champ_cache_mut(duty)?.owner = owner;
+                // The duty takes the root as its owner, with what it answers for: a driver's INPUTS too (T1).
+                self.champ_duty_preflight(duty, owner)?;
+                self.champ_duty_transition(duty, owner);
                 set(duty, tasks::FLAGS, get(duty, tasks::FLAGS) | DETACHED);
                 set(duty, tail + TASK, duty);
                 // The root registry: shutdown cancels it and waits for it, as Tomato does with spawned tasks. A

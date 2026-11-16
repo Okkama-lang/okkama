@@ -413,6 +413,14 @@ pub(super) fn check_helpers(p: &Program, f: &Function, name: &str) -> Result<(),
     enforce(matches!(layout, Some([Type::Future(_), limit_field, clock]) if named(*limit_field, limit)
         && named(*clock, TIMING)), HOLDER_HELPER,
         &format!("{name}: the receiver is not origin, {limit} and Timing"))?;
+    // The driver returns the origin's result word as the outcome: the origin's outcome type is the entry's result
+    // (#810 review T2).
+    let origin = match layout {
+        Some([Type::Future(id), ..]) => p.tables.future_results.get(*id as usize).copied(),
+        _ => None,
+    };
+    enforce(origin == Some(f.results.first().copied()), HOLDER_HELPER,
+        &format!("{name}: the origin's outcome is not the entry's result"))?;
     for (index, kind) in row.helpers.iter().enumerate() {
         let symbol = helper_symbol(name, index);
         let helper = p.functions.iter().find(|helper| helper.symbol == symbol)

@@ -102,8 +102,7 @@ fn cancelling_the_outcome_cancels_the_origin() {
 "#), "cancelled\n");
 }
 
-/// An origin that awaits a call of its own: it starts as a task of its own (its TASK word set, PR-E), so the call it
-/// awaits inherits that task.
+/// An origin that awaits a call of its own: the call it awaits runs in the origin's task.
 #[test]
 fn an_origin_awaits_a_call_of_its_own() {
     expect(&program(r#"object Chain {
@@ -229,4 +228,77 @@ fn the_loader_checks_the_timeout_helpers() {
     (swapped.functions[seconds].symbol, swapped.functions[wait].symbol) = (symbols.1, symbols.0);
     let refused = run(s::encode(&swapped).unwrap()).err().expect("helpers of other shapes");
     assert!(refused.contains("HOLDER_HELPER"), "{refused}");
+}
+
+/// A running timeout whose duty moves (into a group) keeps its inputs with it: the fresh receiver's origin, whose
+/// outcome is destroyed once (review T1: a driver's INPUTS take every owner transition).
+#[test]
+fn a_running_timeout_moved_to_a_group_keeps_its_inputs() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/timeout" take Within;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Maker {
+    Maker();
+    async gated(name is string, gate is Event) is Res { await gate.wait(); Stdout().writeln("make " + name); Res(name: name); }
+}
+object F {
+    F();
+    started(g is FutureGroup<Res>, gate is Event) is Future<Res> {
+        let f = Within(origin: Maker().gated("x", gate), limit: Duration(seconds: 5), clock: SystemClock()).outcome();
+        g.start(f);
+        Stdout().writeln("started");
+        f;
+    }
+}
+async main() is int {
+    let gate = Event();
+    let g is FutureGroup<Res> = FutureGroup();
+    let f = F().started(g, gate);
+    gate.set();
+    let r = await f;
+    Stdout().writeln("got " + r.label());
+    0;
+}
+"#, "started\nmake x\ngot x\ndestroy x\n");
+}
+
+/// A running timeout detached when its owner closes keeps its inputs until the root closer releases them at shutdown
+/// (review T1, memo §2.4: a detached driver is retained while its INPUTS are not empty).
+#[test]
+fn a_detached_timeout_releases_its_inputs_at_shutdown() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/timeout" take Within;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Maker {
+    Maker();
+    async gated(name is string, gate is Event) is Res { await gate.wait(); Stdout().writeln("make " + name); Res(name: name); }
+}
+object H {
+    H();
+    async go(g is FutureGroup<Res>, gate is Event) is void {
+        let f = Within(origin: Maker().gated("x", gate), limit: Duration(seconds: 5), clock: SystemClock()).outcome();
+        g.start(f);
+        Stdout().writeln("go end");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let g is FutureGroup<Res> = FutureGroup();
+    await H().go(g, gate);
+    gate.set();
+    await g.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#, "go end\nmake x\nmain end\ndestroy x\n");
 }

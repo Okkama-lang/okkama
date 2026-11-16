@@ -92,12 +92,15 @@ fn member_parts(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, S
     let family = module.rsplit('/').next().unwrap_or(module);
     // A specialization keeps its source name before its arguments (`Channel<int>`); a holder family's is named by
     // its element's suffix (`FutureGroup_int`, #810).
-    let object = info.name.split('<').next().unwrap_or(&info.name);
-    let (object, suffix) = match object.split_once('_') {
-        Some((base, suffix)) if catalogue::holder_named(&format!("okkama.{family}.{base}.{action}")).is_some() => {
+    // The suffix of a holder specialization is split from the whole name: an element type may be generic itself
+    // (`FutureGroup_t_object(async/scope::FutureGroup<app::Res>)`).
+    let (object, suffix) = match info.name.split_once('_') {
+        Some((base, suffix)) if !base.contains('<')
+            && catalogue::holder_named(&format!("okkama.{family}.{base}.{action}")).is_some() =>
+        {
             (base, Some(suffix.to_string()))
         }
-        _ => (object, None),
+        _ => (info.name.split('<').next().unwrap_or(&info.name), None),
     };
     Some((format!("okkama.{family}.{object}.{action}"), format!("{}.{object}", module.replace('/', ".")), suffix))
 }

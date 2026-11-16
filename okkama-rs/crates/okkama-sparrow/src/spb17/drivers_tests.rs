@@ -517,3 +517,54 @@ fn a_group_specialization_is_named_by_its_family() {
         assert!(!d::group_specialization(name), "{name}");
     }
 }
+
+// --- HOLDER_HELPER (#810, G1 step 2) -----------------------------------------------------------------------------
+
+/// A function of `params` returning `results`, compiled (one instruction), or the external `name` of a timeout row.
+fn shaped(symbol: &str, entry_abi: EntryAbi, params: Vec<Type>, results: Vec<Type>, external: Option<&str>) -> Function {
+    Function {
+        symbol: symbol.into(), entry_abi, registers: params.clone(), services: vec![],
+        params: (0..params.len() as u32).map(Location::Register).collect(), results, blocks: vec![],
+        code: if external.is_some() { vec![] } else { vec![Instruction::Ret(vec![])] },
+        proofs: FunctionProofs {
+            entry: external.map(|name| EntryContract { external: Some(name.into()), ..EntryContract::default() }),
+            ..FunctionProofs::default()
+        },
+    }
+}
+
+/// `Within_int`'s outcome entry with its two helpers, over the declarations their shapes name; the origin's outcome
+/// is `origin`, the entry's result `result`.
+fn within(origin: Option<Type>, result: Type) -> (Program, Function) {
+    let mut p = Program::default();
+    let mut timing = object(d::TIMING, vec![], &[]);
+    timing.role = Some(RoleDecl::default());
+    p.objects = vec![object(d::DURATION, vec![Type::Rat], &["seconds"]), timing,
+        object("async.timeout.Within_int", vec![Type::Future(0), Type::Object(0), Type::Role(1)],
+            &["origin", "limit", "clock"])];
+    p.tables.future_results = vec![origin, None];
+    let name = "okkama.timeout.Within.outcome$int";
+    let entry = shaped(name, EntryAbi::AsyncExternal, vec![Type::Object(2)], vec![result], Some(name));
+    p.functions = vec![
+        shaped(&d::helper_symbol(name, 0), EntryAbi::Observation, vec![Type::Object(0)], vec![Type::Rat], None),
+        shaped(&d::helper_symbol(name, 1), EntryAbi::Owned, vec![Type::Role(1), Type::Object(0)],
+            vec![Type::Future(1)], None),
+    ];
+    (p, entry)
+}
+
+/// The loader checks what Tomato's timeout driver reads: the receiver's layout, each helper's shape, and that the
+/// origin's outcome is the entry's result (review T2: the driver returns the origin's result word as the outcome).
+#[test]
+fn the_timeout_helpers_and_the_origin_match_the_entry() {
+    let name = "okkama.timeout.Within.outcome$int";
+    let (p, entry) = within(Some(Type::Int), Type::Int);
+    d::check_helpers(&p, &entry, name).unwrap();
+    let (p, entry) = within(Some(Type::Str), Type::Int);
+    let refused = d::check_helpers(&p, &entry, name).unwrap_err();
+    assert_eq!(refused.rule, d::HOLDER_HELPER, "{refused:?}");
+    let (mut p, entry) = within(Some(Type::Int), Type::Int);
+    let symbols = (p.functions[0].symbol.clone(), p.functions[1].symbol.clone());
+    (p.functions[0].symbol, p.functions[1].symbol) = (symbols.1, symbols.0);
+    assert_eq!(d::check_helpers(&p, &entry, name).unwrap_err().rule, d::HOLDER_HELPER);
+}
