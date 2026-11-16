@@ -48,6 +48,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   refused with `B51` ("body returns a fresh identity absent from its declared
   summary") in every program that imports the cancellation token.
 
+- **Every SPB 17 catalogue row is pinned end to end (#799).** One test
+  compiles programs that reach every row of the std async primitives'
+  catalogue and loads them against the trusted catalogue, checking each
+  declaration's ABI, failures and deps against its row; a row that no
+  program reaches fails it. It replaces a test that compared the producer's
+  formula with itself. The cancellation token's rows stop in low on #775
+  until it lands.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own

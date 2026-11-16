@@ -136,21 +136,68 @@ fn q1_deps_follow_own_for_role_slots() {
     assert_eq!(deps("okkama.lock.Lock.locked"), 0);
 }
 
-#[test]
-fn q1_the_producer_reads_the_spb17_catalogue_rows() {
-    // #774 D3: one source. Every SPB 17 row is a producer entry with the row's ABI, failures and deps; the
-    // producer has no member of its own.
-    for row in s::drivers::CATALOGUE {
-        assert!(super::known(row.name), "{}", row.name);
-        assert_eq!(super::asynchronous(row.name), row.abi == s::drivers::Abi::Driver, "{}", row.name);
-        assert_eq!(super::deps(row.name), row.params.iter().filter(|&&param| param == s::drivers::EVENT).count());
-        let failures = super::failures(row);
-        assert_eq!(failures.contains(&ir::FailureKind::Thrown), row.failures & s::drivers::THROWN != 0);
-        assert_eq!(failures.contains(&ir::FailureKind::Program), row.failures & s::drivers::PROGRAM != 0);
-        // Every driver can be cancelled; of the synchronous members only the token's check raises Cancelled.
-        let cancels = row.abi == s::drivers::Abi::Driver || row.name == "okkama.cancellation.CancellationToken.check";
-        assert_eq!(failures.contains(&ir::FailureKind::Cancelled), cancels, "{}", row.name);
+/// Every catalogue member a program can reach through the cancellation token: its constructor, `cancelling`, and the
+/// token's members directly and through the `Cancelling` role.
+const TOKEN: &str = concat!(
+    "module app; import \"async/cancellation\" take Cancellation, CancellationToken, Cancelling; ",
+    "async main() is int { let quiet = CancellationToken(); let c = Cancellation(); let t = c.cancelling(); ",
+    "quiet.check(); let asked = quiet.requested(); c.cancel(); let woken = await t.wait(); ",
+    "let direct = await quiet.wait(); if asked || !woken.requested() || direct.requested() { 0; } else { 1; } }",
+);
+
+/// The SPB 17 functions of `program` that are catalogue entries, checked against their row: the loader admitted
+/// each as the trusted entry the row builds (its ABI, failures and deps services).
+fn reached(program: &s::Program, rows: &mut std::collections::BTreeSet<&'static str>) {
+    for function in &program.functions {
+        let Some(name) = function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) else { continue };
+        let Some(row) = s::drivers::row_named(name) else { continue };
+        let abi = match row.abi {
+            s::drivers::Abi::Observation => s::EntryAbi::Observation,
+            s::drivers::Abi::Owned => s::EntryAbi::Owned,
+            s::drivers::Abi::Driver => s::EntryAbi::AsyncExternal,
+        };
+        assert_eq!(function.entry_abi, abi, "{name}");
+        assert_eq!(function.proofs.entry.as_ref().unwrap().failures, row.failures, "{name}");
+        // A synchronous entry takes its deps proofs; a driver takes none (its caller proves them at `fut.new`).
+        let deps = function.services.iter().filter(|&&kind| kind == s::ServiceKind::Deps).count();
+        let synchronous = if row.abi == s::drivers::Abi::Driver { 0 } else { s::drivers::deps(row) };
+        assert_eq!(deps, synchronous, "{name}");
+        assert_eq!(super::deps(name), s::drivers::deps(row), "{name}: own elaborates the row's deps");
+        rows.insert(row.name);
     }
+}
+
+/// #799 (#774 D3): one end-to-end test over every catalogue row. Each row is the declaration of a compiled program
+/// that the SPB 17 load check admits against the trusted catalogue. A row no program reaches fails the test.
+#[test]
+fn q1_every_catalogue_row_compiles_and_loads() {
+    let mut rows = std::collections::BTreeSet::new();
+    reached(&loads(PROGRAM), &mut rows);
+    // Until #775 low refuses the token's `check` adapter (it may throw Cancelled), so the token's program stops in
+    // low and its rows are the ones left; the test is the full check once low accepts it.
+    let high = lower_std(TOKEN).unwrap_or_else(|error| panic!("{error}"));
+    let token = match compile_high_with(high, ir::verify::VerifyMode::Structural) {
+        Ok(bytes) => {
+            let program = s::decode(&bytes).unwrap();
+            s::verify_load(&program, &s::p1::P1Contracts::new(&program.objects).unwrap())
+                .unwrap_or_else(|error| panic!("{error}"));
+            reached(&program, &mut rows);
+            true
+        }
+        // #775: low refuses a call or a body whose failures include Cancelled (here the token's `check`).
+        Err(super::super::pipeline::PipelineError::Phase { phase: "low", message })
+            if message.contains("summary does not prove synchronous execution")
+                || message.contains("call permits suspension, cancellation or async-owned cleanup") =>
+        {
+            println!("the token's program stops in low on #775: {message}");
+            false
+        }
+        Err(error) => panic!("{error}"),
+    };
+    let missing = s::drivers::CATALOGUE.iter().map(|row| row.name)
+        .filter(|name| !rows.contains(name) && (token || !name.starts_with("okkama.cancellation.")))
+        .collect::<Vec<_>>();
+    assert!(missing.is_empty(), "rows no program reaches: {missing:?}");
     assert!(!super::known("okkama.channel.Channel.new"), "channels are slice Q2");
 }
 
