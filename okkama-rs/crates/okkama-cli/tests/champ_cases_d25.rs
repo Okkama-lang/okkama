@@ -376,3 +376,100 @@ async main() is int {
 "#, okkama_compiler::oir2::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!((run.stdout.as_str(), run.result), ("relayed\nseed 1\nseed 2\nseed 3\n6\n", Ok(0)));
 }
+
+/// #802: fresh Futures in an array literal of eight parts (built through a builder) are stored in the builder's
+/// journal; the array holds them, they run when awaited, and the ones never awaited are settled cold at the owner's
+/// close. Also a bound Future with one fresh, and the array returned by a synchronous action. Tomato (okkama 0.5.8)
+/// prints the same; each runs under the Full verifier too.
+#[test]
+fn futures_in_an_eight_part_literal_are_stored_in_the_builder() {
+    for (source, stdout) in [
+        (r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+async main() is int {
+    let fs = [Child(n: 1).run(), Child(n: 2).run(), Child(n: 3).run(), Child(n: 4).run(), Child(n: 5).run(),
+        Child(n: 6).run(), Child(n: 7).run(), Child(n: 8).run()];
+    Stdout().writeln("built");
+    Stdout().writeln(((await fs[0]) + (await fs[7])).string());
+    0;
+}
+"#, "built\nchild 1\nchild 8\n9\n"),
+        (r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+async main() is int {
+    let f = Child(n: 1).run();
+    let fs = [f, f, f, f, f, f, f, Child(n: 5).run()];
+    Stdout().writeln("built");
+    Stdout().writeln(((await fs[0]) + (await fs[7])).string());
+    0;
+}
+"#, "built\nchild 1\nchild 5\n6\n"),
+        (r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Maker {
+    Maker();
+    all() is @Future<int> {
+        [Child(n: 1).run(), Child(n: 2).run(), Child(n: 3).run(), Child(n: 4).run(), Child(n: 5).run(),
+            Child(n: 6).run(), Child(n: 7).run(), Child(n: 8).run()];
+    }
+}
+async main() is int {
+    let fs = Maker().all();
+    Stdout().writeln("made");
+    Stdout().writeln(((await fs[1]) + (await fs[6])).string());
+    0;
+}
+"#, "made\nchild 2\nchild 7\n9\n"),
+    ] {
+        for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+            let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+            assert_eq!((run.stdout.as_str(), run.result), (stdout, Ok(0)), "{mode:?}");
+        }
+    }
+}
+
+/// #802: the fifth part of the literal throws; the four Futures already stored are settled cold (none runs), the
+/// builder is abandoned, and the catch runs, as on Tomato. Structural only: under Full this combined program ends
+/// Incomplete on the gate budget (#634).
+#[test]
+fn a_failing_part_settles_the_futures_already_stored() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+enum Failed is Error = (boom);
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Bad {
+    Bad();
+    value() is int { throw Failed.boom; }
+}
+async main() is int {
+    try {
+        let fs = [Child(n: 1).run(), Child(n: 2).run(), Child(n: 3).run(), Child(n: 4).run(),
+            Child(n: Bad().value()).run(), Child(n: 6).run(), Child(n: 7).run(), Child(n: 8).run()];
+        Stdout().writeln("built");
+    } catch e is Failed {
+        Stdout().writeln("caught");
+    }
+    Stdout().writeln("end");
+    0;
+}
+"#, "caught\nend\n", 0);
+}

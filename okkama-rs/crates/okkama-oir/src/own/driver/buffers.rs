@@ -28,7 +28,27 @@ impl Driver<'_, '_> {
             let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
             arrays::inner_scopes(self.module, scope, owner)?;
             let inserted = self.inserted_values(&point, &instruction.op)?;
-            point = self.rehome(point, buffer, &inserted)?;
+            // #802 (Fable's ruling in OIR-2-async-abi.md): a fresh Future inserted into a builder is stored. Its duty
+            // leaves the owner's state in the builder's journal (a split that coro absorbs), so no rehome takes it.
+            // A bound Future is an alias (PR-B1): `offered` leaves it out, and it keeps its token and rehome.
+            let (stored, moved): (Vec<_>, Vec<_>) = inserted.into_iter().partition(|original| {
+                self.high.values.get(*original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty))
+            });
+            point = self.rehome(point, buffer, &moved)?;
+            let mut selected = None;
+            if !stored.is_empty() {
+                // If the store split fails, coro moves the Future's token into its owner's dynamic inventory (the
+                // follow-up to the #802 ruling), so the owner of its `fut.new` settles entries at run time.
+                for original in &stored {
+                    let future = point.env.value(*original)?.value;
+                    if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| *created == future) {
+                        self.dynamic_owners.insert(*owner);
+                    }
+                }
+                let (next, packet) = self.offered(point, &stored)?;
+                point = next;
+                selected = Some(packet);
+            }
             // Checked transfers forward every live SSA name: rename again.
             op = instruction.op.clone();
             let mut missing = false;
@@ -36,8 +56,12 @@ impl Driver<'_, '_> {
             if missing {
                 return Err(flow_error("builder operand has no reaching SSA definition"));
             }
-            let journal = point.env.journals.remove(&buffer)
+            let mut journal = point.env.journals.remove(&buffer)
                 .ok_or_else(|| flow_error("builder buffer has no element journal"))?;
+            if let Some(selected) = selected {
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: vec![journal, selected] }))?;
+                journal = point.result(SlotName::Packet)?;
+            }
             point.env.values.remove(&buffer);
             set_packet(&mut op, journal)?;
         }
@@ -62,6 +86,7 @@ impl Driver<'_, '_> {
                 point.env.journals.insert(original, journal);
             }
             Operation::Collection(CollectionOp::BuilderFinish { .. } | CollectionOp::MapBuilderFinish { .. }) => {
+                let services = consumed.is_some_and(|buffer| self.holds_services(buffer));
                 let value = point.result(SlotName::Value)?;
                 let journal = point.result(SlotName::Packet)?;
                 let original = original.ok_or_else(|| flow_error("builder finish has no High result"))?;
@@ -71,11 +96,12 @@ impl Driver<'_, '_> {
                     latest.deps = Some(point.result(SlotName::Value)?);
                 }
                 point.env.values.insert(original, latest);
-                point = self.admit_journal(point, journal)?;
+                point = self.admit_journal(point, journal, services)?;
             }
             Operation::Collection(CollectionOp::BuilderAbandon { .. } | CollectionOp::MapBuilderAbandon { .. }) => {
+                let services = consumed.is_some_and(|buffer| self.holds_services(buffer));
                 let journal = point.result(SlotName::Packet)?;
-                point = self.admit_journal(point, journal)?;
+                point = self.admit_journal(point, journal, services)?;
             }
             _ => return Err(flow_error("expected a builder operation")),
         }
@@ -148,6 +174,11 @@ impl Driver<'_, '_> {
             target.is_none_or(|target| !target.args.contains(buffer))
         }).collect();
         for buffer in buffers {
+            // #802: the journal joins the loose packets admitted before lexical unwinding, with its Futures' duties.
+            if self.holds_services(buffer) {
+                let owner = self.journal_owner(&point)?;
+                self.dynamic_owners.insert(owner);
+            }
             let journal = point.env.journals.remove(&buffer).unwrap();
             let value = point.env.values.remove(&buffer)
                 .ok_or_else(|| flow_error("live buffer lost its High name on a failure path"))?.value;
@@ -160,13 +191,36 @@ impl Driver<'_, '_> {
         Ok(point)
     }
 
-    /// The returned journal belongs to the instruction's nearest retained owner.
-    fn admit_journal(&mut self, point: Landing, packet: ValueId) -> Result<Landing, OwnError> {
-        let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
-        let owner = stack(self.module, scope)?.into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
-            .ok_or_else(|| flow_error("builder journal has no retained lexical owner"))?;
+    /// The returned journal belongs to the instruction's nearest retained owner. A journal of elements that can hold
+    /// a Future carries their duties (#802), so they join that owner's dynamic inventory (D25.1, D25.3).
+    fn admit_journal(&mut self, point: Landing, packet: ValueId, services: bool) -> Result<Landing, OwnError> {
+        let owner = self.journal_owner(&point)?;
         let state = point.env.state(owner)?;
+        if services {
+            self.dynamic_owners.insert(owner);
+        }
         self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))
+    }
+
+    fn journal_owner(&self, point: &Landing) -> Result<ScopeId, OwnError> {
+        let scope = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+        stack(self.module, scope)?.into_iter().rev().find(|scope| point.env.scopes.contains_key(scope))
+            .ok_or_else(|| flow_error("builder journal has no retained lexical owner"))
+    }
+
+    /// #802: whether the elements of a High builder can hold a service entry (a Future), by the criterion of a call's
+    /// output packet (`service_types`).
+    fn holds_services(&self, buffer: ValueId) -> bool {
+        let Ok(value) = self.high.values.get(buffer) else {
+            return false;
+        };
+        let elements = match self.module.types.get(value.ty) {
+            Ok(Type::Builder(element)) => vec![*element],
+            Ok(Type::MapBuilder(key, element)) => vec![*key, *element],
+            _ => vec![],
+        };
+        elements.iter().any(|element| self.analysis.types.get(element)
+            .is_some_and(|classification| !classification.service_types.is_empty()))
     }
 }
 

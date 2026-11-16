@@ -96,7 +96,9 @@ impl Lowering<'_, '_> {
         // Future's duty leaves with its packet (D25.2 revision, #771), so own emits no rehome after a store, and
         // `absorbs` refuses a rehome that a store would precede.
         let mut rehomed = self.rehomes(&duties)?;
-        self.absorbs(&duties, &mut rehomed)?;
+        let dynamic: BTreeSet<ScopeId> = schedules.iter().filter(|schedule| schedule.dynamic)
+            .map(|schedule| schedule.owner).collect();
+        self.absorbs(&duties, &dynamic, &mut rehomed)?;
         let mut slots = Slots::default();
         let mut continuations = Vec::new();
         let mut frame = None;
@@ -366,19 +368,28 @@ impl Lowering<'_, '_> {
     /// task duty of a spawned Future, then of its cache duty, at the start of the split's normal block. The
     /// selection keeps naming the Future, whose entry is not in the state. Each absorbed token leaves the schedule
     /// (`consumed` gains its absorbs), so the owner never settles it a second time.
-    fn absorbs(&mut self, duties: &[Duty], consumed: &mut BTreeMap<ValueId, Vec<InstId>>) -> Result<(), CoroError> {
+    ///
+    /// A store split can fail; its failure leaves the entry in the owner's state, and its handler may be shared with
+    /// paths where the token does not exist yet or was absorbed (a builder's, #802). When the owner settles entries at
+    /// run time (its schedule ends with `dynamic`), the token moves there on the failure edge: `own.empty`,
+    /// `service.absorb` of each token, `own.admit` into the restored state. After a store split the token exists on
+    /// neither outcome, so every close reached after the `fut.new` settles it exactly once. Without `dynamic` the
+    /// token stays static, and a close it reaches on some paths only is refused.
+    fn absorbs(&mut self, duties: &[Duty], dynamic: &BTreeSet<ScopeId>, consumed: &mut BTreeMap<ValueId, Vec<InstId>>)
+        -> Result<(), CoroError> {
         let predecessors = graph::predecessors(&self.body);
         // Splits in reverse postorder: a Future stored twice gives its entry to the first holder, and a later split
         // that names it finds the token consumed on every path (a token held on some paths only is refused).
         for block in self.reverse_postorder()? {
             self.budget.step(1)?;
-            let TermKind::InvokeOwn { op, normal, .. } = &self.body.blocks.get(block)?.term.kind else {
+            let TermKind::InvokeOwn { op, normal, unwind } = &self.body.blocks.get(block)?.term.kind else {
                 continue;
             };
             let Operation::Ownership(OwnershipOp::ScopeSplit { state, selection }) = **op else {
                 continue;
             };
             let normal = normal.clone();
+            let unwind = unwind.clone();
             let owner = match self.module.types.get(self.ty(state)?)? {
                 Type::Service(ServiceType::Scope(scope)) => *scope,
                 _ => return Err(self.invalid("scope.split takes a scope state")),
@@ -437,6 +448,9 @@ impl Lowering<'_, '_> {
                 return Err(self.invalid("a scope.split's normal block has one predecessor"));
             }
             let own = self.ty(selected)?;
+            if dynamic.contains(&owner) {
+                self.absorb_on_failure(&unwind, own, &tokens, &predecessors, consumed)?;
+            }
             let mut packet = selected;
             for (position, token) in tokens.into_iter().enumerate() {
                 let absorbed = self.emit(normal.block, position, own,
@@ -471,6 +485,40 @@ impl Lowering<'_, '_> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// #802: a failed store split admits its Future's tokens into the owner's dynamic inventory, at the start of its
+    /// unwind block (see `absorbs`).
+    fn absorb_on_failure(&mut self, unwind: &InvokeEdge, own: TypeId, tokens: &[ValueId], predecessors: &[Vec<BlockId>],
+        consumed: &mut BTreeMap<ValueId, Vec<InstId>>) -> Result<(), CoroError> {
+        let restored = unwind.args.iter().position(|arg| {
+            *arg == EdgeArg::Produced(EdgeResult { outcome: Outcome::Unwind, slot: 0 })
+        }).and_then(|index| self.body.blocks.get(unwind.block).ok()?.params.get(index).copied())
+            .ok_or_else(|| self.invalid("a scope.split passes its restored state to its unwind block"))?;
+        if predecessors[unwind.block.as_u32() as usize].len() != 1 {
+            return Err(self.invalid("a store split's unwind block has one predecessor"));
+        }
+        let mut packet = self.emit(unwind.block, 0, own, Operation::Ownership(OwnershipOp::Empty {}))?;
+        for (index, &token) in tokens.iter().enumerate() {
+            let absorbed = self.emit(unwind.block, 1 + index, own,
+                Operation::Async(AsyncOp::ServiceAbsorb { packet, token }))?;
+            let Definition::InstResult { inst, .. } = self.body.values.get(absorbed)?.def else {
+                return Err(self.invalid("an absorb result is an instruction's"));
+            };
+            consumed.entry(token).or_default().push(inst);
+            packet = absorbed;
+        }
+        let state = self.ty(restored)?;
+        let admitted = self.emit(unwind.block, 1 + tokens.len(), state,
+            Operation::Ownership(OwnershipOp::Admit { state: restored, packet }))?;
+        let Definition::InstResult { inst: admit, .. } = self.body.values.get(admitted)?.def else {
+            return Err(self.invalid("an admit result is an instruction's"));
+        };
+        // The block's later uses read the state with the admitted entries.
+        let mut replace = repair::Replace::single(restored, admitted);
+        visit::rewrite_uses(&mut self.body, &mut replace);
+        self.body.insts.get_mut(admit)?.op = Operation::Ownership(OwnershipOp::Admit { state: restored, packet });
         Ok(())
     }
 
