@@ -33,6 +33,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   structural verifier refuses a service operand (`SPB_STRUCTURE`) or a
   register that is not a Future (`SPB_FUTURE_TYPES`) without the load check.
 
+- **SPB 17: a witness table never names an external (#791 N3, I-F2).** The
+  load check refuses an implementation table whose slot is a catalogue
+  external (`ROLE_IMPL`); the producer reaches an async action, an intrinsic
+  or a native through an adapter with code (rulings PR-D, #773), so every
+  dispatch target checks its own packet on entry, and the dispatch rule no
+  longer has a branch for external targets.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own
