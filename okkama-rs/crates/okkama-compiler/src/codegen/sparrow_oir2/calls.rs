@@ -1069,6 +1069,25 @@ fn retained_parameters(summary: &o::Summary) -> Result<BTreeSet<u32>, GenerateEr
     Ok(retained)
 }
 
+/// The descriptor bindings of a body (#747). An async body carries the descriptors of its generic inputs in
+/// continuation 0 (C-2) and reloads them at every resume, like any other saved slot, so a binding needs no SPB 17
+/// form when its descriptor names plain data: nothing is retained or released through it. A binding that manages
+/// its values (retention or cleanup through the descriptor) has no SPB 17 transport, nor has a synchronous body's.
+fn descriptor_bindings(module: &o::Module, body: &o::Body, asynchronous: bool) -> Result<(), GenerateError> {
+    if !asynchronous {
+        return Err(later("descriptor bindings of a synchronous body"));
+    }
+    for binding in &body.descriptor_bindings {
+        if *module.types.get(body.values.get(binding.dictionary)?.ty)? != o::Type::Descriptor {
+            return Err(error("a descriptor binding names a value that is not a descriptor"));
+        }
+        if binding.contract.managed != o::DescriptorManaged::Plain || binding.contract.async_destroy {
+            return Err(later("descriptor binding of managed values"));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object],
     tables: &mut s::ChampTables, synthetic: &roles::Synthetic) -> Result<s::Function, GenerateError>
 {
@@ -1087,10 +1106,11 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
     }
     let defer = function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::DeferEntry { .. }));
     let body = function.body.as_ref().ok_or_else(|| later("entry without body"))?;
-    if !body.high_results.is_empty() || !body.high_effects.is_empty() || !body.descriptor_bindings.is_empty()
-        || !body.service_schedules.is_empty()
-    {
-        return Err(later("High/descriptor/service schedule metadata"));
+    if !body.high_results.is_empty() || !body.high_effects.is_empty() || !body.service_schedules.is_empty() {
+        return Err(later("High/service schedule metadata"));
+    }
+    if !body.descriptor_bindings.is_empty() {
+        descriptor_bindings(module, body, asynchronous.is_some())?;
     }
     let entry = body.blocks.get(body.entry)?;
     let params = entry.params.iter().map(|&value| Ok(body.values.get(value)?.ty))

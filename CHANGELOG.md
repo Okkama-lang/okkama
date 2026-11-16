@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **SPB 17 generation takes an async body with descriptor bindings (#747).**
+  A generic async body keeps the descriptors of its inputs in continuation 0
+  and reloads them at each resume (async ABI C-2); a binding of plain data
+  needs nothing more, so the descriptor-start golden now compiles and loads.
+  A binding that manages values through its descriptor, or one in a
+  synchronous body, is still refused by name. The OIR-2 producer specializes
+  generic actions, so source programs did not reach this path.
 - **Async bodies with an unreachable handler load on Champ (#741, ruling
   PR-M).** Codegen lowers some operations as total and drops their unwind
   edge; it removed the handler behind such an edge only in synchronous

@@ -241,3 +241,25 @@ async main() is int {
     let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!((run.stdout.as_str(), run.result), ("permits -10\n", Ok(0)));
 }
+
+/// #747: a generic async action, awaited at two instantiations. Tomato prints `5s` (okkama 0.5.8).
+#[test]
+fn b0_generic_async_action() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Box<T> {
+    has v is T;
+    Box(:v);
+    async get() is T { v; }
+}
+async main() is int {
+    let b = Box(v: 5);
+    let x = await b.get();
+    let s = await Box(v: "s").get();
+    Stdout().writeln(x.string() + s);
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("5s\n", Ok(0)));
+}
