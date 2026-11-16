@@ -1,0 +1,36 @@
+module bible/unbound v1.0.0;
+
+// A field bound on some paths of the constructor and not on others. The
+// check runs when construction ends, on the path actually taken.
+import "io/stdout" take Stdout;
+
+object Transfer {
+    has from is string;
+    has via is string;
+
+    Transfer(from is string, direct is bool) {
+        self.from = from;
+        if direct {
+            via = "-";
+        } else if from == "Kostanay" {
+            via = "Astana";
+        }
+    }
+
+    shown() is string { from + " via " + via; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Transfer("Almaty", true).shown());
+    out.writeln(Transfer("Kostanay", false).shown());
+    // Not an error value: a catch of the Error role does not take it.
+    let shown = try {
+        Transfer("Aktau", false).shown();
+    }
+    catch e is Error {
+        "caught: " + e.text();
+    };
+    out.writeln(shown);
+    0;
+}

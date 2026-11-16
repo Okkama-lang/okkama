@@ -174,6 +174,12 @@ language.
   resource (`11-rotation`: rebinding keeps old values, a fold releases);
   2.11 values come back (Evans, Bloch, records); 8.8 sorting worked through
   (`08-sorting`); 28.1 the gap the book found (#743).
+- 2026-11-16, later: 4.9 three refusals; 13.14 async successors (found
+  #754); 9.10 expressions in other languages; 12.11 when construction fails
+  (`12-unbound`, `12-unbound-rejected`, `12-partial`: the D-035 split
+  between the static and the path check, fields bound in blocks, release
+  order; C++, Java/OBJ11-J, Kotlin `lateinit`, Swift, Rust). Chapter 12 is
+  9.8 pages.
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

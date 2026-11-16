@@ -171,9 +171,10 @@
   - [12.8 Caps: a read-only view of an object](#128-caps-a-read-only-view-of-an-object)
   - [12.9 Objects are values](#129-objects-are-values)
   - [12.10 Handing `self` out of a constructor](#1210-handing-self-out-of-a-constructor)
-  - [12.11 A worked domain model: money and an order](#1211-a-worked-domain-model-money-and-an-order)
-  - [12.12 Objects elsewhere](#1212-objects-elsewhere)
-  - [12.13 What this design costs](#1213-what-this-design-costs)
+  - [12.11 When construction fails](#1211-when-construction-fails)
+  - [12.12 A worked domain model: money and an order](#1212-a-worked-domain-model-money-and-an-order)
+  - [12.13 Objects elsewhere](#1213-objects-elsewhere)
+  - [12.14 What this design costs](#1214-what-this-design-costs)
 - [Chapter 13. Actions, successors and immutability](#chapter-13-actions-successors-and-immutability)
   - [13.1 An action is a typed request](#131-an-action-is-a-typed-request)
   - [13.2 Parameters and calls](#132-parameters-and-calls)
@@ -8369,7 +8370,255 @@ which may still be "free", with few annotations [[Summers 2011](#ref-summers2011
 takes the cheaper road: one static rule for `self`, and a run-time check
 for the indirect cases.
 
-## 12.11 A worked domain model: money and an order
+## 12.11 When construction fails
+
+Section 12.6 made the constructor the gate: an object that exists is valid.
+This section covers the other side of the gate, the work a constructor did
+before it refused, and the fields it never got to. Three rules decide both.
+
+**Every field is bound when construction ends.** Defaults are filled before
+the body runs, and then the arguments and the body bind the rest. A field
+that no path of the constructor binds is a compile-time error:
+
+```okkama
+module bible/unbound_rejected v1.0.0;
+
+// A field that no path of the constructor binds is rejected at compile time.
+import "io/stdout" take Stdout;
+
+object Ticket {
+    has route is string;
+    has seat is int;
+
+    Ticket(route is string) {
+        self.route = route;
+    }
+
+    shown() is string { route + ", seat " + seat.string(); }
+}
+
+main() is int {
+    Stdout().writeln(Ticket("Kostanay - Astana").shown());
+    0;
+}
+```
+
+The compiler answers:
+
+```text
+12-unbound-rejected.ok:10:5: semantic error: Object "Ticket" field "seat" was not initialized
+```
+
+A field bound on some paths and not on others is checked when construction
+ends, on the path the call actually took:
+
+```okkama
+module bible/unbound v1.0.0;
+
+// A field bound on some paths of the constructor and not on others. The
+// check runs when construction ends, on the path actually taken.
+import "io/stdout" take Stdout;
+
+object Transfer {
+    has from is string;
+    has via is string;
+
+    Transfer(from is string, direct is bool) {
+        self.from = from;
+        if direct {
+            via = "-";
+        } else if from == "Kostanay" {
+            via = "Astana";
+        }
+    }
+
+    shown() is string { from + " via " + via; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Transfer("Almaty", true).shown());
+    out.writeln(Transfer("Kostanay", false).shown());
+    // Not an error value: a catch of the Error role does not take it.
+    let shown = try {
+        Transfer("Aktau", false).shown();
+    }
+    catch e is Error {
+        "caught: " + e.text();
+    };
+    out.writeln(shown);
+    0;
+}
+```
+
+Output:
+
+```text
+Almaty via -
+Kostanay via Astana
+exit 1
+```
+
+- `Transfer("Almaty", true)` and `Transfer("Kostanay", false)` take paths
+  that bind `via`, so they build complete objects.
+- `Transfer("Aktau", false)` takes the missing `else`. Construction fails
+  with `Object "Transfer" field "via" was not initialized` and points at the
+  constructor.
+- **This is not an error value.** It reports a defect in the program, as an
+  index out of range does (Chapter 10). `catch e is Error` does not take it,
+  and the run ends with the report.
+
+The split between the two checks is the language owner's decision, recorded
+as D-035 in the conformance suite's ledger:
+
+- The compiler rejects what is certain, a field no path binds.
+- The rest is checked where it happens.
+
+The price is visible in `Transfer`: the missing branch is a mistake the
+compiler could have pointed at, and it surfaces only when an input takes
+that branch. A test that covers the branches (Chapter 15) finds it before a
+user does.
+
+**What was bound is released, newest first.** Section 11.7 showed the rule
+on a session: a constructor that fails closes what it opened, and the
+object's own `destroy` does not run. The details matter when the
+constructor binds fields inside blocks:
+
+```okkama
+module bible/partial v1.0.0;
+
+// A constructor that fails halfway. Whatever it already bound to fields is
+// released, newest first, after the temporaries of its body; the object never
+// existed, so its own destroy does not run.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (tooLarge(size is int));
+
+object Area {
+    has name is string;
+    Area(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Upload {
+    has staging is Area;
+    has lock is Area;
+    has size is int;
+
+    Upload(size is int) {
+        staging = Area(name: "staging");
+        if size > 0 {
+            lock = Area(name: "lock");
+        } else {
+            lock = Area(name: "empty lock");
+        }
+        let scratch = Area(name: "scratch");
+        confirm size <= 1000 else throw Refused.tooLarge(size);
+        self.size = size;
+    }
+
+    size() is int { size; }
+
+    destroy { Stdout().writeln("upload of " + size.string() + " done"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let outcome = try {
+        let upload = Upload(5000);
+        "built " + upload.size().string();
+    }
+    catch e is Refused {
+        "refused: " + e.text();
+    };
+    out.writeln(outcome);
+    out.writeln("--");
+    {
+        let upload = Upload(300);
+        out.writeln("built " + upload.size().string());
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+open staging
+open lock
+open scratch
+close scratch
+close lock
+close staging
+refused: Refused.tooLarge(5000)
+--
+open staging
+open lock
+open scratch
+close scratch
+built 300
+upload of 300 done
+close lock
+close staging
+```
+
+- **A temporary of the body dies first.** `scratch` belongs to the
+  constructor's block and closes when the block unwinds, before any field.
+- **A field bound inside a block belongs to the construction.** `lock` is
+  bound in a branch of the `if`, and it outlives the branch. That is what
+  makes it a field. When the `confirm` fails, `lock` is released with the
+  construction, not with the branch.
+- **Fields go in reverse order of binding.** `lock` closes before `staging`,
+  as locals do in a scope (Section 11.4).
+- **The error reaches the caller unchanged.** The `catch` sees
+  `Refused.tooLarge(5000)` after all the cleanup, so it runs with nothing
+  half-open.
+- **The object never existed, so its `destroy` does not run.** `upload of
+  ... done` prints only for the second upload. A `destroy` may rely on
+  everything the constructor establishes, the same argument Section 12.10
+  made for actions, and running it on a half-built object would break that.
+  The fields' own `destroy`s do run, because each field is a complete
+  object.
+
+**Nobody observes the half-built object.** No reference to an unfinished
+`Upload` exists outside its constructor. The one exception is `self`
+handed to a collaborator (Section 12.10), and every call through such a
+reference is refused until construction completes, and forever if it
+fails.
+
+Other languages split the same three questions differently:
+
+- **C++ has the release rule.** When a constructor throws, the destructors
+  of the members and bases already constructed run in reverse order, and
+  the object's own destructor does not. Stroustrup builds the basic
+  exception-safety guarantee of the standard library on exactly this rule
+  [[Stroustrup 2001](#ref-stroustrup2001)]. The gap is the raw resource: a pointer or file handle
+  acquired in the body and not yet held by a member leaks, unless it is
+  wrapped in an object first. In Okkama every resource is an object with an
+  owner, so there is no raw handle to wrap.
+- **Java has no unbound fields, and no release rule.** Every field starts
+  as `null`, `0` or `false`, so "not initialized" cannot be told apart from
+  a value. Only a `final` field must be definitely assigned by every
+  constructor (JLS Chapter 16, [[Gosling 2023](#ref-gosling2023)]). A constructor that throws
+  leaves a partly initialized object behind, and a subclass's finalizer can
+  catch and use it. SEI CERT rule OBJ11-J, "Be wary of letting constructors
+  throw exceptions", describes the attack [[SEI CERT Oracle Coding Standard for Java](#ref-certobj11)]. Nothing is closed.
+- **Kotlin moves the check to the first read.** A `lateinit` property may
+  stay unset after construction, and reading it before it is set throws
+  `UninitializedPropertyAccessException` [[Kotlin documentation](#ref-kotlinproperties)]. The failure
+  appears far from the constructor that caused it.
+- **Swift checks statically.** Every stored property must have a value
+  before the initializer finishes, and `self` cannot be used before then.
+  A failable `init?` returns `nil` instead of an object [[The Swift Programming Language](#ref-swiftbook)].
+- **Rust has no constructors.** A struct literal must name every field, so
+  a half-built struct cannot be written. Values made before a failure are
+  ordinary locals and are dropped as the function unwinds.
+
+Okkama's position is between Swift's and C++'s. It is static where that is
+certain and checks the path otherwise, as no other language here does, and
+it releases what was bound as C++ does, without raw handles.
+
+## 12.12 A worked domain model: money and an order
 
 Small objects are easiest to judge in a domain everyone knows. An order has
 lines; a line has an item, a quantity and a unit price; prices are money in
@@ -8467,7 +8716,7 @@ The model is three short objects and two error enums. A design with getters
 and setters would have more code and fewer guarantees: every reader would
 have to trust that nobody set a quantity to zero after construction.
 
-## 12.12 Objects elsewhere
+## 12.13 Objects elsewhere
 
 Most languages that took immutability seriously added a shorthand for "an
 object that is its fields". Comparing them shows what Okkama chose to
@@ -8497,7 +8746,7 @@ and its fields are nobody else's business. Bloch's advice for Java,
 "minimize mutability" and "favor composition over inheritance", needs no
 discipline here: the language allows nothing else [[Bloch 2018](#ref-bloch2018)].
 
-## 12.13 What this design costs
+## 12.14 What this design costs
 
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action
@@ -21189,7 +21438,7 @@ language is, argued where they appear:
   operand (Section 14.11);
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
-  (Sections 12.13, 13.17);
+  (Sections 12.14, 13.17);
 - ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);
@@ -21317,6 +21566,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
 - <a id="ref-kotlinexceptions"></a>JetBrains (2026). Exceptions. *Kotlin documentation*. https://kotlinlang.org/docs/exceptions.html
 - <a id="ref-kotlininheritance"></a>JetBrains (2026). Inheritance. *Kotlin documentation*. https://kotlinlang.org/docs/inheritance.html
+- <a id="ref-kotlinproperties"></a>JetBrains (2026). Properties: late-initialized properties and variables. *Kotlin documentation*. https://kotlinlang.org/docs/properties.html#late-initialized-properties-and-variables
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-kotlinuse"></a>JetBrains (2026). use. *Kotlin standard library API*. https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.io/use.html
 - <a id="ref-landin1964"></a>Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
@@ -21392,6 +21642,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
 - <a id="ref-schlueter2013"></a>Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
 - <a id="ref-scharli2003"></a>Nathanael Schärli, Stéphane Ducasse, Oscar Nierstrasz, Andrew P. Black (2003). Traits: Composable Units of Behaviour. In *ECOOP 2003 — Object-Oriented Programming*, LNCS 2743: 248–274. Springer. https://doi.org/10.1007/978-3-540-45070-2_12
+- <a id="ref-certobj11"></a>Software Engineering Institute, Carnegie Mellon University (2026). OBJ11-J. Be wary of letting constructors throw exceptions. *SEI CERT Oracle Coding Standard for Java*. https://wiki.sei.cmu.edu/confluence/display/java/OBJ11-J.+Be+wary+of+letting+constructors+throw+exceptions
 - <a id="ref-semver"></a>Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
@@ -21399,6 +21650,7 @@ example runs, and a gap counts as closed when the issue that names it is.
 - <a id="ref-spade-sep"></a>Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - <a id="ref-strom1986"></a>Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
 - <a id="ref-stroustrup1994"></a>Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
+- <a id="ref-stroustrup2001"></a>Bjarne Stroustrup (2001). Exception Safety: Concepts and Techniques. In Alexander Romanovsky, Christophe Dony, Jørgen Lindskov Knudsen, Anand Tripathi (eds.), *Advances in Exception Handling Techniques*, LNCS 2022: 60–76. Springer. https://doi.org/10.1007/3-540-45407-1_4
 - <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15

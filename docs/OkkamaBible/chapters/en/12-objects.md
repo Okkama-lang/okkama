@@ -319,7 +319,107 @@ which may still be "free", with few annotations [@summers2011]. Okkama
 takes the cheaper road: one static rule for `self`, and a run-time check
 for the indirect cases.
 
-## 12.11 A worked domain model: money and an order
+## 12.11 When construction fails
+
+Section 12.6 made the constructor the gate: an object that exists is valid.
+This section covers the other side of the gate, the work a constructor did
+before it refused, and the fields it never got to. Three rules decide both.
+
+**Every field is bound when construction ends.** Defaults are filled before
+the body runs, and then the arguments and the body bind the rest. A field
+that no path of the constructor binds is a compile-time error:
+
+{{example:12-unbound-rejected}}
+
+A field bound on some paths and not on others is checked when construction
+ends, on the path the call actually took:
+
+{{example:12-unbound}}
+
+- `Transfer("Almaty", true)` and `Transfer("Kostanay", false)` take paths
+  that bind `via`, so they build complete objects.
+- `Transfer("Aktau", false)` takes the missing `else`. Construction fails
+  with `Object "Transfer" field "via" was not initialized` and points at the
+  constructor.
+- **This is not an error value.** It reports a defect in the program, as an
+  index out of range does (Chapter 10). `catch e is Error` does not take it,
+  and the run ends with the report.
+
+The split between the two checks is the language owner's decision, recorded
+as D-035 in the conformance suite's ledger:
+
+- The compiler rejects what is certain, a field no path binds.
+- The rest is checked where it happens.
+
+The price is visible in `Transfer`: the missing branch is a mistake the
+compiler could have pointed at, and it surfaces only when an input takes
+that branch. A test that covers the branches (Chapter 15) finds it before a
+user does.
+
+**What was bound is released, newest first.** Section 11.7 showed the rule
+on a session: a constructor that fails closes what it opened, and the
+object's own `destroy` does not run. The details matter when the
+constructor binds fields inside blocks:
+
+{{example:12-partial}}
+
+- **A temporary of the body dies first.** `scratch` belongs to the
+  constructor's block and closes when the block unwinds, before any field.
+- **A field bound inside a block belongs to the construction.** `lock` is
+  bound in a branch of the `if`, and it outlives the branch. That is what
+  makes it a field. When the `confirm` fails, `lock` is released with the
+  construction, not with the branch.
+- **Fields go in reverse order of binding.** `lock` closes before `staging`,
+  as locals do in a scope (Section 11.4).
+- **The error reaches the caller unchanged.** The `catch` sees
+  `Refused.tooLarge(5000)` after all the cleanup, so it runs with nothing
+  half-open.
+- **The object never existed, so its `destroy` does not run.** `upload of
+  ... done` prints only for the second upload. A `destroy` may rely on
+  everything the constructor establishes, the same argument Section 12.10
+  made for actions, and running it on a half-built object would break that.
+  The fields' own `destroy`s do run, because each field is a complete
+  object.
+
+**Nobody observes the half-built object.** No reference to an unfinished
+`Upload` exists outside its constructor. The one exception is `self`
+handed to a collaborator (Section 12.10), and every call through such a
+reference is refused until construction completes, and forever if it
+fails.
+
+Other languages split the same three questions differently:
+
+- **C++ has the release rule.** When a constructor throws, the destructors
+  of the members and bases already constructed run in reverse order, and
+  the object's own destructor does not. Stroustrup builds the basic
+  exception-safety guarantee of the standard library on exactly this rule
+  [@stroustrup2001]. The gap is the raw resource: a pointer or file handle
+  acquired in the body and not yet held by a member leaks, unless it is
+  wrapped in an object first. In Okkama every resource is an object with an
+  owner, so there is no raw handle to wrap.
+- **Java has no unbound fields, and no release rule.** Every field starts
+  as `null`, `0` or `false`, so "not initialized" cannot be told apart from
+  a value. Only a `final` field must be definitely assigned by every
+  constructor (JLS Chapter 16, [@gosling2023]). A constructor that throws
+  leaves a partly initialized object behind, and a subclass's finalizer can
+  catch and use it. SEI CERT rule OBJ11-J, "Be wary of letting constructors
+  throw exceptions", describes the attack [@certobj11]. Nothing is closed.
+- **Kotlin moves the check to the first read.** A `lateinit` property may
+  stay unset after construction, and reading it before it is set throws
+  `UninitializedPropertyAccessException` [@kotlinproperties]. The failure
+  appears far from the constructor that caused it.
+- **Swift checks statically.** Every stored property must have a value
+  before the initializer finishes, and `self` cannot be used before then.
+  A failable `init?` returns `nil` instead of an object [@swiftbook].
+- **Rust has no constructors.** A struct literal must name every field, so
+  a half-built struct cannot be written. Values made before a failure are
+  ordinary locals and are dropped as the function unwinds.
+
+Okkama's position is between Swift's and C++'s. It is static where that is
+certain and checks the path otherwise, as no other language here does, and
+it releases what was bound as C++ does, without raw handles.
+
+## 12.12 A worked domain model: money and an order
 
 Small objects are easiest to judge in a domain everyone knows. An order has
 lines; a line has an item, a quantity and a unit price; prices are money in
@@ -347,7 +447,7 @@ The model is three short objects and two error enums. A design with getters
 and setters would have more code and fewer guarantees: every reader would
 have to trust that nobody set a quantity to zero after construction.
 
-## 12.12 Objects elsewhere
+## 12.13 Objects elsewhere
 
 Most languages that took immutability seriously added a shorthand for "an
 object that is its fields". Comparing them shows what Okkama chose to
@@ -377,7 +477,7 @@ and its fields are nobody else's business. Bloch's advice for Java,
 "minimize mutability" and "favor composition over inheritance", needs no
 discipline here: the language allows nothing else [@bloch2018].
 
-## 12.13 What this design costs
+## 12.14 What this design costs
 
 - **More objects.** Without free functions, a small computation that would
   be a function elsewhere becomes an object with one action, or an action

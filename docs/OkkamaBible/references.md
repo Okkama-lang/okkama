@@ -27,6 +27,7 @@ bibliographic data were checked are listed.
 - [@burstall1980] R. M. Burstall, D. B. MacQueen, D. T. Sannella (1980). HOPE: An Experimental Applicative Language. In *Proceedings of the 1980 ACM Conference on LISP and Functional Programming*, 136–143. https://doi.org/10.1145/800087.802799
 - [@canning1989] Peter Canning, William Cook, Walter Hill, Walter Olthoff, John C. Mitchell (1989). F-Bounded Polymorphism for Object-Oriented Programming. In *Proceedings of FPCA 1989*: 273–280. ACM. https://doi.org/10.1145/99370.99392
 - [@cardelli1985] Luca Cardelli, Peter Wegner (1985). On Understanding Types, Data Abstraction, and Polymorphism. *ACM Computing Surveys* 17(4): 471–523. https://doi.org/10.1145/6041.6042
+- [@certobj11] Software Engineering Institute, Carnegie Mellon University (2026). OBJ11-J. Be wary of letting constructors throw exceptions. *SEI CERT Oracle Coding Standard for Java*. https://wiki.sei.cmu.edu/confluence/display/java/OBJ11-J.+Be+wary+of+letting+constructors+throw+exceptions {label: SEI CERT Oracle Coding Standard for Java}
 - [@church1936] Alonzo Church (1936). An Unsolvable Problem of Elementary Number Theory. *American Journal of Mathematics* 58(2): 345–363. https://doi.org/10.2307/2371045
 - [@claessen2000] Koen Claessen, John Hughes (2000). QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of ICFP 2000*: 268–279. ACM. https://doi.org/10.1145/351240.351266
 - [@clojureds] Rich Hickey and contributors (2026). Data Structures. *Clojure Reference*. https://clojure.org/reference/data_structures {label: Clojure Reference}
@@ -105,6 +106,7 @@ bibliographic data were checked are listed.
 - [@kotlindata] JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html {label: Kotlin documentation}
 - [@kotlinexceptions] JetBrains (2026). Exceptions. *Kotlin documentation*. https://kotlinlang.org/docs/exceptions.html {label: Kotlin documentation}
 - [@kotlininheritance] JetBrains (2026). Inheritance. *Kotlin documentation*. https://kotlinlang.org/docs/inheritance.html {label: Kotlin documentation}
+- [@kotlinproperties] JetBrains (2026). Properties: late-initialized properties and variables. *Kotlin documentation*. https://kotlinlang.org/docs/properties.html#late-initialized-properties-and-variables {label: Kotlin documentation}
 - [@kotlinspec] JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html {label: Kotlin specification}
 - [@kotlinuse] JetBrains (2026). use. *Kotlin standard library API*. https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.io/use.html {label: Kotlin standard library}
 - [@landin1964] Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
@@ -187,6 +189,7 @@ bibliographic data were checked are listed.
 - [@spade-sep] Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - [@strom1986] Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
 - [@stroustrup1994] Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
+- [@stroustrup2001] Bjarne Stroustrup (2001). Exception Safety: Concepts and Techniques. In Alexander Romanovsky, Christophe Dony, Jørgen Lindskov Knudsen, Anand Tripathi (eds.), *Advances in Exception Handling Techniques*, LNCS 2022: 60–76. Springer. https://doi.org/10.1007/3-540-45407-1_4
 - [@summers2011] Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - [@sussman1975] Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - [@swiftbook] Apple Inc. (2026). *The Swift Programming Language*. https://docs.swift.org/swift-book/documentation/the-swift-programming-language/ {label: The Swift Programming Language}

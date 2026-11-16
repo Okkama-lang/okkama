@@ -171,9 +171,10 @@
   - [12.8 cap: вид объекта только для чтения](#128-cap-вид-объекта-только-для-чтения)
   - [12.9 Объекты — значения](#129-объекты--значения)
   - [12.10 Отдать `self` из конструктора](#1210-отдать-self-из-конструктора)
-  - [12.11 Разобранная модель предметной области: деньги и заказ](#1211-разобранная-модель-предметной-области-деньги-и-заказ)
-  - [12.12 Объекты в других языках](#1212-объекты-в-других-языках)
-  - [12.13 Чего стоит такой замысел](#1213-чего-стоит-такой-замысел)
+  - [12.11 Когда создание не удалось](#1211-когда-создание-не-удалось)
+  - [12.12 Разобранная модель предметной области: деньги и заказ](#1212-разобранная-модель-предметной-области-деньги-и-заказ)
+  - [12.13 Объекты в других языках](#1213-объекты-в-других-языках)
+  - [12.14 Чего стоит такой замысел](#1214-чего-стоит-такой-замысел)
 - [Глава 13. Действия, преемники и неизменяемость](#глава-13-действия-преемники-и-неизменяемость)
   - [13.1 Действие — типизированный запрос](#131-действие--типизированный-запрос)
   - [13.2 Параметры и вызовы](#132-параметры-и-вызовы)
@@ -8479,7 +8480,255 @@ RuntimeError: Action "greeted" on object "Tree" was called before its constructi
 Okkama идёт более дешёвым путём: одно статическое правило для `self` и
 проверка во время выполнения для косвенных случаев.
 
-## 12.11 Разобранная модель предметной области: деньги и заказ
+## 12.11 Когда создание не удалось
+
+Раздел 12.6 сделал конструктор воротами: объект, который существует,
+допустим. Этот раздел — о другой стороне ворот: о работе, которую
+конструктор успел сделать до отказа, и о полях, до которых он не дошёл. Всё
+решают три правила.
+
+**К концу создания каждое поле связано.** Значения по умолчанию
+заполняются до тела, затем аргументы и тело связывают остальное. Поле,
+которое не связывает ни один путь конструктора, — ошибка компиляции:
+
+```okkama
+module bible/unbound_rejected v1.0.0;
+
+// A field that no path of the constructor binds is rejected at compile time.
+import "io/stdout" take Stdout;
+
+object Ticket {
+    has route is string;
+    has seat is int;
+
+    Ticket(route is string) {
+        self.route = route;
+    }
+
+    shown() is string { route + ", seat " + seat.string(); }
+}
+
+main() is int {
+    Stdout().writeln(Ticket("Kostanay - Astana").shown());
+    0;
+}
+```
+
+Ответ компилятора:
+
+```text
+12-unbound-rejected.ok:10:5: semantic error: Object "Ticket" field "seat" was not initialized
+```
+
+Поле, связанное на одних путях и не связанное на других, проверяется в
+конце создания, на том пути, по которому пошёл вызов:
+
+```okkama
+module bible/unbound v1.0.0;
+
+// A field bound on some paths of the constructor and not on others. The
+// check runs when construction ends, on the path actually taken.
+import "io/stdout" take Stdout;
+
+object Transfer {
+    has from is string;
+    has via is string;
+
+    Transfer(from is string, direct is bool) {
+        self.from = from;
+        if direct {
+            via = "-";
+        } else if from == "Kostanay" {
+            via = "Astana";
+        }
+    }
+
+    shown() is string { from + " via " + via; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Transfer("Almaty", true).shown());
+    out.writeln(Transfer("Kostanay", false).shown());
+    // Not an error value: a catch of the Error role does not take it.
+    let shown = try {
+        Transfer("Aktau", false).shown();
+    }
+    catch e is Error {
+        "caught: " + e.text();
+    };
+    out.writeln(shown);
+    0;
+}
+```
+
+Вывод:
+
+```text
+Almaty via -
+Kostanay via Astana
+exit 1
+```
+
+- `Transfer("Almaty", true)` и `Transfer("Kostanay", false)` идут путями,
+  которые связывают `via`, и строят полные объекты.
+- `Transfer("Aktau", false)` попадает в недостающий `else`. Создание
+  проваливается с `Object "Transfer" field "via" was not initialized` и
+  указывает на конструктор.
+- **Это не значение ошибки.** Отказ сообщает о дефекте программы, как
+  выход индекса за границы (глава 10). `catch e is Error` его не берёт, и
+  запуск заканчивается отчётом.
+
+Граница между двумя проверками — решение владельца языка, записанное как
+D-035 в журнале набора соответствия:
+
+- Компилятор отвергает то, что известно наверняка: поле, которое не
+  связывает ни один путь.
+- Остальное проверяется там, где происходит.
+
+Цена видна на `Transfer`: недостающая ветвь — ошибка, на которую
+компилятор мог бы указать, а всплывает она, только когда вход приводит в эту
+ветвь. Тест, покрывающий ветви (глава 15), находит её раньше пользователя.
+
+**Связанное освобождается, новое первым.** Раздел 11.7 показал правило на
+сессии: проваленный конструктор закрывает то, что открыл, а собственный
+`destroy` объекта не выполняется. Подробности важны, когда конструктор
+связывает поля внутри блоков:
+
+```okkama
+module bible/partial v1.0.0;
+
+// A constructor that fails halfway. Whatever it already bound to fields is
+// released, newest first, after the temporaries of its body; the object never
+// existed, so its own destroy does not run.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (tooLarge(size is int));
+
+object Area {
+    has name is string;
+    Area(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Upload {
+    has staging is Area;
+    has lock is Area;
+    has size is int;
+
+    Upload(size is int) {
+        staging = Area(name: "staging");
+        if size > 0 {
+            lock = Area(name: "lock");
+        } else {
+            lock = Area(name: "empty lock");
+        }
+        let scratch = Area(name: "scratch");
+        confirm size <= 1000 else throw Refused.tooLarge(size);
+        self.size = size;
+    }
+
+    size() is int { size; }
+
+    destroy { Stdout().writeln("upload of " + size.string() + " done"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let outcome = try {
+        let upload = Upload(5000);
+        "built " + upload.size().string();
+    }
+    catch e is Refused {
+        "refused: " + e.text();
+    };
+    out.writeln(outcome);
+    out.writeln("--");
+    {
+        let upload = Upload(300);
+        out.writeln("built " + upload.size().string());
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+open staging
+open lock
+open scratch
+close scratch
+close lock
+close staging
+refused: Refused.tooLarge(5000)
+--
+open staging
+open lock
+open scratch
+close scratch
+built 300
+upload of 300 done
+close lock
+close staging
+```
+
+- **Временное значение тела умирает первым.** `scratch` принадлежит блоку
+  конструктора и закрывается, когда блок разматывается, раньше любого поля.
+- **Поле, связанное внутри блока, принадлежит созданию.** `lock` связан в
+  ветви `if` и переживает ветвь: этим поле и отличается. Когда `confirm`
+  проваливается, `lock` освобождается вместе с созданием, а не с ветвью.
+- **Поля уходят в обратном порядке связывания.** `lock` закрывается раньше
+  `staging`, как локальные значения в области (раздел 11.4).
+- **Ошибка доходит до вызывающего без изменений.** `catch` видит
+  `Refused.tooLarge(5000)` после всей очистки, поэтому выполняется, когда
+  ничего не осталось полуоткрытым.
+- **Объекта не было, поэтому его `destroy` не выполняется.** `upload of
+  ... done` печатается только для второй загрузки. `destroy` вправе
+  полагаться на всё, что устанавливает конструктор, — тот же довод, что
+  раздел 12.10 привёл для действий, — и вызов на недостроенном объекте его
+  бы нарушил. Собственные `destroy` полей выполняются, потому что каждое
+  поле — законченный объект.
+
+**Недостроенный объект никто не видит.** Ссылки на незавершённый `Upload`
+вне его конструктора не существует. Единственное исключение — `self`,
+отданный сотруднику (раздел 12.10), и любой вызов через такую ссылку
+отклоняется, пока создание не завершится, а если оно провалилось — навсегда.
+
+Другие языки делят те же три вопроса иначе:
+
+- **В C++ есть правило освобождения.** Когда конструктор бросает
+  исключение, деструкторы уже построенных членов и баз выполняются в
+  обратном порядке, а деструктор самого объекта — нет. На этом правиле
+  Страуструп строит базовую гарантию безопасности исключений стандартной
+  библиотеки [[Stroustrup 2001](#ref-stroustrup2001)]. Прореха — «сырой» ресурс: указатель или
+  дескриптор файла, полученный в теле и ещё не отданный члену, утекает,
+  если его заранее не обернуть в объект. В Okkama каждый ресурс — объект с
+  владельцем, так что оборачивать нечего.
+- **В Java нет несвязанных полей и нет правила освобождения.** Каждое поле
+  начинается с `null`, `0` или `false`, поэтому «не инициализировано»
+  нельзя отличить от значения. Только поле `final` каждый конструктор
+  обязан определённо присвоить (глава 16 JLS, [[Gosling 2023](#ref-gosling2023)]). Конструктор,
+  бросивший исключение, оставляет частично инициализированный объект, и
+  финализатор подкласса может его перехватить и использовать. Правило SEI
+  CERT OBJ11-J «Be wary of letting constructors throw exceptions» описывает
+  эту атаку [[SEI CERT Oracle Coding Standard for Java](#ref-certobj11)]. Ничего не закрывается.
+- **Kotlin переносит проверку на первое чтение.** Свойство `lateinit`
+  может остаться незаданным после создания, и чтение до присваивания
+  бросает `UninitializedPropertyAccessException` [[Kotlin documentation](#ref-kotlinproperties)]. Отказ
+  проявляется далеко от конструктора, который его вызвал.
+- **Swift проверяет статически.** Каждое хранимое свойство должно получить
+  значение до конца инициализатора, а `self` до этого использовать нельзя.
+  Отказывающийся `init?` возвращает `nil` вместо объекта [[The Swift Programming Language](#ref-swiftbook)].
+- **В Rust нет конструкторов.** Литерал структуры называет каждое поле, так
+  что недостроенную структуру нельзя даже записать. Значения, созданные до
+  отказа, — обычные локальные, и они удаляются при размотке функции.
+
+Okkama стоит между Swift и C++. Она статична там, где это наверняка, и
+проверяет путь в остальных случаях, чего не делает ни один язык из этого
+списка, и освобождает связанное, как C++, только без «сырых» дескрипторов.
+
+## 12.12 Разобранная модель предметной области: деньги и заказ
 
 Маленькие объекты легче всего оценивать в области, которую знают все. У
 заказа есть строки; у строки — товар, количество и цена за единицу; цены —
@@ -8579,7 +8828,7 @@ quantity 0 refused
 геттерами и сеттерами дал бы больше кода и меньше гарантий: каждому читателю
 пришлось бы верить, что никто не обнулил количество после конструирования.
 
-## 12.12 Объекты в других языках
+## 12.13 Объекты в других языках
 
 Большинство языков, всерьёз взявшихся за неизменяемость, добавили
 сокращение для «объекта, который и есть свои поля». Сравнение показывает,
@@ -8608,7 +8857,7 @@ Okkama оставляет порождённое равенство и отка�
 изменяемость к минимуму» и «предпочитайте композицию наследованию», здесь
 не требует дисциплины: язык просто не позволяет иного [[Bloch 2018](#ref-bloch2018)].
 
-## 12.13 Чего стоит такой замысел
+## 12.14 Чего стоит такой замысел
 
 - **Больше объектов.** Без свободных функций небольшое вычисление, которое
   в другом языке было бы функцией, становится объектом с одним действием
@@ -21413,7 +21662,7 @@ Objects* утверждает, что такие объекты зовут ло�
   операнд (раздел 14.11);
 - никакого приведения вниз от роли, никогда (раздел 14.3);
 - больше объектов и выделений памяти, чем в языке с мутацией (разделы
-  12.13, 13.17);
+  12.14, 13.17);
 - церемонии везде, где значение может отсутствовать (раздел 7.13);
 - нет перехвата всего, кроме `catch e is Error`, и ошибки не могут нести
   объекты (раздел 10.19);
@@ -21544,6 +21793,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-kotlindata"></a>JetBrains (2024). Data classes. *Kotlin documentation*. https://kotlinlang.org/docs/data-classes.html
 - <a id="ref-kotlinexceptions"></a>JetBrains (2026). Exceptions. *Kotlin documentation*. https://kotlinlang.org/docs/exceptions.html
 - <a id="ref-kotlininheritance"></a>JetBrains (2026). Inheritance. *Kotlin documentation*. https://kotlinlang.org/docs/inheritance.html
+- <a id="ref-kotlinproperties"></a>JetBrains (2026). Properties: late-initialized properties and variables. *Kotlin documentation*. https://kotlinlang.org/docs/properties.html#late-initialized-properties-and-variables
 - <a id="ref-kotlinspec"></a>JetBrains (2024). *Kotlin Language Specification*, chapter Type System: Nullable Types. https://kotlinlang.org/spec/type-system.html
 - <a id="ref-kotlinuse"></a>JetBrains (2026). use. *Kotlin standard library API*. https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.io/use.html
 - <a id="ref-landin1964"></a>Peter J. Landin (1964). The Mechanical Evaluation of Expressions. *The Computer Journal* 6(4): 308–320. https://doi.org/10.1093/comjnl/6.4.308
@@ -21619,6 +21869,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-goruntime"></a>The Go Authors. The Go runtime scheduler, src/runtime/proc.go, function checkdead. https://go.dev/src/runtime/proc.go
 - <a id="ref-schlueter2013"></a>Isaac Z. Schlueter (2013). Designing APIs for Asynchrony. Blog post, 23 August 2013. https://blog.izs.me/2013/08/designing-apis-for-asynchrony/
 - <a id="ref-scharli2003"></a>Nathanael Schärli, Stéphane Ducasse, Oscar Nierstrasz, Andrew P. Black (2003). Traits: Composable Units of Behaviour. In *ECOOP 2003 — Object-Oriented Programming*, LNCS 2743: 248–274. Springer. https://doi.org/10.1007/978-3-540-45070-2_12
+- <a id="ref-certobj11"></a>Software Engineering Institute, Carnegie Mellon University (2026). OBJ11-J. Be wary of letting constructors throw exceptions. *SEI CERT Oracle Coding Standard for Java*. https://wiki.sei.cmu.edu/confluence/display/java/OBJ11-J.+Be+wary+of+letting+constructors+throw+exceptions
 - <a id="ref-semver"></a>Tom Preston-Werner (2013). *Semantic Versioning 2.0.0*. https://semver.org/
 - <a id="ref-smith2018"></a>Nathaniel J. Smith (2018). Notes on Structured Concurrency, or: Go Statement Considered Harmful. Blog post, 25 April 2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
 - <a id="ref-snyder1986"></a>Alan Snyder (1986). Encapsulation and Inheritance in Object-Oriented Programming Languages. In *Proceedings of OOPSLA '86*: 38–45. ACM. https://doi.org/10.1145/28697.28702
@@ -21626,6 +21877,7 @@ Objects* утверждает, что такие объекты зовут ло�
 - <a id="ref-spade-sep"></a>Paul Vincent Spade, Claude Panaccio (2019). William of Ockham. In *The Stanford Encyclopedia of Philosophy* (Spring 2019 edition), E. N. Zalta (ed.). https://plato.stanford.edu/entries/ockham/
 - <a id="ref-strom1986"></a>Robert E. Strom, Shaula Yemini (1986). Typestate: A Programming Language Concept for Enhancing Software Reliability. *IEEE Transactions on Software Engineering* SE-12(1): 157–171. https://doi.org/10.1109/TSE.1986.6312929
 - <a id="ref-stroustrup1994"></a>Bjarne Stroustrup (1994). *The Design and Evolution of C++*. Addison-Wesley.
+- <a id="ref-stroustrup2001"></a>Bjarne Stroustrup (2001). Exception Safety: Concepts and Techniques. In Alexander Romanovsky, Christophe Dony, Jørgen Lindskov Knudsen, Anand Tripathi (eds.), *Advances in Exception Handling Techniques*, LNCS 2022: 60–76. Springer. https://doi.org/10.1007/3-540-45407-1_4
 - <a id="ref-summers2011"></a>Alexander J. Summers, Peter Müller (2011). Freedom Before Commitment: A Lightweight Type System for Object Initialisation. In *Proceedings of OOPSLA 2011*: 1013–1032. ACM. https://doi.org/10.1145/2048066.2048142
 - <a id="ref-sussman1975"></a>Gerald Jay Sussman, Guy Lewis Steele Jr. (1975). *Scheme: An Interpreter for Extended Lambda Calculus*. AI Memo 349, MIT Artificial Intelligence Laboratory. https://dspace.mit.edu/handle/1721.1/5794
 - <a id="ref-syme2011"></a>Don Syme, Tomas Petricek and Dmitry Lomov (2011). The F# Asynchronous Programming Model. *Practical Aspects of Declarative Languages (PADL 2011)*, LNCS 6539: 175–189. https://doi.org/10.1007/978-3-642-18378-2_15

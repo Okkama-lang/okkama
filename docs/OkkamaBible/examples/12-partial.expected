@@ -1,0 +1,16 @@
+open staging
+open lock
+open scratch
+close scratch
+close lock
+close staging
+refused: Refused.tooLarge(5000)
+--
+open staging
+open lock
+open scratch
+close scratch
+built 300
+upload of 300 done
+close lock
+close staging

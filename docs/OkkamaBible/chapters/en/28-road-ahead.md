@@ -172,7 +172,7 @@ language is, argued where they appear:
   operand (Section 14.11);
 - no downcast from a role, ever (Section 14.3);
 - more objects and more allocation than in a language with mutation
-  (Sections 12.13, 13.17);
+  (Sections 12.14, 13.17);
 - ceremony wherever a value may be absent (Section 7.13);
 - no catch-all except `catch e is Error`, and errors that cannot carry
   objects (Section 10.19);
