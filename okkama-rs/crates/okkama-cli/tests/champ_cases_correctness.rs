@@ -270,6 +270,69 @@ fn champ_correctness_constructor_fields_bound_on_some_paths() {
     check(&["L04.ctor.unbound-field-dies-after-body", "L12.constructor-nested-resource-failure"]);
 }
 
+/// An early-self constructor (`self` handed out before its fields are bound) that leaves a field unbound on one
+/// path fails after the body as Tomato does (#746): `Gate(true)` completes and prints 1, `Gate(false)` fails with
+/// "Object \"Gate\" field \"a\" was not initialized" before the next line.
+#[test]
+fn champ_correctness_early_self_fields_bound_on_some_paths() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Gate {
+    has a is int;
+    Gate(flag is bool) {
+        let alias = self;
+        if flag {
+            self.a = 1;
+        }
+    }
+    a() is int { a; }
+}
+
+main() is int {
+    Stdout().writeln(Gate(true).a().string());
+    let h = Gate(false);
+    Stdout().writeln("unreachable");
+    0;
+}"#;
+    let run = run_source(source);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    let failure = run.result.unwrap_err().0;
+    assert!(failure.contains("Object \"Gate\" field \"a\" was not initialized"), "{failure}");
+}
+
+/// The same early self binds its field on every path: no check fails and both objects complete.
+#[test]
+fn champ_correctness_early_self_fields_bound_on_every_path() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Gate {
+    has a is int;
+    Gate(flag is bool) {
+        let alias = self;
+        if flag {
+            self.a = 1;
+        } else {
+            self.a = 2;
+        }
+    }
+    a() is int { a; }
+}
+
+main() is int {
+    Stdout().writeln(Gate(true).a().string());
+    Stdout().writeln(Gate(false).a().string());
+    0;
+}"#;
+    let run = run_source(source);
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.result.map_err(|error| error.0), Ok(0), "stdout={stdout:?}");
+    assert_eq!(stdout, "1\n2\n");
+}
+
 /// Left over from #705 (a dead unwind landing of a total construction): #702's pruning of dead blocks made it run.
 #[test]
 fn champ_correctness_csv_rows_and_round_trip() {

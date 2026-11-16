@@ -20,6 +20,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An early-self constructor that may leave a field unbound runs on Champ
+  (#746).** #708 checks a maybe-unbound field's flag before a complete
+  `obj.new`; a constructor that hands out `self` first (language §12.10)
+  completes through `obj.init $pending = false` instead, and both the
+  producer's construction self-check and the verifier's construction rule
+  (A2) joined the field's state over paths and refused the completion
+  ("completion before field initialization"). Both now take the field as
+  initialized on the passing edge of its bound-flag check: a `cond` whose
+  failing target traps with `TrapCode::Unbound` and Tomato's message for
+  that field, directly or through empty `br` blocks (own splits the edges).
+  The program fails as on Tomato, `Object "Gate" field "a" was not
+  initialized`. Verifier fixtures: two valid (direct and split check) and
+  four invalid (another field's check, a non-Unbound trap, completion on the
+  failing edge, an instruction on the split edge).
 - **Builtin values behind roles on Champ (#757).** The OIR-2 producer
   adapted an array only to `Iterating<T>` and refused the other forms, so
   nine conformance cases stopped with "builtin role adapter outside the C3
