@@ -1226,6 +1226,31 @@ fn creation(body: &Body, bound: Option<bool>) -> InstId {
     *inst
 }
 
+/// Review of D25, 4b: the Full verifier's partition of an admissible split that reaches a bound Future through an
+/// aggregate (`Holder(f: f)` offered to `take`) leaves the Future's holder graph in the rest, as the runtime's
+/// admission filter does; no partition of `alias` moves it into a selected part.
+#[test]
+fn a_bound_future_reached_through_an_aggregate_stays_in_the_rest() {
+    let output = rewrite_async(PR_B1_SCOPES).unwrap();
+    let (id, alias) = function(&output.module, "app.Cases.alias#0");
+    let body = alias.body.as_ref().unwrap();
+    let created = creation(body, Some(true));
+    crate::verify::take_partitions();
+    verify_own(&output.module).unwrap();
+    let records: Vec<_> = crate::verify::take_partitions().into_iter().filter(|record| record.function == id).collect();
+    assert!(records.iter().all(|record| !record.selected.contains(&created)), "{records:?}");
+    let holder = |value: &ValueId| matches!(output.module.types.get(body.values.get(*value).unwrap().ty),
+        Ok(Type::Object { decl, .. }) if output.module.declarations.get(*decl).unwrap().name == "app.Holder");
+    let offers: Vec<_> = records.iter().filter(|record| {
+        let Ok(SelectionExpr::Admissible(inner)) = body.selections.get(record.selection) else { return false };
+        matches!(body.selections.get(*inner), Ok(SelectionExpr::Union(items)) if items.iter().any(|item| {
+            matches!(body.selections.get(*item), Ok(SelectionExpr::Value(value)) if holder(value))
+        }))
+    }).collect();
+    assert!(!offers.is_empty(), "the offer of the Holder is partitioned");
+    assert!(offers.iter().all(|record| record.rest.contains(&created)), "{offers:?}");
+}
+
 const STEALS: &str = include_str!("../../../tests/fixtures/verify/invalid/B9-own-split-steals-shared-cache.oir");
 
 /// Review of D25, F4: no partition takes the holder graph of a bound Future it names directly, a plain one included
