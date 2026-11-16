@@ -457,6 +457,45 @@ main() is int {
     assert_eq!(stdout, "6\n");
 }
 
+/// A constructor that binds a role parameter whose implementations may reach a resource, as `TemporaryDirectory`
+/// binds its parent (#785): the load check proves its fresh return. Tomato prints the same.
+#[test]
+fn champ_correctness_constructor_binding_a_role_parameter() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Locating { name() is string; }
+
+object Place does Locating {
+    has label is string;
+    Place(:label);
+    name() is string { label; }
+}
+
+object Scratch does Locating {
+    has label is string;
+    Scratch(parent is Locating, prefix is string) {
+        label = parent.name() + "/" + prefix;
+    }
+    name() is string { label; }
+    destroy { Stdout().writeln("removed " + label); }
+}
+
+main() is int {
+    {
+        let scratch = Scratch(parent: Place(label: "tmp"), prefix: "a");
+        Stdout().writeln(scratch.name());
+    }
+    Stdout().writeln("end");
+    0;
+}"#;
+    let run = run_source(source);
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.result.map_err(|error| error.0), Ok(0), "stdout={stdout:?}");
+    assert_eq!(stdout, "tmp/a\nremoved tmp/a\nend\n");
+}
+
 /// The same early self binds its field on every path: no check fails and both objects complete.
 #[test]
 fn champ_correctness_early_self_fields_bound_on_every_path() {

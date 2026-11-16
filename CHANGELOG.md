@@ -20,6 +20,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A constructor that binds a role parameter passes the load check (#785).**
+  When a constructor binds a parameter whose role may reach a resource (the
+  parent of `TemporaryDirectory`), the binding's checked split asked for the
+  parameter's identity, which lies in the opaque accepted input run. The
+  loader then had no inventory for the scope and refused the fresh return
+  (`FRESH_PACKET`). A checked split selects only from the admission, and an
+  empty admission yields nothing whatever the selected values are; an
+  unchecked split of an entry parameter still proves nothing.
+
 - **Large functions compile and load faster on Champ (#779).** The SPB 17
   load check computed dominance with bitsets of blocks² / 64 words per pass
   and closed dependency sets by walking every record until nothing changed;
