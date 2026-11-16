@@ -1,0 +1,462 @@
+oir 2 own
+// #802: own's output for a literal of eight fresh Futures, built through a builder:
+//   async main() is int { let fs = [Child(n: 1).run(), …, Child(n: 8).run()]; (await fs[0]) + (await fs[7]); }
+// Each push stores its Future: a scope.split before it names the Future, and the journal carries its entry. The
+// schedule of S1 ends with `dynamic`: a failed store split leaves the entry to the owner's dynamic step.
+module app v1.0.0
+requires core, async
+entry @main
+
+object app.Child {
+    field n: int
+}
+scope S0 action in @app.Child.run#0
+scope S1 action in @main
+scope S2 action in @app.Child.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Child], failures=[program], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[cancelled], suspends=true, publication=atomic)
+summary M6 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M7 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M8 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M9 internal contract call_contract(publication=atomic)
+summary M10 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Child], failures=[program], publication=atomic)
+summary M11 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @app.Child.new#0(%0: int) -> app.Child [ctor app.Child] abi observation summary(M10) {
+    binding b0 "n": int in S2
+    boundary B0 lexical in S2
+    ^b0 in S2:
+    br ^b1(%0)
+    ^b1(%1: int) in S2:
+    %2: int = undef ty int
+    invoke.own obj.new app.Child { n: %1 }
+        normal ^b2($value, %1)
+        unwind ^b3($failure)
+    ^b2(%3: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %4: int) in S2:
+    ret %3
+    ^b3(%5: failure) in S2:
+    raise %5
+}
+
+func @app.Child.run#0(%0: app.Child facts(plain(certificate=closed_graph(ty=app.Child))); %1: own) -> (int, own) [method app.Child, async] abi explicit(input_packet=1, output_packet=1) summary(M5) async-creation(M7) async-body(M5) {
+    boundary B0 lexical in S0
+    boundary B1 lexical in S0
+    ^b0 in S0:
+    %2: scope<S0> = scope.begin S0
+    %3: scope<S0> = own.accept %2, %1
+    br ^b1(%0, %3)
+    ^b1(%4: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %5: scope<S0>) in S0:
+    %6: int = obj.get %4, n
+    %7: own = own.empty
+    %8: deps = deps.of %6
+    %9: pending = exit.prepare return %6, %7, deps(%8) at B1
+    invoke.own scope.end %5, reserve %9, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b2($closed, $pending, %6)
+        unwind ^b3($closed, $failure)
+    ^b2(%10: closed, %11: pending, %12: int) in S0:
+    (%13: int, %14: own, %15: deps) = exit.commit %11, destination caller, result int
+    ret %13, %14
+    ^b3(%16: closed, %17: failure) in S0:
+    raise %17
+}
+
+func @main() -> int [entry, async] abi observation summary(M11) async-creation(M8) async-body(M11) {
+    service.schedule Schedule0 owner S1, protocol P0, duties [%115, %151, %187, %223, %259, %295, %331, %367, dynamic]
+    binding b0 "fs": array<future<int>> in S1
+    boundary B0 lexical in S1
+    key k0: key = service_of(value=%115, kind=cache)
+    key k1: key = service_of(value=%151, kind=cache)
+    key k2: key = service_of(value=%187, kind=cache)
+    key k3: key = service_of(value=%223, kind=cache)
+    key k4: key = service_of(value=%259, kind=cache)
+    key k5: key = service_of(value=%295, kind=cache)
+    key k6: key = service_of(value=%331, kind=cache)
+    key k7: key = service_of(value=%367, kind=cache)
+    dependency d0: dependency = from_ssa(%104)
+    dependency d1: dependency = from_ssa(%107)
+    dependency d2: dependency = key(k0)
+    dependency d3: dependency = from_ssa(%128)
+    dependency d4: dependency = from_ssa(%139)
+    dependency d5: dependency = key(k1)
+    dependency d6: dependency = from_ssa(%164)
+    dependency d7: dependency = from_ssa(%175)
+    dependency d8: dependency = key(k2)
+    dependency d9: dependency = from_ssa(%200)
+    dependency d10: dependency = from_ssa(%211)
+    dependency d11: dependency = key(k3)
+    dependency d12: dependency = from_ssa(%236)
+    dependency d13: dependency = from_ssa(%247)
+    dependency d14: dependency = key(k4)
+    dependency d15: dependency = from_ssa(%272)
+    dependency d16: dependency = from_ssa(%283)
+    dependency d17: dependency = key(k5)
+    dependency d18: dependency = from_ssa(%308)
+    dependency d19: dependency = from_ssa(%319)
+    dependency d20: dependency = key(k6)
+    dependency d21: dependency = from_ssa(%344)
+    dependency d22: dependency = from_ssa(%355)
+    dependency d23: dependency = key(k7)
+    dependency d24: dependency = from_ssa(%380)
+    dependency d25: dependency = from_ssa(%391)
+    dependency d26: dependency = retention(value=%396, selection=selection(%396))
+    dependency d27: dependency = from_ssa(%409)
+    dependency d28: dependency = from_ssa(%417)
+    dependency d29: dependency = from_ssa(%420)
+    dependency d30: dependency = retention(value=%415, selection=selection(%415))
+    dependency d31: dependency = from_ssa(%430)
+    dependency d32: dependency = from_ssa(%432)
+    dependency d33: dependency = from_ssa(%444)
+    dependency d34: dependency = retention(value=%441, selection=selection(%441))
+    dependency d35: dependency = from_ssa(%456)
+    selection s0: selection = union([selection(%115)])
+    selection s1: selection = admissible(s0)
+    selection s2: selection = union([selection(%151)])
+    selection s3: selection = admissible(s2)
+    selection s4: selection = union([selection(%187)])
+    selection s5: selection = admissible(s4)
+    selection s6: selection = union([selection(%223)])
+    selection s7: selection = admissible(s6)
+    selection s8: selection = union([selection(%259)])
+    selection s9: selection = admissible(s8)
+    selection s10: selection = union([selection(%295)])
+    selection s11: selection = admissible(s10)
+    selection s12: selection = union([selection(%331)])
+    selection s13: selection = admissible(s12)
+    selection s14: selection = union([selection(%367)])
+    selection s15: selection = admissible(s14)
+    selection s16: selection = admissible(selection(%396))
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    br ^b1(%0)
+    ^b1(%1: scope<S1>) in S1:
+    %2: builder<future<int>> facts(service) = builder.new element future<int>
+    %3: own = own.empty
+    %4: int = const 1
+    br ^b2(%4, %2, %3, %1)
+    ^b2(%5: int, %6: builder<future<int>> facts(service), %7: own, %8: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%5)
+        normal ^b21($value, %6, %7, %8)
+        unwind ^b22($failure, %6, %7, %8)
+    ^b3(%9: builder<future<int>> facts(service), %10: own, %11: failure, %12: scope<S1>) in S1:
+    %13: own = builder.abandon %9, packet %10
+    %14: scope<S1> = own.admit %12, %13
+    %15: failure = scope.unwind %14, %11, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %15
+    ^b4(%16: int, %17: builder<future<int>> facts(service), %18: own, %19: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%16)
+        normal ^b27($value, %17, %18, %19)
+        unwind ^b28($failure, %17, %18, %19)
+    ^b5(%20: builder<future<int>> facts(service), %21: own, %22: failure, %23: scope<S1>) in S1:
+    %24: own = builder.abandon %20, packet %21
+    %25: scope<S1> = own.admit %23, %24
+    %26: failure = scope.unwind %25, %22, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %26
+    ^b6(%27: int, %28: builder<future<int>> facts(service), %29: own, %30: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%27)
+        normal ^b33($value, %28, %29, %30)
+        unwind ^b34($failure, %28, %29, %30)
+    ^b7(%31: builder<future<int>> facts(service), %32: own, %33: failure, %34: scope<S1>) in S1:
+    %35: own = builder.abandon %31, packet %32
+    %36: scope<S1> = own.admit %34, %35
+    %37: failure = scope.unwind %36, %33, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %37
+    ^b8(%38: int, %39: builder<future<int>> facts(service), %40: own, %41: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%38)
+        normal ^b39($value, %39, %40, %41)
+        unwind ^b40($failure, %39, %40, %41)
+    ^b9(%42: builder<future<int>> facts(service), %43: own, %44: failure, %45: scope<S1>) in S1:
+    %46: own = builder.abandon %42, packet %43
+    %47: scope<S1> = own.admit %45, %46
+    %48: failure = scope.unwind %47, %44, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %48
+    ^b10(%49: int, %50: builder<future<int>> facts(service), %51: own, %52: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%49)
+        normal ^b45($value, %50, %51, %52)
+        unwind ^b46($failure, %50, %51, %52)
+    ^b11(%53: builder<future<int>> facts(service), %54: own, %55: failure, %56: scope<S1>) in S1:
+    %57: own = builder.abandon %53, packet %54
+    %58: scope<S1> = own.admit %56, %57
+    %59: failure = scope.unwind %58, %55, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %59
+    ^b12(%60: int, %61: builder<future<int>> facts(service), %62: own, %63: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%60)
+        normal ^b51($value, %61, %62, %63)
+        unwind ^b52($failure, %61, %62, %63)
+    ^b13(%64: builder<future<int>> facts(service), %65: own, %66: failure, %67: scope<S1>) in S1:
+    %68: own = builder.abandon %64, packet %65
+    %69: scope<S1> = own.admit %67, %68
+    %70: failure = scope.unwind %69, %66, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %70
+    ^b14(%71: int, %72: builder<future<int>> facts(service), %73: own, %74: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%71)
+        normal ^b57($value, %72, %73, %74)
+        unwind ^b58($failure, %72, %73, %74)
+    ^b15(%75: builder<future<int>> facts(service), %76: own, %77: failure, %78: scope<S1>) in S1:
+    %79: own = builder.abandon %75, packet %76
+    %80: scope<S1> = own.admit %78, %79
+    %81: failure = scope.unwind %80, %77, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %81
+    ^b16(%82: int, %83: builder<future<int>> facts(service), %84: own, %85: scope<S1>) in S1:
+    invoke.own call @app.Child.new#0(%82)
+        normal ^b63($value, %83, %84, %85)
+        unwind ^b64($failure, %83, %84, %85)
+    ^b17(%86: builder<future<int>> facts(service), %87: own, %88: failure, %89: scope<S1>) in S1:
+    %90: own = builder.abandon %86, packet %87
+    %91: scope<S1> = own.admit %89, %90
+    %92: failure = scope.unwind %91, %88, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %92
+    ^b18(%93: builder<future<int>> facts(service), %94: own, %95: scope<S1>) in S1:
+    invoke.own builder.finish %93, packet %94
+        normal ^b69($value, $packet, %95)
+        unwind ^b70($buffer, $packet, $failure, %95)
+    ^b19(%96: builder<future<int>> facts(service), %97: own, %98: failure, %99: scope<S1>) in S1:
+    %100: own = builder.abandon %96, packet %97
+    %101: scope<S1> = own.admit %99, %100
+    %102: failure = scope.unwind %101, %98, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %102
+    ^b20(%103: array<future<int>> facts(managed(deps=d0)), %104: deps, %105: int, %106: array<future<int>> facts(managed(deps=d1)), %107: deps, %108: scope<S1>) in S1:
+    invoke.own array.get %103, %105
+        normal ^b73($value, %103, %104, %105, %106, %107, %108)
+        unwind ^b74($failure, %108)
+    ^b21(%109: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %110: builder<future<int>> facts(service), %111: own, %112: scope<S1>) in S1:
+    %113: own = own.empty
+    %114: deps = deps.of %109
+    (%115: future<int> facts(managed(deps=d2)), %116: scope<S1>) = fut.new %113, %114, %112, environment deferred(function=@app.Child.run#0, arguments=[%109]), result int, owner S1
+    %117: deps = deps.of %115
+    invoke.own scope.split %116, s1
+        normal ^b23($state, $selected, $external_deps, %110, %111, %115, %117)
+        unwind ^b24($state, $failure, %110, %111)
+    ^b22(%118: failure, %119: builder<future<int>> facts(service), %120: own, %121: scope<S1>) in S1:
+    br ^b3(%119, %120, %118, %121)
+    ^b23(%122: scope<S1>, %123: own, %124: deps, %125: builder<future<int>> facts(service), %126: own, %127: future<int> facts(managed(deps=d3)), %128: deps) in S1:
+    %129: own = own.join [%123]
+    %130: own = own.join [%126, %129]
+    invoke.own builder.push %125, %127, packet %130
+        normal ^b25($buffer, $packet, %122, %127, %128)
+        unwind ^b26($buffer, $packet, $failure, %122)
+    ^b24(%131: scope<S1>, %132: failure, %133: builder<future<int>> facts(service), %134: own) in S1:
+    br ^b3(%133, %134, %132, %131)
+    ^b25(%135: builder<future<int>> facts(service), %136: own, %137: scope<S1>, %138: future<int> facts(managed(deps=d4)), %139: deps) in S1:
+    %140: int = const 2
+    br ^b4(%140, %135, %136, %137)
+    ^b26(%141: builder<future<int>> facts(service), %142: own, %143: failure, %144: scope<S1>) in S1:
+    br ^b3(%141, %142, %143, %144)
+    ^b27(%145: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %146: builder<future<int>> facts(service), %147: own, %148: scope<S1>) in S1:
+    %149: own = own.empty
+    %150: deps = deps.of %145
+    (%151: future<int> facts(managed(deps=d5)), %152: scope<S1>) = fut.new %149, %150, %148, environment deferred(function=@app.Child.run#0, arguments=[%145]), result int, owner S1
+    %153: deps = deps.of %151
+    invoke.own scope.split %152, s3
+        normal ^b29($state, $selected, $external_deps, %146, %147, %151, %153)
+        unwind ^b30($state, $failure, %146, %147)
+    ^b28(%154: failure, %155: builder<future<int>> facts(service), %156: own, %157: scope<S1>) in S1:
+    br ^b5(%155, %156, %154, %157)
+    ^b29(%158: scope<S1>, %159: own, %160: deps, %161: builder<future<int>> facts(service), %162: own, %163: future<int> facts(managed(deps=d6)), %164: deps) in S1:
+    %165: own = own.join [%159]
+    %166: own = own.join [%162, %165]
+    invoke.own builder.push %161, %163, packet %166
+        normal ^b31($buffer, $packet, %158, %163, %164)
+        unwind ^b32($buffer, $packet, $failure, %158)
+    ^b30(%167: scope<S1>, %168: failure, %169: builder<future<int>> facts(service), %170: own) in S1:
+    br ^b5(%169, %170, %168, %167)
+    ^b31(%171: builder<future<int>> facts(service), %172: own, %173: scope<S1>, %174: future<int> facts(managed(deps=d7)), %175: deps) in S1:
+    %176: int = const 3
+    br ^b6(%176, %171, %172, %173)
+    ^b32(%177: builder<future<int>> facts(service), %178: own, %179: failure, %180: scope<S1>) in S1:
+    br ^b5(%177, %178, %179, %180)
+    ^b33(%181: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %182: builder<future<int>> facts(service), %183: own, %184: scope<S1>) in S1:
+    %185: own = own.empty
+    %186: deps = deps.of %181
+    (%187: future<int> facts(managed(deps=d8)), %188: scope<S1>) = fut.new %185, %186, %184, environment deferred(function=@app.Child.run#0, arguments=[%181]), result int, owner S1
+    %189: deps = deps.of %187
+    invoke.own scope.split %188, s5
+        normal ^b35($state, $selected, $external_deps, %182, %183, %187, %189)
+        unwind ^b36($state, $failure, %182, %183)
+    ^b34(%190: failure, %191: builder<future<int>> facts(service), %192: own, %193: scope<S1>) in S1:
+    br ^b7(%191, %192, %190, %193)
+    ^b35(%194: scope<S1>, %195: own, %196: deps, %197: builder<future<int>> facts(service), %198: own, %199: future<int> facts(managed(deps=d9)), %200: deps) in S1:
+    %201: own = own.join [%195]
+    %202: own = own.join [%198, %201]
+    invoke.own builder.push %197, %199, packet %202
+        normal ^b37($buffer, $packet, %194, %199, %200)
+        unwind ^b38($buffer, $packet, $failure, %194)
+    ^b36(%203: scope<S1>, %204: failure, %205: builder<future<int>> facts(service), %206: own) in S1:
+    br ^b7(%205, %206, %204, %203)
+    ^b37(%207: builder<future<int>> facts(service), %208: own, %209: scope<S1>, %210: future<int> facts(managed(deps=d10)), %211: deps) in S1:
+    %212: int = const 4
+    br ^b8(%212, %207, %208, %209)
+    ^b38(%213: builder<future<int>> facts(service), %214: own, %215: failure, %216: scope<S1>) in S1:
+    br ^b7(%213, %214, %215, %216)
+    ^b39(%217: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %218: builder<future<int>> facts(service), %219: own, %220: scope<S1>) in S1:
+    %221: own = own.empty
+    %222: deps = deps.of %217
+    (%223: future<int> facts(managed(deps=d11)), %224: scope<S1>) = fut.new %221, %222, %220, environment deferred(function=@app.Child.run#0, arguments=[%217]), result int, owner S1
+    %225: deps = deps.of %223
+    invoke.own scope.split %224, s7
+        normal ^b41($state, $selected, $external_deps, %218, %219, %223, %225)
+        unwind ^b42($state, $failure, %218, %219)
+    ^b40(%226: failure, %227: builder<future<int>> facts(service), %228: own, %229: scope<S1>) in S1:
+    br ^b9(%227, %228, %226, %229)
+    ^b41(%230: scope<S1>, %231: own, %232: deps, %233: builder<future<int>> facts(service), %234: own, %235: future<int> facts(managed(deps=d12)), %236: deps) in S1:
+    %237: own = own.join [%231]
+    %238: own = own.join [%234, %237]
+    invoke.own builder.push %233, %235, packet %238
+        normal ^b43($buffer, $packet, %230, %235, %236)
+        unwind ^b44($buffer, $packet, $failure, %230)
+    ^b42(%239: scope<S1>, %240: failure, %241: builder<future<int>> facts(service), %242: own) in S1:
+    br ^b9(%241, %242, %240, %239)
+    ^b43(%243: builder<future<int>> facts(service), %244: own, %245: scope<S1>, %246: future<int> facts(managed(deps=d13)), %247: deps) in S1:
+    %248: int = const 5
+    br ^b10(%248, %243, %244, %245)
+    ^b44(%249: builder<future<int>> facts(service), %250: own, %251: failure, %252: scope<S1>) in S1:
+    br ^b9(%249, %250, %251, %252)
+    ^b45(%253: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %254: builder<future<int>> facts(service), %255: own, %256: scope<S1>) in S1:
+    %257: own = own.empty
+    %258: deps = deps.of %253
+    (%259: future<int> facts(managed(deps=d14)), %260: scope<S1>) = fut.new %257, %258, %256, environment deferred(function=@app.Child.run#0, arguments=[%253]), result int, owner S1
+    %261: deps = deps.of %259
+    invoke.own scope.split %260, s9
+        normal ^b47($state, $selected, $external_deps, %254, %255, %259, %261)
+        unwind ^b48($state, $failure, %254, %255)
+    ^b46(%262: failure, %263: builder<future<int>> facts(service), %264: own, %265: scope<S1>) in S1:
+    br ^b11(%263, %264, %262, %265)
+    ^b47(%266: scope<S1>, %267: own, %268: deps, %269: builder<future<int>> facts(service), %270: own, %271: future<int> facts(managed(deps=d15)), %272: deps) in S1:
+    %273: own = own.join [%267]
+    %274: own = own.join [%270, %273]
+    invoke.own builder.push %269, %271, packet %274
+        normal ^b49($buffer, $packet, %266, %271, %272)
+        unwind ^b50($buffer, $packet, $failure, %266)
+    ^b48(%275: scope<S1>, %276: failure, %277: builder<future<int>> facts(service), %278: own) in S1:
+    br ^b11(%277, %278, %276, %275)
+    ^b49(%279: builder<future<int>> facts(service), %280: own, %281: scope<S1>, %282: future<int> facts(managed(deps=d16)), %283: deps) in S1:
+    %284: int = const 6
+    br ^b12(%284, %279, %280, %281)
+    ^b50(%285: builder<future<int>> facts(service), %286: own, %287: failure, %288: scope<S1>) in S1:
+    br ^b11(%285, %286, %287, %288)
+    ^b51(%289: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %290: builder<future<int>> facts(service), %291: own, %292: scope<S1>) in S1:
+    %293: own = own.empty
+    %294: deps = deps.of %289
+    (%295: future<int> facts(managed(deps=d17)), %296: scope<S1>) = fut.new %293, %294, %292, environment deferred(function=@app.Child.run#0, arguments=[%289]), result int, owner S1
+    %297: deps = deps.of %295
+    invoke.own scope.split %296, s11
+        normal ^b53($state, $selected, $external_deps, %290, %291, %295, %297)
+        unwind ^b54($state, $failure, %290, %291)
+    ^b52(%298: failure, %299: builder<future<int>> facts(service), %300: own, %301: scope<S1>) in S1:
+    br ^b13(%299, %300, %298, %301)
+    ^b53(%302: scope<S1>, %303: own, %304: deps, %305: builder<future<int>> facts(service), %306: own, %307: future<int> facts(managed(deps=d18)), %308: deps) in S1:
+    %309: own = own.join [%303]
+    %310: own = own.join [%306, %309]
+    invoke.own builder.push %305, %307, packet %310
+        normal ^b55($buffer, $packet, %302, %307, %308)
+        unwind ^b56($buffer, $packet, $failure, %302)
+    ^b54(%311: scope<S1>, %312: failure, %313: builder<future<int>> facts(service), %314: own) in S1:
+    br ^b13(%313, %314, %312, %311)
+    ^b55(%315: builder<future<int>> facts(service), %316: own, %317: scope<S1>, %318: future<int> facts(managed(deps=d19)), %319: deps) in S1:
+    %320: int = const 7
+    br ^b14(%320, %315, %316, %317)
+    ^b56(%321: builder<future<int>> facts(service), %322: own, %323: failure, %324: scope<S1>) in S1:
+    br ^b13(%321, %322, %323, %324)
+    ^b57(%325: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %326: builder<future<int>> facts(service), %327: own, %328: scope<S1>) in S1:
+    %329: own = own.empty
+    %330: deps = deps.of %325
+    (%331: future<int> facts(managed(deps=d20)), %332: scope<S1>) = fut.new %329, %330, %328, environment deferred(function=@app.Child.run#0, arguments=[%325]), result int, owner S1
+    %333: deps = deps.of %331
+    invoke.own scope.split %332, s13
+        normal ^b59($state, $selected, $external_deps, %326, %327, %331, %333)
+        unwind ^b60($state, $failure, %326, %327)
+    ^b58(%334: failure, %335: builder<future<int>> facts(service), %336: own, %337: scope<S1>) in S1:
+    br ^b15(%335, %336, %334, %337)
+    ^b59(%338: scope<S1>, %339: own, %340: deps, %341: builder<future<int>> facts(service), %342: own, %343: future<int> facts(managed(deps=d21)), %344: deps) in S1:
+    %345: own = own.join [%339]
+    %346: own = own.join [%342, %345]
+    invoke.own builder.push %341, %343, packet %346
+        normal ^b61($buffer, $packet, %338, %343, %344)
+        unwind ^b62($buffer, $packet, $failure, %338)
+    ^b60(%347: scope<S1>, %348: failure, %349: builder<future<int>> facts(service), %350: own) in S1:
+    br ^b15(%349, %350, %348, %347)
+    ^b61(%351: builder<future<int>> facts(service), %352: own, %353: scope<S1>, %354: future<int> facts(managed(deps=d22)), %355: deps) in S1:
+    %356: int = const 8
+    br ^b16(%356, %351, %352, %353)
+    ^b62(%357: builder<future<int>> facts(service), %358: own, %359: failure, %360: scope<S1>) in S1:
+    br ^b15(%357, %358, %359, %360)
+    ^b63(%361: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %362: builder<future<int>> facts(service), %363: own, %364: scope<S1>) in S1:
+    %365: own = own.empty
+    %366: deps = deps.of %361
+    (%367: future<int> facts(managed(deps=d23)), %368: scope<S1>) = fut.new %365, %366, %364, environment deferred(function=@app.Child.run#0, arguments=[%361]), result int, owner S1
+    %369: deps = deps.of %367
+    invoke.own scope.split %368, s15
+        normal ^b65($state, $selected, $external_deps, %362, %363, %367, %369)
+        unwind ^b66($state, $failure, %362, %363)
+    ^b64(%370: failure, %371: builder<future<int>> facts(service), %372: own, %373: scope<S1>) in S1:
+    br ^b17(%371, %372, %370, %373)
+    ^b65(%374: scope<S1>, %375: own, %376: deps, %377: builder<future<int>> facts(service), %378: own, %379: future<int> facts(managed(deps=d24)), %380: deps) in S1:
+    %381: own = own.join [%375]
+    %382: own = own.join [%378, %381]
+    invoke.own builder.push %377, %379, packet %382
+        normal ^b67($buffer, $packet, %374, %379, %380)
+        unwind ^b68($buffer, $packet, $failure, %374)
+    ^b66(%383: scope<S1>, %384: failure, %385: builder<future<int>> facts(service), %386: own) in S1:
+    br ^b17(%385, %386, %384, %383)
+    ^b67(%387: builder<future<int>> facts(service), %388: own, %389: scope<S1>, %390: future<int> facts(managed(deps=d25)), %391: deps) in S1:
+    br ^b18(%387, %388, %389)
+    ^b68(%392: builder<future<int>> facts(service), %393: own, %394: failure, %395: scope<S1>) in S1:
+    br ^b17(%392, %393, %394, %395)
+    ^b69(%396: array<future<int>> facts(managed(deps=d26)), %397: own, %398: scope<S1>) in S1:
+    %399: deps = deps.of %396
+    %400: scope<S1> = own.admit %398, %397
+    invoke.own scope.split %400, s16
+        normal ^b71($state, $selected, $external_deps, %396, %399)
+        unwind ^b72($state, $failure)
+    ^b70(%401: builder<future<int>> facts(service), %402: own, %403: failure, %404: scope<S1>) in S1:
+    br ^b19(%401, %402, %403, %404)
+    ^b71(%405: scope<S1>, %406: own, %407: deps, %408: array<future<int>> facts(managed(deps=d27)), %409: deps) in S1:
+    %410: scope<S1> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%408, packet=%406), state=%405, original_scope=S1)
+    %411: int = const 0
+    br ^b20(%408, %409, %411, %408, %409, %410)
+    ^b72(%412: scope<S1>, %413: failure) in S1:
+    %414: failure = scope.unwind %412, %413, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %414
+    ^b73(%415: future<int> facts(managed(deps=d30)), %416: array<future<int>> facts(managed(deps=d28)), %417: deps, %418: int, %419: array<future<int>> facts(managed(deps=d29)), %420: deps, %421: scope<S1>) in S1:
+    %422: deps = deps.of %415
+    invoke.own await %415, result int
+        normal ^b75($value, $deps, %415, %419, %420, %421, %422)
+        unwind ^b76($failure, $task, $receipt, %421)
+    ^b74(%423: failure, %424: scope<S1>) in S1:
+    %425: failure = scope.unwind %424, %423, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %425
+    ^b75(%426: int, %427: deps, %428: future<int> facts(managed(deps=d32)), %429: array<future<int>> facts(managed(deps=d31)), %430: deps, %431: scope<S1>, %432: deps) in S1:
+    %433: int = const 7
+    invoke.own array.get %429, %433
+        normal ^b77($value, %426, %429, %430, %431, %433)
+        unwind ^b78($failure, %431)
+    ^b76(%434: failure, %435: task-state, %436: receipt, %437: scope<S1>) in S1:
+    (%438: scope<S1>, %439: failure) = await.unwind %437, %434, %435, %436, protocol P0
+    %440: failure = scope.unwind %438, %439, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %440
+    ^b77(%441: future<int> facts(managed(deps=d34)), %442: int, %443: array<future<int>> facts(managed(deps=d33)), %444: deps, %445: scope<S1>, %446: int) in S1:
+    %447: deps = deps.of %441
+    invoke.own await %441, result int
+        normal ^b79($value, $deps, %441, %442, %445, %447)
+        unwind ^b80($failure, $task, $receipt, %445)
+    ^b78(%448: failure, %449: scope<S1>) in S1:
+    %450: failure = scope.unwind %449, %448, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %450
+    ^b79(%451: int, %452: deps, %453: future<int> facts(managed(deps=d35)), %454: int, %455: scope<S1>, %456: deps) in S1:
+    %457: int = int.add %454, %451
+    invoke.own scope.end %455, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b81($closed, %457)
+        unwind ^b82($closed, $failure)
+    ^b80(%458: failure, %459: task-state, %460: receipt, %461: scope<S1>) in S1:
+    (%462: scope<S1>, %463: failure) = await.unwind %461, %458, %459, %460, protocol P0
+    %464: failure = scope.unwind %462, %463, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %464
+    ^b81(%465: closed, %466: int) in S1:
+    ret %466
+    ^b82(%467: closed, %468: failure) in S1:
+    raise %468
+}

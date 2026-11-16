@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: Futures in array literals of eight or more parts (#802).** A literal of
+  8+ parts is built through a builder, and fresh Futures in it stopped the build
+  ("a cache duty that reaches its owner's close on some paths only"). A pushed
+  fresh Future is now stored in the builder's journal, its owner settles entries at
+  run time, and a failed store moves the Future to that dynamic step too. The
+  literal, the same with a bound Future, the array returned by a synchronous
+  action, and a part that throws now run as on Tomato.
+
 - **Champ: resources lent to an async action (#732, #742).** An async action with a
   resource receiver and a resource argument, a bound resource borrowed by an awaited
   async action, and resources that keep the caller's Atomic now compile and run on

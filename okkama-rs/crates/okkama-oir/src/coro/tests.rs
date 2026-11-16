@@ -601,6 +601,23 @@ $external_deps, %27, %29, %901)\n        unwind ^b9($state, $failure, %901)";
     edited(&rehomed, split, rehomed_split)
 }
 
+/// The `service.absorb`s of a body that start from a split's selected packet (`normal`, a block parameter) and from a
+/// failure edge's `own.empty` (#802 follow-up: a failed store moves the token to the owner's dynamic inventory).
+fn absorbs_by_edge(body: &Body) -> (Vec<ValueId>, Vec<ValueId>) {
+    let (mut normal, mut failure) = (vec![], vec![]);
+    for (mut packet, token) in absorbs(body) {
+        while let Definition::InstResult { inst, .. } = body.values.get(packet).unwrap().def
+            && let Operation::Async(AsyncOp::ServiceAbsorb { packet: earlier, .. }) = body.insts.get(inst).unwrap().op {
+            packet = earlier;
+        }
+        match body.values.get(packet).unwrap().def {
+            Definition::BlockParam { .. } => normal.push(token),
+            _ => failure.push(token),
+        }
+    }
+    (normal, failure)
+}
+
 /// The `service.absorb`s of a body, in block order: (packet, token).
 fn absorbs(body: &Body) -> Vec<(ValueId, ValueId)> {
     body.blocks.iter().flat_map(|(_, block)| block.insts.iter()).filter_map(|inst| {
@@ -637,22 +654,24 @@ fn settles_after_absorb(body: &Body, token: ValueId) -> (usize, usize) {
 }
 
 /// #771 (async ABI D25.2 revision): the split before `Holder.new` names the Future created here, so its cache
-/// token moves into the selected packet, once; low then settles it only where the split was refused, never after
-/// the absorb: the duty is never settled twice, from the schedule and from the packet (the first of the three
-/// properties). The full verifiers accept the result.
+/// token moves into the selected packet, once. `make`'s scope settles entries at run time (`dynamic`: its result can
+/// hold a Future), so on the split's failure edge the token moves into that dynamic inventory (#802 follow-up
+/// ruling): the schedule no longer names it, and low settles it statically nowhere. The duty is never settled twice
+/// (the first of the three properties). The full verifiers accept the result.
 #[test]
 fn a_stored_future_is_absorbed_once_and_leaves_its_schedules() {
     let module = lowered("d25-stored-cold", D25_COLD);
     let make = body(&module, "app.Maker.make#0");
     let token = cache_tokens(make)[0];
-    assert_eq!(absorbs(make).iter().map(|(_, token)| *token).collect::<Vec<_>>(), [token]);
-    // Low settles the token only at the closes the absorb does not precede (the split refused).
+    assert_eq!(absorbs_by_edge(make), (vec![token], vec![token]));
+    assert!(make.service_schedules.iter().all(|schedule| !schedule.duties.contains(&ScheduleDuty::Value(token))));
     let low = crate::low::lower_cleanup(module.clone(), &crate::low::LowOptions::default()).unwrap();
     let lowered_make = body(&low, "app.Maker.make#0");
-    assert_eq!(settles_after_absorb(lowered_make, token), (1, 0));
+    assert_eq!(settles_after_absorb(lowered_make, token), (0, 0));
     // The absorb opens the split's normal block and the packet it gives is the one the call takes.
-    let (packet, _) = absorbs(make)[0];
-    let Definition::BlockParam { .. } = make.values.get(packet).unwrap().def else { panic!("the selected packet") };
+    assert!(absorbs(make).iter().any(|(packet, _)| {
+        matches!(make.values.get(*packet).unwrap().def, Definition::BlockParam { .. })
+    }), "the selected packet");
     // No rehome: the entry leaves with the Holder's packet.
     assert!(rehomes(&module, make).is_empty());
 }
@@ -663,22 +682,26 @@ fn a_stored_future_is_absorbed_once_and_leaves_its_schedules() {
 fn a_stored_spawned_future_absorbs_its_task_then_its_cache() {
     let module = lowered("d25-stored-spawned", D25_SPAWNED);
     let make = body(&module, "app.Maker.make#0");
-    let absorbed = absorbs(make);
-    assert_eq!(absorbed.len(), 2, "{absorbed:?}");
-    let kinds: Vec<_> = absorbed.iter().map(|(_, token)| {
+    // On the split's normal edge into the selected packet, on its failure edge into the dynamic inventory (#802
+    // follow-up ruling): task first, then cache, on each.
+    let (normal, failure) = absorbs_by_edge(make);
+    assert_eq!(normal, failure);
+    let kinds: Vec<_> = normal.iter().map(|token| {
         let ty = make.values.get(*token).unwrap().ty;
         module.types.get(ty).unwrap().clone()
     }).collect();
     assert_eq!(kinds, [Type::Service(ServiceType::TaskState), Type::Service(ServiceType::CacheState)]);
-    // The second absorb takes the packet of the first.
-    let Definition::InstResult { inst, .. } = make.values.get(absorbed[1].0).unwrap().def else {
-        panic!("the cache absorb takes the task absorb's packet");
-    };
-    assert!(matches!(make.insts.get(inst).unwrap().op, Operation::Async(AsyncOp::ServiceAbsorb { .. })));
+    // Each edge's second absorb takes the packet of its first.
+    for (packet, _) in absorbs(make).iter().filter(|(_, token)| *token == normal[1]) {
+        let Definition::InstResult { inst, .. } = make.values.get(*packet).unwrap().def else {
+            panic!("the cache absorb takes the task absorb's packet");
+        };
+        assert!(matches!(make.insts.get(inst).unwrap().op, Operation::Async(AsyncOp::ServiceAbsorb { .. })));
+    }
     let low = crate::low::lower_cleanup(module.clone(), &crate::low::LowOptions::default()).unwrap();
     let lowered_make = body(&low, "app.Maker.make#0");
-    for (_, token) in &absorbed {
-        assert_eq!(settles_after_absorb(lowered_make, *token), (1, 0), "{token:?}");
+    for token in &normal {
+        assert_eq!(settles_after_absorb(lowered_make, *token), (0, 0), "{token:?}");
     }
 }
 
@@ -742,6 +765,34 @@ admissible(s9)\n", 1);
     let module = lower_coro(parsed(&source), &CoroOptions::default()).unwrap();
     let make = body(&module, "app.Maker.make#0");
     assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
+}
+
+const BUILDER_FUTURES: &str = include_str!("../../tests/fixtures/async/own/d802-builder-futures.oir");
+
+/// #802 (Fable's ruling and its follow-up, OIR-2-async-abi.md): a fresh Future pushed into a builder is stored. Its
+/// token is absorbed into the split's selected packet on the normal edge, and on the split's unwind edge it moves
+/// into the owner's dynamic inventory (`own.empty`, `service.absorb`, `own.admit`), so the builder's shared handler
+/// sees it on no path. Without `dynamic` in the owner's schedule the token stays static and the shared close is
+/// refused.
+#[test]
+fn a_future_stored_in_a_builder_leaves_its_token_on_both_outcomes() {
+    let output = lowered("d802-builder-futures", BUILDER_FUTURES);
+    let main = body(&output, "main");
+    let absorbs = main.insts.iter().filter(|(_, instruction)| {
+        matches!(instruction.op, Operation::Async(AsyncOp::ServiceAbsorb { .. }))
+    }).count();
+    assert_eq!(absorbs, 16, "eight normal edges and eight failure edges");
+    let admitted_on_failure = main.blocks.iter().filter(|(_, block)| block.insts.iter().any(|inst| {
+        matches!(main.insts.get(*inst).unwrap().op, Operation::Ownership(OwnershipOp::Admit { .. }))
+    }) && block.insts.iter().any(|inst| {
+        matches!(main.insts.get(*inst).unwrap().op, Operation::Async(AsyncOp::ServiceAbsorb { .. }))
+    })).count();
+    assert!(admitted_on_failure >= 8, "{admitted_on_failure}");
+    let schedule = "%331, %367, dynamic]";
+    assert!(BUILDER_FUTURES.contains(schedule));
+    let error = lower(&edited(BUILDER_FUTURES, schedule, "%331, %367]")).unwrap_err();
+    assert!(matches!(&error, CoroError::Unsupported { message, .. }
+        if message == "a cache duty that reaches its owner's close on some paths only"), "{error:?}");
 }
 
 const LOOP_BODY: &str = include_str!("../../tests/fixtures/async/own/d759-loop-body-future.oir");

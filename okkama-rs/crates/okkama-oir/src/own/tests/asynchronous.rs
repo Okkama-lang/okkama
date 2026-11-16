@@ -1359,3 +1359,56 @@ fn a_borrowed_future_result_brings_no_cache_duty() {
         assert!(named.iter().any(|(admissible, _)| !admissible), "{symbol}: the exit names its result {named:?}");
     }
 }
+
+const D802_FRESH: &str = include_str!("../../../tests/fixtures/async/high/d802-builder-fresh.oir");
+const D802_BOUND: &str = include_str!("../../../tests/fixtures/async/high/d802-builder-bound.oir");
+
+/// The Future-typed values that the `scope.split`s of a body name, in block order.
+fn split_futures(module: &Module, body: &Body) -> Vec<ValueId> {
+    let mut named = Vec::new();
+    for (_, block) in body.blocks.iter() {
+        let TermKind::InvokeOwn { op, .. } = &block.term.kind else { continue };
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = **op else { continue };
+        let mut pending = vec![selection];
+        while let Some(selection) = pending.pop() {
+            match body.selections.get(selection).unwrap() {
+                SelectionExpr::Union(items) => pending.extend(items.iter().rev()),
+                SelectionExpr::Admissible(inner) | SelectionExpr::Held(inner) => pending.push(*inner),
+                SelectionExpr::Value(value) if crate::own::futures::is_future(module, body.values.get(*value).unwrap().ty) => {
+                    named.push(*value);
+                }
+                _ => {}
+            }
+        }
+    }
+    named
+}
+
+/// #802 (Fable's ruling, OIR-2-async-abi.md): a builder push stores a fresh Future: a split before the push names
+/// it, the push's packet is the builder's journal joined with that selection, and no `held` transfer moves it. A
+/// bound Future is an alias (PR-B1): no split names it. The owner settles entries at run time (`dynamic`).
+#[test]
+fn a_builder_push_stores_a_fresh_future_and_aliases_a_bound_one() {
+    for (name, source, stored) in [("fresh", D802_FRESH, 8), ("bound", D802_BOUND, 1)] {
+        let output = rewrite_async(source).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let (_, main) = function(&output.module, "main");
+        let body = main.body.as_ref().unwrap();
+        assert_eq!(split_futures(&output.module, body).len(), stored, "{name}: splits that name a Future");
+        let pushes: Vec<_> = body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+            TermKind::InvokeOwn { op, .. } => match **op {
+                Operation::Collection(CollectionOp::BuilderPush { packet: Some(packet), .. }) => Some(packet),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
+        assert_eq!(pushes.len(), 8, "{name}");
+        let joined = pushes.iter().filter(|packet| matches!(body.values.get(**packet).unwrap().def,
+            Definition::InstResult { inst, .. } if matches!(body.insts.get(inst).unwrap().op,
+                Operation::Ownership(OwnershipOp::Join { ref packets }) if packets.len() == 2))).count();
+        assert_eq!(joined, stored, "{name}: a push of a fresh Future takes the journal joined with its selection");
+        assert!(!body.insts.iter().any(|(_, instruction)| matches!(instruction.op,
+            Operation::Ownership(OwnershipOp::ScopeTransfer { .. }))), "{name}: no held transfer");
+        let schedule = body.service_schedules.first().unwrap_or_else(|| panic!("{name}: a schedule"));
+        assert_eq!(schedule.duties.last(), Some(&ScheduleDuty::Dynamic), "{name}");
+    }
+}

@@ -2,6 +2,8 @@ oir 2 coro
 // Coro golden of tests/fixtures/async/own/d25-stored-cold.oir (#771, D25.2): `fut.new` has no `binding`, so the
 // Future is a fresh temporary and the split before Holder.new absorbs its cache token into the selected packet.
 // The positive of coro-invalid/b9-bound-future-absorbed.oir.
+// #802 follow-up ruling: `make`'s scope settles entries at run time, so the split's failure edge moves the token
+// into that dynamic inventory too (own.empty, service.absorb, own.admit), and the schedule no longer names it.
 module app v1.0.0
 requires core, async
 entry @main
@@ -234,16 +236,16 @@ func @app.Maker.new#0() -> app.Maker [ctor app.Maker] abi observation summary(M1
 }
 
 func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app.Maker))), %1: int; %2: own) -> (app.Holder, own) [method app.Maker] abi explicit(input_packet=2, output_packet=1) summary(M11) {
-    service.schedule Schedule0 owner S2, protocol P0, duties [%13, dynamic]
+    service.schedule Schedule0 owner S2, protocol P0, duties [dynamic]
     binding b0 "n": int in S2
     boundary B0 lexical in S2
     boundary B1 lexical in S2
     key k0: key = service_of(value=%12, kind=cache)
     dependency d0: dependency = key(k0)
     dependency d1: dependency = from_ssa(%23)
-    dependency d2: dependency = from_ssa(%31)
-    dependency d3: dependency = from_ssa(%43)
-    dependency d4: dependency = from_ssa(%43)
+    dependency d2: dependency = from_ssa(%34)
+    dependency d3: dependency = from_ssa(%46)
+    dependency d4: dependency = from_ssa(%46)
     selection s0: selection = union([selection(%12)])
     selection s1: selection = admissible(s0)
     ^b0 in S2:
@@ -272,26 +274,29 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
         normal ^b6($value, $packet, $deps, %19)
         unwind ^b7($failure, %19)
     ^b5(%26: scope<S2>, %27: failure) in S2:
-    %28: failure = scope.unwind %26, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %28
-    ^b6(%29: app.Holder facts(managed(deps=d2)), %30: own, %31: deps, %32: scope<S2>) in S2:
-    %33: scope<S2> = own.admit %32, %30
-    %34: own = own.empty
-    %35: pending = exit.prepare return %29, %34, deps(%31) at B1
-    invoke.own scope.split %33, selection(%29)
-        normal ^b8($state, $selected, $external_deps, %29, %31, %35)
-        unwind ^b9($state, $failure, %35)
-    ^b7(%36: failure, %37: scope<S2>) in S2:
-    %38: failure = scope.unwind %37, %36, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %38
-    ^b8(%39: scope<S2>, %40: own, %41: deps, %42: app.Holder facts(managed(deps=d3)), %43: deps, %44: pending) in S2:
-    %45: pending = exit.extend %44, %40
-    (%46: closed, %47: pending) = scope.end %39, reserve %45, effects scope_effects(failures=[], suspends=false, cancel=false)
-    (%48: app.Holder facts(managed(deps=d4)), %49: own, %50: deps) = exit.commit %47, destination caller, result app.Holder
-    ret %48, %49
-    ^b9(%51: scope<S2>, %52: failure, %53: pending) in S2:
-    %54: failure = scope.unwind %51, %52, reserve %53, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %54
+    %28: own = own.empty
+    %29: own = service.absorb %28, %13
+    %30: scope<S2> = own.admit %26, %29
+    %31: failure = scope.unwind %30, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %31
+    ^b6(%32: app.Holder facts(managed(deps=d2)), %33: own, %34: deps, %35: scope<S2>) in S2:
+    %36: scope<S2> = own.admit %35, %33
+    %37: own = own.empty
+    %38: pending = exit.prepare return %32, %37, deps(%34) at B1
+    invoke.own scope.split %36, selection(%32)
+        normal ^b8($state, $selected, $external_deps, %32, %34, %38)
+        unwind ^b9($state, $failure, %38)
+    ^b7(%39: failure, %40: scope<S2>) in S2:
+    %41: failure = scope.unwind %40, %39, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %41
+    ^b8(%42: scope<S2>, %43: own, %44: deps, %45: app.Holder facts(managed(deps=d3)), %46: deps, %47: pending) in S2:
+    %48: pending = exit.extend %47, %43
+    (%49: closed, %50: pending) = scope.end %42, reserve %48, effects scope_effects(failures=[], suspends=false, cancel=false)
+    (%51: app.Holder facts(managed(deps=d4)), %52: own, %53: deps) = exit.commit %50, destination caller, result app.Holder
+    ret %51, %52
+    ^b9(%54: scope<S2>, %55: failure, %56: pending) in S2:
+    %57: failure = scope.unwind %54, %55, reserve %56, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %57
 }
 
 func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M19) async-creation(M15) async-body(M19) {
