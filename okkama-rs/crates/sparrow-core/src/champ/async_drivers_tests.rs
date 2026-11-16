@@ -29,7 +29,7 @@ fn object(name: &str, storage: Vec<s::Type>, fields: &[&str]) -> s::Object {
 fn program() -> s::Program {
     let mut broken = object("async.barrier.BrokenBarrier", vec![s::Type::Int], &[]);
     broken.error_cases = vec!["BrokenBarrier.broken".into()];
-    let objects = vec![object(s::drivers::EVENT, s::drivers::EVENT_STORAGE.to_vec(), &[]),
+    let objects = vec![object(s::drivers::EVENT, s::drivers::EVENT_STORAGE.to_vec(), &["initial"]),
         object("async.barrier.Barrier", vec![s::Type::Int], &["amount"]), broken];
     let contracts = s::p1::P1Contracts::new(&objects).unwrap();
     let functions = contracts.entries().iter().filter(|entry| {
@@ -51,6 +51,17 @@ fn program() -> s::Program {
 
 fn index(runtime: &Runtime, name: &str) -> usize {
     runtime.champ.machine.as_ref().unwrap().source.functions.iter().position(|f| f.symbol == name).unwrap()
+}
+
+/// `program()` with a resource declaration `Res` (object 3) and its destroy, as any program with a resource has.
+fn with_resource() -> s::Program {
+    let mut p = program();
+    p.objects.push(res());
+    let mut destroy = destroy();
+    destroy.registers = vec![s::Type::Object(3)];
+    destroy.proofs.entry.as_mut().unwrap().destroy = Some(3);
+    p.functions.push(destroy);
+    p
 }
 
 fn load(stress: bool) -> Box<Runtime> {
@@ -211,4 +222,55 @@ fn champ_q1_a_thrown_error_case_carries_its_case_number() {
     };
     assert_eq!(heap::payload(runtime.heap.header_of(object)), BROKEN);
     assert_eq!(runtime.heap.field(object, 0), word::small(0).unwrap());
+}
+
+#[test]
+fn champ_q1_a_driver_keeps_its_cache_in_a_program_with_resources() {
+    // #601 Q1 audit: Tomato's resource tracking would take a settled driver Future's OWNED word, which is Champ's
+    // cache record, for its outcome region. A Champ runtime never tracks, whatever its declarations.
+    for stress in [false, true] {
+        let mut runtime = Runtime::new_champ(with_resource(), Vec::new()).unwrap();
+        runtime.heap.set_stress(stress);
+        assert!(!runtime.resources.enabled);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let ctx = &mut ctx;
+        let runtime = runtime_of(ctx);
+        let [new, set, wait] = ["new", "set", "wait"]
+            .map(|member| index(runtime, &format!("okkama.event.Event.{member}")));
+        let event = crate::intrinsics::champ_call(ctx, new, &[]);
+        runtime.roots.push((event, Repr::Ref));
+        observe(ctx, set, &[event]);
+        let mut state = owner(ctx);
+        let inputs = empty(ctx);
+        let future = new_future(ctx, wait as u32, &[event], &mut state, inputs);
+        runtime.champ_future_start(ctx, 0, future);
+        assert_eq!(get(future, tasks::STATE), tasks::DONE);
+        collect(ctx, &[future, event]);
+        assert!(runtime.champ_cache(future).is_ok_and(|cache| cache.packet != 0));
+    }
+}
+
+#[test]
+fn champ_q1_equality_reads_objects_only() {
+    // #601 Q1 audit A1: an Event's waiters are a runtime payload whose header names no descriptor. Equality reads an
+    // Event's source field `initial`, as Tomato's; a word that is not an object is never read as one.
+    let mut runtime = load(false);
+    let mut ctx = context(&mut runtime);
+    let ctx = &mut ctx;
+    let runtime = runtime_of(ctx);
+    let [new, ready] = ["new", "new_ready"].map(|member| index(runtime, &format!("okkama.event.Event.{member}")));
+    let a = crate::intrinsics::champ_call(ctx, new, &[]);
+    let b = crate::intrinsics::champ_call(ctx, new, &[]);
+    let c = crate::intrinsics::champ_call(ctx, ready, &[1]);
+    let source = runtime.champ.machine.as_ref().unwrap().source.clone();
+    let event = s::Type::Object(EVENT);
+    // A waiter in one Event's list changes nothing: only `initial` is compared.
+    runtime.event_wait(&crate::primitives::EventRef::Cell(a), b);
+    assert_eq!(super::super::machine::value_equal(runtime, &source, a, b, event), Ok(true));
+    assert_eq!(super::super::machine::value_equal(runtime, &source, a, c, event), Ok(false));
+    runtime.event_wait(&crate::primitives::EventRef::Cell(b), c);
+    let (left, right) = (runtime.heap.field(a, 2), runtime.heap.field(b, 2));
+    assert!(left != right && left != 0 && right != 0);
+    assert!(super::super::machine::value_equal(runtime, &source, left, right, s::Type::Any).is_err());
 }

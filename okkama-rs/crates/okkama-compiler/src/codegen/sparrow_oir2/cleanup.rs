@@ -39,6 +39,12 @@ pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::E
             o::SummarySelection::Descriptor(_) => return Err(error("descriptor summary retention is outside P1")),
         }
     }
+    // An async body takes only its frame (#772): its language inputs arrive in continuation 0, and what it retains of
+    // them the Future's inputs holder keeps from creation (OIR-2 §10.1). No synchronous call names it, so its entry
+    // retains no SPB parameter.
+    if f.body.is_some() && f.attrs.contains(&o::FunctionAttr::Async) {
+        retained.clear();
+    }
     let positions = f.signature.params.iter().enumerate().filter_map(|(index, &ty)| {
         matches!(kind(module, ty), Ok(P::Value(_))).then_some(index as u32)
     }).collect::<Vec<_>>();

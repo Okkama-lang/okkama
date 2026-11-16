@@ -145,7 +145,8 @@ fn object(name: &str, storage: Vec<Type>, fields: &[&str]) -> Object {
         }).collect(),
         layout: ObjectRuntimeLayout { allocation_words: 1 + storage.len().max(1) as u32, identity_offset: None,
             has_destroy: false, may_reach_resource: false, may_async_destroy: false,
-            trace_layout: vec![], selection_layout: vec![], storage_fields: storage },
+            trace_layout: storage.iter().enumerate().filter_map(|(i, ty)| ty.traced().then_some(i as u32)).collect(),
+            selection_layout: vec![], storage_fields: storage },
     }
 }
 
@@ -155,7 +156,7 @@ fn entry<'c>(contracts: &'c p1::P1Contracts, name: &str) -> Option<&'c Function>
 
 #[test]
 fn the_event_cell_admits_its_entries_and_driver() {
-    let objects = vec![object(EVENT, EVENT_STORAGE.to_vec(), &[])];
+    let objects = vec![object(EVENT, EVENT_STORAGE.to_vec(), &["initial"])];
     let contracts = p1::P1Contracts::new(&objects).unwrap();
     let wait = entry(&contracts, "okkama.event.Event.wait").unwrap();
     assert_eq!((wait.entry_abi.clone(), wait.registers.clone(), wait.results.clone()),
@@ -172,16 +173,27 @@ fn the_event_cell_admits_its_entries_and_driver() {
 #[test]
 fn an_event_with_another_layout_has_no_entry() {
     for storage in [vec![Type::Bool], vec![Type::Bool, Type::Bool, Type::Str]] {
-        let contracts = p1::P1Contracts::new(&[object(EVENT, storage, &[])]).unwrap();
+        let contracts = p1::P1Contracts::new(&[object(EVENT, storage, &["initial"])]).unwrap();
         assert!(entry(&contracts, "okkama.event.Event.wait").is_none());
     }
-    let mut resource = object(EVENT, EVENT_STORAGE.to_vec(), &[]);
-    resource.layout.has_destroy = true;
-    resource.layout.may_reach_resource = true;
-    let contracts = p1::P1Contracts::new(&[resource]).unwrap();
-    assert!(entry(&contracts, "okkama.event.Event.set").is_none());
+    // Each fact alone takes the cell's entries away (#601 Q1 audit A2: a cell that reaches resources is no cell).
+    for fact in 0..3 {
+        let mut resource = object(EVENT, EVENT_STORAGE.to_vec(), &["initial"]);
+        match fact {
+            0 => resource.layout.may_reach_resource = true,
+            1 => resource.layout.has_destroy = true,
+            _ => resource.layout.may_async_destroy = true,
+        }
+        let contracts = p1::P1Contracts::new(&[resource]).unwrap();
+        assert!(entry(&contracts, "okkama.event.Event.set").is_none(), "{fact}");
+    }
+    // Its one source field is `initial`, at storage 0.
+    for fields in [&[][..], &["ready"][..]] {
+        let contracts = p1::P1Contracts::new(&[object(EVENT, EVENT_STORAGE.to_vec(), fields)]).unwrap();
+        assert!(entry(&contracts, "okkama.event.Event.set").is_none(), "{fields:?}");
+    }
     // A native handle of the same name is no cell.
-    let mut handle = object(EVENT, EVENT_STORAGE.to_vec(), &[]);
+    let mut handle = object(EVENT, EVENT_STORAGE.to_vec(), &["initial"]);
     handle.handle = true;
     assert!(entry(&p1::P1Contracts::new(&[handle]).unwrap(), "okkama.event.Event.set").is_none());
 }
@@ -212,4 +224,51 @@ fn a_role_slot_receiver_takes_its_deps() {
     let contracts = p1::P1Contracts::new(&[closing, guard]).unwrap();
     assert_eq!(entry(&contracts, "okkama.lock.LockGuard.close").unwrap().services, vec![ServiceKind::Deps]);
     assert!(entry(&contracts, "okkama.lock.LockGuard.closed").unwrap().services.is_empty());
+}
+
+// --- The runtime cell (#601 Q1 audit A1) ------------------------------------------------------------------------
+
+/// `plain()` with an Event cell declared, valid as is.
+fn with_cell(edit: impl FnOnce(&mut Object)) -> Program {
+    let mut p = plain();
+    let mut event = object(EVENT, EVENT_STORAGE.to_vec(), &["initial"]);
+    edit(&mut event);
+    p.objects.push(event);
+    p
+}
+
+#[test]
+fn a_runtime_cell_is_a_hidden_word_of_an_object_with_source_fields() {
+    verify_load(&with_cell(|_| {}), &NoExternalContracts).unwrap();
+    let cell = 2;
+    let named = with_cell(|event| event.fields.push(Field { name: "waiters".into(), storage: cell, once: false }));
+    rejects(&named, &Catalogue(vec![]), verify::RUNTIME_CELL, "unselected hidden word");
+    let selected = with_cell(|event| {
+        event.layout.selection_layout.push(cell);
+        event.layout.may_reach_resource = true;
+    });
+    rejects(&selected, &Catalogue(vec![]), verify::RUNTIME_CELL, "unselected hidden word");
+    let bare = with_cell(|event| event.fields.clear());
+    rejects(&bare, &Catalogue(vec![]), verify::RUNTIME_CELL, "unselected hidden word");
+    let boxed = with_cell(|event| event.any_box = true);
+    rejects(&boxed, &Catalogue(vec![]), verify::RUNTIME_CELL, "unselected hidden word");
+    let untraced = with_cell(|event| event.layout.trace_layout.clear());
+    assert!(verify_load(&untraced, &NoExternalContracts).unwrap_err().message.contains("trace layout"));
+}
+
+#[test]
+fn a_runtime_cell_is_no_value_type() {
+    // A register, a result or a Future outcome of the type would make it an operand of a comparison.
+    let mut p = with_cell(|_| {});
+    p.functions[1].registers.push(Type::RuntimeCell);
+    rejects(&p, &Catalogue(vec![]), verify::RUNTIME_CELL, "never a value type");
+    let mut p = with_cell(|_| {});
+    p.tables.future_results.push(Some(Type::RuntimeCell));
+    rejects(&p, &Catalogue(vec![]), verify::RUNTIME_CELL, "never a value type");
+}
+
+#[test]
+fn a_runtime_cell_round_trips_the_codec() {
+    let p = with_cell(|_| {});
+    assert_eq!(decode(&encode(&p).unwrap()).unwrap(), p);
 }

@@ -66,6 +66,10 @@ pub fn implementation(p: &Program, object: u32, role: u32, slot: u32) -> Option<
 
 pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
     match ty {
+        // A hidden runtime word is a storage type only; the object storage check admits it (#601 Q1 audit A1).
+        Type::RuntimeCell => {
+            return Err(violation(RUNTIME_CELL, "a runtime cell is object storage only, never a value type"));
+        }
         Type::Object(id) | Type::Successor(id) => {
             enforce(!at(&p.objects, id)?.handle, "HANDLE_TYPE", "an object type names a native handle declaration")?;
             enforce(at(&p.objects, id)?.role.is_none(), "ROLE_TYPE", "object type names a role declaration")?;
@@ -128,6 +132,9 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
 /// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; a Future is
 /// held only in registers (no object storage holds one before the service entries of D25).
 pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
+/// A runtime cell (`Type::RuntimeCell`) is a storage word of an object with source fields, which no source field
+/// names and no selection walks; it is no value type (#601 Q1 audit A1).
+pub(crate) const RUNTIME_CELL: &str = "SPB_RUNTIME_CELL";
 
 /// The leaf of a collection (an array element or a map value): a resource object, which a managed collection
 /// refers to without owning it (own keeps its obligation with its owner), or closed plain data. An object that
@@ -209,7 +216,8 @@ fn plain_graph(p: &Program, ty: Type, handles: bool) -> bool {
                 {
                     return false;
                 }
-                pending.extend(&object.layout.storage_fields);
+                // A runtime cell is the runtime's word, outside the value: equality reads the source fields.
+                pending.extend(object.layout.storage_fields.iter().filter(|&&ty| ty != Type::RuntimeCell));
                 pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
             }
             // A native handle is the native registry's: it has no Okkama destroy and holds no ownership graph
@@ -544,6 +552,17 @@ pub fn verify(p: &Program) -> Check {
         unique(&layout.trace_layout)?;
         unique(&layout.selection_layout)?;
         for (index, &ty) in layout.storage_fields.iter().enumerate() {
+            if ty == Type::RuntimeCell {
+                // Equality and keys read an object's source fields; a runtime cell is none of them, and an object
+                // without source fields would compare its storage words (#601 Q1 audit A1).
+                let source = object.fields.iter().any(|field| field.storage == index as u32);
+                enforce(!source && !object.fields.is_empty() && !layout.selection_layout.contains(&(index as u32))
+                    && !object.any_box && object.role.is_none() && !object.handle && object.error_cases.is_empty()
+                    && object.enum_cases == 0 && object.variant_cases.is_empty(),
+                    RUNTIME_CELL, "a runtime cell is an unselected hidden word of an object with source fields")?;
+                require(layout.trace_layout.contains(&(index as u32)), "incorrect object trace layout")?;
+                continue;
+            }
             ty_valid(ty, p)?;
             enforce(!matches!(ty, Type::Future(_)), FUTURE_TYPES, "object storage cannot hold a Future")?;
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",

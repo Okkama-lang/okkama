@@ -7,7 +7,8 @@
 //!   result. Only `fut.new` names it (`SPB_EXTERNAL_ASYNC`); the runtime allocates a driver frame for it.
 //! - Each entry also names the declarations the runtime creates or throws (Tomato's intrinsic objects).
 //! - Every payload is plain. An entry exists only when every declaration it names has its runtime layout: the
-//!   Event cell `[initial, set, waiters]`, Semaphore and Barrier with their `amount`, the other objects without
+//!   Event cell `[initial, set, waiters]` (its source field `initial`, the waiters a `RuntimeCell`), Semaphore
+//!   and Barrier with their `amount`, the other objects without
 //!   storage, `BrokenBarrier` a one-case Error enum, `Cancelling` a role.
 use super::*;
 
@@ -18,7 +19,7 @@ pub const EXTERNAL_ASYNC: &str = "SPB_EXTERNAL_ASYNC";
 /// The Event cell's declaration and its runtime layout: `initial`, the set flag and the waiters (Tomato
 /// `primitives`); the waiters word is a traced runtime list.
 pub const EVENT: &str = "async.event.Event";
-pub const EVENT_STORAGE: [Type; 3] = [Type::Bool, Type::Bool, Type::Any];
+pub const EVENT_STORAGE: [Type; 3] = [Type::Bool, Type::Bool, Type::RuntimeCell];
 
 const LOCK: &str = "async.lock.Lock";
 const GUARD: &str = "async.lock.LockGuard";
@@ -88,8 +89,10 @@ fn declaration(objects: &[Object], name: &str) -> Option<u32> {
         && object.enum_cases == 0 && object.variant_cases.is_empty();
     let valid = match name {
         CANCELLING => object.role.is_some(),
-        EVENT => plain && object.role.is_none() && object.fields.is_empty() && layout.storage_fields == EVENT_STORAGE
-            && object.error_cases.is_empty(),
+        // Its source field `initial` is storage 0, which an equality reads as Tomato's does (#601 Q1 audit A1).
+        EVENT => plain && object.role.is_none() && layout.storage_fields == EVENT_STORAGE
+            && object.error_cases.is_empty() && matches!(object.fields.as_slice(),
+                [field] if field.name == "initial" && field.storage == 0 && !field.once),
         SEMAPHORE | BARRIER => plain && object.role.is_none() && object.error_cases.is_empty()
             && layout.storage_fields.first() == Some(&Type::Int)
             && object.fields.first().is_some_and(|field| field.name == "amount" && field.storage == 0 && !field.once),
@@ -135,6 +138,9 @@ pub(super) fn entries(objects: &[Object]) -> Vec<(Function, Vec<u32>)> {
 /// The deps proofs of an entry, as the producer's elaboration gives them: one for each Event cell parameter (a
 /// builtin capability: a reference with deps) and one for the receiver of a member that is a role slot of the
 /// object implementing that role. The other declarations of the catalogue are plain values without references.
+///
+/// The producer gives its declarations the same deps (`okkama-compiler`, `lowering/oir2/drivers.rs`, `deps`), as own
+/// elaborates external signatures: change both together.
 fn deps(objects: &[Object], name: &str, registers: &[Type]) -> usize {
     let event = declaration(objects, EVENT);
     let cells = registers.iter().filter(|&&ty| Some(ty) == event.map(Type::Object)).count();

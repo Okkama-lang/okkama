@@ -126,7 +126,10 @@ impl Resources {
 
     pub fn new(program: &Program) -> Self {
         Self {
-            enabled: program.objects.iter().any(|o| o.destroy.is_some()),
+            // Champ owns its outcomes and identities (draft 3 §3): Tomato's tracking never runs on its declaration
+            // view, whose destroys would otherwise make `settle` take a driver Future's cache word for an outcome
+            // region (#601 Q1 audit).
+            enabled: !cfg!(feature = "champ-abi") && program.objects.iter().any(|o| o.destroy.is_some()),
             flags: descriptor_flags(program),
             trace: std::env::var_os("SPARROW_TRACE_DESTROY")
                 .and_then(|path| std::fs::OpenOptions::new().create(true).append(true).open(path).ok()),
