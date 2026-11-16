@@ -48,11 +48,31 @@ explicit. The table is the razor's procedure in action: a missing operation
 is added as an operation, not by bringing back the entity whose removal made
 it necessary.
 
-Writing this book found gaps too. Measuring how far exact fractions grow
-(Section 5.11) showed that `rat.numerator()` and `rat.denominator()`
-returned their parts as text, a choice made when `int` had a fixed width
-and kept after `int` became unbounded. They return `int` since 0.6.0
-(#743).
+### What writing this book found
+
+A book whose examples must run is a test suite that reads the language the
+way its users will. Writing this one turned up three gaps that no test had
+caught, each where an example did something ordinary.
+
+- **Fractions handed out text (#743, closed).** Measuring how far exact
+  fractions grow (Section 5.11) showed that `rat.numerator()` and
+  `rat.denominator()` returned their parts as text. The choice was made
+  when `int` had a fixed width and kept after `int` became unbounded. They
+  return `int` since 0.6.0.
+- **A successor's future could be dropped (#754, open).** The Book says
+  that an async successor's obligation moves into its future, which must
+  be awaited or handed on (Section 13.14). The checker rejects a dropped
+  call, but it accepts a future bound to a name and then never awaited.
+  The rule is right, and the check is incomplete.
+- **A failed test could not say why (#756, open).** When `test.is`
+  compares two objects that differ, the report prints their heap
+  identities, `Duration@52e44f14340`, instead of their values
+  (Section 15.8). The check is exact, but its report is not useful.
+
+Only the first changed what programs see, and it took the owner's
+decision. The other two are places where the implementation had fallen
+behind what the rules already said, which is the kind of gap a book of
+running examples is good at finding.
 
 ## 28.2 Missing from the language
 
@@ -161,6 +181,16 @@ postponed because they add behaviour that is not visible at the `try`.
 generic object today (Section 17.11). Generic actions would remove that
 object at the cost of a second place where type parameters live.
 
+**A synchronous answer to an async role.** A role's async action is kept
+only by an async action (Section 14.9). Swift allows the other direction:
+a synchronous function satisfies an async requirement, since an answer
+that comes at once is a special case of one that may wait. Tables, caches
+and test doubles would drop a word, and the compiler would wrap the answer
+in a settled future. Against it stands the single rule that an
+implementation repeats the role's signature exactly. With the exception, a
+reader could no longer tell from one implementation how the role is
+called.
+
 ## 28.5 Costs accepted on purpose
 
 The rest of the limits named in this book are not gaps. They are what the
@@ -179,7 +209,11 @@ language is, argued where they appear:
 - a fake to write for every role a test replaces (Section 15.12);
 - no list of an enum's cases and no order between them (Section 16.10);
 - no module-level state, only compile-time constants (Section 19.6);
-- a fixed cleanup order: newest first, owner before fields (Section 11.15).
+- a fixed cleanup order: newest first, owner before fields (Section 11.15);
+- a field that only some paths of a constructor bind is found when such a
+  path runs, not when the program compiles (Section 12.11);
+- patterns without backreferences or lookaround, the price of linear-time
+  matching (Section 6.11).
 
 A reader who finds one of these intolerable has found a real disagreement
 with the language, not a bug in it. The book has tried to state each one

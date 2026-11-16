@@ -196,6 +196,9 @@ language.
   the official version history up to C# 15's unions), TypeScript (structural
   and deliberately unsound; `strictNullChecks`); port and conclusion
   renumbered to 27.14–27.15.
+- 2026-11-16: 28.1 "What writing this book found" (#743, #754, #756); 28.4
+  a synchronous answer to an async role (Swift's direction); 28.5 the path
+  check of unbound fields and the regex dialect as accepted costs.
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,
