@@ -144,9 +144,14 @@ fn operation(
         };
         let summary = target.and_then(|target| external.get(&target));
         if let Some(summary) = summary {
+            // A result that is a service holder brings its duty in the packet: a Future, or a D23 holder such as a
+            // FutureGroup, whose settle releases its members' outcomes (#810 review F4).
             let services = summary.entry_kind == EntryKind::CallBoundary
-                && summary.contract.results.iter().any(|ty| {
-                    matches!(module.types.get(*ty), Ok(Type::Future(_) | Type::Frame(_)))
+                && summary.contract.results.iter().any(|ty| match module.types.get(*ty) {
+                    Ok(Type::Future(_) | Type::Frame(_)) => true,
+                    Ok(Type::Object { decl, .. }) => module.declarations.get(*decl)
+                        .is_ok_and(|declaration| crate::catalogue::service_holder(&declaration.name)),
+                    _ => false,
                 });
             if services || summary.results.iter().any(|result| !result.fresh.is_empty()) {
                 return true;

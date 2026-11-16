@@ -13,6 +13,7 @@ use okkama_sparrow::spb17 as s;
 
 const SOURCE: &str = r#"module app v1.0.0;
 import "async/atomic" take Atomic;
+import "async/scope" take FutureGroup, Supervising;
 object Plain { has n is int; Plain(:n); grown() is ^Plain { ^n = n + 1; } }
 object Holder { has f is Future<int>; Holder(:f); again() is ^Holder { ^f = f; } }
 role Pending { pending() is int; }
@@ -22,6 +23,7 @@ object Calm does Quiet { has n is int; Calm(:n); quiet() is int { n; } }
 object Nested { has inner is Holder; Nested(:inner); }
 object Job { Job(); async run() is int { 1; } }
 object Kept { has slot is Atomic<@Future<int>>; Kept(:slot); }
+object GroupBox { has g is FutureGroup<int>; GroupBox(:g); }
 enum Slot = (empty, ready(f is Future<int>));
 enum Mark = (none, some(n is int));
 main() is int {
@@ -40,6 +42,9 @@ main() is int {
     let ff = [[Job().run()]];
     let empty is @Future<int> = [];
     let kept = Kept(slot: Atomic(empty));
+    let group is FutureGroup<int> = FutureGroup();
+    let supervising is Supervising<int> = group;
+    let boxed_group = GroupBox(g: FutureGroup());
     0;
 }
 "#;
@@ -91,7 +96,9 @@ fn holds_futures_and_reaches_holder_agree() {
         ("app.Slot", true), ("app.Mark", false), ("^app.Holder", true), ("^app.Plain", false),
         ("(int) is int", true), ("[[future]]", true),
         // PR-A: an Atomic borrows the Futures it stores, so a value that keeps one reaches no holder through it.
-        ("app.Kept", false)];
+        ("app.Kept", false),
+        // #810: a FutureGroup holds its own entry, also behind its role and in a field (review F3).
+        ("async.scope.FutureGroup_int", true), ("async/scope::Supervising<int>", true), ("app.GroupBox", true)];
     let mut checked = Vec::new();
     for (ty, _) in module.types.iter() {
         let label = name(ty);

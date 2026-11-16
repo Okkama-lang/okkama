@@ -30,7 +30,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - A fresh Future passed from a nested scope (inside a `try`, say) together with a value from an enclosing scope no longer stops the build with SPB_SCHEDULE.
   - An async action that waits on a group stored in one of its fields compiles.
 
-  Not yet supported: Futures whose inputs hold a resource (#735), and the collectors, timeouts and FutureScope (the next G1 steps).
+  Not yet supported:
+  - Futures whose inputs hold a resource (#735);
+  - a Future started through the `Supervising` role is settled when that call returns, not when the group's owner closes (#818);
+  - a few group shapes that the build refuses: #819–#822;
+  - the collectors, timeouts and FutureScope (the next G1 steps).
 
 - **Champ: an Atomic holds Futures as borrowed views (PR-A, D25 tail).** Std keeps
   optional Futures in `Atomic<@Future<T>>` slots (sqlite, tcp, http, logging). The

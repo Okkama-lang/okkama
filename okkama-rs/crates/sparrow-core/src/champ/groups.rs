@@ -109,7 +109,14 @@ impl Runtime {
     pub(super) fn champ_plan_group(&self, service: Service, closing: Option<OwnerId>,
         plan: &mut Vec<(Service, CacheSettle)>, released: &mut Packet) -> Result<(), Error>
     {
-        let mut registered = self.champ_group(service.holder)?.registered.clone();
+        let holder = self.champ_group(service.holder)?;
+        if holder.settled {
+            return Err(error("a group duty settled twice"));
+        }
+        if closing.is_some() && holder.owner != closing {
+            return Err(error("a group duty settles in a close of another owner"));
+        }
+        let mut registered = holder.registered.clone();
         plan.push((service, CacheSettle::Nothing));
         let nested = std::mem::take(&mut registered.services);
         self.champ_plan_services(&nested, closing, plan, released)?;
@@ -121,7 +128,9 @@ impl Runtime {
     /// accepts members, which settle on their own (`start`).
     pub(super) fn champ_group_settled(&mut self, group: Word) -> Result<(), Error> {
         let holder = self.champ_group_mut(group)?;
-        holder.settled = true;
+        if std::mem::replace(&mut holder.settled, true) {
+            return Err(error("a group duty settled twice"));
+        }
         holder.registered = Packet::default();
         Ok(())
     }
@@ -222,8 +231,14 @@ fn start(ctx: *mut Ctx, function: usize, io: *mut CallOwn, group: Word, future: 
     }
     // Registration: every duty the packet holds joins the record and takes the group's owner, checked before the
     // first store (I-G1: one place per duty).
+    // A fresh temporary group comes with its own duty in the packet (review F1): the duty never joins the group's
+    // own record. It closes in this call, after the registration and the spawn, as a fresh argument does.
+    let mut own = Vec::new();
     let registered = (|| {
-        let offered = packet(runtime, input.record)?;
+        let mut offered = packet(runtime, input.record)?;
+        let itself = |service: &Service| service.holder == group && service.kind == SERVICE_GROUP;
+        own = offered.services.iter().copied().filter(itself).collect();
+        offered.services.retain(|service| !itself(service));
         if offered.is_empty() {
             return Ok(());
         }
@@ -250,6 +265,34 @@ fn start(ctx: *mut Ctx, function: usize, io: *mut CallOwn, group: Word, future: 
     if rt_future_spawn_bound(ctx, future) != NORMAL {
         return OUTCOME_STOP;
     }
+    if !own.is_empty() {
+        let runtime = unsafe { &mut *(*ctx).runtime };
+        let mut slot = PacketSlot { record: store(runtime, Data::Packet(Packet { services: own, ..Packet::default() })) };
+        return finish(ctx, io, &mut slot);
+    }
+    let mut post = CallPost::default();
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    post.packet.record = store(runtime, Data::Packet(Packet::default()));
+    unsafe { (*io).output.write(post) };
+    NORMAL
+}
+
+/// The end of a `start` that closes a packet in the call: each duty settles for its own owner (D24.2 rows); a destroy
+/// failure fails the call, otherwise its output packet is empty.
+fn finish(ctx: *mut Ctx, io: *mut CallOwn, packet: &mut PacketSlot) -> Word {
+    let failure = match super::cleanup::close_packet(ctx, packet, 0) {
+        Ok(failure) => failure,
+        Err(_) if matches!(unsafe { (*ctx).status }, runtime::FATAL | runtime::EXHAUSTED) => return OUTCOME_STOP,
+        Err(failure) => return stop(ctx, failure),
+    };
+    if failure != 0 {
+        unsafe {
+            (*ctx).failure = failure;
+            (*ctx).status = runtime::FAILED;
+            (*io).output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
+        }
+        return UNWIND;
+    }
     let mut post = CallPost::default();
     let runtime = unsafe { &mut *(*ctx).runtime };
     post.packet.record = store(runtime, Data::Packet(Packet::default()));
@@ -274,22 +317,5 @@ fn start_unregistered(ctx: *mut Ctx, io: *mut CallOwn, group: Word, future: Word
     if spawned != NORMAL {
         return OUTCOME_STOP;
     }
-    let failure = match super::cleanup::close_packet(ctx, input, 0) {
-        Ok(failure) => failure,
-        Err(_) if matches!(unsafe { (*ctx).status }, runtime::FATAL | runtime::EXHAUSTED) => return OUTCOME_STOP,
-        Err(failure) => return stop(ctx, failure),
-    };
-    if failure != 0 {
-        unsafe {
-            (*ctx).failure = failure;
-            (*ctx).status = runtime::FAILED;
-            (*io).output.write(CallPost { value: 0, packet: PacketSlot::default(), failure });
-        }
-        return UNWIND;
-    }
-    let mut post = CallPost::default();
-    let runtime = unsafe { &mut *(*ctx).runtime };
-    post.packet.record = store(runtime, Data::Packet(Packet::default()));
-    unsafe { (*io).output.write(post) };
-    NORMAL
+    finish(ctx, io, input)
 }

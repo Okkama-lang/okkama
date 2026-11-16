@@ -312,6 +312,44 @@ fn check_roots(f: &Function) -> Result<allocation::Liveness, Error> {
     live.with_roots(f)
 }
 
+/// #810: what an entry of a ready FutureGroup row may release when its group settles: the group itself, whose
+/// closure reaches its members' outcomes (`group_member_types`). `None` for any other external.
+fn holder_member_types(p: &Program, name: &str) -> Option<Vec<Type>> {
+    let row = super::drivers::ready_holder(name)?;
+    if !row.name.starts_with("okkama.scope.FutureGroup.") {
+        return None;
+    }
+    let (_, suffix) = name.split_once('$')?;
+    let group = super::drivers::specialization(super::drivers::FUTURE_GROUP, &[suffix]);
+    Some(p.objects.iter().position(|object| object.name == group).map(|id| Type::Object(id as u32)).into_iter()
+        .collect())
+}
+
+/// #810: the outcome types the FutureGroup `group` may release: the result of the Future that a `start` entry of the
+/// group takes. A program without that entry registers nothing.
+fn group_member_types(p: &Program, group: u32) -> Vec<Type> {
+    p.functions.iter().filter(|function| function.proofs.entry.as_ref()
+        .and_then(|entry| entry.external.as_deref())
+        .is_some_and(|name| name.starts_with("okkama.scope.FutureGroup.start$"))
+        && function.registers.first() == Some(&Type::Object(group)))
+        .filter_map(|function| match function.registers.get(1) {
+            Some(Type::Future(id)) => p.tables.future_results.get(*id as usize).copied().flatten(),
+            _ => None,
+        }).collect()
+}
+
+/// The language start values of an entry: an async body's continuation 0, or a synchronous function's parameters.
+fn start_values(p: &Program, f: &Function) -> Vec<Type> {
+    match p.frame_layout(f).and_then(|layout| layout.saved_types(0)) {
+        Some(start) => start.into_iter().filter_map(|ty| match ty {
+            ProducedType::Value(ty) => Some(ty), _ => None,
+        }).collect(),
+        None => f.params.iter().filter_map(|&location| match verify::loc_type(f, location) {
+            Ok(ProducedType::Value(ty)) => Some(ty), _ => None,
+        }).collect(),
+    }
+}
+
 /// A proved empty inventory sees no descriptor. Opaque packets/journals conservatively see all
 /// registered destroys, including descriptors reachable through fields and an aborted reserve.
 pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
@@ -372,8 +410,21 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                 })) {
                     // A settled cache releases a Future's outcome and its unstarted inputs into the plan.
                     let released = *op == Opcode::FutureNew && !plain_inputs(p, callee);
-                    if !plain_results(p, callee) || *op == Opcode::InvokeDefer || released {
-                        if callee.proofs.entry.as_ref().is_some_and(|entry| entry.external.is_some()) {
+                    let results = !plain_results(p, callee) || *op == Opcode::InvokeDefer;
+                    // With plain results only the unstarted inputs can be released: the start values, not what the
+                    // body creates for itself (#810 review F4: a body that makes its own FutureGroup).
+                    if released && !results {
+                        types.extend(start_values(p, callee));
+                        continue;
+                    }
+                    if results || released {
+                        if let Some(name) = callee.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) {
+                            // A ready holder row (#810): the group's settle releases its members' outcomes, of its
+                            // member type, as own's classification reaches them (`holder_members`).
+                            if let Some(members) = holder_member_types(p, name) {
+                                types.extend(members);
+                                continue;
+                            }
                             return Ok(p.functions.iter().filter_map(|f| f.proofs.entry.as_ref())
                                 .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures));
                         }
@@ -397,6 +448,10 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
             && descriptors.insert(id)
         {
             types.extend(&p.objects[id as usize].layout.storage_fields);
+            // A FutureGroup's settle releases its registered members' outcomes (#810).
+            if super::drivers::group_specialization(&p.objects[id as usize].name) {
+                types.extend(group_member_types(p, id));
+            }
         }
     }
     Ok(p.functions.iter().filter_map(|function| function.proofs.entry.as_ref())

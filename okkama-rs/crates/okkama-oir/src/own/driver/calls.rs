@@ -27,7 +27,11 @@ impl Driver<'_, '_> {
     ) -> Result<(Landing, ValueId), OwnError> {
         let mut values = BTreeSet::new();
         for original in originals {
-            if self.elide_offers && !self.may_offer(&point, *original) {
+            // A fresh Future's duty is a cache duty, never an admission the snapshot knows: elision does not drop it,
+            // or the callee would not get it (a group would retain the Future instead of registering it, #810 review
+            // F2), as a builder push keeps it (#802).
+            let future = self.high.values.get(*original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty));
+            if self.elide_offers && !future && !self.may_offer(&point, *original) {
                 continue;
             }
             // PR-B1 (#784): own never names a bound Future in an admissible selection for a store or an offer.

@@ -1202,6 +1202,10 @@ pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
                     let implements = witnesses.iter().any(|witness| {
                         matches!(module.types.get(witness.role), Ok(Type::Role { decl: role, .. }) if role == decl)
                     });
+                    // A group behind the role holds its own entry (#810 review F3), as `reaches_holder` answers.
+                    if implements && crate::catalogue::service_holder(&declaration.name) {
+                        return true;
+                    }
                     if implements {
                         pending.extend(fields(object));
                     }
