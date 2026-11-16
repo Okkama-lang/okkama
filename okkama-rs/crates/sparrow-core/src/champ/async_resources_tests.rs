@@ -1803,6 +1803,57 @@ fn champ_d25_a_split_that_reaches_a_future_takes_its_entries() {
     }
 }
 
+/// PR-B (OIR-2 async remaining §2.2, #784), review of D25 (F6): a transfer moves a Future's entry only from the
+/// journals its filter takes, as it moves identities. `f`'s entry is in S's bound journal (as `own.bind` puts it),
+/// `g`'s in its admission journal. An admissible transfer (`TRANSFER_ADMISSION`) of both moves `g`'s entry only; a
+/// held transfer (#697) moves both. Each moved entry joins the target's bound journal.
+#[test]
+fn champ_d25_a_transfer_moves_entries_from_the_journals_its_filter_takes() {
+    for configuration in configurations() {
+        for held in [false, true] {
+            let (stress, engine) = configuration;
+            let mut runtime = load_r5(stress, engine);
+            let mut ctx = context(&mut runtime);
+            ctx.entry_frame = frame_pointer!();
+            let Escape { mut t, mut s, f, .. } = escape(&mut ctx, 0);
+            let mut packet = empty(&mut ctx);
+            let mut absorbed = PacketSlot::default();
+            assert_eq!(rt_service_absorb(&mut ctx, &mut packet, f, SERVICE_CACHE, &mut absorbed), NORMAL);
+            let mut accepted = ScopeSlot::default();
+            assert_eq!(rt_own_accept(&mut ctx, &mut s, &mut absorbed, &mut accepted), NORMAL);
+            let mut s = accepted;
+            unsafe { &mut *ctx.runtime }.roots.push((s.record, Repr::Ref));
+            let inputs = empty(&mut ctx);
+            let g = new_future(&mut ctx, MAKE, &[], &mut s, inputs);
+            absorb_into(&mut ctx, &mut s, g);
+            let entry = |holder| Service { holder, kind: SERVICE_CACHE, target: None };
+            let runtime = unsafe { &mut *ctx.runtime };
+            let state = super::super::helpers::scope(runtime, s.record).unwrap();
+            let journals = (state.bound.services.clone(), state.admission.services.clone());
+            assert_eq!(journals, (vec![entry(f)], vec![entry(g)]));
+            let roots = [f, g];
+            let selection = Selection { roots: roots.as_ptr(), count: 2 };
+            let inputs = TransferInputs { from: &mut s, to: &mut t };
+            let mut post = TransferPost::default();
+            let outcome = if held {
+                rt_scope_transfer_held(&mut ctx, &inputs, &selection, &mut post)
+            } else {
+                rt_scope_transfer_admissible(&mut ctx, &inputs, &selection, &mut post)
+            };
+            assert_eq!(outcome, NORMAL, "{:?}", runtime.fatal);
+            let source = super::super::helpers::scope(runtime, post.from.record).unwrap();
+            let target = super::super::helpers::scope(runtime, post.to.record).unwrap();
+            let mut moved = target.bound.services.clone();
+            moved.sort_by_key(|service| service.holder);
+            let mut expected = if held { vec![entry(f), entry(g)] } else { vec![entry(g)] };
+            expected.sort_by_key(|service| service.holder);
+            assert_eq!(moved, expected, "held {held}");
+            let kept = if held { vec![] } else { vec![entry(f)] };
+            assert_eq!((source.bound.services, source.admission.services), (kept, vec![]), "held {held}");
+        }
+    }
+}
+
 /// PR-B (OIR-2 async remaining §2.2, #784): service entries follow the journals of identities. A bound Future's
 /// entry stays when an admissible split (an argument offer, a constructor's staging) reaches it; an exit's split
 /// takes it.
