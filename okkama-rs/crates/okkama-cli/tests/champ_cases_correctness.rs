@@ -386,6 +386,77 @@ main() is int {
     assert_eq!(stdout, "3\n");
 }
 
+/// An early-self constructor that fails after handing out `self` (#780): the escaped receiver never completes,
+/// and an action on it fails at run time, as the case.json states.
+#[test]
+fn champ_correctness_escaped_self_of_a_failed_constructor() {
+    check(&[
+        "L04.invariant.escaped-self-failed-constructor",
+        "L04.invariant.escaped-self-in-block-failed-constructor",
+    ]);
+}
+
+/// A pending check inside `try` (#780): the failed construction is caught, the completed one answers. Tomato
+/// prints `Refused.empty`, then `a`.
+#[test]
+fn champ_correctness_pending_check_inside_try() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (empty);
+
+object Tree {
+    has name is string;
+    Tree(name is string) {
+        self.name = name;
+        let alias = self;
+        confirm name != "" else throw Refused.empty;
+    }
+    name() is string { name; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(try { Tree("").name(); } catch e is Refused { e.text(); });
+    out.writeln(Tree("a").name());
+    0;
+}"#;
+    let run = run_source(source);
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert_eq!(run.result.map_err(|error| error.0), Ok(0), "stdout={stdout:?}");
+    assert_eq!(stdout, "Refused.empty\na\n");
+}
+
+/// The check that a valued `for` ran, inside `try` (#780): Tomato prints `6`, then fails with "A void result
+/// cannot be used as a value", a trap that `catch` does not take.
+#[test]
+fn champ_correctness_iteration_check_inside_try() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Probe {
+    Probe();
+    last(items is @int) is int {
+        let out = Stdout();
+        try { for items -> i { i * 3; } } catch e is Error { out.writeln("caught"); 7; }
+    }
+}
+
+main() is int {
+    let empty is @int = [];
+    Stdout().writeln(Probe().last([1, 2]).string());
+    Stdout().writeln(Probe().last(empty).string());
+    0;
+}"#;
+    let run = run_source(source);
+    let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+    let error = run.result.expect_err("the empty loop fails");
+    assert!(error.0.starts_with("RuntimeError: A void result cannot be used as a value"), "{}", error.0);
+    assert_eq!(stdout, "6\n");
+}
+
 /// The same early self binds its field on every path: no check fails and both objects complete.
 #[test]
 fn champ_correctness_early_self_fields_bound_on_every_path() {

@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An early-self constructor that fails after handing out `self` builds on
+  Champ (#780).** A pending check, and the check that a valued `for` ran,
+  inside `try` continued from the trap block's carried locals instead of the
+  values that reached the check, which broke SSA (`SSA2`). An early self now
+  takes each field that is still unbound as an `undef` defined next to its
+  allocation, so own's split at a resource binding between the prologue and
+  the allocation no longer turns the later `obj.init` into a second binding
+  (`A2`). `L04.invariant.escaped-self-failed-constructor` and
+  `L04.invariant.escaped-self-in-block-failed-constructor` pass on Champ.
+
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the

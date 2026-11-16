@@ -650,3 +650,71 @@ fn oir2_own_large_plain_functions_finish_within_the_default_budgets() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// #780: a pending check of a call inside `try` continues from the values that reach the check. Its trap block
+/// takes fresh carried locals for the unwind edge into the handler; the call past it must not use them, or
+/// verify_high rejects the use (SSA2). Tomato prints `Refused.empty`, then `a`.
+#[test]
+fn oir2_pending_check_inside_try_continues_with_the_checked_values() {
+    let source = concat!("module app; import \"io/stdout\" take Stdout; enum Refused is Error = (empty); ",
+        "object Tree { has name is string; Tree(name is string) { self.name = name; let alias = self; ",
+        "confirm name != \"\" else throw Refused.empty; } name() is string { name; } } ",
+        "main() is int { let out = Stdout(); ",
+        "out.writeln(try { Tree(\"\").name(); } catch e is Refused { e.text(); }); ",
+        "out.writeln(Tree(\"a\").name()); 0; }");
+    own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+}
+
+/// #780: the same for the check that a valued `for` ran at least once, inside `try`. Tomato prints `6`, then
+/// fails with "A void result cannot be used as a value" (a trap, which `catch` does not take).
+#[test]
+fn oir2_iteration_check_inside_try_continues_with_the_checked_values() {
+    let source = concat!("module app; import \"io/stdout\" take Stdout; ",
+        "object Probe { Probe(); last(items is @int) is int { let out = Stdout(); ",
+        "try { for items -> i { i * 3; } } catch e is Error { out.writeln(\"caught\"); 7; } } } ",
+        "main() is int { let empty is @int = []; Stdout().writeln(Probe().last([1, 2]).string()); ",
+        "Probe().last(empty); }");
+    own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+}
+
+/// The fields of an early self that are still unbound enter its incomplete `obj.new` as `undef`s defined in the
+/// allocation's own block (#780). A2 counts only a directly defined `undef` as unbound; the constructor's
+/// prologue `undef` would reach a later allocation through block parameters once own splits the body at a
+/// resource binding (here the `Atomic` parameter), and the later `obj.init` would read as a second binding.
+#[test]
+fn oir2_early_self_takes_its_unbound_fields_as_adjacent_undefs() {
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "object Tree { has name is string; has marks is @int; ",
+        "Tree(name is string, tags is @int, sink is Atomic<Maybe<Tree>>) { self.name = name; ",
+        "marks = tags.map() -> tag { sink.replace(Maybe.some(self)); tag * 2; }; } ",
+        "size() is int { marks.size(); } } ",
+        "main() is int { let sink is Atomic<Maybe<Tree>> = Atomic(Maybe.none); ",
+        "Tree(\"a\", [1, 2], sink).size(); }");
+    let module = high(source, None).unwrap();
+    let mut incomplete = 0;
+    for (_, function) in module.functions.iter() {
+        let Some(body) = function.body.as_ref() else { continue };
+        for (block_id, block) in body.blocks.iter() {
+            for &id in &block.insts {
+                let op = &body.insts.get(id).unwrap().op;
+                let ir::Operation::Core(ir::CoreOp::ObjNew { fields, construction, .. }) = op else {
+                    continue;
+                };
+                if *construction != ir::ConstructionStatus::Incomplete {
+                    continue;
+                }
+                incomplete += 1;
+                let undefs: Vec<_> = fields.iter().filter_map(|&value| match body.values.get(value).unwrap().def {
+                    ir::Definition::InstResult { inst, .. } if matches!(body.insts.get(inst).unwrap().op,
+                        ir::Operation::Core(ir::CoreOp::Undef { .. })) => Some(inst),
+                    _ => None,
+                }).collect();
+                // `marks` and `$pending`.
+                assert_eq!(undefs.len(), 2, "{}", function.symbol);
+                assert!(undefs.iter().all(|inst| block.insts.contains(inst)), "{}: {block_id:?}", function.symbol);
+            }
+        }
+    }
+    assert_eq!(incomplete, 1);
+    own_stage(source, None, ir::verify::VerifyMode::Full).unwrap();
+}
