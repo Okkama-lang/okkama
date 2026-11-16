@@ -313,7 +313,12 @@ fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
             enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
             // A managed map refers to resource objects as values; like a managed array it owns none.
             enforce(collection_leaf(p, value), "MAP_PLAIN",
-                "map value graph is neither plain data nor resource objects")
+                "map value graph is neither plain data nor resource objects")?;
+            // The leaf rule admits a Future for arrays of Futures (D25.2 revision, #758). A map selection's runtime
+            // walk enters object and array values only, never a Future's frame, so a map would keep the entries of
+            // its Futures in the closing scope while the static model believes the selection took them. Maps of
+            // Futures wait for their own design (#800).
+            enforce(!matches!(value, Type::Future(_)), "MAP_PLAIN", "map value is a Future")
         }
         Composite::Builder { array } => {
             enforce(earlier(array), "COMPOSITE_ORDER", "builder composite refers forward")?;

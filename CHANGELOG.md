@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **SPB 17: a map value is never a Future (review of D25, F2).** The
+  leaf rule that admits arrays of Futures (#758) also admitted
+  `Map<K, Future<V>>`, but a map selection's runtime walk does not enter
+  Future values: the entries of its Futures would stay in the closing scope
+  while the static model believed the selection took them. `MAP_PLAIN` now
+  refuses a Future map value; maps of Futures get their own design
+  (#800).
 - **OIR own: an alias of a Future in a nested scope no longer unbinds it
   (review of D25, F1, #784).** Whether a binding holds a Future is now the
   flow-sensitive bound bit of its cache-duty atoms in the own analysis,

@@ -48,6 +48,19 @@ fn a_future_array_field_follows_the_future_field_rule() {
     reject_with(&with(holder(vec![FUTURE_ARRAY], vec![], true)), verify::FUTURE_TYPES, "a Future field is selected");
 }
 
+/// Review of D25 (F2): an array may hold Futures, a map may not (`MAP_PLAIN`): the runtime walk of a map selection
+/// does not enter Future values, so their entries would stay in the closing scope while the static model believes
+/// the selection took them.
+#[test]
+fn a_map_value_is_never_a_future() {
+    let mut p = with(holder(vec![FUTURE_INT], vec![0], true));
+    p.composites.push(Composite::Map { key: Type::Int, value: Type::Str });
+    verify_load(&p, &NoExternalContracts).unwrap();
+    p.composites.pop();
+    p.composites.push(Composite::Map { key: Type::Int, value: FUTURE_INT });
+    reject_with(&p, "MAP_PLAIN", "map value is a Future");
+}
+
 #[test]
 fn a_future_array_names_a_future_results_entry() {
     let unknown = Type::Array(ArrayType { leaf: ArrayLeaf::Future(9), depth: 1 });
