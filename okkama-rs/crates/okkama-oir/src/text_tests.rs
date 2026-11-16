@@ -82,8 +82,8 @@ fn every_opcode_builder_roundtrips_and_every_invoke_slot_is_preserved() {
         roundtrip(&module);
     }
     assert_eq!(seen, Operation::opcode_inventory().into_iter().collect(), "opcode missing a builder round-trip case");
-    // #678 adds array.order and call.order.
-    assert_eq!(seen.len(), 276);
+    // #678 adds array.order and call.order; #601 F1 (ruling PR-E) adds fut.spawn.bound.
+    assert_eq!(seen.len(), 277);
 }
 
 #[test]
@@ -1761,5 +1761,24 @@ fn removed_exit_forms_are_not_in_the_codec() {
         );
         assert!(text::parse(&source).is_err());
         assert!(!Operation::opcode_inventory().contains(&opcode));
+    }
+}
+
+/// Ruling PR-E (#601 F1): `fut.spawn.bound %f` prints and parses; it names only the Future, has no result and moves
+/// nothing; High names every spawn `fut.spawn %f`, so the bound form is refused there.
+#[test]
+fn fut_spawn_bound_round_trips_and_is_not_high() {
+    let high = include_str!("own/tests/async-high/p1-spawn-detached.oir");
+    assert!(high.contains("    fut.spawn %1\n"));
+    let module = text::parse(high).unwrap();
+    crate::verify_high(&module).unwrap();
+    let bound = text::parse(&high.replace("    fut.spawn %1\n", "    fut.spawn.bound %1\n")).unwrap();
+    assert!(crate::verify_high(&bound).is_err(), "the bound form is own, coro and low only");
+    let op = Operation::Async(AsyncOp::FutureSpawnBound { future: ValueId::from_u32(0) });
+    let contract = ContractRegistry::new(&bound).lookup(&op).unwrap();
+    assert!(contract.normal.results.is_empty() && contract.normal.transfers.is_empty() && contract.unwind.is_none());
+    assert!(!contract.effects.suspends);
+    for profile in [Profile::Own, Profile::Coro, Profile::Low] {
+        roundtrip(&build_op(op.clone(), profile));
     }
 }

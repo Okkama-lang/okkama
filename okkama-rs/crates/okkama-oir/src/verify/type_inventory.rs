@@ -231,6 +231,7 @@ pub(super) const TYPE_RULES: &[&str] = &[
     "unique_cache.proof",
     "cache.rehome",
     "fut.spawn",
+    "fut.spawn.bound",
     "fut.cancel",
     "fut.done",
     "fut.cancelled",

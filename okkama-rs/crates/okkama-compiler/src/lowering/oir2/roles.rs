@@ -33,7 +33,14 @@ pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Anal
                         LowerError::unsupported(span, "role slot has no reachable implementation")
                     })?;
                 let function = declarations.builder.module().functions.get(target)?;
-                if function.signature.results == method.signature.results
+                // A slot names an implementation of its own ABI. Two kinds never have it, and are reached through an
+                // adapter with the slot's signature (ruling PR-D): an async action, whose adapter is the creation
+                // thunk that returns its cold Future, and a catalogue external (an intrinsic member, a native),
+                // whose entry ABI is the trusted one, not the slot's (#773).
+                let external = function.attrs.iter()
+                    .any(|attr| matches!(attr, ir::FunctionAttr::Extern(_) | ir::FunctionAttr::Intrinsic { .. }));
+                let asynchronous = function.attrs.contains(&ir::FunctionAttr::Async);
+                if !external && !asynchronous && function.signature.results == method.signature.results
                     && function.attrs.contains(&ir::FunctionAttr::Method(declaration)) {
                     slots.push(target);
                     continue;
@@ -43,55 +50,7 @@ pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Anal
                 let symbol = format!("{}.witness.{}.slot{slot}",
                     declarations.builder.module().declarations.get(declaration)?.name,
                     declarations.builder.module().declarations.get(role_decl)?.name);
-                let adapter = declarations.builder.declare_function(ir::Function {
-                    symbol, signature, attrs: vec![ir::FunctionAttr::Method(declaration)], type_params: vec![],
-                    summary: None, async_creation_summary: None, async_body_summary: None, body: None, loc: None,
-                })?;
-                let root = declarations.builder.declare_scope(ir::ScopeDecl {
-                    function: adapter, parent: None, kind: ir::ScopeKind::Action, loc: None,
-                })?;
-                let result = method.signature.results.first().copied();
-                let mut builder = declarations.builder.function_builder(adapter, root)?;
-                let entry = builder.entry();
-                let failure_ty = builder.intern_type(ir::Type::Service(ir::ServiceType::Failure))?;
-                let failure = builder.create_block(root, &[ir::ParamSpec::new(failure_ty)])?;
-                builder.switch_to(failure)?;
-                builder.terminate(ir::TermKind::Raise(builder.block_params(failure)?[0]))?;
-                builder.switch_to(entry)?;
-                builder.set_unwind(Some(ir::BlockUnwind {
-                    target: ir::Target { block: failure, args: vec![] },
-                }))?;
-                let args = builder.block_params(entry)?.iter().map(|&value| ir::CallArgument {
-                    value, convention: ir::OperandConvention::Borrow,
-                }).collect();
-                let values = builder.emit_schema(ir::Operation::Call(ir::CallOp::Direct {
-                    function: target, call: call_site(args),
-                }))?;
-                record_call_effect(&mut builder, entry)?;
-                let value = match (values.first().copied(), result) {
-                    (Some(value), Some(ty)) => {
-                        let input = builder.body().values.get(value)?.ty;
-                        let value = if matches!(builder.module().types.get(input)?, ir::Type::Successor(_))
-                            && !matches!(builder.module().types.get(ty)?, ir::Type::Successor(_)) {
-                            let ir::Type::Successor(inner) = *builder.module().types.get(input)? else {
-                                unreachable!("successor result");
-                            };
-                            builder.emit_schema(ir::Operation::Core(ir::CoreOp::SuccTake { value, ty: inner }))?[0]
-                        } else {
-                            value
-                        };
-                        if builder.body().values.get(value)?.ty == ty {
-                            Some(value)
-                        } else {
-                            Some(builder.emit_schema(ir::Operation::Core(ir::CoreOp::RoleWrap { value, ty }))?[0])
-                        }
-                    }
-                    (None, None) => None,
-                    _ => return Err(LowerError::invalid(span, "role adapter result arity")),
-                };
-                finish_adapter(&mut builder, root, entry, value)?;
-                let body = builder.finish()?;
-                declarations.builder.define_function(adapter, body)?;
+                let adapter = adapter(declarations, declaration, target, signature, symbol, span)?;
                 slots.push(adapter);
             }
             witnesses.push(ir::Witness { role: role_type, slots });
@@ -102,6 +61,102 @@ pub(super) fn declare_witnesses(declarations: &mut Declarations, analysis: &Anal
         }
     }
     Ok(())
+}
+
+/// A synchronous function of `signature` (receiver first) that calls `target` with its parameters and returns its
+/// result, taking a successor and wrapping into a role as the signature asks. It is a witness slot's adapter, and
+/// the creation thunk of an async action (ruling PR-D): the call of an async `target` creates its cold Future,
+/// which own rewrites to `fut.new` and returns through `cache.rehome … target caller`. An external `target` is
+/// called through its own call form and summary.
+pub(super) fn adapter(declarations: &mut Declarations, declaration: ir::DeclId, target: ir::FuncId,
+    signature: ir::Signature, symbol: String, span: crate::source::Span) -> Result<ir::FuncId> {
+    let function = declarations.builder.module().functions.get(target)?;
+    let native = function.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Extern(_)));
+    let intrinsic = function.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Intrinsic { .. }));
+    let summary = function.summary;
+    let result = signature.results.first().copied();
+    let adapter = declarations.builder.declare_function(ir::Function {
+        symbol, signature, attrs: vec![ir::FunctionAttr::Method(declaration)], type_params: vec![],
+        summary: None, async_creation_summary: None, async_body_summary: None, body: None, loc: None,
+    })?;
+    let root = declarations.builder.declare_scope(ir::ScopeDecl {
+        function: adapter, parent: None, kind: ir::ScopeKind::Action, loc: None,
+    })?;
+    let mut builder = declarations.builder.function_builder(adapter, root)?;
+    let entry = builder.entry();
+    let failure_ty = builder.intern_type(ir::Type::Service(ir::ServiceType::Failure))?;
+    let failure = builder.create_block(root, &[ir::ParamSpec::new(failure_ty)])?;
+    builder.switch_to(failure)?;
+    builder.terminate(ir::TermKind::Raise(builder.block_params(failure)?[0]))?;
+    builder.switch_to(entry)?;
+    builder.set_unwind(Some(ir::BlockUnwind {
+        target: ir::Target { block: failure, args: vec![] },
+    }))?;
+    let args = builder.block_params(entry)?.iter().map(|&value| ir::CallArgument {
+        value, convention: ir::OperandConvention::Borrow,
+    }).collect();
+    // An external is called with its catalogue summary, as `BodyLowerer::call` does; a body's call has none in High.
+    let call = ir::CallSite { summary: summary.filter(|_| native || intrinsic), ..call_site(args) };
+    let call = if native {
+        ir::CallOp::Native { function: target, call }
+    } else if intrinsic {
+        ir::CallOp::Intrinsic { function: target, call }
+    } else {
+        ir::CallOp::Direct { function: target, call }
+    };
+    let values = builder.emit_schema(ir::Operation::Call(call))?;
+    record_call_effect(&mut builder, entry)?;
+    let value = match (values.first().copied(), result) {
+        (Some(value), Some(ty)) => {
+            let input = builder.body().values.get(value)?.ty;
+            let value = if matches!(builder.module().types.get(input)?, ir::Type::Successor(_))
+                && !matches!(builder.module().types.get(ty)?, ir::Type::Successor(_)) {
+                let ir::Type::Successor(inner) = *builder.module().types.get(input)? else {
+                    unreachable!("successor result");
+                };
+                builder.emit_schema(ir::Operation::Core(ir::CoreOp::SuccTake { value, ty: inner }))?[0]
+            } else {
+                value
+            };
+            if builder.body().values.get(value)?.ty == ty {
+                Some(value)
+            } else {
+                Some(builder.emit_schema(ir::Operation::Core(ir::CoreOp::RoleWrap { value, ty }))?[0])
+            }
+        }
+        (None, None) => None,
+        _ => return Err(LowerError::invalid(span, "role adapter result arity")),
+    };
+    finish_adapter(&mut builder, root, entry, value)?;
+    let body = builder.finish()?;
+    declarations.builder.define_function(adapter, body)?;
+    Ok(adapter)
+}
+
+/// The creation thunks of the async actions a program binds as values (ruling PR-D item 3): a bound async action is
+/// an `Fn` returning the Future, so `fn.bind` names a synchronous function of the receiver and the parameters that
+/// creates the cold Future. One thunk per bound async method, keyed by the method's function.
+pub(super) fn declare_thunks(declarations: &mut Declarations, inventory: &super::callables::Inventory)
+    -> Result<std::collections::HashMap<ir::FuncId, ir::FuncId>> {
+    let mut thunks = std::collections::HashMap::new();
+    for bound in &inventory.bound {
+        let super::callables::BoundTarget::Method { object, method } = bound.target else { continue };
+        let Some(&target) = declarations.functions.get(&thir::BodyOwner::Method { object, method }) else {
+            continue;
+        };
+        let function = declarations.builder.module().functions.get(target)?;
+        if !function.attrs.contains(&ir::FunctionAttr::Async) || thunks.contains_key(&target) {
+            continue;
+        }
+        let mut signature = function.signature.clone();
+        let symbol = format!("{}.thunk", function.symbol);
+        let outcome = signature.results.first().copied();
+        signature.results = vec![declarations.builder.intern_type(ir::Type::Future(outcome))?];
+        let declaration = declarations.objects[&object];
+        let thunk = adapter(declarations, declaration, target, signature, symbol, bound.span)?;
+        thunks.insert(target, thunk);
+    }
+    Ok(thunks)
 }
 
 pub(super) fn call_site(args: Vec<ir::CallArgument>) -> ir::CallSite {

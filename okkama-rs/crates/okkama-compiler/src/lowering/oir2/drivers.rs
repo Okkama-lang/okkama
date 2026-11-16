@@ -217,28 +217,21 @@ pub(super) fn objects(module: &ir::Module, name: &str) -> Result<Option<Vec<ir::
     }).collect::<Result<Vec<_>, _>>().map(Some)
 }
 
-/// The deps parameters own's elaboration gives the catalogue entry `function` over its language parameters
-/// `params` (own's external signatures): one for each managed reference, which among these types is the Event cell
-/// (a builtin capability), and one for the receiver of a member that is a role slot of its object. The other
-/// objects of the catalogue are plain values without references.
+/// The deps parameters own's elaboration gives a catalogue entry over its language parameters `params` (own's
+/// external signatures): one for each managed reference, which among these types is the Event cell (a builtin
+/// capability). The other objects of the catalogue are plain values without references. A member that is a role slot
+/// of its object is reached through an adapter of the slot's ABI, never named by a witness table (ruling PR-D, #773),
+/// so its receiver takes no deps.
 ///
 /// The same rule builds the trusted SPB 17 entries (`okkama_sparrow::spb17::drivers::deps`): change both together.
-pub(super) fn deps(module: &ir::Module, function: ir::FuncId, params: &[ir::TypeId]) -> usize {
-    let cell = params.iter().filter(|&&ty| match module.types.get(ty) {
+pub(super) fn deps(module: &ir::Module, params: &[ir::TypeId]) -> usize {
+    params.iter().filter(|&&ty| match module.types.get(ty) {
         Ok(ir::Type::Object { decl, .. }) => module.declarations.get(*decl).is_ok_and(|declaration| {
             matches!(declaration.kind, ir::DeclarationKind::Object { builtin: true, .. })
         }),
         Ok(ir::Type::Role { .. }) => true,
         _ => false,
-    }).count();
-    let receiver = params.first().is_some_and(|&ty| {
-        let cell = matches!(module.types.get(ty), Ok(ir::Type::Object { decl, .. }) if module.declarations.get(*decl)
-            .is_ok_and(|declaration| matches!(declaration.kind, ir::DeclarationKind::Object { builtin: true, .. })));
-        let slot = |witness: &ir::Witness| witness.slots.contains(&function);
-        !cell && module.declarations.iter().any(|(_, declaration)| matches!(&declaration.kind,
-            ir::DeclarationKind::Object { witnesses, .. } if witnesses.iter().any(slot)))
-    });
-    cell + usize::from(receiver)
+    }).count()
 }
 
 #[cfg(test)]

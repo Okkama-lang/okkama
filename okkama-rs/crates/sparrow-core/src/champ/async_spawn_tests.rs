@@ -17,7 +17,8 @@ const SPAWNS_FAILS: u32 = 3;
 const AWAITS_SPAWNED: u32 = 4;
 const RETURNS_SPAWNED: u32 = 5;
 const CANCELS_THEN_SPAWNS: u32 = 6;
-const ASYNC_P1: u32 = 7;
+const SPAWNS_BOUND: u32 = 7;
+const ASYNC_P1: u32 = 8;
 /// Object 1, `Bad`: its destroy fails.
 const BAD: u32 = 1;
 
@@ -116,6 +117,24 @@ fn cancels_then_spawns() -> (s::Function, s::FrameLayout) {
     (b.finish(), layout)
 }
 
+/// `async spawns_bound() is int { let f = work(7); spawn f; return 0; }` with the bound form (ruling PR-E, #766):
+/// `fut.spawn.bound` takes no duty and gives none, so the close settles the cache duty alone.
+fn spawns_bound() -> (s::Function, s::FrameLayout) {
+    let slots = spawner_slots();
+    let index = SPAWNS_BOUND;
+    let (mut b, frame) = Body::asynchronous("spawns_bound", index, vec![s::Type::Int]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(index), A::Boundary(index)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let seven = b.constant(s::Constant::Int("7".into()), s::Type::Int);
+    let (future, cache, q2) = future_new(&mut b, index, WORK, &[seven], q1);
+    b.next(O::FutureSpawnBound, vec![l(future)], vec![]);
+    let zero = b.constant(s::Constant::Int("0".into()), s::Type::Int);
+    b.return_value(body, q2, index, Some(zero), &[cache], "done");
+    let layout = b.layout(slots, vec![(vec![0], vec![])]);
+    (b.finish(), layout)
+}
+
 /// The destroy of `Bad`, which fails with "bad destroy".
 fn destroy_bad() -> s::Function {
     let mut b = Body::new("destroy_bad", s::EntryAbi::Observation, vec![]);
@@ -134,7 +153,7 @@ fn p1_program() -> s::Program {
     let mut frames = Vec::new();
     for (function, layout) in [work(), fails(), spawner("spawns_work", SPAWNS_WORK, WORK, false),
         spawner("spawns_fails", SPAWNS_FAILS, FAILS, false), spawner("awaits_spawned", AWAITS_SPAWNED, WORK, true),
-        returns_spawned(), cancels_then_spawns()]
+        returns_spawned(), cancels_then_spawns(), spawns_bound()]
     {
         functions.push(function);
         frames.push(layout);
@@ -574,6 +593,126 @@ fn champ_p1_the_root_close_failure_survives_a_second_drain() {
         assert!(kind(&runtime, report).contains("bad destroy"), "{}", kind(&runtime, report));
         assert_eq!(destroyed(&runtime), "Bad 1\n");
         assert!(failed_cancelled(&runtime, held), "the second drain cancelled the detached Future");
+        assert!(runtime.spawned.is_empty());
+    }
+}
+
+// --- fut.spawn.bound (ruling PR-E, #601 F1, #766) --------------------------------------------------------------
+
+fn spawn_bound(ctx: &mut Ctx, future: Word) {
+    let runtime = unsafe { &mut *ctx.runtime };
+    assert_eq!(rt_future_spawn_bound(ctx, future), NORMAL, "{:?}", runtime.fatal);
+}
+
+#[test]
+fn champ_f1_a_bound_spawn_starts_a_cold_future_at_once_and_moves_no_duty() {
+    // `spawn f` of a Future not created on the spot: work starts and publishes inside the spawn, before the spawner
+    // returns, as Tomato's `spawn` of a cold Future; the close settles the cache duty alone, and shutdown finds the
+    // registry empty of a settled success.
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_p1(stress, engine);
+        let result = runtime.run_function(SPAWNS_BOUND as usize, crate::STACK_BYTES);
+        assert_eq!(result.unwrap(), word::small(0).unwrap());
+        let order = events(&runtime);
+        let spawned = [(FutureStep::Start, WORK as usize), (FutureStep::Published, WORK as usize)];
+        let start = order.iter().position(|event| *event == (FutureStep::Start, SPAWNS_BOUND as usize)).unwrap();
+        assert_eq!(order[start + 1..start + 3], spawned, "{order:?}");
+        assert_eq!(count(&runtime, WORK, FutureStep::Start), 1);
+        assert!(runtime.spawned.is_empty(), "shutdown empties the registry");
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+#[test]
+fn champ_f1_a_bound_spawn_of_a_cold_running_or_settled_future() {
+    // PR-E: a cold Future becomes SPAWNED, its own task and registered once, and starts; a running or settled one
+    // is left as it is: no second start, no second registry entry, and a settled one is never registered.
+    for engine in [Engine::Jit, Engine::Reference] {
+        for stress in [false, true] {
+            let mut runtime = load_p1(stress, engine);
+            let mut ctx = context(&mut runtime);
+            ctx.entry_frame = frame_pointer!();
+            let mut state = owner(&mut ctx);
+            let inputs = empty(&mut ctx);
+            let task = new_future(&mut ctx, FAILS, &[], &mut state, inputs);
+            runtime.invocations[FAILS as usize].code = parks as *const () as u64;
+            spawn_bound(&mut ctx, task);
+            assert_eq!(get(task, tasks::STATE), tasks::RUNNING);
+            assert_ne!(get(task, tasks::FLAGS) & SPAWNED, 0);
+            assert_eq!(runtime.champ_task_of(task).unwrap(), task);
+            assert_eq!(facts(&runtime, task), (false, false, false, 1));
+            // Running: nothing changes.
+            let flags = get(task, tasks::FLAGS);
+            spawn_bound(&mut ctx, task);
+            assert_eq!((get(task, tasks::STATE), get(task, tasks::FLAGS)), (tasks::RUNNING, flags));
+            assert_eq!(facts(&runtime, task).3, 1, "registered once");
+            // Settled: an awaited Future that ran elsewhere is not registered by a later bound spawn.
+            let inputs = empty(&mut ctx);
+            let done = new_future(&mut ctx, WORK, &[word::small(3).unwrap()], &mut state, inputs);
+            runtime.champ_future_start(&mut ctx, 0, done);
+            assert_eq!((ctx.status, get(done, tasks::STATE)), (OK, tasks::DONE));
+            spawn_bound(&mut ctx, done);
+            assert_eq!(get(done, tasks::FLAGS) & SPAWNED, 0);
+            assert_eq!(facts(&runtime, done).3, 0);
+            assert_eq!(count(&runtime, WORK, FutureStep::Start), 1);
+            // The owner closes: the cache duties settle by their rows; nothing is cancelled.
+            assert_eq!(close_duties(&mut ctx, &mut state, &[(task, SERVICE_CACHE), (done, SERVICE_CACHE)]), 0);
+            assert_eq!(get(task, tasks::FLAGS) & CANCEL_REQUESTED, 0);
+            assert_eq!(runtime.champ_shutdown(&mut ctx).unwrap(), None);
+            assert_eq!(ctx.status, OK);
+            assert!(runtime.spawned.is_empty());
+        }
+    }
+}
+
+#[test]
+fn champ_f1_a_bound_spawned_future_detaches_once_at_its_owner_close() {
+    // D24.2 "Cache, Running, not detached", I-F5: the owner closes while the bound-spawned Future waits; its cache
+    // duty detaches it to the root (not cancelled) without a second registry entry; shutdown cancels and drains it.
+    for engine in [Engine::Jit, Engine::Reference] {
+        for stress in [false, true] {
+            let mut runtime = load_p1(stress, engine);
+            let mut ctx = context(&mut runtime);
+            ctx.entry_frame = frame_pointer!();
+            let mut state = owner(&mut ctx);
+            let inputs = empty(&mut ctx);
+            let task = new_future(&mut ctx, FAILS, &[], &mut state, inputs);
+            runtime.invocations[FAILS as usize].code = parks as *const () as u64;
+            spawn_bound(&mut ctx, task);
+            assert_eq!(close_duties(&mut ctx, &mut state, &[(task, SERVICE_CACHE)]), 0);
+            assert_eq!(facts(&runtime, task), (true, true, false, 1), "detached to the root, registered once");
+            assert_eq!(get(task, tasks::FLAGS) & CANCEL_REQUESTED, 0, "a detached task is not cancelled");
+            assert_eq!(runtime.champ_shutdown(&mut ctx).unwrap(), None, "a cancellation is never reported");
+            assert_eq!(ctx.status, OK);
+            assert!(failed_cancelled(&runtime, task), "shutdown cancelled it and waited until it settled");
+            assert!(runtime.spawned.is_empty());
+        }
+    }
+}
+
+#[test]
+fn champ_f1_bound_and_duty_spawns_share_the_registry_in_spawn_order() {
+    // The unobserved-failure report reads the registry in spawn order (D24.2 shutdown step 3): a bound spawn and a
+    // duty-form spawn are registered as they start, whatever their form.
+    for engine in [Engine::Jit, Engine::Reference] {
+        let mut runtime = load_p1(true, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        runtime.invocations[FAILS as usize].code = parks as *const () as u64;
+        let inputs = empty(&mut ctx);
+        let bound = new_future(&mut ctx, FAILS, &[], &mut state, inputs);
+        let inputs = empty(&mut ctx);
+        let duty = new_future(&mut ctx, FAILS, &[], &mut state, inputs);
+        spawn_bound(&mut ctx, bound);
+        spawn(&mut ctx, duty);
+        assert_eq!(runtime.spawned, [bound, duty]);
+        assert_eq!(close_duties(&mut ctx, &mut state, &[(duty, SERVICE_TASK), (duty, SERVICE_CACHE),
+            (bound, SERVICE_CACHE)]), 0);
+        assert_eq!(runtime.champ_shutdown(&mut ctx).unwrap(), None);
         assert!(runtime.spawned.is_empty());
     }
 }

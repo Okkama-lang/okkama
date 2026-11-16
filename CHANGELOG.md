@@ -81,6 +81,33 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   (`A2`). `L04.invariant.escaped-self-failed-constructor` and
   `L04.invariant.escaped-self-in-block-failed-constructor` pass on Champ.
 
+- **A role call that reaches a std primitive's intrinsic member runs on
+  Champ (#773, ruling PR-D).** LockGuard and Permit do `Closing`, and the
+  cancellation token does `Cancelling`, with catalogue externals as their
+  members; a witness table named the external, whose trusted entry ABI is
+  not the slot's, so generation stopped ("dynamic call packet differs from
+  its ABI"). A slot now reaches a catalogue external through an adapter of
+  the slot's signature, as an async implementation does, and the catalogue
+  rule that gave such a member's receiver a deps proof (in the producer and
+  in SPB 17) is gone with it.
+- **SPB 17 generation takes an async body with descriptor bindings (#747).**
+  A generic async body keeps the descriptors of its inputs in continuation 0
+  and reloads them at each resume (async ABI C-2); a binding of plain data
+  needs nothing more, so the descriptor-start golden now compiles and loads.
+  A binding that manages values through its descriptor, or one in a
+  synchronous body, is still refused by name. The OIR-2 producer specializes
+  generic actions, so source programs did not reach this path.
+- **Async bodies with an unreachable handler load on Champ (#741, ruling
+  PR-M).** Codegen lowers some operations as total and drops their unwind
+  edge; it removed the handler behind such an edge only in synchronous
+  functions, so an async body's dead handler, which reads the frame, failed
+  the loader's dominance check (`SPB_STRUCTURE`). Async bodies are now pruned
+  too: the continuation sites of the D21 frame layout follow the code, and a
+  continuation whose suspension was unreachable goes with it. The loader stays
+  strict. A `try` with a payload `catch` over a throwing constructor in
+  `async main` runs as on Tomato. With the loader's successor rule fixed for
+  `cleanup.deliver_cancel` (it gives the cleanup state back with the
+  successor it holds), `L12.future-successor-obligation` runs too.
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the
@@ -678,6 +705,38 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **`spawn` of any Future on Champ: `fut.spawn.bound`, SPB 17 opcode 87
+  (#601 F1, ruling PR-E; closes #766).** A spawn of a Future that its
+  creating call did not just give (a synchronous action that returns a
+  Future, a bound async action value's call) starts the Future if it is cold
+  and registers it, as Tomato's `spawn` does; it moves no duty, and the
+  Future's cache duty stays where it is. The duty form of D24.1 stays for
+  the Future a creating call just gave. New helper
+  `champ_future_spawn_bound` (class X); loader rule `SPB_SPAWN` gains: the
+  bound form takes its Future and names no service.
+
+- **Async role slots and bound async action values on Champ (#601 F1,
+  ruling PR-D).** An async action of a role (`role Loader { async load() is
+  int; }`) is a synchronous slot that returns the Future of its outcome. Each
+  implementation is reached through a creation thunk: a synchronous function
+  with the slot's signature that calls the async action, whose cold Future
+  own returns through `cache.rehome … target caller`. An implementation by an
+  async intrinsic (`Cancelling.wait` by the cancellation token) gets the same
+  thunk. An async action type `async (A) is T` is a synchronous `Fn` that
+  returns the Future; binding an async method binds its thunk, and calling the
+  value creates the cold Future. No new ABI. `L08.role-shape.async-dispatch`
+  runs; the other cases of the slice stop next on N1, G1, #775, #759 and
+  #735.
+
+- **Variadic role slots on Champ (#601 F1, ruling PR-D item 5).** A role
+  action with a variadic tail (`WritingText.write(values is ...string)`) is an
+  ordinary slot whose last parameter is the array the checker packs at every
+  call site; the producer refused it ("async or variadic role slot"). Std's
+  P1 direct-call objects (Stdout, Utf8Encoded) now get their witnesses when a
+  value of them becomes a role value, as `fs/temp` does with `ByteSource`.
+  `L00.stderr.basic` and five `L10.fs` cases run; the two temporary-directory
+  cases stop next on #785.
 
 - **Champ runs the std async primitives (#601 Q1, OIR-2 async ABI D22).**
   Event, Lock, Semaphore, Barrier and the cancellation token are a trusted

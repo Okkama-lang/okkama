@@ -417,14 +417,6 @@ fn int(module: &ir::Module) -> ir::TypeId {
 }
 
 #[test]
-fn oir2_p1_spawn_of_a_bound_async_action_value_keeps_its_diagnostic() {
-    // A typed bound async action value is slice F1; spawn of it keeps that slice's diagnostic.
-    let (message, _) = diagnostic(concat!("module app; object R { R(); ",
-        "async run(work is async (int) is int) is int { await spawn work(1); } } main() is int { 0; }"));
-    assert!(message.contains("P2.5 slice F1"), "{message}");
-}
-
-#[test]
 fn oir2_v5_process_worker_keeps_its_diagnostic() {
     assert_names(
         "module app; object W { W(); run() is int { 1; } } async main() is int { await spawn W().run(); }",
@@ -470,33 +462,6 @@ fn oir2_std_async_intrinsics_outside_q1_name_their_slice() {
         assert!(message.starts_with("unsupported in OIR-2 lowering: std async intrinsic ") && message.contains(slice),
             "{message}");
     }
-}
-
-#[test]
-fn oir2_v5_async_role_slot_keeps_its_diagnostic() {
-    assert_names(
-        concat!("module app; role Loader { async load() is int; } ",
-            "object Net does Loader { Net(); async load() is int { 5; } } ",
-            "async main() is int { let loader is Loader = Net(); await loader.load(); }"),
-        "async role slot Loader.load (P2.5 slice F1)",
-        None,
-    );
-}
-
-#[test]
-fn oir2_v5_bound_async_action_values_keep_their_diagnostic() {
-    assert_names(
-        concat!("module app; object E { E(); async fetch(n is int) is int { n; } } ",
-            "async main() is int { let work = E().fetch; 0; }"),
-        "bound async action value (P2.5 slice F1)",
-        Some("E().fetch"),
-    );
-    assert_names(
-        concat!("module app; object R { R(); ",
-            "async run(work is async (int) is int) is int { await work(1); } } main() is int { 0; }"),
-        "bound async action value (P2.5 slice F1)",
-        Some("work(1)"),
-    );
 }
 
 /// One W1 High golden through High -> verify_high -> own (V2) -> verify_own (Full) -> coro (V3)
@@ -648,3 +613,4 @@ fn oir2_v5_a_module_that_holds_futures_declares_the_services_protocol_once() {
     let module = lower("module app; async main() is int { 5; }");
     assert_eq!(services(&module), []);
 }
+

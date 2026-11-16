@@ -232,6 +232,8 @@ impl Emitter<'_> {
                 (O::FutureSpawn, vec![location(*future)?, location(*cache)?])
             }
             X::FutureSpawn { state: None, .. } => return Err(error("High's fut.spawn reached codegen")),
+            // Ruling PR-E (#766): the Future only; no duty goes in or comes out.
+            X::FutureSpawnBound { future } => (O::FutureSpawnBound, vec![location(*future)?]),
             X::FutureCancel { future } => (O::FutureCancel, vec![location(*future)?]),
             X::FutureDone { future } => (O::FutureDone, vec![location(*future)?]),
             X::FutureCancelled { future } => (O::FutureCancelled, vec![location(*future)?]),

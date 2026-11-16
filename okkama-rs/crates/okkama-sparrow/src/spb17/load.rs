@@ -49,6 +49,8 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
             AwaitTake => index == 1,
             // D24.1: the cache duty goes in and comes back with the task duty; the Future is a language value.
             FutureSpawn => index == 1,
+            // PR-E: the bound spawn takes no duty; its Future is a language value.
+            FutureSpawnBound => false,
             // Every linear operand: fut.new takes the input packet and the owner state; fut.publish the frame
             // and the success packet; frame.save the frame and the saved tokens; await.unwind the state, task and
             // receipt; cleanup.settle the cleanup state and its duty.

@@ -131,6 +131,7 @@ fut.new
 fut.publish
 fut.settle
 fut.spawn
+fut.spawn.bound
 global
 int.abs
 int.add

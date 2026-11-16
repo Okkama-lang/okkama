@@ -1554,6 +1554,9 @@ mod any_tests;
 #[path = "callable_case_tests.rs"]
 mod callable_case_tests;
 
+#[path = "f1_tests.rs"]
+mod f1_tests;
+
 #[test]
 fn oir2_pipeline_scalar() {
     let source = SourceFile::new("app.ok", "module app; main() is int { 7; }").unwrap();

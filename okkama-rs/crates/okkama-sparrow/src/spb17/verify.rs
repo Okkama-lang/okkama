@@ -1558,6 +1558,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         AwaitTake => shape == "lls",
         // The Future and its cache duty (D24.1).
         FutureSpawn => shape == "ll",
+        // PR-E: locations only; SPB_SPAWN requires exactly the Future (`suspension::check_spawns`).
+        FutureSpawnBound => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         // The exit's destination, the pending reserve and the cache duty with a spawned Future's task duty (C-4,
         // token form), or the owner state and the Future whose admitted entry moves (state form).
         CacheRehome => shape == "xll" || shape == "xlll",
@@ -2413,8 +2415,11 @@ pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     use Opcode::*;
     match (op, tag) {
         // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
+        // cleanup.deliver_cancel gives the cleanup state back (D18; #741's async successor body).
         (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
-            | CleanupDestroy | CacheRehome | CleanupSettleDynamic, Tag::Normal) => Carry::Slot(0),
+            | CleanupDestroy | CacheRehome | CleanupSettleDynamic | CleanupDeliverCancel, Tag::Normal) => {
+            Carry::Slot(0)
+        }
         (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
         (CleanupFinish, Tag::Normal) => Carry::Slot(2),
         (ExitDispatch, Tag::Pending) => Carry::Slot(1),
