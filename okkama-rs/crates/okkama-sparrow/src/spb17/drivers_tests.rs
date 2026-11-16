@@ -123,6 +123,49 @@ fn fut_new_of_a_driver_produces_its_result() {
     rejects(&p, &catalogue, verify::FUTURE_TYPES, "differs from the async body's result");
 }
 
+/// `driven()` with the driver an async native of the runtime table (#601 N1): a canonical symbol.
+const NATIVE: &str = "runtime/time@1::sleep_nanoseconds/1";
+
+fn driven_native() -> Program {
+    let mut p = driven();
+    p.functions[2] = driver(NATIVE);
+    p
+}
+
+#[test]
+fn fut_new_creates_the_future_of_a_native_driver_with_an_empty_packet() {
+    // Ruling PR-N: own offers a native nothing, so `fut.new`'s inputs packet is `own.empty`.
+    verify_load(&driven_native(), &Catalogue(vec![driver(NATIVE)])).unwrap();
+}
+
+/// `async_tests::leaking`'s body, which commits a `Res` into a packet and offers it to `fut.new`, with the driver
+/// `name` (function 3) as the created Future's entry: an inputs packet that is not empty.
+fn leaking(name: &str) -> Program {
+    let mut p = super::async_tests::leaking(true);
+    p.functions.push(driver(name));
+    let body = &mut p.functions[1];
+    let new = find(body, O::FutureNew);
+    arguments(body, new)[0] = A::Entry(3);
+    p
+}
+
+#[test]
+fn a_native_drivers_inputs_packet_is_statically_empty() {
+    // Ruling PR-N, checked before the general rule of plain inputs (which a handle's inputs would also meet).
+    rejects(&leaking(NATIVE), &Catalogue(vec![driver(NATIVE)]), EXTERNAL_ASYNC, "statically empty (PR-N)");
+    // The std async primitives' drivers are no natives: PR-N leaves them to CALL_PLAIN_PACKET (and Q2's PR-I).
+    rejects(&leaking("q1.work"), &trusted(), "CALL_PLAIN_PACKET", "plain Future inputs");
+}
+
+#[test]
+fn the_program_entry_is_no_driver() {
+    // #774: only `fut.new` starts a driver; a program cannot begin in one. Nothing else names the driver here.
+    let mut p = plain();
+    p.functions.push(driver(NATIVE));
+    p.entry = Some(2);
+    rejects(&p, &Catalogue(vec![driver(NATIVE)]), EXTERNAL_ASYNC, "program entry cannot be an async external");
+}
+
 #[test]
 fn only_fut_new_names_a_driver() {
     // `invoke.call_own` of @main's await replaced by a direct call of the driver: no synchronous ABI admits it.

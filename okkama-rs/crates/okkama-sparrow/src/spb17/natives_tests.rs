@@ -51,9 +51,8 @@ fn table_natives_are_trusted_entries_from_the_table() {
     load(&program(buffer(), vec![size.clone(), create, hex])).unwrap();
     let contracts = P1Contracts::new(&buffer()).unwrap();
     assert_eq!(contracts.native("runtime/buffer@1::buffer_state_size/1"), Some(&size));
-    // Not admitted by the companion catalogue: `any` transport and an asynchronous provider.
+    // Not admitted by the companion catalogue: `any` transport.
     assert_eq!(contracts.native("runtime/debug@1::data_dump/1"), None);
-    assert_eq!(contracts.native("runtime/application@1::terminal_standard/1"), None);
     // A handle of the table needs its declaring module's handle object.
     assert_eq!(P1Contracts::new(&[]).unwrap().native("runtime/buffer@1::buffer_state_size/1"), None);
 }
@@ -91,6 +90,64 @@ fn table_natives_take_and_return_handle_arrays() {
     assert_eq!(load(&program(json(), vec![other])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
     let single = declaration("runtime/json@1::json_array_node/1", vec![Type::Handle(0)], vec![Type::Handle(0)]);
     assert_eq!(load(&program(json(), vec![single])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+}
+
+/// The driver declaration of an async native (#601 N1, D22): its registers in order, no service, its failures.
+fn driver(symbol: &str, registers: Vec<Type>, results: Vec<Type>) -> Function {
+    Function {
+        symbol: symbol.into(), entry_abi: EntryAbi::AsyncExternal,
+        params: (0..registers.len() as u32).map(Location::Register).collect(), registers, services: vec![],
+        results, blocks: vec![], code: vec![],
+        proofs: FunctionProofs {
+            entry: Some(EntryContract {
+                external: Some(symbol.into()), failures: NATIVE_FAILURES, ..EntryContract::default()
+            }),
+            ..FunctionProofs::default()
+        },
+    }
+}
+
+/// #601 N1: an async native of the table is a trusted driver built from the table's signature, as its handles
+/// name them; a declaration of it loads, as a synchronous entry it does not, and a synchronous native is no driver.
+#[test]
+fn table_async_natives_are_trusted_drivers() {
+    let terminal = || vec![object("runtime.application.TerminalState", true, vec![])];
+    let standard = driver("runtime/application@1::terminal_standard/1", vec![Type::Int], vec![Type::Handle(0)]);
+    let read = driver("runtime/application@1::terminal_read/2", vec![Type::Handle(0), Type::Int], vec![Type::Bytes]);
+    let sleep = driver("runtime/time@1::sleep_nanoseconds/1", vec![Type::Str], vec![Type::Bool]);
+    let contracts = P1Contracts::new(&terminal()).unwrap();
+    assert_eq!(contracts.native("runtime/application@1::terminal_standard/1"), Some(&standard));
+    assert_eq!(contracts.native("runtime/application@1::terminal_read/2"), Some(&read));
+    assert_eq!(contracts.native("runtime/time@1::sleep_nanoseconds/1"), Some(&sleep));
+    load(&program(terminal(), vec![standard.clone(), read, sleep.clone()])).unwrap();
+    // Declared as a synchronous owning entry, an async native is refused; so is a synchronous native as a driver.
+    let owned = declaration("runtime/time@1::sleep_nanoseconds/1", vec![Type::Str], vec![Type::Bool]);
+    assert_eq!(load(&program(vec![], vec![owned])).unwrap_err().rule, super::drivers::EXTERNAL_ASYNC);
+    let hex = driver("runtime/hex@1::hex_encode/1", vec![Type::Bytes], vec![Type::Str]);
+    assert_eq!(load(&program(vec![], vec![hex])).unwrap_err().rule, super::drivers::EXTERNAL_ASYNC);
+    // The driver's failures are the native's: a refusal or a program failure, never an undeclared one.
+    let mut quiet = sleep;
+    quiet.proofs.entry.as_mut().unwrap().failures = 2;
+    assert_eq!(load(&program(vec![], vec![quiet])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
+}
+
+/// #601 N1 with #752: an async native whose result is a map has a driver adapter over the program's composite.
+#[test]
+fn table_async_natives_with_maps_have_driver_adapters() {
+    let watch = || vec![object("runtime.fs.FileWatchState", true, vec![])];
+    let event = driver("runtime/fs@1::file_watch_event/1", vec![Type::Handle(0)], vec![Type::Map(0)]);
+    let maps = [(Type::Str, Type::Str)];
+    load(&with_maps(watch(), vec![event.clone()], &maps)).unwrap();
+    let contracts = P1Contracts::new(&watch()).unwrap();
+    let composites = [Composite::Map { key: Type::Str, value: Type::Str }];
+    assert_eq!(contracts.native("runtime/fs@1::file_watch_event/1"), None);
+    assert_eq!(contracts.adapter(&event, &composites), Some(event.clone()));
+    // Declared synchronous, the map adapter is still a driver: the declaration is refused.
+    let owned = declaration("runtime/fs@1::file_watch_event/1", vec![Type::Handle(0)], vec![Type::Map(0)]);
+    assert_eq!(load(&with_maps(watch(), vec![owned], &maps)).unwrap_err().rule, super::drivers::EXTERNAL_ASYNC);
+    let exit = driver("runtime/process@1::process_state_exit/1", vec![Type::Handle(0)], vec![Type::Map(0)]);
+    let process = vec![object("runtime.process.ProcessState", true, vec![])];
+    load(&with_maps(process, vec![exit], &[(Type::Str, Type::Int)])).unwrap();
 }
 
 fn with_maps(objects: Vec<Object>, functions: Vec<Function>, maps: &[(Type, Type)]) -> Program {

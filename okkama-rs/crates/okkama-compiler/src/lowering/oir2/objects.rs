@@ -300,7 +300,9 @@ impl BodyLowerer<'_, '_> {
         }).collect();
         let target = self.b.module().functions.get(function)?;
         let summary = target.summary;
-        let native = target.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Extern(_)));
+        // An async native is called as any async action: its call creates the Future its driver runs (#601 N1, D22).
+        let native = !target.attrs.contains(&ir::FunctionAttr::Async)
+            && target.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Extern(_)));
         let intrinsic = target.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Intrinsic { .. }));
         let call = ir::CallSite {
             args, packet: None, deps: vec![], descriptors: vec![], type_args: vec![], summary,

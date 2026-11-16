@@ -1416,7 +1416,7 @@ fn private_tokens_are_not_entry_arguments() {
 }
 
 /// An async body that commits a `Res` into a packet, then offers it to a plain @work or publishes it.
-fn leaking(offer: bool) -> Program {
+pub(super) fn leaking(offer: bool) -> Program {
     let (mut b, frame) = Body::asynchronous("leak", 1, vec![]);
     b.block("entry", &[frame]);
     let (body, start) = b.resume(frame, 0, &[ProducedType::Service(K::Packet)]);

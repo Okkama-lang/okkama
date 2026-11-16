@@ -180,9 +180,12 @@ pub(super) fn check_intrinsic(registry: &Registry<'_>, body: &thir::Body) -> Res
     Err(LowerError::unsupported(body.span, format!("std async intrinsic {name} (P2.5 slice {slice})")))
 }
 
-/// The async native diagnostic: a native whose call creates a driver Future (D22).
+/// The diagnostic of an async native that no driver provides: its symbol is not an async native of the runtime
+/// table (#601 N1, D22). A synchronous native outside the table takes the checked unresolved-provider adapter; an
+/// async one has no such adapter.
 pub(super) fn async_native(name: &str, span: Span) -> LowerError {
-    LowerError::unsupported(span, format!("async native {name} (P2.5 slice N1, D22)"))
+    LowerError::unsupported(span, format!("async native {name} has no driver: it is not an async native of the \
+        runtime table (D22)"))
 }
 
 /// The async expressions outside plain async, with the diagnostic naming each.

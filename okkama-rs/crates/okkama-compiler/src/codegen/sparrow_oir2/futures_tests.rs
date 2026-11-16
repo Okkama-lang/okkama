@@ -864,3 +864,14 @@ fn p1_a_returned_spawned_future_rehomes_its_task_duty_with_its_cache_duty() {
     assert!(matches!(arguments[0], A::Destination(s::ExitDestination::Caller)), "{arguments:?}");
     assert_eq!(types(start, arguments), [P::Service(K::Pending), P::Service(K::CacheState), P::Service(K::TaskState)]);
 }
+
+#[test]
+fn n1_a_bodyless_async_function_needs_an_external_driver() {
+    // #601 N1, D22: a bodyless `[async]` function is a driver declared by `cleanup::external` when it is an intrinsic
+    // (Q1) or a native (N1; positive: `lowering::oir2::native_catalogue_tests`); without either it has nothing to run.
+    let mut module = golden("async-plain-await");
+    let (id, _) = module.functions.iter().find(|(_, function)| function.symbol == "work").unwrap();
+    module.functions.get_mut(id).unwrap().body = None;
+    let error = translate(&module).err().expect("a bodyless async function without an external driver");
+    assert!(error.to_string().contains("work: a bodyless async function without an external driver"), "{error}");
+}

@@ -170,6 +170,11 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
             "LOAD_WORK_BUDGET", "function exceeds verification work budget")?;
     }
     verify(p)?;
+    // #774: a driver runs only as the Future of a `fut.new`; the program cannot start in one.
+    if let Some(entry) = p.entry {
+        enforce(p.functions[entry as usize].entry_abi != EntryAbi::AsyncExternal, drivers::EXTERNAL_ASYNC,
+            "the program entry cannot be an async external")?;
+    }
     for (id, object) in p.objects.iter().enumerate() {
         let entries = p.functions.iter().filter(|function| function.proofs.entry.as_ref()
             .is_some_and(|entry| entry.destroy == Some(id as u32))).collect::<Vec<_>>();
@@ -199,26 +204,29 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
         if let Some(entry) = &f.proofs.entry
             && let Some(name) = &entry.external
         {
-            // D22 (#601 Q1): a driver resolves only to a trusted catalogue driver, and a catalogue driver is never
-            // declared as a synchronous entry.
-            let driver = contracts.entry(name).is_some_and(|trusted| trusted.entry_abi == EntryAbi::AsyncExternal);
-            enforce(driver == (f.entry_abi == EntryAbi::AsyncExternal), drivers::EXTERNAL_ASYNC,
-                &format!("external {name}: an async external resolves to a catalogue driver, and a driver is async"))?;
             let adapter;
             let trusted = match contracts.entry(name) {
-                Some(trusted) => trusted,
+                Some(trusted) => Some(trusted),
                 None => {
-                    adapter = contracts.adapter(f, &p.composites).ok_or_else(|| violation("EXTERNAL_UNRESOLVED",
-                        format!("external {name} has no trusted entry and no data or handle adapter")))?;
-                    &adapter
+                    adapter = contracts.adapter(f, &p.composites);
+                    adapter.as_ref()
                 }
             };
+            // D22 (#601 Q1, N1): a driver resolves only to a trusted driver (a catalogue driver, an async native of
+            // the runtime table or its map adapter), and a trusted driver is never declared as a synchronous entry.
+            let driver = trusted.is_some_and(|trusted| trusted.entry_abi == EntryAbi::AsyncExternal);
+            let message = format!("external {name}: an async external resolves to a catalogue driver, \
+                and a driver is async");
+            enforce(driver == (f.entry_abi == EntryAbi::AsyncExternal), drivers::EXTERNAL_ASYNC, &message)?;
+            let trusted = trusted.ok_or_else(|| violation("EXTERNAL_UNRESOLVED",
+                format!("external {name} has no trusted entry and no data or handle adapter")))?;
             enforce(f.entry_abi == trusted.entry_abi && f.registers == trusted.registers
                 && f.services == trusted.services && f.params == trusted.params && f.results == trusted.results
                 && f.proofs.entry == trusted.proofs.entry,
                 "EXTERNAL_SIGNATURE", "external signature/summary mismatch")?;
             continue;
         }
+        drivers::check_native_inputs(p, f)?;
         check_fallible_data(f)?;
         check_creations(p, f)?;
         check_failure_mask(p, f)?;

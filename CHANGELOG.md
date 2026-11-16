@@ -706,6 +706,24 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
 
+- **Async natives on Champ (#601 N1, OIR-2 async ABI D22, ruling PR-N).**
+  The 51 `native async` declarations of std `runtime/` (database, network,
+  process, application, TLS, time, signal, fs, fs_root) have a contract in
+  the companion catalogue: each takes and publishes plain data or native
+  handles only, so the asynchronous ABI admits them. The producer declares
+  an async native `[async, extern]` with the High creation envelope and the
+  catalogue's body summary (`suspends`, `cancelled`); its call is an
+  ordinary async call, and own creates its Future in the `external`
+  environment. SPB 17 makes it a trusted driver of the table
+  (`EntryAbi::AsyncExternal`, a map result through the #752 adapter), and
+  the Champ declaration view runs it with Tomato's `drivers::native`. Loader
+  rules under `SPB_EXTERNAL_ASYNC`: the inputs packet of a native driver's
+  `fut.new` is statically empty (PR-N), and the program entry is never a
+  driver (#774). The SPB 17 catalogue rows of the std async primitives are
+  now the one source of the producer's members, failures and deps (#774 D3).
+  `L10.clock.monotonic-order`, `L08.deadlock.after-timer` and
+  `L10.env.process-snapshot` run on Champ.
+
 - **`spawn` of any Future on Champ: `fut.spawn.bound`, SPB 17 opcode 87
   (#601 F1, ruling PR-E; closes #766).** A spawn of a Future that its
   creating call did not just give (a synchronous action that returns a
