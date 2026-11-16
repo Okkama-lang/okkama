@@ -417,14 +417,6 @@ fn int(module: &ir::Module) -> ir::TypeId {
 }
 
 #[test]
-fn oir2_p1_spawn_of_a_bound_async_action_value_keeps_its_diagnostic() {
-    // A typed bound async action value is slice F1; spawn of it keeps that slice's diagnostic.
-    let (message, _) = diagnostic(concat!("module app; object R { R(); ",
-        "async run(work is async (int) is int) is int { await spawn work(1); } } main() is int { 0; }"));
-    assert!(message.contains("P2.5 slice F1"), "{message}");
-}
-
-#[test]
 fn oir2_v5_process_worker_keeps_its_diagnostic() {
     assert_names(
         "module app; object W { W(); run() is int { 1; } } async main() is int { await spawn W().run(); }",

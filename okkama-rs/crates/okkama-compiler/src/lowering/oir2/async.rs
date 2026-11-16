@@ -10,7 +10,8 @@
 //!   that is a call's result awaited at once is a temporary: the producer marks it `temp` in the
 //!   awaiting scope, its cleanup boundary (OIR-2 §10.3), which is how own finds the temporary take.
 //! - `f.done()`, `f.cancel()` and `f.cancelled()` are `fut.done`, `fut.cancel` and `fut.cancelled`.
-//! - `spawn R(…).a(…)` of an async action is the creating call followed by `fut.spawn %f` (D24.1, slice P1).
+//! - `spawn e` of a Future is `e` followed by `fut.spawn %f`: D24.1's duty form when `e` is the creating call of an
+//!   async action (slice P1), and `fut.spawn.bound` in own for any other Future (ruling PR-E, #766).
 //! - `defer await …`: a defer entry whose expression awaits is an async defer entry (async ABI C-6),
 //!   `[defer(), async]` with the async envelopes of H6. It has no replacement: a `return` inside it
 //!   is refused by name (`async-defer-replace`).
@@ -21,9 +22,6 @@ use crate::analysis::{registry::Registry, thir, ty::Ty};
 use crate::oir2 as ir;
 use crate::source::Span;
 
-/// `spawn` of an async action value that is not a fresh call: a bound async action value (Bible §20.11) is slice
-/// F1; the frontend admits nothing else (D24.1 `d24-spawn-not-fresh`).
-const SPAWN_ASYNC: &str = "spawn of an async action that is not a direct call (P2.5 slice F1, fut.spawn)";
 /// `spawn` of a sync action or of a sync bound action value: a process worker.
 const SPAWN_WORKER: &str = "spawn of a process worker (P2.5 slice X1, proc.spawn)";
 /// A `return` inside a deferred expression that awaits: an async defer entry has no replacement in 0.6.0
@@ -191,7 +189,8 @@ pub(super) fn async_native(name: &str, span: Span) -> LowerError {
 pub(super) fn outside_plain(expr: &thir::Expr) -> Option<&'static str> {
     use thir::ExprKind as E;
     match &expr.kind {
-        E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) && !temporary(target) => Some(SPAWN_ASYNC),
+        // Any Future: own keeps D24.1's duty form for a Future its creation just gave and `fut.spawn.bound` for every
+        // other one (ruling PR-E, #766).
         E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) => None,
         E::Spawn(_) => Some(SPAWN_WORKER),
         _ => None,

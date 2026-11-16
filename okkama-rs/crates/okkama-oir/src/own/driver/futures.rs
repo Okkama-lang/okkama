@@ -116,15 +116,32 @@ impl Driver<'_, '_> {
     /// D24.1 (slice P1): High's `fut.spawn %f` of the Future its creation just gave. Own forwards the state of the
     /// scope that owns the Future's cache duty, which gains the spawned task's duty `ServiceOf{f, Frame}`; both
     /// duties settle at that scope's close, the task's first (D24.2), or leave together through `cache.rehome`.
+    /// Any other Future (a binding, a role slot's or an action value's result, a synchronous call's: #766) gets
+    /// `fut.spawn.bound %f` (ruling PR-E): it starts the Future if it is cold and registers it, and changes no duty.
     pub(super) fn spawn_future(&mut self, point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
         let Operation::Async(AsyncOp::FutureSpawn { future: original, state: None }) = instruction.op else {
             return Err(flow_error("expected High's fut.spawn"));
         };
         let future = point.env.value(original)?.value;
-        let owner = self.cache_duties.iter().rev().find(|(_, created)| *created == future).map(|(owner, _)| *owner)
-            .ok_or_else(|| unsupported_async("fut.spawn of a Future this function did not just create (D24.1)"))?;
+        let owner = self.cache_duties.iter().rev().find(|(_, created)| *created == future).map(|(owner, _)| *owner);
+        let (Some(owner), true) = (owner, self.created_just_before(original)?) else {
+            return self.emit(point, Operation::Async(AsyncOp::FutureSpawnBound { future }));
+        };
         let state = point.env.state(owner)?;
         self.emit(point, Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state) }))
+    }
+
+    /// Whether the High instruction just before the current one, in the same block, is the async call that created
+    /// `original` (D24.1's freshness, ruling PR-E).
+    fn created_just_before(&self, original: ValueId) -> Result<bool, OwnError> {
+        let Some(current) = self.current_instruction else { return Ok(false) };
+        let insts = &self.high.blocks.get(self.current_high).map_err(arena)?.insts;
+        let Some(position) = insts.iter().position(|&inst| inst == current) else { return Ok(false) };
+        let Some(&previous) = position.checked_sub(1).and_then(|index| insts.get(index)) else { return Ok(false) };
+        let previous = self.high.insts.get(previous).map_err(arena)?;
+        let creates = matches!(previous.op, Operation::Call(CallOp::Direct { function, .. }
+            | CallOp::Intrinsic { function, .. }) if super::super::futures::is_async(self.module, function));
+        Ok(creates && previous.results.first() == Some(&original))
     }
 
     /// A shared await (elaboration §13.2): `(value?, deps)` with deps the stable

@@ -1,5 +1,5 @@
 //! #601 F1 in the producer and own: async role slots, external witnesses (#773) and bound async action values
-//! (ruling PR-D).
+//! (ruling PR-D); `fut.spawn.bound` (ruling PR-E, #766).
 use crate::oir2 as ir;
 
 fn function<'m>(module: &'m ir::Module, symbol: &str) -> (ir::FuncId, &'m ir::Function) {
@@ -182,3 +182,60 @@ fn f1_a_bound_async_action_is_an_fn_that_returns_its_future() {
     full_low(BOUND);
 }
 
+
+const SPAWNS: &str = concat!(
+    "module app v1.0.0; ",
+    "object Job { has n is int; Job(:n); async run() is int { n; } async add(k is int) is int { n + k; } } ",
+    "object Starter { Starter(); start(n is int) is Future<int> { Job(n: n).run(); } } ",
+    "async main() is int { let fresh = spawn Job(n: 1).run(); let made = spawn Starter().start(4); ",
+    "let action is async (int) is int = Job(n: 7).add; let valued = spawn action(3); ",
+    "await fresh + await made + await valued; }",
+);
+
+/// Ruling PR-E: `spawn` of the Future its creating call just gave keeps D24.1's duty form (own forwards the owner
+/// state); the Future of a synchronous call (#766) or of an action value call gets `fut.spawn.bound`, which takes and
+/// gives no duty. The program reaches Low under the full verifiers (I-F4: the bound spawn changes no state).
+#[test]
+fn f1_a_spawn_of_a_future_not_created_on_the_spot_is_a_bound_spawn() {
+    let module = super::lower_std(SPAWNS).unwrap_or_else(|error| panic!("{error}"));
+    super::verify_high(&module, "spawns");
+    let (_, main) = function(&module, "main");
+    let spawns = main.body.as_ref().unwrap().insts.iter()
+        .filter(|(_, inst)| matches!(inst.op, ir::Operation::Async(ir::AsyncOp::FutureSpawn { state: None, .. })))
+        .count();
+    assert_eq!(spawns, 3, "High names every spawn fut.spawn %f");
+    let (own, _) = super::own_case_tests::own_stage(SPAWNS, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, main) = function(&own, "main");
+    let body = main.body.as_ref().unwrap();
+    let forms = body.insts.iter().filter_map(|(_, inst)| match &inst.op {
+        ir::Operation::Async(ir::AsyncOp::FutureSpawn { state, .. }) => Some(state.is_some()),
+        ir::Operation::Async(ir::AsyncOp::FutureSpawnBound { .. }) => Some(false),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert_eq!(forms, [true, false, false], "duty form for the fresh call, the bound form for the others");
+    full_low(SPAWNS);
+}
+
+/// Ruling PR-E: own keeps the duty form only when the creating call is the instruction just before the spawn. With
+/// anything between them (here a constant), the spawn is the bound form, and coro keeps it, under the full verifiers.
+#[test]
+fn f1_own_keeps_the_duty_form_only_for_a_spawn_right_after_its_creation() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../okkama-oir/src/own/tests/async-high/p1-spawn-detached.oir");
+    let text = std::fs::read_to_string(path).unwrap();
+    let spawned = |text: &str| {
+        let coro = super::super::async_tests::high_to_coro(ir::text::parse(text).unwrap())
+            .unwrap_or_else(|error| panic!("{error}"));
+        let (_, main) = function(&coro, "main");
+        main.body.as_ref().unwrap().insts.iter().filter_map(|(_, inst)| match &inst.op {
+            ir::Operation::Async(ir::AsyncOp::FutureSpawn { .. }) => Some("duty"),
+            ir::Operation::Async(ir::AsyncOp::FutureSpawnBound { .. }) => Some("bound"),
+            _ => None,
+        }).collect::<Vec<_>>()
+    };
+    assert_eq!(spawned(&text), ["duty"]);
+    let separated = text.replace("    fut.spawn %1\n", "    %9: int = const 1\n    fut.spawn %1\n");
+    assert_ne!(separated, text);
+    assert_eq!(spawned(&separated), ["bound"]);
+}
