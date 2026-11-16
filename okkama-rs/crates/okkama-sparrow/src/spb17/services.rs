@@ -297,7 +297,36 @@ fn produced_carriers(p: &Program, f: &Function, op: Opcode, arguments: &[Argumen
     }
 }
 
-/// The begin pcs of closes whose scope state may have admitted a service entry on some path (D25.3).
+/// `fut.new` gives the callee an inputs packet that carries service entries only when some start value of the callee
+/// can bring one (`entry_carries`; PR-B2, #782): a bare Future input is borrowed and arrives without its entry.
+pub(crate) const FUTURE_INPUT: &str = "SPB_FUTURE_INPUT";
+
+/// The language inputs of an entry: the start values of an async body (its continuation 0, D21), or the
+/// parameters of a synchronous function; `None` for an async body without a start continuation.
+fn language_inputs(p: &Program, f: &Function) -> Option<Vec<ProducedType>> {
+    match p.frame_layout(f) {
+        Some(layout) => layout.saved_types(0),
+        None => Some(f.params.iter().filter_map(|&location| verify::loc_type(f, location).ok()).collect()),
+    }
+}
+
+/// PR-B2 (#782): whether the entry packet of `f` may carry service entries, so that its scope may admit them
+/// (D25.3). A language input that can reach a holder brings its entries in the packet: a parameter of a synchronous
+/// function (a constructor or a synchronous owner stores it, D25.2), or an aggregate start value of an async body.
+/// A bare Future start value does not: own never offers a Future input to `fut.new` (OIR-2 §10.2), so the body
+/// borrows it.
+pub(crate) fn entry_carries(p: &Program, f: &Function) -> bool {
+    let asynchronous = p.frame_layout(f).is_some();
+    language_inputs(p, f).is_none_or(|inputs| inputs.into_iter().any(|ty| match ty {
+        ProducedType::Value(Type::Future(_)) if asynchronous => false,
+        ProducedType::Value(ty) => reaches_holder(p, ty),
+        _ => false,
+    }))
+}
+
+/// The begin pcs of closes whose scope state may have admitted a service entry on some path (D25.3). An entry
+/// packet that `entry_carries` is a carrier from the start (#782): the packet parameter of a synchronous entry, the
+/// start packet that an async body's continuation 0 resumes with.
 pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32>, Error> {
     let resumes = resumes(f);
     let mut saved = BTreeMap::<u32, Vec<bool>>::new();
@@ -307,7 +336,13 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
         previous.extend(next.iter().copied());
         previous.len() != before
     };
-    forward(f, Carriers::new(), join, |pc, state| {
+    let carries = entry_carries(p, f);
+    let start: Carriers = if carries && p.frame_layout(f).is_none() {
+        f.params.iter().copied().filter(|&location| kind(f, location) == Some(ServiceKind::Packet)).collect()
+    } else {
+        Carriers::new()
+    };
+    forward(f, start, join, |pc, state| {
         let mut out = state.clone();
         let mut successors = Vec::new();
         let mut revisit = Vec::new();
@@ -349,8 +384,13 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
                                 let stored = saved.get(&k).cloned().unwrap_or_default();
                                 facts.extend((1..outputs.len()).map(|index| {
                                     stored.get(index - 1).copied().unwrap_or(false)
+                                        || (k == 0 && carries && kind(f, outputs[index]) == Some(ServiceKind::Packet))
                                 }));
                                 facts
+                            }
+                            Opcode::FutureNew => {
+                                future_input(p, arguments, &ins)?;
+                                next_carriers(f, *op, arguments, &ins, outputs)
                             }
                             _ => next_carriers(f, *op, arguments, &ins, outputs),
                         };
@@ -375,6 +415,25 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
         Ok((successors, revisit))
     })?;
     Ok(closes)
+}
+
+/// `SPB_FUTURE_INPUT` (#782): the inputs packet of `fut.new`, which follows the callee's start values, carries
+/// entries only when the callee's entry packet may (`entry_carries`).
+fn future_input(p: &Program, arguments: &[Argument], ins: &[bool]) -> Check {
+    let Some(callee) = arguments.iter().find_map(|argument| match argument {
+        Argument::Entry(id) => p.functions.get(*id as usize),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let Some(inputs) = language_inputs(p, callee) else {
+        return Ok(());
+    };
+    let values = inputs.iter().filter(|ty| matches!(ty, ProducedType::Value(_))).count();
+    let carried = ins.get(values).copied().unwrap_or(false);
+    enforce(!carried || entry_carries(p, callee), FUTURE_INPUT,
+        &format!("fut.new of {} gives an inputs packet that may carry service entries to a body whose inputs cannot \
+            bring them", callee.symbol))
 }
 
 /// The state after an edge's parallel assignments.

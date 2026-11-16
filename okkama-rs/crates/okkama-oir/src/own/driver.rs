@@ -328,6 +328,20 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
             let state = point.env.state(root)?;
             point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
+            // PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope
+            // one that may admit them, so its schedule ends with the dynamic step. A bare Future input of an async
+            // body brings none: own never offers a Future input to `fut.new` (OIR-2 §10.2).
+            let asynchronous = super::futures::is_async(driver.module, function);
+            let carries = high.blocks.get(high.entry).map_err(arena)?.params.iter().any(|original| {
+                high.values.get(*original).is_ok_and(|value| {
+                    driver.analysis.types.get(&value.ty)
+                        .is_some_and(|classification| !classification.service_types.is_empty())
+                        && !(asynchronous && super::futures::is_future(driver.module, value.ty))
+                })
+            });
+            if carries {
+                driver.dynamic_owners.insert(root);
+            }
         } else {
             signature.ownership_abi = OwnershipAbi::Observation;
             if driver.retained.contains(&root) {

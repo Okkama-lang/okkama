@@ -403,6 +403,23 @@ impl Driver<'_, '_> {
         Ok(point)
     }
 
+    /// PR-B2 (#782): an escaping Future that reaches no cache duty of the closing scope, so `rehome_caches` takes
+    /// nothing for it: a parameter, an element or a field read, borrowed from a holder. Its entry can still be in the
+    /// scope when a carrier entry packet brought it, so the exit's selection names it.
+    pub(super) fn borrowed_future(&self, scope: ScopeId, original: ValueId) -> bool {
+        let Some(state) = self.flow.before_edges.get(&self.current_high) else {
+            return false;
+        };
+        let Some(value) = state.values.get(original) else {
+            return false;
+        };
+        !state.journals.iter().any(|((owner, atom), quantity)| {
+            *owner == scope && value.deps.contains(atom)
+                && !matches!(quantity.presence, domain::Presence::Absent | domain::Presence::Bottom)
+                && state.provenance.get(&(*owner, *atom)).is_some_and(|mask| mask & CACHE_DUTY != 0)
+        })
+    }
+
     /// The High Futures whose cache duty a call gives the calling scope, in body order: Future creations
     /// (calls of async entries, D12) and Futures returned with their duty in the result packet (D25.1).
     fn high_futures(&self) -> Vec<ValueId> {

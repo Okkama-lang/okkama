@@ -1065,18 +1065,61 @@ fn an_admitted_future_binding_is_a_split_and_a_bind() {
     let (_, main) = function(&output.module, "main");
     let body = main.body.as_ref().unwrap();
     let g = body.bindings.iter().find(|(_, binding)| binding.name == "g").unwrap().0;
+    let split = body.blocks.iter().find_map(|(_, block)| {
+        let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind else { return None };
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref() else { return None };
+        let first = *body.blocks.get(normal.block).unwrap().insts.first()?;
+        matches!(&body.insts.get(first).unwrap().op,
+            Operation::Ownership(OwnershipOp::Bind { binding }) if binding.binding == g).then_some(*selection)
+    }).expect("the binding of g follows a split");
+    let SelectionExpr::Admissible(inner) = body.selections.get(split).unwrap() else { panic!("admissible") };
+    let SelectionExpr::Value(value) = body.selections.get(*inner).unwrap() else { panic!("names g") };
+    assert!(matches!(output.module.types.get(body.values.get(*value).unwrap().ty).unwrap(), Type::Future(_)));
+    assert!(creation_bindings(body).iter().all(Option::is_none), "{:?}", creation_bindings(body));
+}
+
+/// Whether a body's Services schedules end with the dynamic step (D25.3).
+fn settles_dynamically(body: &Body) -> bool {
+    body.service_schedules.iter().any(|schedule| schedule.duties.contains(&ScheduleDuty::Dynamic))
+}
+
+/// PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope one that
+/// may admit them: a synchronous constructor with a Future parameter (a fresh Future stored through it arrives with
+/// its entry) and an async method whose receiver stores a Future. An input that reaches no holder does not.
+#[test]
+fn an_entry_packet_that_can_carry_entries_settles_dynamically() {
+    let output = pr_b1_output();
+    for (symbol, dynamic) in [("app.Holder.new#0", true), ("app.Holder.get#0", true), ("app.Child.run#0", false)] {
+        let (_, function) = function(&output.module, symbol);
+        assert_eq!(settles_dynamically(function.body.as_ref().unwrap()), dynamic, "{symbol}");
+    }
+}
+
+/// PR-B2: a bare Future input of an async body is borrowed (own never offers it to `fut.new`), so its start packet
+/// brings no entry and the body's schedule has no dynamic step (golden start-deps: `Adder.plus(f: Future<int>)`).
+#[test]
+fn a_bare_future_input_of_an_async_body_brings_no_entry() {
+    let output = rewrite_async(&input("start-deps")).unwrap();
+    let (_, plus) = output.module.functions.iter().find(|(_, function)| function.symbol.contains("plus")).unwrap();
+    let body = plus.body.as_ref().unwrap();
+    assert!(!settles_dynamically(body));
+}
+
+/// PR-B2 (#782): `first() is Future<int> { f; }` returns a Future it borrows from its receiver. No cache duty of
+/// its scope reaches it, so no rehome takes it; a carrier entry packet may still have brought its entry, so the
+/// exit's selection names it (`SPB_EXIT_SELECTION`). A Future whose duty a call gave the function keeps leaving by
+/// `cache.rehome` only.
+#[test]
+fn a_returned_borrowed_future_is_named_by_its_exit_selection() {
+    let output = pr_b1_output();
+    let (_, first) = function(&output.module, "app.Box.first#0");
+    let body = first.body.as_ref().unwrap();
     let named = named_futures(&output.module, body);
     assert_eq!(named.len(), 1, "{named:?}");
-    assert!(named[0].0, "the binding's split is admissible");
-    let bind = body.blocks.iter().find_map(|(_, block)| {
-        let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind else { return None };
-        let Operation::Ownership(OwnershipOp::ScopeSplit { .. }) = op.as_ref() else { return None };
-        let first = *body.blocks.get(normal.block).unwrap().insts.first()?;
-        match &body.insts.get(first).unwrap().op {
-            Operation::Ownership(OwnershipOp::Bind { binding }) => Some(binding.binding),
-            _ => None,
-        }
-    });
-    assert_eq!(bind, Some(g));
-    assert!(creation_bindings(body).iter().all(Option::is_none), "{:?}", creation_bindings(body));
+    assert!(!named[0].0, "the exit selection is not admissible");
+    assert!(rehomes(&output.module, body).is_empty());
+    let (_, make) = function(&output.module, "app.Maker.make#0");
+    let make = make.body.as_ref().unwrap();
+    assert!(named_futures(&output.module, make).is_empty(), "{:?}", named_futures(&output.module, make));
+    assert_eq!(rehomes(&output.module, make).len(), 1);
 }

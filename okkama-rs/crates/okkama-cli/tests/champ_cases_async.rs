@@ -206,3 +206,75 @@ async main() is int {
     assert_eq!(run.result, Ok(0), "{}", run.stdout);
     assert_eq!(run.stdout, "made\nrunning\ngot Q\ndestroy Q\n");
 }
+
+/// PR-B1 (#784): a binding marks a Future bound, so an aggregate that stores it only borrows it. `f` is created
+/// here and bound (`fut.new … binding`); `g` is admitted with `make`'s result packet and bound by `own.bind`. Neither
+/// `Wrapper` takes the duty into `helper`'s packet, so `helper`'s return settles nothing and both Futures run when
+/// `main` awaits them. Tomato's output (okkama 0.5.8, the program of #784).
+#[test]
+fn pr_b1_a_bound_future_stored_in_an_argument_stays_with_its_binding() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Wrapper {
+    has pending is Future<int>;
+    Wrapper(:pending);
+}
+object Helper {
+    Helper();
+    take(w is Wrapper) is int { 1; }
+}
+object Maker {
+    Maker();
+    make(n is int) is Future<int> { Child(n: n).run(); }
+}
+async main() is int {
+    let f = Child(n: 4).run();
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: f)).string());
+    Stdout().writeln((await f).string());
+    let g = Maker().make(9);
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: g)).string());
+    Stdout().writeln((await g).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "helper 1\nchild 4\n4\nhelper 1\nchild 9\n9\n");
+}
+
+/// PR-B1 (#784), §2.2a runtime row: `pass` binds an admitted Future (`own.bind` moves its entry to the bound
+/// journal) and returns it, so the state form of `cache.rehome` takes the entry from the bound journal; the Future
+/// runs once when `main` awaits it.
+#[test]
+fn pr_b1_a_bound_admitted_future_is_rehomed_to_the_caller() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Maker {
+    Maker();
+    make(n is int) is Future<int> { Child(n: n).run(); }
+    pass(n is int) is Future<int> {
+        let g = Maker().make(n);
+        g;
+    }
+}
+async main() is int {
+    let h = Maker().pass(9);
+    Stdout().writeln("passed");
+    Stdout().writeln((await h).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "passed\nchild 9\n9\n");
+}

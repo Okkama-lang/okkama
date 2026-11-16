@@ -20,6 +20,27 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: a bound Future stays with its binding when an aggregate stores it
+  (#784, PR-B1).** A binding marks a Future's duty bound and moves nothing:
+  `fut.new` gains the optional attribute `binding bN` for a Future that its
+  owner scope binds (SPB 17 does not carry it); an admitted Future (a call
+  result, a rehome from a nested scope) is bound by `scope.split admissible`
+  and `own.bind`. Own never names a bound Future in an offer or a store, coro
+  absorbs only a fresh Future's tokens, and the loader keeps the admission
+  filter of a split whose root can reach a Future holder. New verifier rules
+  `b9-binding-attribute`, `b9-bound-future-named` and
+  `b9-bound-future-absorbed`. `let f = work(); helper(Wrapper(pending: f));
+  await f;` now runs as on Tomato instead of ending Cancelled. A Done Future
+  stored in a bound holder now settles at the binding's close (#794).
+- **SPB 17: entry packets that can carry Future entries (#782, PR-B2).** An
+  aggregate input of an async body that reaches a Future holder makes the
+  body's inputs non-plain and its start packet a carrier; a bare `Future<T>`
+  input stays plain. The may-admit analysis seeds entry packets that can
+  carry entries (a synchronous entry's packet parameter, an async body's
+  start packet), so their closes settle dynamically; own ends those scopes'
+  schedules with the dynamic step and names a returned borrowed Future in
+  the exit selection. New loader rule `SPB_FUTURE_INPUT`: `fut.new` passes a
+  packet that carries entries only to a body whose inputs can bring them.
 - **Champ: Futures in object fields and in arrays (#771, #758).** Async
   ABI D25.2, revision of 2026-11-16, and the ruling "How a stored Future
   leaves". A Future created in a function and stored by a constructor

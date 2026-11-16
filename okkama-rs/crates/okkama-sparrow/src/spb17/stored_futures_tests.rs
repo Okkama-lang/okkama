@@ -102,3 +102,71 @@ fn an_object_that_reaches_no_identity_is_identity_free() {
     assert!(!identity_free(&p.objects, Type::Map(0)));
     assert!(!identity_free(&p.objects, Type::Object(99)));
 }
+
+// --- PR-B2 (#782): an async body whose start value can bring service entries -----------------------------------
+
+/// `async watch(w: Wrapper) is int { 0; }` where `Wrapper` (object 0) stores a Future: its start packet may carry
+/// the Future's entry (`entry_carries`), so the close of its scope settles dynamically (`dynamic`) and plans
+/// through the executor (`merge`). `bare` gives it a bare `Future<int>` start value instead, which brings no entry.
+fn watch(dynamic: Option<super::async_tests::Dynamic>, merge: bool, bare: bool) -> Program {
+    use super::async_tests::{l, p, program, service, value, Body, WORK};
+    use Argument as A;
+    use Opcode as O;
+    use ServiceKind as K;
+    let input = if bare { FUTURE_INT } else { Type::Object(0) };
+    let (mut b, frame) = Body::asynchronous("watch", 0, vec![Type::Int]);
+    if let Some(dynamic) = dynamic {
+        b.dynamic.insert(WORK, dynamic);
+    }
+    b.block("entry", &[frame]);
+    let (body, start) = b.resume(frame, 0, &[ProducedType::Value(input), ProducedType::Service(K::Packet)]);
+    let [_, inputs] = start[..] else { unreachable!() };
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(WORK), A::Boundary(WORK)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs)], K::ScopeState);
+    let zero = b.constant(Constant::Int("0".into()), Type::Int);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let selection = b.selection();
+    let pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(WORK), l(zero), l(empty),
+        A::Selection(selection)], K::Pending);
+    let finished = b.close(q1, Some(pending), None, WORK, &[], 0, merge);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let [result, packet, deps] = [b.register(Type::Int), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(ExitDestination::Caller)], vec![result, packet, deps]);
+    b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(result), l(packet), l(deps)], vec![]);
+    b.ret();
+    let layout = FrameLayout {
+        slots: vec![value(input), service(K::Packet)],
+        continuations: vec![Continuation { site: None, saved: vec![0, 1], operands: vec![] }],
+    };
+    let mut p = program(vec![b.finish()], vec![layout], None);
+    p.objects.push(holder(vec![FUTURE_INT], vec![0], true));
+    p
+}
+
+/// A Wrapper start value makes the start packet a carrier: the close settles dynamically and merges.
+#[test]
+fn a_body_whose_start_value_reaches_a_future_settles_dynamically() {
+    use super::async_tests::Dynamic;
+    verify_load(&watch(Some(Dynamic::AfterStatic), true, false), &NoExternalContracts).unwrap();
+    reject_with(&watch(None, true, false), suspension::SCHEDULE, "settles them dynamically first");
+}
+
+/// The inventory of such a body is not known to be empty, so a direct plan is refused.
+#[test]
+fn a_body_whose_start_value_reaches_a_future_plans_through_the_executor() {
+    use super::async_tests::Dynamic;
+    reject_with(&watch(Some(Dynamic::AfterStatic), false, false), "SPB_STRUCTURE",
+        "direct plan loses owner inventory");
+}
+
+/// A bare Future start value is borrowed: the body's inputs stay plain, so a direct plan without a dynamic step
+/// loads (the 42 hand-built V8/R5 programs rely on it).
+#[test]
+fn a_bare_future_start_value_keeps_the_inputs_plain() {
+    verify_load(&watch(None, false, true), &NoExternalContracts).unwrap();
+    assert!(evidence::plain_inputs(&watch(None, false, true), &watch(None, false, true).functions[0]));
+    let wrapper = watch(None, false, false);
+    assert!(!evidence::plain_inputs(&wrapper, &wrapper.functions[0]));
+}

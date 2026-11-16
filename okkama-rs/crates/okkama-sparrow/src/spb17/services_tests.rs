@@ -43,6 +43,10 @@ enum Caller {
     AbsorbOwn,
     /// The same, and the absorbed token is also a duty of the close's schedule.
     AbsorbAndSettle,
+    /// A Future of @caller is absorbed into a packet, and that packet is the inputs packet of a second Future of
+    /// @work, whose only start value is an int (#782, `SPB_FUTURE_INPUT`); `feed: false` gives that Future an empty
+    /// packet and admits the absorbed one instead.
+    Feed { feed: bool },
 }
 
 /// The int argument of @work and its external deps.
@@ -107,7 +111,19 @@ fn caller(variant: Caller, dynamic: Option<Dynamic>) -> Function {
     b.block("entry", &[]);
     let mut state = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
     let mut duties = Vec::new();
-    let admitted = if matches!(variant, Caller::AbsorbOwn | Caller::AbsorbAndSettle | Caller::AbsorbDirect) {
+    let admitted = if let Caller::Feed { feed } = variant {
+        let (_, cache) = create(&mut b, &mut state, MAIN);
+        let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+        let absorbed = b.emit(O::ServiceAbsorb, vec![l(empty), l(cache)], K::Packet);
+        let (seven, external) = seven(&mut b);
+        let inputs = if feed { absorbed } else { b.emit(O::OwnEmpty, vec![], K::Packet) };
+        let [future, cache, next] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
+        b.next(O::FutureNew, vec![A::Entry(0), A::Scope(MAIN), A::Result(Some(FUTURE_INT)), l(seven), l(inputs),
+            l(external), l(state)], vec![future, cache, next]);
+        state = next;
+        duties.push(cache);
+        if feed { b.emit(O::OwnEmpty, vec![], K::Packet) } else { absorbed }
+    } else if matches!(variant, Caller::AbsorbOwn | Caller::AbsorbAndSettle | Caller::AbsorbDirect) {
         let (_, cache) = create(&mut b, &mut state, MAIN);
         if variant == Caller::AbsorbAndSettle {
             duties.push(cache);
@@ -543,4 +559,14 @@ fn a_selection_takes_the_entry_its_state_held() {
     let fresh = services::fresh_futures(&p).unwrap();
     let failure = services::check_materialize(&p, &f, &fresh).unwrap_err();
     assert_eq!(failure.rule, automaton::REHOME, "{failure}");
+}
+
+/// PR-B2 (#782), `SPB_FUTURE_INPUT`: `fut.new` gives @work an inputs packet that carries an entry, but @work's
+/// only start value is an int, so its body could never admit it (`entry_carries`). The same program that admits the
+/// absorbed packet in @caller instead loads.
+#[test]
+fn an_inputs_packet_carries_entries_only_into_a_body_that_can_take_them() {
+    loads(&returned(Make::Rehomed, Caller::Feed { feed: false }, Some(Dynamic::AfterStatic)));
+    reject_with(&returned(Make::Rehomed, Caller::Feed { feed: true }, Some(Dynamic::AfterStatic)),
+        services::FUTURE_INPUT, "inputs packet that may carry service entries");
 }
