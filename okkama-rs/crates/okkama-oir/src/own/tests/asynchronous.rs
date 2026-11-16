@@ -941,7 +941,7 @@ func @main()");
     let body = main.body.as_ref().unwrap();
     let mut offers = 0;
     for op in operations(body) {
-        let (Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. }))
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. })
             = op else { continue };
         let mut pending = vec![*selection];
         while let Some(selection) = pending.pop() {
