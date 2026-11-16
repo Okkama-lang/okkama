@@ -459,7 +459,8 @@ impl Specializer<'_, '_> {
             }
             // Other closed plain data (#778): maps, objects and variants, arrays of handles and of roles. The
             // value type is read from the specialization's operations; the loader admits it only as closed
-            // plain data (ATOMIC_PLAIN). A Future, an action value, `any` or a cap is never stored.
+            // plain data (ATOMIC_PLAIN), or a Future and arrays of Futures as borrowed views (PR-A, ATOMIC_BORROW).
+            // An action value, `any` or a cap is never stored.
             let storable = atomic_storable(value, &|object| self.input.registry.objects[object.0].destroy.is_none());
             return Ok(storable.then(|| self.encode(value)).transpose()?.map(|name| format!("t_{name}")));
         };
@@ -994,6 +995,9 @@ fn atomic_storable(value: &ty::Ty, plain_object: &dyn Fn(ty::ObjectId) -> bool) 
         T::Object(object, args) => plain_object(*object) && args.iter().all(storable),
         T::Role(_, args) | T::Variant(_, args) => args.iter().all(storable),
         T::Enum(_) => true,
+        // PR-A (D25 tail): an Atomic borrows a Future, whatever its outcome type. It never holds the duty; the
+        // loader admits it as a borrowed view (`ATOMIC_BORROW`).
+        T::Future(_) => true,
         _ => false,
     }
 }

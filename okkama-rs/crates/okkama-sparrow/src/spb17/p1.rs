@@ -63,17 +63,20 @@ impl P1Contracts {
                 return Err(error("invalid P1 Atomic runtime layout"));
             }
             let atomic = Type::Object(id as u32);
+            // PR-A (D25 tail): an Atomic over Futures borrows them. Every entry is an observation, publication
+            // offers nothing, and Futures do not compare, so there is no `compare_and_replace` (ATOMIC_BORROW).
+            let borrows = borrowed_future(value);
             // OIR-2 §7.2: publication closes fresh inputs with the call; reads
             // and close preserve the external lifetime of borrowed values.
             for (op, params, results, owned, failures) in [
-                ("new_value", vec![value], vec![atomic], true, 0),
+                ("new_value", vec![value], vec![atomic], !borrows, 0),
                 ("value", vec![atomic], vec![value], false, 1),
-                ("replace", vec![atomic, value], vec![], true, 1),
+                ("replace", vec![atomic, value], vec![], !borrows, 1),
                 ("compare_and_replace", vec![atomic, value, value], vec![Type::Bool], true, 1),
                 ("closed", vec![atomic], vec![Type::Bool], false, 0),
                 ("close", vec![atomic], vec![], false, 0),
             ] {
-                if failures != 0 && !closed {
+                if failures != 0 && !closed || borrows && op == "compare_and_replace" {
                     continue;
                 }
                 entries.push(entry(&format!("okkama.atomic.Atomic.{op}${suffix}"), params, results, owned, failures));
@@ -417,6 +420,11 @@ fn native_entry(native: abi::Native, registers: Vec<Type>, results: Vec<Type>) -
     entry(native.symbol(), registers, results, true, NATIVE_FAILURES)
 }
 
+/// PR-A: whether an Atomic's value is a Future or an array of Futures, which the Atomic borrows (`ATOMIC_BORROW`).
+pub fn borrowed_future(value: Type) -> bool {
+    matches!(value, Type::Future(_)) || matches!(value, Type::Array(shape) if matches!(shape.leaf, ArrayLeaf::Future(_)))
+}
+
 fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, failures: u32) -> Function {
     let mut params = (0..registers.len() as u32).map(Location::Register).collect::<Vec<_>>();
     if owned {
@@ -425,8 +433,8 @@ fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, fail
     // A role value (an Atomic over a role, #764) carries its deps like an object, and so does an array of role
     // values (an Atomic over other closed plain data, #778), as own elaborates them.
     let deps = registers.iter().filter(|ty| match ty {
-        Type::Object(_) | Type::Error | Type::Role(_) => true,
-        Type::Array(shape) => matches!(shape.leaf, ArrayLeaf::Role(_)),
+        Type::Object(_) | Type::Error | Type::Role(_) | Type::Future(_) => true,
+        Type::Array(shape) => matches!(shape.leaf, ArrayLeaf::Role(_) | ArrayLeaf::Future(_)),
         _ => false,
     }).count();
     let mut services = vec![ServiceKind::Deps; deps];

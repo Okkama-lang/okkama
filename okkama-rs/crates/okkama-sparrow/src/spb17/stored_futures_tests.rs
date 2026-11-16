@@ -183,3 +183,50 @@ fn a_bare_future_start_value_keeps_the_inputs_plain() {
     let wrapper = watch(None, false, false);
     assert!(!evidence::plain_inputs(&wrapper, &wrapper.functions[0]));
 }
+
+/// PR-A (D25 tail): an Atomic over an array of Futures, with `selected` and `reaches` as its layout says.
+fn borrowing_atomic(selected: Vec<u32>, reaches: bool) -> Object {
+    let mut object = holder(vec![FUTURE_ARRAY, Type::Bool], selected, reaches);
+    object.name = "async.atomic.Atomic_t_array<future<int>>".into();
+    object
+}
+
+/// PR-A: an Atomic borrows the Futures it stores. Its value word is traced and never selected, and it reaches no
+/// resource (`ATOMIC_BORROW`), although a Future field of any other object is selected (`SPB_FUTURE_TYPES`).
+#[test]
+fn an_atomic_borrows_the_futures_it_stores() {
+    verify_load(&with(borrowing_atomic(vec![], false)), &NoExternalContracts).unwrap();
+}
+
+/// PR-A, I-A2: an Atomic that borrows Futures neither reaches a resource nor selects its value word.
+#[test]
+fn an_atomic_over_futures_that_reaches_or_selects_is_refused() {
+    for (selected, reaches) in [(vec![], true), (vec![0], true), (vec![0], false)] {
+        reject_with(&with(borrowing_atomic(selected.clone(), reaches)), "ATOMIC_BORROW",
+            "an Atomic that borrows Futures reaches a resource or selects its value");
+    }
+}
+
+/// PR-A, I-A1: the P1 entries of an Atomic over Futures are observations (no packet transition has the Atomic as its
+/// source or destination), and there is no `compare_and_replace` (Futures do not compare). An Atomic over ints keeps
+/// its owned publication.
+#[test]
+fn the_entries_of_an_atomic_over_futures_are_observations() {
+    let plain = |name: &str, storage: Vec<Type>| {
+        let mut object = holder(storage, vec![], false);
+        object.name = name.into();
+        object.fields.clear();
+        object
+    };
+    let mut closed = plain("async.atomic.AtomicClosed", vec![Type::Int]);
+    closed.error_cases = vec!["AtomicClosed.closed".into()];
+    let futures = plain("async.atomic.Atomic_t_array<future<int>>", vec![FUTURE_ARRAY, Type::Bool]);
+    let ints = plain("async.atomic.Atomic_int", vec![Type::Int, Type::Bool]);
+    let contracts = super::p1::P1Contracts::new(&[closed, futures, ints]).unwrap();
+    let abi = |name: &str| contracts.entries().iter().find(|entry| entry.symbol == name).map(|entry| entry.entry_abi.clone());
+    for op in ["new_value", "value", "replace", "closed", "close"] {
+        assert_eq!(abi(&format!("okkama.atomic.Atomic.{op}$t_array<future<int>>")), Some(EntryAbi::Observation), "{op}");
+    }
+    assert_eq!(abi("okkama.atomic.Atomic.compare_and_replace$t_array<future<int>>"), None);
+    assert_eq!(abi("okkama.atomic.Atomic.replace$int"), Some(EntryAbi::Owned));
+}

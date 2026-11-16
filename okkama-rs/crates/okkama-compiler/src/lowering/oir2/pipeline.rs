@@ -295,6 +295,12 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
     }
     let mut callable_reaches = std::collections::BTreeSet::<u32>::new();
+    // PR-A: the Atomics whose value is a Future or an array of Futures, which they borrow (ATOMIC_BORROW).
+    let borrowing_atomics: std::collections::BTreeSet<u32> = layouts.iter().filter(|(id, layout)| {
+        module.declarations.get(o::DeclId::from_u32(**id)).is_ok_and(|declaration| {
+            declaration.name.starts_with("async.atomic.Atomic_t_")
+        }) && layout.runtime.storage_fields.first().is_some_and(|value| s::p1::borrowed_future(*value))
+    }).map(|(id, _)| *id).collect();
     loop {
         let reaches = layouts.iter().filter_map(|(&id, layout)| layout.runtime.may_reach_resource.then_some(id))
             .collect::<std::collections::BTreeSet<_>>();
@@ -335,7 +341,13 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             _ => false,
         });
         let mut changed = false;
-        for layout in layouts.values_mut() {
+        for (id, layout) in layouts.iter_mut() {
+            // PR-A (D25 tail): an Atomic over Futures borrows them. No selection walks through its value word (I-A2),
+            // and it reaches no resource (ATOMIC_BORROW): the stored Futures' duties stay with their owners.
+            if borrowing_atomics.contains(id) {
+                layout.runtime.selection_layout.clear();
+                continue;
+            }
             // A field holding a resource object, or a managed array of them, is selected: the runtime
             // selection walk reaches the identities through it (ARRAY_RETENTION).
             layout.runtime.selection_layout = layout.runtime.storage_fields.iter().enumerate().filter_map(|(i, ty)| {

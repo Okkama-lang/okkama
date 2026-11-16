@@ -290,6 +290,12 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
                     } if fields.is_empty() && witnesses.is_empty())).map(|_| id),
                 _ => None,
             }).ok_or_else(|| error("missing plain Atomic specialization"))?;
+            // PR-A (D25 tail): an Atomic over a value that can hold a Future borrows it. Every entry is an observation:
+            // publication offers nothing, and the stored Future's duty stays with its owner.
+            let borrows = known.is_some_and(|value| ir::verify::holds_futures(module, value));
+            if borrows {
+                kind = ir::EntryKind::ObservationAdmissionStaysCaller;
+            }
             match operation {
                 "new_value" => (vec![value()?], vec![object]),
                 "value" => {
@@ -303,6 +309,10 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
                 }
                 // Publishes `revised` only when the held value equals `expected`; a failed comparison
                 // publishes nothing. Plain values compare without failure.
+                // Futures do not compare (PR-A item 5).
+                "compare_and_replace" if borrows => {
+                    return Err(error(format!("unsupported Atomic operation {operation} over Futures (PR-A)")));
+                }
                 "compare_and_replace" => {
                     failures.push(ir::FailureKind::Thrown);
                     (vec![object, value()?, value()?], vec![find(ir::Type::Bool).ok_or_else(|| error("missing bool"))?])
@@ -372,14 +382,14 @@ pub(super) fn atomic_value(module: &ir::Module, suffix: &str) -> Option<ir::Type
 
 /// Whether an external's parameter of `ty` carries deps in its elaborated signature, as own gives them: an object
 /// or a role value, and (#778, an Atomic over closed plain data) an array of role values, which own tracks as
-/// references. A plain variant or map carries none. The SPB 17 P1 entries count the same (`p1::entry`).
+/// references; a Future and an array of Futures (PR-A, an Atomic that borrows them). A plain variant or map carries none. The SPB 17 P1 entries count the same (`p1::entry`).
 fn carries_deps(module: &ir::Module, ty: ir::TypeId) -> bool {
     let mut leaf = ty;
     while let Ok(ir::Type::Array(element)) = module.types.get(leaf) {
         leaf = *element;
     }
-    matches!(module.types.get(ty), Ok(ir::Type::Object { .. } | ir::Type::Role { .. }))
-        || leaf != ty && matches!(module.types.get(leaf), Ok(ir::Type::Role { .. }))
+    matches!(module.types.get(ty), Ok(ir::Type::Object { .. } | ir::Type::Role { .. } | ir::Type::Future(_)))
+        || leaf != ty && matches!(module.types.get(leaf), Ok(ir::Type::Role { .. } | ir::Type::Future(_)))
 }
 
 /// The value type of the Atomic specialization `suffix`, as its registered operations declare it (#778): the

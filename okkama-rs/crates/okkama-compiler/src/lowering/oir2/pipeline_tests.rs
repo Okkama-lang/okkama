@@ -164,14 +164,24 @@ fn oir2_pipeline_registers_an_atomic_over_a_plain_map() {
     assert!(matches!(atomic.layout.storage_fields.as_slice(), [s::Type::Map(_), s::Type::Bool]), "{atomic:?}");
 }
 
-/// #778 leaves Futures out (D25): an Atomic over an array of Futures stays a producer refusal.
+/// PR-A (D25 tail): an Atomic over an array of Futures borrows them. It registers like other data (#778), its value
+/// word is traced and never selected, and it reaches no resource (ATOMIC_BORROW); the program loads under both
+/// verifications.
 #[test]
-fn oir2_pipeline_refuses_an_atomic_over_futures() {
+fn oir2_pipeline_registers_an_atomic_that_borrows_futures() {
     let source = concat!("module app; import \"async/atomic\" take Atomic; ",
         "object Job { Job(); async run() is int { 1; } } ",
         "main() is int { let pending is @Future<int> = []; let held = Atomic(pending); held.close(); 0; }");
-    let error = super::super::tests::lower_std(source).map(|_| ()).unwrap_err().to_string();
-    assert!(error.contains("std object async/atomic.Atomic"), "{error}");
+    for mode in [o::VerifyMode::Structural, o::VerifyMode::Full] {
+        let high = super::super::tests::lower_std(source).unwrap_or_else(|error| panic!("{error}"));
+        let bytes = compile_high_with(high, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        let program = s::decode(&bytes).unwrap();
+        let atomic = program.objects.iter().find(|object| object.name.starts_with("async.atomic.Atomic_t_"))
+            .expect("the registered Atomic over the Futures");
+        assert!(matches!(atomic.layout.storage_fields.as_slice(), [s::Type::Array(shape), s::Type::Bool]
+            if matches!(shape.leaf, s::ArrayLeaf::Future(_))), "{atomic:?}");
+        assert!(atomic.layout.selection_layout.is_empty() && !atomic.layout.may_reach_resource, "{atomic:?}");
+    }
 }
 
 /// #777: an action value's role is implemented by the backend's closure layouts, so a holder of a closure that

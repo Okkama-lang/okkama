@@ -527,7 +527,15 @@ pub fn verify(p: &Program) -> Check {
         // closed plain data, by its whole graph.
         if object.name.starts_with("async.atomic.Atomic_t_")
             && let Some(&value) = object.layout.storage_fields.first() {
-            enforce(closed_plain(p, value), "ATOMIC_PLAIN", "an Atomic holds a value that is not closed plain data")?;
+            if super::p1::borrowed_future(value) {
+                // PR-A (D25 tail): an Atomic over Futures borrows them: it never holds a duty, so it reaches no
+                // resource and no selection walks through its value word; its entries are observations (P1).
+                enforce(!object.layout.may_reach_resource && object.layout.selection_layout.is_empty(),
+                    "ATOMIC_BORROW", "an Atomic that borrows Futures reaches a resource or selects its value")?;
+            } else {
+                enforce(closed_plain(p, value), "ATOMIC_PLAIN",
+                    "an Atomic holds a value that is not closed plain data")?;
+            }
         }
         // Natives name their handles by declaring module and name: one name, one declaration.
         enforce(!object.handle || handles.insert(object.name.as_str()), "HANDLE_NAME",
@@ -595,7 +603,11 @@ pub fn verify(p: &Program) -> Check {
             // travels with the packet of the value that holds it, so the field is selected (the runtime selection
             // walk reaches the holder through it) and the object reaches what a packet carries. Where the entry
             // comes from is the ownership verifier's proof (coro's absorb).
-            if future_storage(ty) {
+            // PR-A (D25 tail): the value word of an Atomic that borrows Futures holds no entry; it is traced and never
+            // selected (ATOMIC_BORROW, I-A2).
+            let borrowed = index == 0 && object.name.starts_with("async.atomic.Atomic_t_")
+                && super::p1::borrowed_future(ty);
+            if future_storage(ty) && !borrowed {
                 enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32))
                     && !object.any_box && object.role.is_none() && !object.handle && object.error_cases.is_empty(),
                     FUTURE_TYPES, "a Future field is selected in an object that reaches what its packet carries")?;
