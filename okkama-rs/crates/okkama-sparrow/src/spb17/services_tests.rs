@@ -443,3 +443,104 @@ fn rehome_scopes_of_a_function_without_a_state_form_rehome_are_empty() {
     }
 }
 
+
+// --- #771: a dynamic selection moves the entries it reaches; SPB_EXIT_SELECTION -------------------------------
+
+/// How @pass's exit takes the Future it returns, which its state admitted from @make (ruling "How a stored Future
+/// leaves", #771).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExitBy {
+    /// The exit's scope split selects the Future and the reserve takes the selected packet.
+    Selection,
+    /// The exit takes an empty packet: the entry stays in the closing state.
+    Nothing,
+    /// The exit selection is taken, then a state-form rehome names the Future its state no longer surely holds.
+    SelectionThenRehome,
+}
+
+/// `pass() is Future<int> { return make(); }` with the admitted Future leaving by `by`.
+fn exiting(by: ExitBy) -> Function {
+    let mut b = Body::new("pass", EntryAbi::Owned, vec![FUTURE_INT]);
+    let input = b.service(K::Packet);
+    b.f.params = vec![input];
+    b.f.proofs.entry = Some(EntryContract::default());
+    b.dynamic.insert(PASSER, Dynamic::AfterStatic);
+    b.block("entry", &[input]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(PASSER), A::Boundary(PASSER)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(input)], K::ScopeState);
+    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    b.outcomes(O::InvokeCallOwn, vec![A::Entry(MAKE), A::Summary(0), l(offered), A::Flag(false)],
+        vec![(Tag::Normal, "made", vec![p(0), p(1), p(2)])]);
+    let [future, packet, deps] = [b.register(FUTURE_INT), b.service(K::Packet), b.service(K::Deps)];
+    b.block("made", &[future, packet, deps]);
+    let state = b.emit(O::OwnAdmit, vec![l(q1), l(packet)], K::ScopeState);
+    let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let exit_selection = b.selection();
+    let mut pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(PASSER), l(future),
+        l(empty), A::Selection(exit_selection)], K::Pending);
+    let mut state = state;
+    if by != ExitBy::Nothing {
+        let selection = b.selection();
+        b.f.proofs.selections[selection as usize].locations = vec![future];
+        b.outcomes(O::ScopeSplit, vec![l(state), A::Selection(selection), A::Flag(false)],
+            vec![(Tag::Normal, "split", vec![p(0), p(1), p(2)]), (Tag::Unwind, "refused", vec![p(0), p(1)])]);
+        let [rest, selected, external] = [b.service(K::ScopeState), b.service(K::Packet), b.service(K::Deps)];
+        b.block("split", &[rest, selected, external]);
+        pending = b.emit(O::ExitExtend, vec![l(pending), l(selected)], K::Pending);
+        state = rest;
+        if by == ExitBy::SelectionThenRehome {
+            let [moved, reserve] = [b.service(K::ScopeState), b.service(K::Pending)];
+            b.next(O::CacheRehome, vec![A::Destination(ExitDestination::Caller), l(pending), l(state), l(future)],
+                vec![moved, reserve]);
+            state = moved;
+            pending = reserve;
+        }
+    }
+    let finished = b.close(state, Some(pending), None, PASSER, &[], 0, true);
+    let [closed, reserved] = [b.service(K::Closed), b.service(K::Pending)];
+    b.dispatch(finished, [true, false, false], vec![(Tag::Pending, "done", vec![p(0), p(1)])]);
+    b.block("done", &[closed, reserved]);
+    let [result, packet, deps] = [b.register(FUTURE_INT), b.service(K::Packet), b.service(K::Deps)];
+    b.next(O::ExitCommit, vec![l(reserved), A::Destination(ExitDestination::Caller)], vec![result, packet, deps]);
+    b.f.code.push(Instruction::Champ { op: O::RetOwn, arguments: vec![l(result), l(packet), l(deps)],
+        flow: Flow::Next(vec![]) });
+    if by != ExitBy::Nothing {
+        let [state, failure] = [b.service(K::ScopeState), b.register(Type::Failure)];
+        b.block("refused", &[state, failure]);
+        b.f.code.push(Instruction::Unreachable);
+    }
+    b.finish_unchecked()
+}
+
+/// The program of `passing(true)` with @pass's exit by `by`, and @pass itself.
+fn exit_program(by: ExitBy) -> (Program, Function) {
+    let mut p = passing(true);
+    let f = exiting(by);
+    p.functions[PASS as usize] = f.clone();
+    (p, f)
+}
+
+#[test]
+fn an_exit_selection_that_takes_the_returned_future_meets_its_entry() {
+    let (p, f) = exit_program(ExitBy::Selection);
+    let fresh = services::fresh_futures(&p).unwrap();
+    services::check_materialize(&p, &f, &fresh).unwrap();
+}
+
+#[test]
+fn an_exit_without_its_selection_leaves_the_entry_behind() {
+    let (p, f) = exit_program(ExitBy::Nothing);
+    let fresh = services::fresh_futures(&p).unwrap();
+    let failure = services::check_materialize(&p, &f, &fresh).unwrap_err();
+    assert_eq!(failure.rule, services::EXIT_SELECTION, "{failure}");
+    assert!(failure.message.contains("does not surely take"), "{failure}");
+}
+
+#[test]
+fn a_selection_takes_the_entry_its_state_held() {
+    // After the split the state no longer surely holds the Future's entry, so a state-form rehome of it is refused.
+    let (p, f) = exit_program(ExitBy::SelectionThenRehome);
+    let fresh = services::fresh_futures(&p).unwrap();
+    let failure = services::check_materialize(&p, &f, &fresh).unwrap_err();
+    assert_eq!(failure.rule, automaton::REHOME, "{failure}");
+}

@@ -17,6 +17,12 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
         None => f.params.iter().map(|&location| verify::loc_type(f, location)).collect(),
     };
     inputs.into_iter().all(|ty| match ty {
+        // A Future input of a call carries its service entry in the packet (D25.2 revision, #771): a constructor or
+        // a synchronous owner stores it. An async body's start values keep the earlier rule; its inputs packet
+        // carrying an entry is #782.
+        Ok(ProducedType::Value(ty)) if p.frame_layout(f).is_none() && super::services::reaches_holder(p, ty) => {
+            false
+        }
         Ok(ProducedType::Value(ty @ (Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
             | Type::Variant(_)))) => {
             !verify::reaches_resource(p, ty)
@@ -594,6 +600,10 @@ impl<'a> Evidence<'a> {
             ProducedType::Service(_) => return None,
         };
         match ty {
+            // An object that reaches no identity holds at most service entries (D25.1, #771, #758).
+            Type::Object(_) | Type::Successor(_) if super::services::identity_free(&self.program.objects, ty) => {
+                Some(Inventory::new())
+            }
             // A case object refers to resources without being an identity: no static inventory.
             Type::Variant(_) if verify::reaches_resource(self.program, ty) => None,
             Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
