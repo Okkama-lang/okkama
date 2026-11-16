@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A holder of a closure that captures a resource passes full verification
+  (#777).** Since #723 a holder's function type is resolved by the closures
+  the module creates, so its classification no longer carried the type's
+  dictionary, and own bound no `type.of` in the function that owns the
+  holder. The verifier cleans a `fn` value up only through a dictionary
+  bound in that function (P2.4 §5.1), took the unknown branch and rejected
+  the scope's envelope (`B104`, `B112`). The classification now keeps these
+  closure types with their dictionaries: own binds them where it owns the
+  holder, and the scope's envelope counts their cleanup effects.
+
 - **Large std instantiations and row readers build on Champ (#781).** An
   observation entry that returned a managed value which cannot own from a
   retained inner scope committed a reserve and returned its packet, beyond

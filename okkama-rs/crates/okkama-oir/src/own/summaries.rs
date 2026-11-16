@@ -635,7 +635,7 @@ impl Universe {
         for destroy in &facts.destroy_entries {
             project(&mut effects, self.summary(*destroy));
         }
-        for descriptor in &facts.descriptors {
+        for descriptor in facts.descriptors.iter().chain(facts.closures.values().flatten()) {
             if descriptor.managed != DescriptorManaged::Plain {
                 if let Ok(summary) = module.summaries.get(descriptor.summary) {
                     project(&mut effects, summary);

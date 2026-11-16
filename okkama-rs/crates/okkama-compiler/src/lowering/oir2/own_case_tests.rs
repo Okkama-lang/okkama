@@ -741,3 +741,30 @@ fn oir2_observation_entry_returns_a_managed_result_from_a_retained_scope() {
     assert_eq!(pick.signature.ownership_abi, ir::OwnershipAbi::Observation);
     assert_eq!(pick.signature.results.len(), 1);
 }
+
+/// #777 (full verification): a scope that owns a holder of an action value whose closure captures a resource
+/// binds the function type's dictionary (`type.of`), through which its cleanup reaches the closure, and its
+/// envelope counts what the captured resource's destroy may do. The verifier finds the dictionary in the
+/// owner's function and agrees (B104, B112), whether the holder comes back from a call or is built in the
+/// scope of the resource.
+#[test]
+fn oir2_holder_of_a_resource_closure_binds_the_closure_dictionary() {
+    let common = concat!("module app; import \"io/stdout\" take Stdout; ",
+        "object Res { has n is string; Res(:n); size() is int { n.length(); } ",
+        "destroy { Stdout().writeln(\"destroy \" + n); } } ",
+        "object Filter { has keep is (int) is bool; Filter(:keep); passes(value is int) is bool { keep(value); } } ");
+    let returned = format!("{common}{}", concat!("object Sets { Sets(); sized(name is string) is Filter { ",
+        "let r = Res(n: name); Filter(keep: (value is int) is bool { value > r.size(); }); } } ",
+        "main() is int { { let f = Sets().sized(\"abc\"); Stdout().writeln(f.passes(5).string()); } 0; }"));
+    let local = format!("{common}{}", concat!("main() is int { { let r = Res(n: \"abc\"); ",
+        "let f = Filter(keep: (v is int) is bool { v > r.size(); }); Stdout().writeln(f.passes(5).string()); } ",
+        "0; }"));
+    for source in [returned, local] {
+        let (module, _) = own_stage(&source, None, ir::verify::VerifyMode::Full).unwrap_or_else(|error| {
+            panic!("{error}\n{source}")
+        });
+        let main = module.functions.get(module.entry.unwrap()).unwrap().body.as_ref().unwrap();
+        assert!(main.insts.iter().any(|(_, inst)| matches!(&inst.op, ir::Operation::Core(ir::CoreOp::TypeOf { ty, .. })
+            if matches!(module.types.get(*ty), Ok(ir::Type::Fn(_))))), "{source}");
+    }
+}
