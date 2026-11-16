@@ -20,6 +20,29 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: Futures in object fields and in arrays (#771, #758).** Async
+  ABI D25.2, revision of 2026-11-16, and the ruling "How a stored Future
+  leaves". A Future created in a function and stored by a constructor
+  moves its duty with the constructor's packet: coro absorbs its cache
+  token (and the task token of a spawned Future, task first) into the
+  selected packet, own emits no `cache.rehome` for it, and the entry leaves
+  with its holder through the exit selection. SPB 17: a selected Future
+  field, or a field of an array of Futures (`ArrayLeaf::Future`, wire tag
+  23), in an object that reaches what its packet carries
+  (`SPB_FUTURE_TYPES`); a Future input of a call is no plain input
+  (`CALL_PLAIN_PACKET`); an object that reaches no identity takes no
+  static position; a dynamic split moves the entries it reaches; an exit
+  that returns a value reaching a holder takes that value's selection
+  (`SPB_EXIT_SELECTION`). The Champ selection walk treats a Champ Future,
+  as a root, a field or an array element, as a holder. The Full verifier
+  models `service.absorb` and a selection of Future holders. On Champ,
+  `L08.cancel.after-await-settled`, `late-after-last-await`,
+  `shared-awaited-survives`, `nested-frame-next-await`,
+  `final-exit-window` and `L08.collect.race-empty` print Tomato's output
+  (`okkama-cli/tests/champ_cases_d25.rs`, also under GC stress). Open:
+  a bound Future must not be absorbed (PR-B, #784), entry packets of async
+  bodies (#782), a store on some paths only (#783).
+
 - **Tomato: `e.text()` on a cancellation caught as `Error` no longer
   crashes (#744).** A catch of the Error role binds a `Cancelled` value,
   which Sparrow builds from the system `Cancelled` object; the OIR-1

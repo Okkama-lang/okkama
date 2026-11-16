@@ -945,6 +945,12 @@ impl Emitter<'_> {
                         && self.objects[object as usize].layout.may_reach_resource
                     {
                         let layout = &self.objects[object as usize].layout;
+                        // An object that reaches no identity holds at most the service entries of its Futures: it
+                        // takes no position of the static partition, and its entries stay in the packet (D25.1,
+                        // #771, #758).
+                        if s::identity_free(self.objects, s::Type::Object(object)) && op_is_split(instruction) {
+                            continue;
+                        }
                         if !layout.has_destroy || layout.storage_fields.iter().any(|ty| {
                             matches!(ty, s::Type::Object(_) | s::Type::Successor(_))
                         }) {
@@ -962,4 +968,10 @@ impl Emitter<'_> {
             .map(|(pc, locations)| s::StateRecord { pc, locations: locations.into_iter().collect() }).collect();
         Ok(())
     }
+}
+
+/// A static `own.split`: own rejoins its two parts (deps of a creation or an exit), so the service entries of the
+/// Futures it selects may stay in either part. `exit.replace` keeps its finite identity layout.
+fn op_is_split(instruction: &s::Instruction) -> bool {
+    matches!(instruction, s::Instruction::Champ { op: O::OwnSplit, .. })
 }
