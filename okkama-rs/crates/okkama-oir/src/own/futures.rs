@@ -26,6 +26,28 @@ pub(super) fn is_future(module: &Module, ty: TypeId) -> bool {
     matches!(module.types.get(ty), Ok(Type::Future(_)))
 }
 
+/// #801 (D25.1, PR-B2): whether the `index`-th result of a synchronous call is a borrowed alias that carries no
+/// cache duty: its callee's result relation names only aliases of its parameters (a getter of a Future field, a
+/// relay of one), no fresh site. The duty stays with the holder of the aliased Future; the caller must not rehome
+/// it. A call without a known summary is taken as giving its duty (D25.1).
+pub(super) fn borrowed_result(module: &Module, op: &CallOp, index: usize) -> bool {
+    let (CallOp::Direct { call, .. } | CallOp::Native { call, .. } | CallOp::Intrinsic { call, .. }
+        | CallOp::Resume { call, .. } | CallOp::Role { call, .. } | CallOp::Order { call, .. }
+        | CallOp::Closure { call, .. } | CallOp::Cap { call, .. }) = op;
+    // The call of an async entry creates its Future (D12): never an alias, whatever the cold inputs it retains.
+    if let CallOp::Direct { function, .. } | CallOp::Intrinsic { function, .. } = op
+        && module.functions.get(*function).is_ok_and(|data| data.attrs.contains(&FunctionAttr::Async)) {
+        return false;
+    }
+    let summary = call.summary.or_else(|| match op {
+        CallOp::Direct { function, .. } => module.functions.get(*function).ok().and_then(|function| function.summary),
+        _ => None,
+    });
+    summary.and_then(|summary| module.summaries.get(summary).ok())
+        .and_then(|summary| summary.results.get(index))
+        .is_some_and(|relation| relation.fresh.is_empty() && !relation.aliases.is_empty())
+}
+
 /// An async action: its call creates a Future and its body publishes through an exit transaction. An async
 /// defer entry (`defer await`, async ABI C-6) is none: it runs inside its owner's cleanup through
 /// `invoke.defer` and leaves like any defer entry (#730).

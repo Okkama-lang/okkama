@@ -63,6 +63,9 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     golden!("p1-spawn-returned"),
     // #771 (D25.2): a fresh Future stored in a field; its token is absorbed into the constructor's packet (PR-B1).
     variant!("d25-stored-cold"),
+    // #759: a Future created in a `for` body, also spawned; the body's close settles each iteration's duties.
+    variant!("d759-loop-body-future"),
+    variant!("d759-loop-body-spawn"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).
@@ -739,4 +742,30 @@ admissible(s9)\n", 1);
     let module = lower_coro(parsed(&source), &CoroOptions::default()).unwrap();
     let make = body(&module, "app.Maker.make#0");
     assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
+}
+
+const LOOP_BODY: &str = include_str!("../../tests/fixtures/async/own/d759-loop-body-future.oir");
+
+/// #759: the close of a duty's owner settles it, so a loop body's duty does not flow along the back edge into the
+/// next iteration (the golden `d759-loop-body-future`). A close that the token reaches on some paths only is still
+/// refused: here the body's close is shared by the path that created the Future and the unwind of `Job(n: i)`.
+#[test]
+fn a_loop_body_duty_ends_at_each_close_of_its_owner() {
+    let output = lowered("d759-loop-body-future", LOOP_BODY);
+    let main = body(&output, "main");
+    let [schedule] = main.service_schedules.as_slice() else { panic!("one schedule") };
+    assert_eq!(schedule.duties.len(), 1);
+    let effects = "effects scope_effects(failures=[], suspends=false, cancel=false)";
+    let close = format!("    %42: closed = scope.end %40, {effects}\n    br ^b15\n");
+    let shared = format!("    br ^bx(%40, %33, %34, %35)\n    \
+        ^bx(%60: scope<S2>, %61: int, %62: int, %63: scope<S1>) in S2:\n    \
+        %42: closed = scope.end %60, {effects}\n    br ^b6(%61, %62, %63)\n");
+    let source = edited(LOOP_BODY, &close, &shared);
+    let unwind = format!("    %46: failure = scope.unwind %45, %43, {effects}\n    br ^b16\n");
+    let source = edited(&source, &unwind, "    br ^bx(%45, %33, %33, %44)\n");
+    // ^b16 is left without a predecessor; it keeps naming defined values.
+    let source = edited(&source, "scope.unwind %44, %46,", "scope.unwind %44, %43,");
+    let error = lower(&source).unwrap_err();
+    assert!(matches!(&error, CoroError::Unsupported { message, .. }
+        if message == "a cache duty that reaches its owner's close on some paths only"), "{error:?}");
 }

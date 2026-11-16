@@ -20,6 +20,61 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A spawned Future's task and cache duties leave together (#765).** The
+  SPB 17 loader admitted a `cache.rehome` that took a spawned Future's cache
+  duty without its task duty, or with the task duty of another Future; the
+  runtime then stopped. `SPB_REHOME` now refuses both shapes, and the full
+  OIR-2 verifier refuses a rehome that leaves a spawned Future's task duty
+  behind (B94).
+
+- **A Future returned through a getter or a relay runs on Champ (#801).**
+  Own took every Future result of a call as one that brings its cache duty,
+  so a caller that let a getter's result escape emitted a `cache.rehome` of
+  an entry its state never held, which the SPB 17 loader refused
+  (`SPB_REHOME`). A result whose callee relation names only aliases of its
+  parameters is now a borrowed alias: no rehome takes it, and the exit's
+  selection names it, which takes its entry wherever the scope keeps it.
+  The full verifier still refuses the getter case from the storing scope
+  (#808).
+
+- **A Future stored on some paths only runs on Champ (#783).** Checked
+  after PR-B1: a bound Future stored on one path is an alias whose duty stays
+  with its binding, and a fresh Future reaches a store on some paths only
+  only as a branch's value, which leaves the branch scope by `cache.rehome`;
+  the store after the join then takes an admitted entry. Both programs are
+  now end-to-end tests with Tomato's output.
+
+- **A Future created in a `for` body runs on Champ, spawned or not (#759).**
+  OIR-2 coro refused such a body ("a cache duty that reaches its owner's
+  close on some paths only"): its duty token flowed along the loop's back
+  edge into the next iteration, where the unwind close before the creation
+  saw a token of an earlier iteration. The close of a duty's owner now
+  consumes its token, so each iteration settles its own Futures at its own
+  close, and spawn in a loop body (the server and worker pattern) compiles.
+  Two neighbouring defects found on the way are #805 (awaiting in a loop a
+  Future created outside it) and #806 (coro's step budget on three loops
+  that each suspend).
+
+- **The full OIR-2 verifier checks that a Future leaves with the Futures it
+  reads (#776).** A cold Future borrows the cache of each Future argument of
+  its creation. New rule `b9-borrowed-future-left`: a `cache.rehome` that
+  moves such a Future out of a scope which still keeps the cache duty of an
+  argument created there, and which closes before the destination, is
+  refused; that argument would be settled (a cold one Cancelled) before the
+  Future that awaits it runs. Own already rehomes the argument first, since
+  its analysis deps name every argument; the `deps` operand of `fut.new`
+  has no consumer, so leaving the Future argument out of it beside a managed
+  input admitted nothing.
+
+- **A synchronous action may pass a thrown Cancelled on Champ (#775, PR-F).**
+  An action that calls `check()` on a `Cancelling` throws `Cancelled` once
+  stopping is requested, and its caller catches it as on Tomato. OIR-2 low
+  and SPB 17 code generation refused every synchronous body or call whose
+  failures included Cancelled, confusing a thrown Cancelled with a delivered
+  cancellation. Now they refuse only a body or call that suspends or runs an
+  async destroy; delivery of a cancellation still needs a suspending
+  operation, which a synchronous body cannot hold.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own
