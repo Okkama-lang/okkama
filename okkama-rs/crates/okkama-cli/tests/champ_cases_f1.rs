@@ -254,7 +254,6 @@ async main() is int {
 /// #791 W5: a borrowed resource through an async role slot. The creation thunk borrows `kept` into the cold Future,
 /// the body uses it when awaited, and `kept` is destroyed once, at the end of its scope (Tomato's output).
 #[test]
-#[ignore = "#732: a resource argument of an async action fails the SPB 17 static selection check"]
 fn f1_a_borrowed_resource_goes_through_an_async_slot() {
     expect(r#"module app v1.0.0;
 import "io/stdout" take Stdout;
