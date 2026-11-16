@@ -52,7 +52,7 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
 
 /// PR-B1 (#784, OIR-2 §10.2, В9): a binding marks a Future's duty bound and moves nothing.
 /// - `b9-binding-attribute`: `fut.new … binding b` names a binding of the Future's owner scope and of its type.
-/// - `b9-bound-future-named` (own): no admissible selection names a bound Future directly: the result of a
+/// - `b9-bound-future-named` (own): no selection, admissible or not, names a bound Future directly: the result of a
 ///   `fut.new` with `binding`, the resource of an `own.bind`/`own.rebind` of a Future, or a block parameter that
 ///   every edge passes one of these.
 /// - `b9-bound-future-absorbed` (coro, low): no `service.absorb` takes the cache token of a bound `fut.new`, or the
@@ -132,15 +132,14 @@ fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut Sta
         match op {
             Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }
                 | OwnershipOp::ScopeTransfer { selection, .. }) if module.profile == Profile::Own => {
-                let Ok(SelectionExpr::Admissible(inner)) = body.selections.get(*selection) else {
-                    continue;
-                };
-                let mut pending = vec![*inner];
+                // Admissible or not (an offer, a store, a plain split, a held transfer): a binding never moves a
+                // duty out of its owner, so no selection names a bound created Future directly (review of D25, F4).
+                let mut pending = vec![*selection];
                 let mut named = false;
                 while let Some(selection) = pending.pop() {
                     match body.selections.get(selection) {
                         Ok(SelectionExpr::Union(items)) => pending.extend(items),
-                        Ok(SelectionExpr::Admissible(inner)) => pending.push(*inner),
+                        Ok(SelectionExpr::Admissible(inner) | SelectionExpr::Held(inner)) => pending.push(*inner),
                         Ok(SelectionExpr::Value(value)) => named |= bound.contains(value),
                         _ => {}
                     }
@@ -148,7 +147,7 @@ fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut Sta
                 if named {
                     state.at(location.clone(), *loc);
                     state.error(R::B9BoundFutureNamed,
-                        "an admissible selection names a bound Future; a binding keeps its duty (PR-B1, В9)");
+                        "a selection names a bound Future; a binding keeps its duty (PR-B1, В9)");
                 }
             }
             Operation::Async(AsyncOp::ServiceAbsorb { token, .. }) if tokens.contains(token) => {

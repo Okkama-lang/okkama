@@ -46,6 +46,35 @@ impl Drop for ScheduleWork {
     }
 }
 
+/// Test hook (review of D25, 4b): which Future holder graphs every partition of a selection leaves in its rest and
+/// which it moves into its selected part, by the `fut.new` instruction that created each Future.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PartitionRecord {
+    pub function: FuncId,
+    pub selection: SelectionId,
+    pub rest: BTreeSet<InstId>,
+    pub selected: BTreeSet<InstId>,
+}
+#[cfg(test)]
+thread_local! {
+    static PARTITIONS: std::cell::RefCell<Vec<PartitionRecord>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+fn record_partition(function: FuncId, selection: SelectionId, rest: &Token, selected: &Token) {
+    let holders = |token: &Token| token.pieces.iter().filter_map(|piece| match piece.holder {
+        Some(Origin::Instruction(inst, 0)) => Some(inst),
+        _ => None,
+    }).collect();
+    let record = PartitionRecord { function, selection, rest: holders(rest), selected: holders(selected) };
+    PARTITIONS.with(|log| log.borrow_mut().push(record));
+}
+/// The partitions recorded on this thread since the last call.
+#[cfg(test)]
+pub(crate) fn take_partitions() -> Vec<PartitionRecord> {
+    PARTITIONS.with(|log| std::mem::take(&mut *log.borrow_mut()))
+}
+
 struct Engine<'m, 's> {
     module: &'m Module,
     function: FuncId,
@@ -67,9 +96,10 @@ struct Engine<'m, 's> {
     defer_stack: Vec<FuncId>,
     defer_outputs: Vec<defer::ReturnWitness>,
     defer_cache: std::collections::BTreeMap<FuncId, Vec<defer::ReturnWitness>>,
-    /// PR-B1 (#784): during a partition, the Futures created here, without `binding`, that its selection names
-    /// directly: the only created Futures whose duty an admissible partition takes.
-    fresh_named: BTreeSet<Origin>,
+    /// PR-B1 (#784): during a partition, the Futures created here that its selection names directly, each with
+    /// whether its `fut.new` carries `binding`. An admissible partition takes the duty of a named fresh one only; no
+    /// partition takes the duty of a named bound one.
+    named_futures: std::collections::BTreeMap<Origin, bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,7 +190,7 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
             witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
-            fresh_named: BTreeSet::new(),
+            named_futures: Default::default(),
         };
         engine.solve();
     }

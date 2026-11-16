@@ -11,7 +11,7 @@ impl Engine<'_, '_> {
         let mut rest = token.clone();
         let mut selected = Token::default();
         let futures = self.selects_futures(selection);
-        self.fresh_named = self.named_fresh_futures(flow, selection);
+        self.named_futures = self.named_created_futures(flow, selection);
         for (keys, fresh, labels) in self.selection_terms(flow, selection) {
             let possible = self.possible(flow, &keys);
             let filter = Filter { keys, fresh, possible, labels, stale: false, whole_future: false, futures, state: 0 };
@@ -19,13 +19,15 @@ impl Engine<'_, '_> {
             rest = next;
             selected = self.union([selected, part], true);
         }
-        self.fresh_named.clear();
+        self.named_futures.clear();
+        #[cfg(test)]
+        super::record_partition(self.function, selection, &rest, &selected);
         (rest, selected)
     }
-    /// PR-B1 (#784): the Futures created by a `fut.new` of this body without `binding` that a selection names
-    /// directly (by the identity of a value it names).
-    fn named_fresh_futures(&mut self, flow: &Flow, selection: SelectionId) -> BTreeSet<Origin> {
-        let mut named = BTreeSet::new();
+    /// PR-B1 (#784): the Futures created by a `fut.new` of this body that a selection names directly (by the
+    /// identity of a value it names), each with whether its `fut.new` carries `binding`.
+    fn named_created_futures(&mut self, flow: &Flow, selection: SelectionId) -> std::collections::BTreeMap<Origin, bool> {
+        let mut named = std::collections::BTreeMap::new();
         let mut pending = vec![selection];
         let mut seen = BTreeSet::new();
         while let Some(id) = pending.pop() {
@@ -38,10 +40,10 @@ impl Engine<'_, '_> {
                 Ok(SelectionExpr::Value(value)) => {
                     let Some(Some(origin)) = flow.identities.get(value.as_u32() as usize).copied() else { continue };
                     let Origin::Instruction(inst, 0) = origin else { continue };
-                    if self.body.insts.get(inst).is_ok_and(|instruction| matches!(instruction.op,
-                        Operation::Async(AsyncOp::FutureNew { binding: None, .. })))
+                    if let Ok(Operation::Async(AsyncOp::FutureNew { binding, .. })) =
+                        self.body.insts.get(inst).map(|instruction| &instruction.op)
                     {
-                        named.insert(origin);
+                        named.insert(origin, binding.is_some());
                     }
                 }
                 _ => {}
@@ -122,9 +124,15 @@ impl Engine<'_, '_> {
             let reached = |holder: &Origin| keys.contains(holder) || possible.contains(holder);
             // PR-B1 (#784): an admissible partition takes the graph of a Future created here only from a selection
             // that names that Future directly, and only when no binding holds it; reach through another value (an
-            // aggregate that borrows it) leaves it with its owner, as the runtime's admission filter does.
-            if base.futures && *fresh && related && piece.holder.is_some_and(|holder| self.future_origin(holder)
-                && !self.fresh_named.contains(&holder))
+            // aggregate that borrows it) leaves it with its owner, as the runtime's admission filter does. No
+            // partition, admissible or not, takes the graph of a bound Future it names directly: a binding never
+            // moves a duty out of its owner (В9; the structural rule `b9-bound-future-named` refuses the selection).
+            let kept = |holder: &Origin| if *fresh {
+                self.named_futures.get(holder) != Some(&false)
+            } else {
+                self.named_futures.get(holder) == Some(&true)
+            };
+            if base.futures && related && piece.holder.is_some_and(|holder| self.future_origin(holder) && kept(&holder))
             {
                 rest.pieces.insert(piece.clone());
                 continue;

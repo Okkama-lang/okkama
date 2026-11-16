@@ -40,7 +40,7 @@ impl Engine<'_, '_> {
                 diagnose: false, collecting: false, capture_returns: true, contract_invalid: false,
                 witnesses: witnesses(self.module, body),
                 defer_stack: stack, defer_outputs: vec![],
-                defer_cache: Default::default(), fresh_named: BTreeSet::new(),
+                defer_cache: Default::default(), named_futures: Default::default(),
             };
             helper.solve();
             let invalid = helper.contract_invalid;

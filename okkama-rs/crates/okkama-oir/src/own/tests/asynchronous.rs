@@ -1212,3 +1212,39 @@ fn a_fresh_future_made_from_a_bound_one_is_named_by_its_store() {
     }).unwrap();
     assert_eq!(admissible_futures(&output.module, body), [fresh]);
 }
+
+/// The instruction of the one `fut.new` of `body` that carries `binding` (`Some(true)`), carries none
+/// (`Some(false)`), or either (`None`).
+fn creation(body: &Body, bound: Option<bool>) -> InstId {
+    let found: Vec<_> = body.insts.iter().filter_map(|(inst, instruction)| match instruction.op {
+        Operation::Async(AsyncOp::FutureNew { binding, .. }) if bound.is_none_or(|bound| binding.is_some() == bound) => {
+            Some(inst)
+        }
+        _ => None,
+    }).collect();
+    let [inst] = found.as_slice() else { panic!("one fut.new: {found:?}") };
+    *inst
+}
+
+const STEALS: &str = include_str!("../../../tests/fixtures/verify/invalid/B9-own-split-steals-shared-cache.oir");
+
+/// Review of D25, F4: no partition takes the holder graph of a bound Future it names directly, a plain one included
+/// (`scope.split %s, selection(%f)` with `fut.new … binding b0`). The structural rule `b9-bound-future-named`
+/// refuses the selection; the Full model keeps the duty with its owner as well.
+#[test]
+fn no_partition_takes_a_bound_future_it_names() {
+    let module = crate::text::parse(STEALS).unwrap();
+    let (id, main) = function(&module, "main");
+    let body = main.body.as_ref().unwrap();
+    let created = creation(body, Some(true));
+    crate::verify::take_partitions();
+    let report = verify_own(&module).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B9BoundFutureNamed), "{report:?}");
+    let named: Vec<_> = crate::verify::take_partitions().into_iter().filter(|record| record.function == id
+        && matches!(body.selections.get(record.selection), Ok(SelectionExpr::Value(value))
+            if matches!(module.types.get(body.values.get(*value).unwrap().ty), Ok(Type::Future(_)))))
+        .collect();
+    assert!(!named.is_empty(), "the split that names f is partitioned");
+    assert!(named.iter().all(|record| record.rest.contains(&created) && !record.selected.contains(&created)),
+        "{named:?}");
+}

@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **OIR verifier: no selection names a bound Future (review of D25, F4,
+  #784).** `b9-bound-future-named` covered admissible selections only, and
+  the Full model kept a bound created Future's duty with its owner only in
+  an admissible partition. Both now hold for every selection: a plain
+  `scope.split` or a held transfer that names a bound Future is refused,
+  and no partition moves the holder graph of a bound Future it names. The
+  negative `invalid/B9-own-split-steals-shared-cache` is back, now with
+  `fut.new … binding b0`.
 - **SPB 17: a map value is never a Future (review of D25, F2).** The
   leaf rule that admits arrays of Futures (#758) also admitted
   `Map<K, Future<V>>`, but a map selection's runtime walk does not enter
