@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future creation offers only its managed inputs (#601 Q1).** Own
+  offered every input of an async call when one of them was managed, a
+  Future argument included, though a Future input only borrows its cache
+  and no selection may name it (OIR-2 §10.2, D12). On Champ the creation
+  then walked the Future's frame and stopped with "unsupported selection
+  root", for example `spawn Worker(event).run(child)`.
+
 - **Collections of native handles on Champ (#751).** SPB 17 had no array
   leaf for a native handle and no builder of handles, so OIR-2 code
   generation stopped on json's parsed nodes (`Array(Handle(_))`,
@@ -462,6 +469,32 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **Champ runs the std async primitives (#601 Q1, OIR-2 async ABI D22).**
+  Event, Lock, Semaphore, Barrier and the cancellation token are a trusted
+  catalogue of the producer (`lowering/oir2/drivers`) and of SPB 17
+  (`spb17::drivers`): a member whose std body is a VM intrinsic, and the
+  constructors Tomato overrides, is a bodyless `[intrinsic]` named as Tomato
+  names it. An async member is an async external: its call is
+  `fut.new … environment external`, and SPB 17 declares it
+  `EntryAbi::AsyncExternal` (wire tag 5), a driver whose parameters are its
+  registers. New loader rule `SPB_EXTERNAL_ASYNC`: an async external is a
+  bodyless external that resolves only to a catalogue driver, a catalogue
+  driver is never declared synchronous, and `fut.new` passes it its
+  registers' types. Champ links the catalogue to Tomato's intrinsics in its
+  declaration view, so Tomato's drivers run a driver Future (Tomato's driver
+  frame with the Champ tail) through the same scheduler as `spawn`, with an
+  empty outcome packet committed before the waiters wake; the synchronous
+  members run as Tomato's intrinsics. Payloads are plain; the Event cell
+  keeps Tomato's layout `[initial, set, waiters]`. Eleven conformance cases
+  pass on Champ (`L08.wake.event-set`, `wake.already-settled`,
+  `wake.multiple-waiters`, `wake.cancel-defers-cleanup`,
+  `spawn.event-barrier`, `deadlock.two-tasks`,
+  `shutdown.outstanding-task-cleanup`, `cancel.awaited-cleanup-settles`,
+  `cancel.awaited-spawned`, `cancel.final-defer-await-interrupted`,
+  `L12.cancellation-runs-cleanup`; `champ_cases_q1`). The other std async
+  intrinsics name their slice in the refusal: channels Q2, groups,
+  collectors and timeouts G1.
 
 - **Champ runs `spawn` of an async action (#601 P1, OIR-2 async ABI D24).**
   `spawn R(…).a(…)` lowers to the creating call followed by `fut.spawn` of

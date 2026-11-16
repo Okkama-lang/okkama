@@ -321,3 +321,44 @@ async main() is int {
 }
 "#, "arrivals 0 1\nstate 2 0 1 false\nbroken true\nBrokenBarrier.broken\nwait -1\nreset false 2\ncancelled once\n", 0);
 }
+
+/// #739, K2 "direct": the scenario of `L08.cancel.final-exit-window` that made the ruling provisional, with the child
+/// Future passed as an argument (the case keeps it in a field, #771). The worker's await of the child has
+/// finished when the request arrives and it has no later await: the result stands, `cancelled()` stays false.
+#[test]
+fn k2_direct_cancel_after_the_last_await_keeps_the_result() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+object Child {
+    has go is Event;
+    Child(:go);
+    async run() is int { await go.wait(); 42; }
+}
+object Worker {
+    has ready is Event;
+    has go is Event;
+    Worker(:ready, :go);
+    async direct(child is Future<int>) is int {
+        defer Stdout().writeln("direct cleanup");
+        await ready.wait();
+        go.set();
+        let v = await child;
+        Stdout().writeln("direct observed " + v.string());
+        v;
+    }
+}
+async main() is int {
+    let ready2 = Event();
+    let go2 = Event();
+    let child2 = spawn Child(go: go2).run();
+    let w2 = spawn Worker(ready: ready2, go: go2).direct(child2);
+    ready2.set();
+    Stdout().writeln("main observed " + (await child2).string());
+    w2.cancel();
+    let r2 = try { await w2; } catch e is Cancelled { -1; };
+    Stdout().writeln("direct " + r2.string() + " cancelled " + w2.cancelled().string());
+    0;
+}
+"#, "main observed 42\ndirect observed 42\ndirect cleanup\ndirect 42 cancelled false\n", 0);
+}
