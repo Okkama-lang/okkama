@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future stored on some paths only runs on Champ (#783).** Checked
+  after PR-B1: a bound Future stored on one path is an alias whose duty stays
+  with its binding, and a fresh Future reaches a store on some paths only
+  only as a branch's value, which leaves the branch scope by `cache.rehome`;
+  the store after the join then takes an admitted entry. Both programs are
+  now end-to-end tests with Tomato's output.
+
 - **A Future created in a `for` body runs on Champ, spawned or not (#759).**
   OIR-2 coro refused such a body ("a cache duty that reaches its owner's
   close on some paths only"): its duty token flowed along the loop's back
