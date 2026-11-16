@@ -108,6 +108,43 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `async main` runs as on Tomato. With the loader's successor rule fixed for
   `cleanup.deliver_cancel` (it gives the cleanup state back with the
   successor it holds), `L12.future-successor-obligation` runs too.
+- **A successor Future must be awaited or handed on (#754).** The checker
+  rejected only an awaited successor whose result was dropped. Now a call of
+  an async successor gives its `Future<^C>` the successor's obligation, as the
+  Book says: a binding that can leave its scope without awaiting it, or reads
+  it only for `done()`, gets the synchronous must-use error at the binding; a
+  dropped call and `spawn` of one are rejected too. Awaiting it, aliasing it,
+  storing it in an aggregate, giving it as a block value, spawning and
+  awaiting the task, or cancelling it explicitly consumes or transfers it.
+  New case `L12.future-successor-bound-dropped`. Handing it on through a typed
+  parameter, field or result is not expressible yet (#790).
+- **`buffer_state_append` is documented as returning the bytes appended
+  (#674).** Its doc comment in `std/runtime/buffer` said "the new size";
+  Tomato, the reference, returns how many bytes were appended, and
+  `io/buffer` relies on that (`written == bytes.size()`). The Champ handle
+  test now checks the returned count too.
+- **A failed `test.is` shows objects by value (#756).** Unequal objects in
+  a test report printed heap identities (`Duration@52e44f14340`). Tomato and
+  Champ now show an object as its source writes it: `Duration(origin: 2)`,
+  `Point(x: 1, label: "a\"b")`, a variant case as `Shape.rect(1, 2)` or
+  `Maybe.none`, an Error as `Down.unavailable(3)`, nested values and arrays
+  of objects likewise; `once let` slots stay out, as in `==`. Both engines
+  give the same text: type names drop their module and the engines'
+  internal spellings (`okkama_runtime_core::testing::display_name`).
+  Showing an object by its `string()` needs compiler support (#793); Champ's
+  case texts of generic variant instances are wrong (#792).
+- **The outcome of a spawned task that nobody awaits is released at its
+  owner's close, on both engines (#768).** 0.5.8's Tomato never destroyed it;
+  since #581 (a Future owns its cached outcome) Tomato releases it when the
+  scope that owns the Future closes, once, in reverse creation order, which
+  is Champ's moment (ABI D24.2). New case
+  `L08.spawn.unawaited-outcome-released` and a Tomato test pin it.
+- **`tally --help` reads on a command with subcommands (#637).** A branch
+  command refused every invocation without a child ("child command
+  required"), so its own `--help` could not be asked for. Now a branch stops
+  at one of its own flags and is the selected command, so the program can
+  print `usage()`. Without arguments, with only an option, or with only a
+  parent's flag before a child branch, it still refuses.
 - **A holder of a closure that captures a resource builds on Champ (#777,
   structural build).** An action value's role is implemented by the
   closure layouts the backend adds, not by module declarations, so the

@@ -48,6 +48,7 @@ fn champ_natives_data_transport() {
 }
 
 /// A handle is published by the provider and used, closed and observed through the registry.
+/// An append returns how many bytes it appended, as on Tomato (#674).
 #[test]
 fn champ_natives_handles() {
     expect_output(concat!(
@@ -60,6 +61,7 @@ fn champ_natives_handles() {
         "    let out = Stdout();\n",
         "    let state = buffer_state_create(utf8_encode(\"ab\"));\n",
         "    let appended = buffer_state_append(state, utf8_encode(\"c\"));\n",
+        "    out.writeln(appended.string());\n",
         "    out.writeln(buffer_state_size(state).string());\n",
         "    out.writeln(buffer_state_read(state, 2).size().string());\n",
         "    out.writeln(buffer_state_size(state).string());\n",
@@ -68,7 +70,7 @@ fn champ_natives_handles() {
         "    out.writeln(buffer_state_closed(state).string());\n",
         "    0;\n",
         "}\n",
-    ), "3\n2\n1\nfalse\ntrue\ntrue\n");
+    ), "1\n3\n2\n1\nfalse\ntrue\ntrue\n");
 }
 
 /// A language wrapper with `destroy` is an ordinary object whose destroy calls the native close.

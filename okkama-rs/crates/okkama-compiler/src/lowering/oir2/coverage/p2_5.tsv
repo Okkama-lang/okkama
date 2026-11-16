@@ -60,6 +60,7 @@ L08.shutdown.outstanding-task-cleanup	conformance/cases/L08-async-and-concurrenc
 L08.shutdown.unobserved-failure	conformance/cases/L08-async-and-concurrency/shutdown.unobserved-failure/case.json	P1	W3	run	error	-	-	-	plan §4 P1; runs on Champ (champ_cases_spawn)
 L08.spawn.eager-start-and-channel	conformance/cases/L08-async-and-concurrency/spawn.eager-start-and-channel/case.json	Q2	W3	run	success	0	-	-	plan §4 Q2
 L08.spawn.event-barrier	conformance/cases/L08-async-and-concurrency/spawn.event-barrier/case.json	Q1	W3	run	success	0	-	-	plan §4 Q1
+L08.spawn.unawaited-outcome-released	conformance/cases/L08-async-and-concurrency/spawn.unawaited-outcome-released/case.json	P1	W3	run	success	0	-	-	plan §4 P1; the owner's close releases an unawaited outcome (#768)
 L08.spawn.worker-process	conformance/cases/L08-async-and-concurrency/spawn.worker-process/case.json	X1	W4	run	success	0	-	-	plan §4 X1
 L08.spawn.worker-rejects-objects	conformance/cases/L08-async-and-concurrency/spawn.worker-rejects-objects/case.json	frontend	-	run	error	-	-	-	plan §4 lists it under X1; the checker rejects a non-transferable worker value
 L08.timeout.before-and-within	conformance/cases/L08-async-and-concurrency/timeout.before-and-within/case.json	G1	W3	run	success	0	-	-	plan §4 G1; also the async role slot Timing.wait (F1)
@@ -96,6 +97,7 @@ L12.await-cap-continuation	conformance/cases/L12-cross-feature-adversarial/await
 L12.cancellation-runs-cleanup	conformance/cases/L12-cross-feature-adversarial/cancellation-runs-cleanup/case.json	Q1	W3	run	success	0	-	-	Event and spawn
 L12.concurrent-cas-and-dedup	conformance/cases/L12-cross-feature-adversarial/concurrent-cas-and-dedup/case.json	G1	W3	run	success	0	-	-	spawn, Event and AllFutures
 L12.exact-number-json-sqlite	conformance/cases/L12-cross-feature-adversarial/exact-number-json-sqlite/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)
+L12.future-successor-bound-dropped	conformance/cases/L12-cross-feature-adversarial/future-successor-bound-dropped/case.json	frontend	-	run	error	-	-	-	the checker rejects a successor Future bound and never awaited (#754)
 L12.future-successor-dropped	conformance/cases/L12-cross-feature-adversarial/future-successor-dropped/case.json	frontend	-	run	error	-	-	-	the checker rejects a dropped successor result
 L12.future-successor-obligation	conformance/cases/L12-cross-feature-adversarial/future-successor-obligation/case.json	R3	W2	run	success	0	-	-	async successor outcome ^Counter
 L12.primary-failure-over-cleanup	conformance/cases/L12-cross-feature-adversarial/primary-failure-over-cleanup/case.json	N1	W3	run	success	0	-	atomic-nonplain	async sqlite natives and defer await (R3)

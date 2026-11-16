@@ -187,6 +187,25 @@ fn future_outcome_suspended_await_and_cached_failure() {
     "#);
 }
 
+/// A spawned task that nobody awaits releases its outcome once, when the Future's owner closes, in reverse
+/// creation order (#768, Bible §11.9, OIR-2 async ABI D24.2): the same moment as on Champ.
+#[test]
+fn future_outcome_unawaited_spawn_released_at_owner_close() {
+    check(r#"
+        {
+            spawn Work().make("A", log);
+            confirm log.value() == "";
+        }
+        confirm log.value() == "A";
+        {
+            spawn Work().make("B", log);
+            spawn Work().make("C", log);
+            confirm log.value() == "A";
+        }
+        confirm log.value() == "ACB";
+    "#);
+}
+
 #[test]
 fn future_outcome_all_futures_duplicates_and_nested_consumers() {
     check(r#"

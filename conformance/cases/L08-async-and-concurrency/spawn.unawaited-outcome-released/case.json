@@ -1,0 +1,44 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.spawn.unawaited-outcome-released",
+  "title": "the outcome of a spawned task that nobody awaits is destroyed when its owner closes",
+  "purpose": "A spawned Future owns its outcome; a task that is never awaited still releases what it made, exactly once, at the close of the scope that owns the Future.",
+  "level": "L08",
+  "contracts": [
+    {
+      "contract": "ASYNC.SPAWN-TASK",
+      "aspects": [
+        "interaction"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "owner\ndestroy inner\nafter owner\nmain\ndestroy outer\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#18.1",
+    "docs/okkama-spec-11072026.md#11.9"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #768 from the cited contract text and the ruling recorded in the ticket",
+    "expected_basis": "spec 11.9 and Bible 11.9: a task that is never awaited still releases what it owns; 11.4: destroy runs once, when the owning scope ends. The Future is owned by the scope that spawned it (OIR-2 async ABI D24.2: the owner's close releases the outcome), so `inner` is destroyed when `owner` ends, before `after owner`, and `outer` when `main` ends."
+  },
+  "status": "mandatory"
+}

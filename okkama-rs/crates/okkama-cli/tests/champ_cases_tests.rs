@@ -307,6 +307,48 @@ fn champ_test_mode_checks_continue_and_cases_are_isolated() {
         === RUN   passes\n--- PASS: passes\nFAIL\n");
 }
 
+/// Unequal objects, variants and nested values in a failing check show their values, not heap
+/// identities (#756); Tomato shows the same text (`cli.rs`).
+const SHOWN_VALUES: &str = "module app v1.0.0;\n\
+    import \"time/duration\" take Duration;\n\
+    enum Shape = (dot, rect(w is int, h is int));\n\
+    enum Down is Error = (unavailable(code is int));\n\
+    object Point { has x is int; has label is string; Point(:x, :label); }\n\
+    object Box<T> { has v is T; Box(:v); }\n\
+    object Cached { has n is int; Cached(:n); twice() is int { once let doubled = n * 2; doubled; } }\n\
+    test \"values\" {\n\
+    \x20   test.is(Duration(seconds: 1), Duration(seconds: 2));\n\
+    \x20   test.is(Point(x: 1, label: \"a\\\"b\"), Point(x: 2, label: \"c\"));\n\
+    \x20   test.is(Box(v: Shape.rect(1, 2)), Box(v: Shape.dot));\n\
+    \x20   test.is(Box(v: [1, 2]), Box(v: [3]));\n\
+    \x20   test.is(Down.unavailable(3), Down.unavailable(4));\n\
+    \x20   test.isnt(Maybe.some(Point(x: 1, label: \"\")), Maybe.some(Point(x: 1, label: \"\")));\n\
+    \x20   test.is([Point(x: 1, label: \"p\")], [Point(x: 2, label: \"q\")]);\n\
+    \x20   let cached = Cached(n: 4);\n\
+    \x20   test.is(cached.twice(), 8);\n\
+    \x20   test.isnt(cached, Cached(n: 4));\n\
+    }\n";
+
+const SHOWN_VALUES_REPORT: &str = "=== RUN   values\n\
+    --- FAIL: values\n\
+    \x20   expected Duration(origin: 2), got Duration(origin: 1)\n\
+    \x20   expected Point(x: 2, label: \"c\"), got Point(x: 1, label: \"a\\\"b\")\n\
+    \x20   expected Box<Shape>(v: Shape.dot), got Box<Shape>(v: Shape.rect(1, 2))\n\
+    \x20   expected Box<@int>(v: [3]), got Box<@int>(v: [1, 2])\n\
+    \x20   expected Down.unavailable(4), got Down.unavailable(3)\n\
+    \x20   expected values to differ, both were Maybe.some(Point(x: 1, label: \"\"))\n\
+    \x20   expected [Point(x: 2, label: \"q\")], got [Point(x: 1, label: \"p\")]\n\
+    \x20   expected values to differ, both were Cached(n: 4)\n\
+    FAIL\n";
+
+#[test]
+fn champ_test_mode_shows_objects_and_variants_by_value() {
+    let source = Source::new("shown.ok", SHOWN_VALUES);
+    let run = run_tests(std::slice::from_ref(&source.0)).unwrap();
+    assert_eq!((run.code, run.error.as_deref()), (1, None));
+    assert_eq!(run.stdout, SHOWN_VALUES_REPORT);
+}
+
 /// Async execution is #570: a test profile with an async test stops with a diagnostic naming it.
 #[test]
 fn champ_test_mode_async_tests_are_unsupported() {

@@ -1,0 +1,31 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Made {
+    has name is string;
+    Made(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+
+object Maker {
+    Maker();
+
+    async make(name is string) is Made {
+        Made(name: name);
+    }
+
+    async owner() is int {
+        spawn Maker().make("inner");
+        Stdout().writeln("owner");
+        0;
+    }
+}
+
+async main() is int {
+    await Maker().owner();
+    Stdout().writeln("after owner");
+    spawn Maker().make("outer");
+    Stdout().writeln("main");
+    0;
+}
