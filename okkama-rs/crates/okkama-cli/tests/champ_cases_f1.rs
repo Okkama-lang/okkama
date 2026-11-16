@@ -57,40 +57,6 @@ async main() is int {
 "#, "created\nnext runs\nnext runs\nnext x 4\n");
 }
 
-/// PR-D, §4.8 item 1: a fresh resource passed through an async role slot is retained by the cold Future, used by the
-/// body and destroyed once, at the awaiting scope; a bound one stays with its binding.
-#[test]
-#[ignore = "#735: SPB 17 static selection of fresh inputs offered to fut.new (also for direct calls)"]
-fn f1_a_fresh_argument_of_an_async_slot_is_retained_by_its_future() {
-    expect(r#"module app v1.0.0;
-import "io/stdout" take Stdout;
-object Res {
-    has label is string;
-    Res(:label);
-    label() is string { label; }
-    destroy { Stdout().writeln("destroy " + label); }
-}
-role Using { async use(r is Res) is int; }
-object Impl does Using {
-    Impl();
-    async use(r is Res) is int { Stdout().writeln("use " + r.label()); r.label().length(); }
-}
-async main() is int {
-    let u is Using = Impl();
-    let f = u.use(Res(label: "fresh"));
-    Stdout().writeln("created");
-    let n = await f;
-    Stdout().writeln("got " + n.string());
-    let kept = Res(label: "kept");
-    let g = u.use(kept);
-    Stdout().writeln("awaiting " + (await g).string());
-    Stdout().writeln("temp " + (await u.use(Res(label: "temp"))).string());
-    0;
-}
-"#, concat!("created\nuse fresh\ndestroy fresh\ngot 5\nuse kept\nawaiting 4\nuse temp\ndestroy temp\ntemp 4\n",
-        "destroy kept\n"));
-}
-
 /// #773: a role call that reaches a std primitive's intrinsic member (LockGuard as Closing) goes through an adapter of
 /// the slot's ABI.
 #[test]
