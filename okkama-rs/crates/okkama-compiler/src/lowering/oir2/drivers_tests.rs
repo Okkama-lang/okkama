@@ -236,3 +236,65 @@ fn q1_failure_masks_name_their_kinds() {
     assert_eq!(super::mask_failures(s::drivers::PANIC), [Panic]);
     assert!(super::mask_failures(0).is_empty());
 }
+
+/// A program that imports every D23 holder family.
+const HOLDER_FAMILIES: &str = concat!(
+    "module app; import \"async/channel\" take Channel; import \"async/scope\" take FutureGroup, FutureScope; ",
+    "import \"async/collect\" take AllFutures, Raced, FirstSuccessful, FutureCompletions; ",
+    "import \"async/timeout\" take Within, Before; main() is int { 0; }",
+);
+
+/// #601 B3: every row of Q2 and G1 is the std member it names, of the arity the row's signature gives (a method's
+/// receiver first), and no other std member maps to a row.
+#[test]
+fn b3_every_holder_row_is_a_std_member() {
+    super::super::tests::with_std_analysis(HOLDER_FAMILIES, |analysis| {
+        let mut rows = std::collections::BTreeSet::new();
+        for body in &analysis.bodies {
+            let Some(row) = super::holder_row(&analysis.registry, body) else { continue };
+            assert!(rows.insert(row.name), "{} twice", row.name);
+            let (params, results) = match body.owner {
+                crate::analysis::thir::BodyOwner::Method { object, method } => {
+                    let info = &analysis.registry.objects[object.0].methods[method];
+                    (1 + info.params.len(), usize::from(info.result.is_some()))
+                }
+                crate::analysis::thir::BodyOwner::Ctor { object, ctor } => {
+                    let shape = &analysis.registry.objects[object.0].ctors[ctor].shape;
+                    let count = match shape {
+                        crate::analysis::registry::CtorShape::Full { params, .. } => params.len(),
+                        crate::analysis::registry::CtorShape::Shorthand { fields, .. } => fields.len(),
+                    };
+                    (count, 1)
+                }
+                _ => unreachable!("a member"),
+            };
+            assert_eq!((row.params.len(), row.results.len()), (params, results), "{}", row.name);
+        }
+        let missing = s::drivers::HOLDERS.iter().map(|row| row.name).filter(|name| !rows.contains(name))
+            .collect::<Vec<_>>();
+        assert!(missing.is_empty(), "rows without their std member: {missing:?}");
+    });
+}
+
+/// #601 B3: until the runtime slices land, a program that reaches a holder member is refused by its row, never
+/// lowered with the std placeholder body (`Raced.winner` would throw NoFutures where Tomato returns the winner).
+#[test]
+fn b3_a_holder_member_is_refused_by_its_row() {
+    for (source, slice) in [
+        (concat!("module app; import \"async/channel\" take Channel; ",
+            "async main() is int { let ch is Channel<int> = Channel(capacity: 1); 0; }"), "Q2"),
+        (concat!("module app; import \"async/collect\" take Raced; ",
+            "object Job { has n is int; Job(:n); async run() is int { n; } } ",
+            "async main() is int { await Raced(origins: [Job(n: 1).run()]).winner(); }"), "G1"),
+    ] {
+        match lower_std(source) {
+            Err(super::super::LowerError::Unsupported { message, .. }) => {
+                assert!(message.contains(&format!("(P2.5 slice {slice}, D23)")), "{message}");
+                let row = s::drivers::HOLDERS.iter().any(|row| message.contains(&format!("intrinsic {} ", row.name)));
+                assert!(row, "{message}");
+            }
+            Err(other) => panic!("{other}"),
+            Ok(_) => panic!("{source}: a holder member must be refused"),
+        }
+    }
+}

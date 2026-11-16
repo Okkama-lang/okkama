@@ -61,9 +61,10 @@ pub(super) fn builtin(module: &str, object: &str) -> bool {
     module == "async/event" && object == "Event"
 }
 
-/// The runtime name of the body's member when the runtime provides it, as Tomato names it: the catalogue
-/// objects' constructors (`new` and the parameter names, joined by `_`) and actions. None for an ordinary body.
-pub(super) fn intrinsic_name(registry: &Registry<'_>, body: &thir::Body) -> Option<String> {
+/// Tomato's name of a std member: `okkama.<family>.<Object>.<action>`, a constructor's action `new` and its
+/// parameter names joined by `_`, with the std declaration it belongs to (`async.<family>.<Object>`). None for a
+/// body of the program or one that is not a member.
+fn member_name(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, String)> {
     let (object, action) = match body.owner {
         thir::BodyOwner::Method { object, method } => (object, registry.objects[object.0].methods[method].name.clone()),
         thir::BodyOwner::Ctor { object, ctor } => {
@@ -82,12 +83,28 @@ pub(super) fn intrinsic_name(registry: &Registry<'_>, body: &thir::Body) -> Opti
         return None;
     }
     let module = registry.modules[info.module].name.as_str();
+    let family = module.rsplit('/').next().unwrap_or(module);
+    // A specialization keeps its source name before its arguments (`Channel<int>`).
+    let object = info.name.split('<').next().unwrap_or(&info.name);
+    Some((format!("okkama.{family}.{object}.{action}"), format!("{}.{object}", module.replace('/', "."))))
+}
+
+/// The D23 holder row (slices Q2 and G1, `spb17::drivers::HOLDERS`) of a std member the runtime provides. Until
+/// those slices bring the runtime (`HOLDERS_READY`), the producer refuses the member by its row: its std body is
+/// a placeholder (`panic "… is a VM intrinsic"`, or `throw NoFutures.none` where Tomato's driver decides).
+pub(super) fn holder_row(registry: &Registry<'_>, body: &thir::Body) -> Option<&'static catalogue::Template> {
+    let (name, declaration) = member_name(registry, body)?;
+    catalogue::holder_named(&name).filter(|row| catalogue::member_of_holder(row) == declaration)
+}
+
+/// The runtime name of the body's member when the runtime provides it, as Tomato names it: the catalogue
+/// objects' constructors (`new` and the parameter names, joined by `_`) and actions. None for an ordinary body.
+pub(super) fn intrinsic_name(registry: &Registry<'_>, body: &thir::Body) -> Option<String> {
+    let (name, declaration) = member_name(registry, body)?;
     // The SPB 17 rows name the objects (#799): `async/<family>`'s object whose members they are.
-    if !catalogue::has_members(&format!("{}.{}", module.replace('/', "."), info.name)) {
+    if !catalogue::has_members(&declaration) {
         return None;
     }
-    let family = module.rsplit('/').next().unwrap_or(module);
-    let name = format!("okkama.{family}.{}.{action}", info.name);
     known(&name).then_some(name)
 }
 

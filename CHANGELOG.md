@@ -63,6 +63,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   conversion; the producer's own copies (`OBJECTS`, `[Program, Native]`) are
   gone.
 
+- **A std member of channels, groups, collectors or timeouts is refused by
+  its catalogue row on Champ (#601 B3).** Members whose std body is a
+  placeholder that does not say "VM intrinsic" (`Raced.winner`,
+  `FirstSuccessful.outcome`, `FutureCompletions.completion`,
+  `Within`/`Before.outcome`, `FutureGroup.start`) and the holders'
+  constructors were lowered as ordinary code: `await Raced(origins:
+  [...]).winner()` threw `NoFutures` where Tomato returns the winner. The
+  producer now refuses each of them as `unsupported` with its row and slice
+  ("std async intrinsic okkama.collect.Raced.winner (P2.5 slice G1, D23)")
+  until the runtime slices land.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own
@@ -854,6 +865,19 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **SPB 17 catalogue rows of channels (Q2) and groups, collectors and
+  timeouts (G1) (#601 B3, memo §§5.2, 6.2).** The 22 members Tomato runs as
+  intrinsics (`Channel.new_capacity`, `sending`, `receiving`, the endpoints'
+  constructors, `send`, `item` and `close`; `FutureGroup.new`, `start`,
+  `active`, `cancel`, `wait`, `FutureScope.outcome`, the collectors'
+  `results`, `winner`, `outcome`, `remaining_count`, `completion`, and
+  `Within`/`Before.outcome`) are rows of `spb17::drivers::HOLDERS`, each
+  instantiated per specialization as the Atomic entries are
+  (`okkama.channel.Sending.send$int` over `async.channel.Sending_int`). A
+  holder's hidden word is a `RuntimeCell` (ruling PR-C); a Channel and a
+  FutureGroup hold duties. The rows wait for their runtime (lane A, A3/A4):
+  the loader does not admit them yet (`HOLDERS_READY`).
 
 - **Async natives on Champ (#601 N1, OIR-2 async ABI D22, ruling PR-N).**
   The 51 `native async` declarations of std `runtime/` (database, network,
