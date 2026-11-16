@@ -106,14 +106,17 @@ pub(super) fn intrinsic(ctx: *mut Ctx, name: &str, args: &[Word]) -> Word {
     0
 }
 
-/// A value as test reports show it (strings quoted at the top level), as on Tomato.
+/// A value as test reports show it (strings quoted at the top level), as on Tomato: an object shows its type
+/// and fields, a variant its case and payload (`Down.unavailable(3)`), as the source writes them (#756).
 fn show(runtime: &Runtime, program: &s::Program, word: Word, ty: s::Type) -> String {
     let mut out = String::new();
-    show_into(runtime, program, word, ty, true, &mut out);
+    show_into(runtime, program, word, ty, true, 0, &mut out);
     out
 }
 
-fn show_into(runtime: &Runtime, program: &s::Program, word: Word, ty: s::Type, quoted: bool, out: &mut String) {
+fn show_into(runtime: &Runtime, program: &s::Program, word: Word, ty: s::Type, quoted: bool, depth: usize,
+    out: &mut String)
+{
     match ty {
         s::Type::Str if quoted => {
             out.push('"');
@@ -138,7 +141,7 @@ fn show_into(runtime: &Runtime, program: &s::Program, word: Word, ty: s::Type, q
                 if index > 0 {
                     out.push_str(", ");
                 }
-                show_into(runtime, program, item, element, false, out);
+                show_into(runtime, program, item, element, false, depth, out);
             }
             out.push(']');
         }
@@ -148,20 +151,85 @@ fn show_into(runtime: &Runtime, program: &s::Program, word: Word, ty: s::Type, q
             let object = (heap::kind(header) == heap::OBJECT)
                 .then(|| program.objects.get(heap::payload(header) as usize)).flatten();
             match object {
-                // A plain enum shows its case; an Error enum has its case names.
+                // An `any` box shows the value it holds.
+                Some(object) if object.any_box && object.layout.storage_fields.len() == 1 => {
+                    let held = object.layout.storage_fields[0];
+                    show_into(runtime, program, runtime.heap.field(word, 0), held, quoted, depth, out);
+                }
+                // An Error value shows as its text without `Error.text`: `Down.unavailable(3)`.
+                Some(object) if !object.error_cases.is_empty() => {
+                    out.push_str(&super::p1::error_text(runtime, program, word));
+                }
+                // A plain enum shows its case's name, as Tomato does.
                 Some(object) if object.fields.is_empty() && object.layout.storage_fields == [s::Type::Int] => {
                     let tag = runtime.big_value(runtime.heap.field(word, 0)).to_string();
-                    let case = tag.parse::<usize>().ok().and_then(|tag| object.error_cases.get(tag));
+                    let case = tag.parse::<usize>().ok().and_then(|tag| object.enum_names.get(tag));
                     match case {
-                        Some(case) => out.push_str(case),
+                        Some(case) => out.push_str(case.rsplit('.').next().unwrap_or(case)),
                         None => out.push_str(&format!("{}.{tag}", object.name)),
                     }
                 }
-                Some(object) => out.push_str(&format!("{}@{word:x}", object.name)),
+                Some(object) if object.handle || object.role.is_some() => {
+                    out.push_str(&format!("{}@{word:x}", object.name));
+                }
+                Some(_) => show_object(runtime, program, word, depth, out),
                 None => out.push_str(&format!("value@{word:x}")),
             }
         }
     }
+}
+
+/// An object as its source writes it (#756), as on Tomato: a variant case as `Enum.case(payload, …)` or
+/// `Enum.case`, any other object as `Type(field: value, …)`. `once let` slots are caches and stay out, as in `==`.
+fn show_object(runtime: &Runtime, program: &s::Program, word: Word, depth: usize, out: &mut String) {
+    use okkama_runtime_core::testing::{display_name, literal, variant_name, SHOWN_DEPTH};
+    let descriptor = heap::payload(runtime.heap.header_of(word));
+    let declaration = &program.objects[descriptor as usize];
+    // The case from the variant's case text, the enum from its declaration name: a generic instance's case text
+    // does not carry the whole name (`Point)>.some` for `app::Maybe<object(app::Point)>`).
+    let case = program.objects.iter().find_map(|variant| {
+        let case = variant.variant_cases.iter().position(|&case| case == descriptor)?;
+        let text = variant.enum_names.get(case)?;
+        Some(variant_name(&variant.name, text.rsplit('.').next().unwrap_or(text)))
+    });
+    let fields = declaration.fields.iter().filter(|field| !field.once).collect::<Vec<_>>();
+    match &case {
+        Some(case) if fields.is_empty() => {
+            out.push_str(case);
+            return;
+        }
+        Some(case) => out.push_str(case),
+        None => out.push_str(&display_name(&declaration.name)),
+    }
+    out.push('(');
+    if depth + 1 >= SHOWN_DEPTH && !fields.is_empty() {
+        out.push_str("…)");
+        return;
+    }
+    for (position, field) in fields.into_iter().enumerate() {
+        if position > 0 {
+            out.push_str(", ");
+        }
+        if case.is_none() {
+            out.push_str(&field.name);
+            out.push_str(": ");
+        }
+        let ty = declaration.layout.storage_fields[field.storage as usize];
+        let value = runtime.heap.field(word, field.storage as usize);
+        // As in `value_equal`: an unbound raw scalar is Tomato's marker, an unbound reference or int the zero word.
+        let unbound = match ty {
+            s::Type::Float | s::Type::Bool | s::Type::Byte | s::Type::Char => value == crate::word::UNBOUND_RAW,
+            _ => (ty.traced() || ty == s::Type::Int) && value == 0,
+        };
+        if unbound {
+            out.push_str("null");
+        } else if ty == s::Type::Str {
+            out.push_str(&literal(runtime.heap.text(value)));
+        } else {
+            show_into(runtime, program, value, ty, false, depth + 1, out);
+        }
+    }
+    out.push(')');
 }
 
 /// Run the tests table of an SPB 17 program and write the standard report: true when no test failed.

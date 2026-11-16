@@ -669,14 +669,22 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
     }
 }
 
-/// A value as test reports show it (strings quoted at the top level).
+/// A value as test reports show it (strings quoted at the top level). An object shows its type and
+/// fields, a variant its case and payload (`Down.unavailable(3)`), as the source writes them (#756).
 fn show(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef) -> String {
     let mut out = String::new();
-    show_into(runtime, word, ty, true, &mut out);
+    show_into(runtime, word, ty, true, 0, &mut out);
     out
 }
 
-fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted: bool, out: &mut String) {
+fn show_into(
+    runtime: &Runtime,
+    word: Word,
+    ty: okkama_sparrow::TypeRef,
+    quoted: bool,
+    depth: usize,
+    out: &mut String,
+) {
     let program = &runtime.loaded.program;
     match program.ty(ty) {
         Some(Type::Str) if quoted => {
@@ -695,6 +703,11 @@ fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted:
             let name = program.enums.get(e.0 as usize).and_then(|en| en.cases.get(word as u32 as usize));
             out.push_str(name.map_or("?", |n| n.as_str()));
         }
+        Some(Type::Array(_)) if word != UNBOUND && runtime.heap.is_bytes(word) => {
+            let bytes = runtime.heap.bytes(word);
+            let items = bytes.iter().map(|&byte| (byte as i8).to_string()).collect::<Vec<_>>();
+            out.push_str(&format!("[{}]", items.join(", ")));
+        }
         Some(Type::Array(element)) => {
             let element = *element;
             out.push('[');
@@ -702,7 +715,7 @@ fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted:
                 if i > 0 {
                     out.push_str(", ");
                 }
-                show_into(runtime, item, element, false, out);
+                show_into(runtime, item, element, false, depth, out);
             }
             out.push(']');
         }
@@ -714,28 +727,76 @@ fn show_into(runtime: &Runtime, word: Word, ty: okkama_sparrow::TypeRef, quoted:
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    show_into(runtime, k, key, false, out);
+                    show_into(runtime, k, key, false, depth, out);
                     out.push('=');
-                    show_into(runtime, v, value, false, out);
+                    show_into(runtime, v, value, false, depth, out);
                 }
             }
             out.push('}');
         }
         Some(Type::Any) => match runtime.heap.payload::<crate::ops::AnyBox>(word) {
-            Some(boxed) => show_into(runtime, boxed.value, boxed.ty, quoted, out),
+            Some(boxed) => show_into(runtime, boxed.value, boxed.ty, quoted, depth, out),
             None => out.push_str("null"),
         },
         _ if word == UNBOUND => out.push_str("null"),
-        _ => {
-            let header = runtime.heap.header_of(word);
-            let name = if crate::heap::kind(header) == crate::heap::OBJECT {
-                program.objects[crate::heap::payload(header) as usize].name.as_str()
-            } else {
-                "value"
-            };
-            out.push_str(&format!("{name}@{word:x}"));
+        _ if crate::heap::kind(runtime.heap.header_of(word)) == crate::heap::OBJECT => {
+            show_object(runtime, word, depth, out);
+        }
+        // Closures, futures, handles: no value to show beyond their identity.
+        _ => out.push_str(&format!("value@{word:x}")),
+    }
+}
+
+/// An object as its source writes it (#756): a variant case as `Enum.case(payload, …)` or `Enum.case`,
+/// any other object as `Type(field: value, …)`. `once let` slots are caches and stay out, as in `==`.
+fn show_object(runtime: &Runtime, word: Word, depth: usize, out: &mut String) {
+    use okkama_runtime_core::testing::{display_name, variant_name, SHOWN_DEPTH};
+    let program = &runtime.loaded.program;
+    let object = crate::heap::payload(runtime.heap.header_of(word)) as usize;
+    let declaration = &program.objects[object];
+    let case = program.variants.iter().find_map(|variant| {
+        let case = variant.cases.iter().find(|(_, case)| case.0 as usize == object)?;
+        Some(variant_name(&variant.name, &case.0))
+    });
+    let fields = declaration.fields.iter().enumerate().filter(|(_, (name, _))| !crate::ops::is_once_slot(name));
+    let fields = fields.collect::<Vec<_>>();
+    match &case {
+        Some(case) if fields.is_empty() => {
+            out.push_str(case);
+            return;
+        }
+        Some(case) => out.push_str(case),
+        None => out.push_str(&display_name(&declaration.name)),
+    }
+    out.push('(');
+    if depth + 1 >= SHOWN_DEPTH && !fields.is_empty() {
+        out.push_str("…)");
+        return;
+    }
+    for (position, (index, (name, ty))) in fields.into_iter().enumerate() {
+        if position > 0 {
+            out.push_str(", ");
+        }
+        if case.is_none() {
+            out.push_str(name);
+            out.push_str(": ");
+        }
+        let field = runtime.heap.field(word, index);
+        let unbound = match Kind::of(program, *ty) {
+            Kind::Float | Kind::Raw | Kind::Byte => {
+                field == crate::word::UNBOUND_RAW
+            }
+            _ => field == UNBOUND,
+        };
+        if unbound {
+            out.push_str("null");
+        } else if let Some(Type::Str) = program.ty(*ty) {
+            out.push_str(&okkama_runtime_core::testing::literal(runtime.heap.text(field)));
+        } else {
+            show_into(runtime, field, *ty, false, depth + 1, out);
         }
     }
+    out.push(')');
 }
 
 /// `stream_init` for drivers: Err(Some(failure)), or Err(None) when stopped.

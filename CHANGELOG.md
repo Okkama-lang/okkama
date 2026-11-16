@@ -35,6 +35,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   Tomato, the reference, returns how many bytes were appended, and
   `io/buffer` relies on that (`written == bytes.size()`). The Champ handle
   test now checks the returned count too.
+- **A failed `test.is` shows objects by value (#756).** Unequal objects in
+  a test report printed heap identities (`Duration@52e44f14340`). Tomato and
+  Champ now show an object as its source writes it: `Duration(origin: 2)`,
+  `Point(x: 1, label: "a\"b")`, a variant case as `Shape.rect(1, 2)` or
+  `Maybe.none`, an Error as `Down.unavailable(3)`, nested values and arrays
+  of objects likewise; `once let` slots stay out, as in `==`. Both engines
+  give the same text: type names drop their module and the engines'
+  internal spellings (`okkama_runtime_core::testing::display_name`).
+  Showing an object by its `string()` needs compiler support (#793); Champ's
+  case texts of generic variant instances are wrong (#792).
 - **`tally --help` reads on a command with subcommands (#637).** A branch
   command refused every invocation without a child ("child command
   required"), so its own `--help` could not be asked for. Now a branch stops
