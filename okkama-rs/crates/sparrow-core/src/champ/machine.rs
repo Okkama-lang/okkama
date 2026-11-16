@@ -219,13 +219,27 @@ impl Runtime {
                 s::Location::Register(id) => Some(okkama_sparrow::Register(*id)),
                 _ => None,
             }).collect();
+            let external = function.proofs.entry.as_ref().and_then(|entry| entry.external.clone());
+            // The std async primitives (#601 Q1, D22): Tomato's intrinsics run them, a driver frame each async one,
+            // with the declarations the catalogue relates to them. Only a driver has a result in this view: Tomato's
+            // frame layout reads it for the RESULT word.
+            let intrinsic = external.as_deref().and_then(|name| verified.p1.related(name).map(|objects| {
+                okkama_sparrow::Intrinsic {
+                    name: name.to_owned(), helpers: vec![],
+                    objects: objects.iter().map(|&id| okkama_sparrow::ObjectRef(id)).collect(),
+                }
+            }));
+            let driver = function.entry_abi == s::EntryAbi::AsyncExternal;
+            let result = function.results.first().filter(|_| driver).map(|&ty| {
+                legacy.types.push(legacy_type(ty, &futures));
+                okkama_sparrow::TypeRef(legacy.types.len() as u32 - 1)
+            });
             legacy.functions.push(okkama_sparrow::Function {
-                symbol: function.symbol.clone(), is_async: false,
+                symbol: function.symbol.clone(), is_async: driver,
                 // Tomato resolves the provider by symbol; an unresolved adapter finds none and fails at the call.
-                native: function.proofs.entry.as_ref().and_then(|entry| entry.external.clone())
-                    .filter(|name| native_symbol(name)),
-                intrinsic: None,
-                registers, params, result: None, code: vec![], handlers: vec![],
+                native: external.filter(|name| native_symbol(name)),
+                intrinsic,
+                registers, params, result, code: vec![], handlers: vec![],
             });
         }
         // Native diagnostics use Sparrow's existing four-string NativeFailure carrier: the program's own
@@ -241,7 +255,7 @@ impl Runtime {
                 does: vec![], destroy: None, builtin: true,
             });
         }
-        let mut runtime = Self::new(crate::program::Loaded::new(legacy))?;
+        let mut runtime = Self::new_champ_view(crate::program::Loaded::new(legacy))?;
         let mut layouts = source.objects.iter().map(|object| {
             let layout = &object.layout;
             ObjectRuntimeLayout::new(layout.storage_fields.iter().copied().map(repr).collect(), LayoutFacts {
@@ -254,9 +268,13 @@ impl Runtime {
             layouts.push(ObjectRuntimeLayout::new(vec![Repr::Ref; 4], LayoutFacts::default(), vec![])
                 .map_err(|error| Error(error.to_string()))?);
         }
-        // An async body's frame is traced by its frame map, not by Tomato's register layout.
-        let frames = (0..source.functions.len()).map(|index| super::FrameMap::new(source, index)).collect::<Vec<_>>();
+        // An async body's frame is traced by its frame map, not by Tomato's register layout; a driver frame by
+        // Tomato's driver layout and the Champ tail (draft 3 §2.3).
         let mut heap_layouts = runtime.loaded.layouts();
+        let frames = (0..source.functions.len()).map(|index| {
+            super::FrameMap::new(source, index)
+                .or_else(|| super::FrameMap::driver(source, index, &heap_layouts.frames[index]))
+        }).collect::<Vec<_>>();
         for (index, map) in frames.iter().enumerate() {
             if let Some(map) = map {
                 heap_layouts.frames[index] = map.trace.clone();

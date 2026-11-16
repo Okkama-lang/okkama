@@ -197,6 +197,18 @@ macro_rules! frame_pointer {
 impl Runtime {
     pub fn new(loaded: Loaded) -> Result<Self, Error> {
         crate::contracts::check(&loaded)?;
+        Self::assemble(loaded)
+    }
+
+    /// The runtime of a Champ program's declaration view (#601 Q1). Tomato's load-time intrinsic contracts describe
+    /// SPB 16 layouts; the SPB 17 loader has proved the layouts the std async primitives' drivers read from the
+    /// trusted catalogue (`spb17::drivers`), so they are not checked again here.
+    #[cfg(feature = "champ-abi")]
+    pub(crate) fn new_champ_view(loaded: Loaded) -> Result<Self, Error> {
+        Self::assemble(loaded)
+    }
+
+    fn assemble(loaded: Loaded) -> Result<Self, Error> {
         #[cfg(not(feature = "champ-abi"))]
         let mut heap = Heap::new(loaded.layouts());
         #[cfg(feature = "champ-abi")]

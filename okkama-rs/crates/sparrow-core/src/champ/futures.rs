@@ -72,6 +72,10 @@ pub struct FrameMap {
     pub words: usize,
     /// The collector's layout after the header (`heap::Layouts::frames`).
     pub trace: Vec<Repr>,
+    /// A driver frame (async ABI D22, draft 3 §§2.1, 9): the number of its language arguments. Its area is
+    /// Tomato's driver layout (registers, the driver slot, the retained arguments), its INPUTS tail word holds the
+    /// creation's inputs packet, and nothing compiles it.
+    pub driver: Option<usize>,
 }
 
 impl FrameMap {
@@ -101,18 +105,41 @@ impl FrameMap {
         let tail = offset;
         trace.extend([Repr::Ref; TAIL_WORDS]);
         let start = layout.continuations.first()?.saved.clone();
-        Some(Self { slots, scopes, tail, start, words: 1 + trace.len(), trace })
+        Some(Self { slots, scopes, tail, start, words: 1 + trace.len(), trace, driver: None })
     }
 
-    /// The number of language inputs of continuation 0: the deps of borrowed inputs take no words.
+    /// The map of the async external `function` (D22, #601 Q1), from its legacy driver layout `legacy` (Tomato's
+    /// fixed words, registers, driver slot and retained arguments): the tail follows it. None for any other
+    /// function.
+    pub fn driver(program: &s::Program, function: usize, legacy: &[Repr]) -> Option<Self> {
+        let source = &program.functions[function];
+        if source.entry_abi != s::EntryAbi::AsyncExternal {
+            return None;
+        }
+        let tail = 8 * (1 + legacy.len() as u64);
+        let mut trace = legacy.to_vec();
+        trace.extend([Repr::Ref; TAIL_WORDS]);
+        let driver = Some(source.params.len());
+        Some(Self { slots: vec![], scopes: vec![], tail, start: vec![], words: 1 + trace.len(), trace, driver })
+    }
+
+    /// The number of language inputs of continuation 0: the deps of borrowed inputs take no words. A driver takes
+    /// its arguments.
     pub fn inputs(&self) -> usize {
+        if let Some(arguments) = self.driver {
+            return arguments;
+        }
         self.start.split_last().map_or(0, |(_, inputs)| {
             inputs.iter().filter(|&&slot| !self.slots[slot as usize].reprs.is_empty()).count()
         })
     }
 
-    /// The offset of the input packet's slot; a fixed root, whose start is empty (#667), has none.
+    /// The offset of the input packet's slot; a fixed root, whose start is empty (#667), has none. A driver keeps
+    /// its inputs in the INPUTS tail word (draft 3 §2.1).
     pub fn packet(&self) -> Option<u64> {
+        if self.driver.is_some() {
+            return Some(self.tail + INPUTS);
+        }
         self.start.last().map(|&slot| self.slots[slot as usize].offset)
     }
 }
@@ -195,9 +222,9 @@ impl Runtime {
         self.champ.machine.as_ref()?.frames.get(function)?.as_ref()
     }
 
-    /// Whether `function` of the loaded Champ program is an async body.
+    /// Whether `function` of the loaded Champ program is an async body (a driver is not).
     pub(crate) fn champ_async_body(&self, function: usize) -> bool {
-        self.champ_frame_map(function).is_some()
+        self.champ_frame_map(function).is_some_and(|map| map.driver.is_none())
     }
 
     /// A Champ body frame: a FRAME whose flags carry CHAMP and whose function has a frame map.
@@ -263,9 +290,28 @@ impl Runtime {
     }
 
     /// Creation step 2: continuation 0 holds the language inputs (their deps take no words), then the accepted
-    /// input packet.
+    /// input packet. A driver frame takes Tomato's start (`future_new`): raw registers unbound, the arguments in
+    /// their registers and in the retained words, and the packet in INPUTS (draft 3 §2.4).
     fn champ_write_start(&self, frame: Word, args: &[Word], packet: Word) {
-        let map = self.champ_frame_map(self.function_of(frame)).expect("Champ frame map");
+        let function = self.function_of(frame);
+        let map = self.champ_frame_map(function).expect("Champ frame map");
+        if map.driver.is_some() {
+            use crate::program::Kind;
+            let kinds = &self.loaded.functions[function].kinds;
+            for (register, kind) in kinds.iter().enumerate() {
+                if matches!(kind, Kind::Float | Kind::Raw | Kind::Byte) {
+                    set(frame, AREA + register as u64 * 8, crate::word::UNBOUND_RAW);
+                }
+            }
+            let retained = AREA + 8 * (kinds.len() as u64 + 1);
+            let params = &self.loaded.program.functions[function].params;
+            for (index, (param, &argument)) in params.iter().zip(args).enumerate() {
+                set(frame, AREA + u64::from(param.0) * 8, argument);
+                set(frame, retained + index as u64 * 8, argument);
+            }
+            set(frame, map.tail + INPUTS, packet);
+            return;
+        }
         let inputs = map.start.split_last().map_or(&[][..], |(_, inputs)| inputs);
         let words = inputs.iter().filter(|&&slot| !map.slots[slot as usize].reprs.is_empty());
         for (&slot, &word) in words.zip(args) {
@@ -642,6 +688,19 @@ impl Runtime {
             }
         }
         Ok(())
+    }
+
+    /// A driver of a Champ Future settles with a value (draft 3 §9): its outcome packet is empty, since every Q1
+    /// driver result is plain (ABI §4.3: no fresh identity with a destroy), and is committed to the cache before
+    /// the waiters wake. A Tomato frame is not touched.
+    pub(crate) fn champ_driver_done(&mut self, frame: Word) {
+        if get(frame, tasks::FLAGS) & CHAMP == 0 {
+            return;
+        }
+        let record = store(self, Data::Packet(Packet::default()));
+        if let Ok(cache) = self.champ_cache_mut(frame) {
+            cache.packet = record;
+        }
     }
 
     #[cfg(test)]
