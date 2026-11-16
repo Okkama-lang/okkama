@@ -423,3 +423,45 @@ async main() is int {
     assert_eq!(run.result, Ok(0), "{}", run.stdout);
     assert_eq!(run.stdout, "passed\nchild 9\n9\n");
 }
+
+/// #776: a cold Future that reads a Future created beside it in a block leaves the block with that Future's duty:
+/// both run after the block, as on Tomato (okkama 0.5.8: `escaped`, `seed`, `read 1 2`, `3`).
+#[test]
+fn a_future_leaves_its_block_with_the_future_it_reads() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Seed {
+    Seed();
+    async run() is int { Stdout().writeln("seed"); 2; }
+}
+object Reader {
+    Reader();
+    async read(r is int, e is Future<int>) is int {
+        let n = await e;
+        Stdout().writeln("read " + r.string() + " " + n.string());
+        n + 1;
+    }
+}
+async main() is int {
+    let f = if true {
+        let r = 1;
+        let e = Seed().run();
+        Reader().read(r, e);
+    } else {
+        Reader().read(5, Seed().run());
+    };
+    Stdout().writeln("escaped");
+    Stdout().writeln((await f).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "escaped\nseed\nread 1 2\n3\n");
+}

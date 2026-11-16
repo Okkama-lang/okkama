@@ -937,10 +937,9 @@ fn n1_a_bodyless_async_function_needs_an_external_driver() {
     assert!(diagnostics[0].message.contains("neither a body nor an external driver"), "{diagnostics:?}");
 }
 
-#[test]
-fn a_future_input_beside_a_managed_input_is_never_offered() {
-    // OIR-2 §10.2, D12: a Future input's cache is borrowed, so no selection of the creation names it, also when
-    // a managed input (a fresh Res) is offered with it.
+/// The R1 cold escape whose Future reads a fresh Res and a Future `%e` created beside it in the inner block SI
+/// (#776): `%f = call @read(%r, %e)` leaves SI and is awaited in S.
+fn future_input_beside_managed() -> String {
     let source = edit(&input("r1-cold-escape"), "func @read(%arg: Res) -> int",
         "func @read(%arg: Res, %g: future<int>) -> int");
     let borrow = "parameter_effect(convention=borrow, destination=none)";
@@ -965,6 +964,14 @@ func @seed() -> int [async] async-creation(MseedC) async-body(MseedB) {
 func @main()");
     let source = edit(&source, "    %r: Res = call @res()\n    %f: future<int> = call @read(%r)\n",
         "    %r: Res = call @res()\n    %e: future<int> = call @seed()\n    %f: future<int> = call @read(%r, %e)\n");
+    source
+}
+
+#[test]
+fn a_future_input_beside_a_managed_input_is_never_offered() {
+    // OIR-2 §10.2, D12: a Future input's cache is borrowed, so no selection of the creation names it, also when
+    // a managed input (a fresh Res) is offered with it.
+    let source = future_input_beside_managed();
     let output = rewrite_async(&source).unwrap();
     verify_own(&output.module).unwrap();
     let (_, main) = function(&output.module, "main");
@@ -1303,4 +1310,30 @@ fn no_partition_takes_a_bound_future_it_names() {
     assert!(!named.is_empty(), "the split that names f is partitioned");
     assert!(named.iter().all(|record| record.rest.contains(&created) && !record.selected.contains(&created)),
         "{named:?}");
+}
+
+/// #776 (OIR-2 §10.2, D12): a Future that leaves its owner takes along the cache duty of the Future its creation
+/// borrows, when both are created in the scope it leaves, also beside a managed input. Own's rehome follows its
+/// analysis deps, which name every argument; the full verifier refuses the escape without the input's rehome
+/// (`b9-borrowed-future-left`, fixture invalid/B9-borrowed-future-left.oir).
+#[test]
+fn a_future_input_leaves_with_the_future_that_borrows_it() {
+    let output = rewrite_async(&future_input_beside_managed()).unwrap();
+    verify_own(&output.module).unwrap();
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let created: Vec<_> = body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Async(AsyncOp::FutureNew { environment: FutureEnvironment::Deferred { function, .. }, .. }) =>
+            Some((output.module.functions.get(*function).unwrap().symbol.clone(), instruction.results[0])),
+        _ => None,
+    }).collect();
+    let [(seed, input), (read, future)] = created.as_slice() else { panic!("{created:?}") };
+    assert_eq!((seed.as_str(), read.as_str()), ("seed", "read"));
+    let rehomed: Vec<_> = body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Async(AsyncOp::CacheRehome { form: RehomeForm::Scope { future, .. }, .. }) => Some(*future),
+        _ => None,
+    }).collect();
+    assert_eq!(rehomed, [*input, *future], "the borrowed input's duty leaves first");
+    let text = crate::text::print(&output.module).unwrap();
+    assert_eq!(rejections(&text), []);
 }

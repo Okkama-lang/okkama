@@ -307,6 +307,7 @@ impl Engine<'_, '_> {
             }
             AsyncOp::CacheRehome { form: RehomeForm::Scope { state, pending, future }, target, .. } => {
                 let key = self.identity(before, *future);
+                self.borrowed_futures_left(before, key, *target);
                 let mut owner = before.tokens[state.as_u32() as usize].clone();
                 let moved: Vec<_> = owner.pieces.iter().filter(|piece| piece.holder == Some(key)).cloned().collect();
                 for piece in &moved {
@@ -336,6 +337,7 @@ impl Engine<'_, '_> {
                     && before.tokens[task.as_u32() as usize].cache != Some(key) {
                     self.error(R::B94, "cache.rehome consumes the task-state of the same spawned Future");
                 }
+                self.borrowed_futures_left(before, key, *target);
                 let mut moved = vec![];
                 let mut source = None;
                 for (index, holder) in flow.tokens.indexed_mut() {
@@ -644,6 +646,52 @@ impl Engine<'_, '_> {
     /// exit of their owner scope `source`. The target is that exit's destination: a live scope enclosing
     /// `source`, or the caller. The owner tag stays until `exit.commit`, which checks the destination.
     #[allow(clippy::too_many_arguments)]
+    /// #776 (OIR-2 §10.2, D12): a cold Future borrows the cache of every Future argument of its creation. When
+    /// the Future with cache key `key` leaves for `target`, the cache duty of each such argument created in this
+    /// body must not stay with a scope that closes before `target`: it left first (a rehome into a reserve), or its
+    /// owner is the target or encloses it. Otherwise the argument settles (a cold one is Cancelled) while the
+    /// Future that reads it is still to run.
+    fn borrowed_futures_left(&mut self, before: &Flow, key: Origin, target: RehomeTarget) {
+        let (Origin::Instruction(inst, 0) | Origin::RetiredInstruction(inst, 0)) = key else {
+            return;
+        };
+        let Ok(Operation::Async(AsyncOp::FutureNew { environment, .. })) =
+            self.body.insts.get(inst).map(|instruction| &instruction.op) else {
+            return;
+        };
+        let (FutureEnvironment::Deferred { arguments, .. } | FutureEnvironment::External { arguments, .. }) =
+            environment else {
+            return;
+        };
+        let borrowed: BTreeSet<Origin> = arguments.iter()
+            .filter(|argument| super::super::later::value_type(self.module, self.body, **argument)
+                .is_some_and(|ty| matches!(ty, Type::Future(_))))
+            .map(|argument| self.identity(before, *argument))
+            .filter(|origin| *origin != key && before.cache_keys.contains(origin)).collect();
+        for origin in borrowed {
+            let owners: Vec<ScopeId> = (0..before.availability.len())
+                .filter(|index| before.availability[*index] == AVAILABLE)
+                .map(|index| &before.tokens[index])
+                .filter(|token| token.pending_kind.is_none())
+                .flat_map(|token| token.pieces.iter()
+                    .filter(|piece| piece.origin == origin && piece.holder == Some(origin))
+                    .filter_map(|piece| piece.owner))
+                .collect();
+            for owner in owners {
+                let outlives = match target {
+                    RehomeTarget::Scope(target) => owner == target
+                        || super::super::high::inside(self.module, target, owner, self.state),
+                    RehomeTarget::Caller => false,
+                };
+                if !outlives {
+                    self.error(R::B9BorrowedFutureLeft,
+                        "a Future leaves a scope that keeps the cache duty of a Future it borrows (#776)");
+                    return;
+                }
+            }
+        }
+    }
+
     fn rehome_reserve(
         &mut self, before: &Flow, flow: &mut Flow, pending: ValueId, source: Option<ScopeId>, target: RehomeTarget,
         key: Origin, moved: Vec<Piece>,

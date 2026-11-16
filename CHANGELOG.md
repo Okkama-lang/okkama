@@ -20,6 +20,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The full OIR-2 verifier checks that a Future leaves with the Futures it
+  reads (#776).** A cold Future borrows the cache of each Future argument of
+  its creation. New rule `b9-borrowed-future-left`: a `cache.rehome` that
+  moves such a Future out of a scope which still keeps the cache duty of an
+  argument created there, and which closes before the destination, is
+  refused; that argument would be settled (a cold one Cancelled) before the
+  Future that awaits it runs. Own already rehomes the argument first, since
+  its analysis deps name every argument; the `deps` operand of `fut.new`
+  has no consumer, so leaving the Future argument out of it beside a managed
+  input admitted nothing.
+
 - **A synchronous action may pass a thrown Cancelled on Champ (#775, PR-F).**
   An action that calls `check()` on a `Cancelling` throws `Cancelled` once
   stopping is requested, and its caller catches it as on Tomato. OIR-2 low
