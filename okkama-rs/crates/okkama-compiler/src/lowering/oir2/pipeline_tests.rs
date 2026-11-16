@@ -144,3 +144,26 @@ fn oir2_pipeline_refuses_an_atomic_over_futures() {
     let error = super::super::tests::lower_std(source).map(|_| ()).unwrap_err().to_string();
     assert!(error.contains("std object async/atomic.Atomic"), "{error}");
 }
+
+/// #777: an action value's role is implemented by the backend's closure layouts, so a holder of a closure that
+/// captures a resource reaches that resource; its layout says so (the loader's OBJECT_RETENTION). A holder of a
+/// closure that captures plain data does not.
+#[test]
+fn oir2_pipeline_a_holder_reaches_what_its_closure_captures() {
+    let holder = |captured: &str| {
+        let source = format!(concat!("module app; ",
+            "object Res {{ has n is string; Res(:n); size() is int {{ n.length(); }} ",
+            "destroy {{ n; }} }} object Plain {{ has n is string; Plain(:n); size() is int {{ n.length(); }} }} ",
+            "object Filter {{ has keep is (int) is bool; Filter(:keep); ",
+            "passes(value is int) is bool {{ keep(value); }} }} ",
+            "main() is int {{ {} let f = Filter(keep: (value is int) is bool {{ value > r.size(); }}); ",
+            "if f.passes(5) {{ 1; }} else {{ 0; }} }}"), captured);
+        let high = super::super::tests::lower_std(&source).unwrap_or_else(|error| panic!("{error}"));
+        let bytes = compile_high_with(high, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+        let program = s::decode(&bytes).unwrap();
+        program.objects.iter().find(|object| object.name == "app.Filter").unwrap().layout.may_reach_resource
+    };
+    assert!(holder("let r = Res(n: \"abc\");"));
+    // The plain capture: a `Res`-free value with the same `size()` shape.
+    assert!(!holder("let r = Plain(n: \"abc\");"));
+}

@@ -230,3 +230,42 @@ main() is int {
     0;
 }"#, "2\n16\n2 9\n");
 }
+
+/// A holder of a closure that captures a resource (#777): the holder reaches the resource through the closure's
+/// layout, the resource lives while the holder does and is destroyed once with it. Tomato prints the same.
+#[test]
+fn a_holder_of_a_closure_keeps_its_captured_resource() {
+    expect_output(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Res {
+    has n is string;
+    Res(:n);
+    size() is int { n.length(); }
+    destroy { Stdout().writeln("destroy " + n); }
+}
+
+object Filter {
+    has keep is (int) is bool;
+    Filter(:keep);
+    passes(value is int) is bool { keep(value); }
+}
+
+object Sets {
+    Sets();
+    sized(name is string) is Filter {
+        let r = Res(n: name);
+        Filter(keep: (value is int) is bool { value > r.size(); });
+    }
+}
+
+main() is int {
+    {
+        let f = Sets().sized("abc");
+        Stdout().writeln(f.passes(5).string() + " " + f.passes(2).string());
+    }
+    Stdout().writeln("end");
+    0;
+}"#, "true false\ndestroy abc\nend\n");
+}

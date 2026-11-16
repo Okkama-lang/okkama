@@ -266,10 +266,61 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             }
         }
     }
+    // An action value's role is implemented by the closure layouts the backend adds (one per closure site), not by
+    // module declarations: it reaches a resource when one of its closures captures a value that does (#777).
+    let mut closures = BTreeMap::<u32, Vec<s::Type>>::new();
+    for (_, function) in module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            let (ty, captured) = match &instruction.op {
+                o::Operation::Core(o::CoreOp::FnClosure { captures, ty, .. }) => (*ty, captures.clone()),
+                o::Operation::Core(o::CoreOp::FnBind { receiver, ty, .. }
+                    | o::CoreOp::FnBindRole { receiver, ty, .. }) => (*ty, vec![*receiver]),
+                _ => continue,
+            };
+            let Ok(s::Type::Role(role)) = sparrow_oir2::translate_type(module, ty) else { continue };
+            let entry = closures.entry(role).or_default();
+            for value in captured {
+                let value = body.values.get(value).map_err(|error| phase("layout", error))?;
+                if let Ok(ty) = sparrow_oir2::translate_type(module, value.ty) {
+                    entry.push(ty);
+                }
+            }
+        }
+    }
+    let mut callable_reaches = std::collections::BTreeSet::<u32>::new();
     loop {
         let reaches = layouts.iter().filter_map(|(&id, layout)| layout.runtime.may_reach_resource.then_some(id))
             .collect::<std::collections::BTreeSet<_>>();
-        let role_reaches = |role: &u32| implementors.get(role).is_some_and(|objects| {
+        let role_reaches = |role: &u32| callable_reaches.contains(role) || implementors.get(role).is_some_and(|objects| {
+            objects.iter().any(|object| reaches.contains(object))
+        });
+        let mut newly = vec![];
+        for (&role, captures) in &closures {
+            let captured = captures.iter().any(|ty| {
+                let leaf = match *ty {
+                    s::Type::Array(shape) => s::ArrayType { depth: 1, ..shape }.element(),
+                    s::Type::Map(id) => match sparrow_oir2::composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    ty => Some(ty),
+                };
+                match leaf {
+                    Some(s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id)) => reaches.contains(&id),
+                    Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) => role_reaches(&id),
+                    _ => false,
+                }
+            });
+            if captured && !callable_reaches.contains(&role) {
+                newly.push(role);
+            }
+        }
+        if !newly.is_empty() {
+            callable_reaches.extend(newly);
+            continue;
+        }
+        let role_reaches = |role: &u32| callable_reaches.contains(role) || implementors.get(role).is_some_and(|objects| {
             objects.iter().any(|object| reaches.contains(object))
         });
         let any_reaches = boxed.iter().any(|ty| match *ty {

@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A holder of a closure that captures a resource builds on Champ (#777,
+  structural build).** An action value's role is implemented by the
+  closure layouts the backend adds, not by module declarations, so the
+  object layouts missed that a holder of such a value reaches the captured
+  resource and the loader refused it (`OBJECT_RETENTION`). The layouts now
+  count, for each action type, what its closures capture. The program runs
+  as on Tomato; the full ownership verifier still reports B104 for it (see
+  #777).
 - **Cell and Atomic over other closed plain data run on Champ (#778).**
   After #764 the producer still refused Atomic/Cell over maps, variants of
   plain objects, arrays of native handles or of plain roles and generic role
