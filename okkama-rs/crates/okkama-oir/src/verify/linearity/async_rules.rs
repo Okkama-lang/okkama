@@ -651,10 +651,6 @@ impl Engine<'_, '_> {
         }
     }
 
-    /// C-4 step 2 and the ruling of #601 R1: the duties of the Future `key` join the pending reserve of the
-    /// exit of their owner scope `source`. The target is that exit's destination: a live scope enclosing
-    /// `source`, or the caller. The owner tag stays until `exit.commit`, which checks the destination.
-    #[allow(clippy::too_many_arguments)]
     /// #776 (OIR-2 §10.2, D12): a cold Future borrows the cache of every Future argument of its creation. When
     /// the Future with cache key `key` leaves for `target`, the cache duty of each such argument created in this
     /// body must not stay with a scope that closes before `target`: it left first (a rehome into a reserve), or its
@@ -701,6 +697,10 @@ impl Engine<'_, '_> {
         }
     }
 
+    /// C-4 step 2 and the ruling of #601 R1: the duties of the Future `key` join the pending reserve of the
+    /// exit of their owner scope `source`. The target is that exit's destination: a live scope enclosing
+    /// `source`, or the caller. The owner tag stays until `exit.commit`, which checks the destination.
+    #[allow(clippy::too_many_arguments)]
     fn rehome_reserve(
         &mut self, before: &Flow, flow: &mut Flow, pending: ValueId, source: Option<ScopeId>, target: RehomeTarget,
         key: Origin, moved: Vec<Piece>,

@@ -755,14 +755,14 @@ fn a_loop_body_duty_ends_at_each_close_of_its_owner() {
     let main = body(&output, "main");
     let [schedule] = main.service_schedules.as_slice() else { panic!("one schedule") };
     assert_eq!(schedule.duties.len(), 1);
-    let close = "    %42: closed = scope.end %40, effects scope_effects(failures=[], suspends=false, cancel=false)\n    \
-        br ^b15\n";
-    let shared = "    br ^bx(%40, %33, %34, %35)\n    ^bx(%60: scope<S2>, %61: int, %62: int, %63: scope<S1>) in S2:\n    \
-        %42: closed = scope.end %60, effects scope_effects(failures=[], suspends=false, cancel=false)\n    \
-        br ^b6(%61, %62, %63)\n";
-    let source = edited(LOOP_BODY, close, shared);
-    let source = edited(&source, "    %46: failure = scope.unwind %45, %43, effects scope_effects(failures=[], suspends=false, \
-        cancel=false)\n    br ^b16\n", "    br ^bx(%45, %33, %33, %44)\n");
+    let effects = "effects scope_effects(failures=[], suspends=false, cancel=false)";
+    let close = format!("    %42: closed = scope.end %40, {effects}\n    br ^b15\n");
+    let shared = format!("    br ^bx(%40, %33, %34, %35)\n    \
+        ^bx(%60: scope<S2>, %61: int, %62: int, %63: scope<S1>) in S2:\n    \
+        %42: closed = scope.end %60, {effects}\n    br ^b6(%61, %62, %63)\n");
+    let source = edited(LOOP_BODY, &close, &shared);
+    let unwind = format!("    %46: failure = scope.unwind %45, %43, {effects}\n    br ^b16\n");
+    let source = edited(&source, &unwind, "    br ^bx(%45, %33, %33, %44)\n");
     // ^b16 is left without a predecessor; it keeps naming defined values.
     let source = edited(&source, "scope.unwind %44, %46,", "scope.unwind %44, %43,");
     let error = lower(&source).unwrap_err();

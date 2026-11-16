@@ -962,9 +962,8 @@ func @seed() -> int [async] async-creation(MseedC) async-body(MseedB) {
     ret %n
 }
 func @main()");
-    let source = edit(&source, "    %r: Res = call @res()\n    %f: future<int> = call @read(%r)\n",
-        "    %r: Res = call @res()\n    %e: future<int> = call @seed()\n    %f: future<int> = call @read(%r, %e)\n");
-    source
+    edit(&source, "    %r: Res = call @res()\n    %f: future<int> = call @read(%r)\n",
+        "    %r: Res = call @res()\n    %e: future<int> = call @seed()\n    %f: future<int> = call @read(%r, %e)\n")
 }
 
 #[test]
