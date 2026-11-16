@@ -136,17 +136,6 @@ macro_rules! case {
     };
 }
 
-/// A case that runs once its named blocker is fixed.
-macro_rules! blocked {
-    ($name:ident, $id:literal, $reason:literal) => {
-        #[test]
-        #[ignore = $reason]
-        fn $name() {
-            check($id);
-        }
-    };
-}
-
 // C3b: open action invocation. An open call dispatches over every closure layout of its `fn` type with the
 // registered open callable contract, and its result packet joins the scope through the Closure protocol
 // (`own.dynamic`, #676); the scope's cleanup releases what it holds once.
@@ -162,8 +151,8 @@ case!(open_successor_bound_action_invoked, "L04.successor.bound-action-invoked")
 case!(open_successor_closure_transferred, "L04.successor.closure-transferred");
 // Managed arrays and maps of role values that reach resources (#711).
 case!(open_regions_role_instances, "L07.regions.role-instances");
-blocked!(open_collections_ordered_sets, "L09.collections.ordered-sets",
-    "#723: own gives OrderedSet a fresh identity the SPB 17 layout has not (FRESH_ORIGIN)");
+// A holder of action values whose closures capture only plain data is no identity (#723).
+case!(open_collections_ordered_sets, "L09.collections.ordered-sets");
 
 /// A single-file program of this test, run in Champ: its exit status and stdout.
 fn run_source(text: &str) -> Observed {

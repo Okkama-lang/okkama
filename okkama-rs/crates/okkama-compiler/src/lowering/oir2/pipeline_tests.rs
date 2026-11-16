@@ -99,3 +99,100 @@ fn oir2_772_an_async_body_passes_its_future_parameter_on() {
         }
     }
 }
+
+/// A Cell over a plain role (P2.4 §4.8, #764): the registered Atomic keeps its dotted name with the role's
+/// declaration in its suffix, holds a role reference and its closed flag, and the program loads.
+#[test]
+fn oir2_pipeline_registers_an_atomic_over_a_plain_role() {
+    let high = super::super::tests::lower_std(concat!("module app; import \"cell\" take Cell; ",
+        "role Shape { area() is int; } object Square does Shape { has side is int; Square(:side); ",
+        "area() is int { side * side; } } ",
+        "main() is int { let first is Shape = Square(side: 3); let held = Cell(first); held.value().area(); }"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let bytes = compile_high_with(high, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let program = s::decode(&bytes).unwrap();
+    let role = program.objects.iter().position(|object| object.name == "app.Shape").unwrap() as u32;
+    let atomic = program.objects.iter().find(|object| object.name == "async.atomic.Atomic_role_app.Shape")
+        .expect("the registered Atomic over the role");
+    assert_eq!(atomic.layout.storage_fields, [s::Type::Role(role), s::Type::Bool]);
+    assert_eq!(atomic.layout.trace_layout, [0]);
+    assert!(!atomic.layout.may_reach_resource);
+}
+
+/// A Cell over a role one of whose implementations is a resource is the slice P2.4 §4.8 leaves out: refused by
+/// name before SPB 17.
+#[test]
+fn oir2_pipeline_refuses_an_atomic_over_a_role_with_a_resource() {
+    let high = super::super::tests::lower_std(concat!("module app; import \"cell\" take Cell; ",
+        "role Named { name() is string; } object Res does Named { has n is string; Res(:n); ",
+        "name() is string { n; } destroy { n; } } ",
+        "main() is int { let first is Named = Res(n: \"a\"); let held = Cell(first); held.value().name().length(); }"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let error = compile_high_with(high, o::VerifyMode::Structural).unwrap_err().to_string();
+    // #778 words the refusal for every closed plain value; the role is named by its suffix.
+    assert!(error.contains("Atomic/Cell over role_app.Named") && error.contains("closed plain data only"), "{error}");
+}
+
+/// #723: an object that holds an action value whose closures capture only plain data is no identity. Own gives
+/// its construction no fresh creation, the full verifier counts the function type's obligations by the same
+/// closures, and the loader finds no fresh result without a creation (FRESH_ORIGIN).
+#[test]
+fn oir2_pipeline_a_holder_of_plain_closures_is_no_identity() {
+    let source = concat!("module app; object Filter { has keep is (int) is bool; Filter(:keep); ",
+        "passes(value is int) is bool { keep(value); } } ",
+        "object Sets { Sets(); ",
+        "above(limit is int) is Filter { Filter(keep: (value is int) is bool { value > limit; }); } } ",
+        "main() is int { let f = Sets().above(3); if f.passes(5) { 1; } else { 0; } }");
+    for mode in [o::VerifyMode::Structural, o::VerifyMode::Full] {
+        let high = super::super::tests::lower_std(source).unwrap_or_else(|error| panic!("{error}"));
+        compile_high_with(high, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+    }
+}
+
+
+/// #778: a Cell over a map of plain data registers an Atomic named by the encoded type, whose storage holds the
+/// map and the closed flag, and the program loads.
+#[test]
+fn oir2_pipeline_registers_an_atomic_over_a_plain_map() {
+    let high = super::super::tests::lower_std(concat!("module app; import \"cell\" take Cell; ",
+        "main() is int { let counts = Cell([\"a\": 1]); counts.replace([\"a\": 1, \"b\": 2]); ",
+        "counts.value().size(); }")).unwrap_or_else(|error| panic!("{error}"));
+    let bytes = compile_high_with(high, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let program = s::decode(&bytes).unwrap();
+    let atomic = program.objects.iter().find(|object| object.name.starts_with("async.atomic.Atomic_t_"))
+        .expect("the registered Atomic over the map");
+    assert!(matches!(atomic.layout.storage_fields.as_slice(), [s::Type::Map(_), s::Type::Bool]), "{atomic:?}");
+}
+
+/// #778 leaves Futures out (D25): an Atomic over an array of Futures stays a producer refusal.
+#[test]
+fn oir2_pipeline_refuses_an_atomic_over_futures() {
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "object Job { Job(); async run() is int { 1; } } ",
+        "main() is int { let pending is @Future<int> = []; let held = Atomic(pending); held.close(); 0; }");
+    let error = super::super::tests::lower_std(source).map(|_| ()).unwrap_err().to_string();
+    assert!(error.contains("std object async/atomic.Atomic"), "{error}");
+}
+
+/// #777: an action value's role is implemented by the backend's closure layouts, so a holder of a closure that
+/// captures a resource reaches that resource; its layout says so (the loader's OBJECT_RETENTION). A holder of a
+/// closure that captures plain data does not.
+#[test]
+fn oir2_pipeline_a_holder_reaches_what_its_closure_captures() {
+    let holder = |captured: &str| {
+        let source = format!(concat!("module app; ",
+            "object Res {{ has n is string; Res(:n); size() is int {{ n.length(); }} ",
+            "destroy {{ n; }} }} object Plain {{ has n is string; Plain(:n); size() is int {{ n.length(); }} }} ",
+            "object Filter {{ has keep is (int) is bool; Filter(:keep); ",
+            "passes(value is int) is bool {{ keep(value); }} }} ",
+            "main() is int {{ {} let f = Filter(keep: (value is int) is bool {{ value > r.size(); }}); ",
+            "if f.passes(5) {{ 1; }} else {{ 0; }} }}"), captured);
+        let high = super::super::tests::lower_std(&source).unwrap_or_else(|error| panic!("{error}"));
+        let bytes = compile_high_with(high, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+        let program = s::decode(&bytes).unwrap();
+        program.objects.iter().find(|object| object.name == "app.Filter").unwrap().layout.may_reach_resource
+    };
+    assert!(holder("let r = Res(n: \"abc\");"));
+    // The plain capture: a `Res`-free value with the same `size()` shape.
+    assert!(!holder("let r = Plain(n: \"abc\");"));
+}

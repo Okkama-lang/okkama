@@ -57,7 +57,8 @@ pub(super) fn managed_types(module: &Module, state: &mut State<'_>) -> Vec<bool>
 /// is narrower than managedness, which also counts deps on borrowed identities: a builtin capability without
 /// destroy holds borrowed references with their deps and no obligation of its own (Atomic, §7.2; P2.4 §4.8),
 /// and a role holds one only when one of its implementations can (§3.1 counts every implementation of a role).
-/// Closures, caps, `any` and Futures stay opaque.
+/// A function type holds one only when one of the module's closures of it captures one, or a value of it may come
+/// from outside the module (#723; P2.4 §4.1). Caps, `any` and Futures stay opaque.
 pub(super) fn obligation_types(module: &Module, state: &mut State<'_>) -> Vec<bool> {
     classify_types(module, state, Formula::Obligations)
 }
@@ -171,7 +172,7 @@ fn classify_types(module: &Module, state: &mut State<'_>, formula: Formula) -> V
         return Vec::new();
     }
     let obligations = formula != Formula::Managed;
-    let closures = if formula == Formula::Once {
+    let closures = if formula != Formula::Managed {
         let Some(closures) = closures(module, state) else {
             return Vec::new();
         };
@@ -264,7 +265,9 @@ fn classify_types(module: &Module, state: &mut State<'_>, formula: Formula) -> V
                         next.include(declarations.get(implementer.as_u32() as usize).unwrap_or(&opaque));
                     }
                 }
-                Type::Fn(_) if formula == Formula::Once => {
+                // A function type holds what the closures of the module capture (#723, as own classifies a
+                // holder of action values), or anything when a value may come from outside the module.
+                Type::Fn(_) if obligations => {
                     next.owned = closures.foreign.contains(&id);
                     for capture in closures.captures.get(&id).into_iter().flatten() {
                         next.include(types.get(capture.as_u32() as usize).unwrap_or(&opaque));

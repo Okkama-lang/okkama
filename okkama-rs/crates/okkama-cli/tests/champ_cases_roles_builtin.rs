@@ -150,3 +150,122 @@ main() is int {
     0;
 }"#, "x\ny\n7\n");
 }
+
+/// A Cell over a plain role (P2.4 §4.8, #764): the registered Atomic holds the role reference; `replace`
+/// publishes another implementation and `value` reads it back. Tomato prints the same.
+#[test]
+fn a_cell_holds_a_plain_role_value() {
+    expect_output(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Shape { area() is int; }
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+object Rect does Shape {
+    has w is int;
+    has h is int;
+    Rect(:w, :h);
+    area() is int { w * h; }
+}
+
+main() is int {
+    let first is Shape = Square(side: 3);
+    let held = Cell(first);
+    Stdout().writeln(held.value().area().string());
+    let second is Shape = Rect(w: 2, h: 5);
+    held.replace(second);
+    Stdout().writeln(held.value().area().string());
+    let parts = Cell(0);
+    for 1..4 -> n {
+        let square is Shape = Square(side: n);
+        held.replace(square);
+        parts.replace(parts.value() + held.value().area());
+    }
+    Stdout().writeln(parts.value().string());
+    0;
+}"#, "9\n10\n14\n");
+}
+
+/// Cells over other closed plain data (#778): a map, a variant of a plain object and an array of plain role values.
+/// Tomato prints the same.
+#[test]
+fn cells_hold_maps_variants_and_role_arrays() {
+    expect_output(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Shape { area() is int; }
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+main() is int {
+    let out = Stdout();
+    let counts = Cell(["a": 1]);
+    counts.replace(["a": 1, "b": 2]);
+    out.writeln(counts.value().size().string());
+    let found is Maybe<Square> = Maybe.none;
+    let maybe = Cell(found);
+    maybe.replace(Maybe.some(Square(side: 4)));
+    match maybe.value() {
+        case Maybe.some(square) { out.writeln(square.area().string()); }
+        case Maybe.none { out.writeln("none"); }
+    }
+    let first is Shape = Square(side: 2);
+    let shapes = Cell([first]);
+    let second is Shape = Square(side: 3);
+    shapes.replace([first, second]);
+    out.writeln(shapes.value().size().string() + " " + shapes.value()[1].area().string());
+    0;
+}"#, "2\n16\n2 9\n");
+}
+
+/// A holder of a closure that captures a resource (#777): the holder reaches the resource through the closure's
+/// layout, the resource lives while the holder does and is destroyed once with it. Tomato prints the same.
+#[test]
+fn a_holder_of_a_closure_keeps_its_captured_resource() {
+    expect_output(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Res {
+    has n is string;
+    Res(:n);
+    size() is int { n.length(); }
+    destroy { Stdout().writeln("destroy " + n); }
+}
+
+object Filter {
+    has keep is (int) is bool;
+    Filter(:keep);
+    passes(value is int) is bool { keep(value); }
+}
+
+object Sets {
+    Sets();
+    sized(name is string) is Filter {
+        let r = Res(n: name);
+        Filter(keep: (value is int) is bool { value > r.size(); });
+    }
+}
+
+main() is int {
+    {
+        let f = Sets().sized("abc");
+        Stdout().writeln(f.passes(5).string() + " " + f.passes(2).string());
+    }
+    Stdout().writeln("end");
+    0;
+}"#, "true false\ndestroy abc\nend\n");
+}

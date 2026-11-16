@@ -187,6 +187,14 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     s::encode(&output.program).map_err(|error| phase("encode", error))
 }
 
+/// The SPB 17 role type of a role-valued Atomic suffix (`role_` and a role declaration, #764): its descriptor
+/// is the role's declaration.
+fn atomic_role(module: &o::Module, suffix: &str) -> Option<s::Type> {
+    let name = suffix.strip_prefix("role_")?;
+    module.declarations.iter().find(|(_, declaration)| declaration.name == name
+        && matches!(declaration.kind, o::DeclarationKind::Role { .. })).map(|(id, _)| s::Type::Role(id.as_u32()))
+}
+
 fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayout>, PipelineError> {
     let mut layouts = BTreeMap::new();
     for (id, declaration) in module.declarations.iter() {
@@ -202,7 +210,9 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         };
         let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
             .filter(|_| builtin && fields.is_empty() && destroy.is_none())
-            .and_then(s::p1::atomic_value);
+            .and_then(|suffix| atomic_role(module, suffix).or_else(|| s::p1::atomic_value(suffix))
+                .or_else(|| super::native_summaries::atomic_operand(module, suffix)
+                    .and_then(|ty| sparrow_oir2::translate_type(module, ty).ok())));
         // A once slot is an ordinary Maybe field: the producer stores Maybe.none at construction and
         // once.load/once.store read and fill it (SPB 17 `Field::once` keeps it out of equality and keys).
         // The Event cell of the std async primitives (#601 Q1): `[initial, set, waiters]`, as Tomato keeps it.
@@ -261,10 +271,61 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
             }
         }
     }
+    // An action value's role is implemented by the closure layouts the backend adds (one per closure site), not by
+    // module declarations: it reaches a resource when one of its closures captures a value that does (#777).
+    let mut closures = BTreeMap::<u32, Vec<s::Type>>::new();
+    for (_, function) in module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            let (ty, captured) = match &instruction.op {
+                o::Operation::Core(o::CoreOp::FnClosure { captures, ty, .. }) => (*ty, captures.clone()),
+                o::Operation::Core(o::CoreOp::FnBind { receiver, ty, .. }
+                    | o::CoreOp::FnBindRole { receiver, ty, .. }) => (*ty, vec![*receiver]),
+                _ => continue,
+            };
+            let Ok(s::Type::Role(role)) = sparrow_oir2::translate_type(module, ty) else { continue };
+            let entry = closures.entry(role).or_default();
+            for value in captured {
+                let value = body.values.get(value).map_err(|error| phase("layout", error))?;
+                if let Ok(ty) = sparrow_oir2::translate_type(module, value.ty) {
+                    entry.push(ty);
+                }
+            }
+        }
+    }
+    let mut callable_reaches = std::collections::BTreeSet::<u32>::new();
     loop {
         let reaches = layouts.iter().filter_map(|(&id, layout)| layout.runtime.may_reach_resource.then_some(id))
             .collect::<std::collections::BTreeSet<_>>();
-        let role_reaches = |role: &u32| implementors.get(role).is_some_and(|objects| {
+        let role_reaches = |role: &u32| callable_reaches.contains(role) || implementors.get(role).is_some_and(|objects| {
+            objects.iter().any(|object| reaches.contains(object))
+        });
+        let mut newly = vec![];
+        for (&role, captures) in &closures {
+            let captured = captures.iter().any(|ty| {
+                let leaf = match *ty {
+                    s::Type::Array(shape) => s::ArrayType { depth: 1, ..shape }.element(),
+                    s::Type::Map(id) => match sparrow_oir2::composites(module).entries().get(id as usize) {
+                        Some(s::Composite::Map { value, .. }) => Some(*value),
+                        _ => None,
+                    },
+                    ty => Some(ty),
+                };
+                match leaf {
+                    Some(s::Type::Object(id) | s::Type::Successor(id) | s::Type::Variant(id)) => reaches.contains(&id),
+                    Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) => role_reaches(&id),
+                    _ => false,
+                }
+            });
+            if captured && !callable_reaches.contains(&role) {
+                newly.push(role);
+            }
+        }
+        if !newly.is_empty() {
+            callable_reaches.extend(newly);
+            continue;
+        }
+        let role_reaches = |role: &u32| callable_reaches.contains(role) || implementors.get(role).is_some_and(|objects| {
             objects.iter().any(|object| reaches.contains(object))
         });
         let any_reaches = boxed.iter().any(|ty| match *ty {
@@ -313,6 +374,17 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         }
         if !changed {
             break;
+        }
+    }
+    // The registered Atomic over a role value is the plain-role slice of P2.4 §4.8 (#764): a role one of whose
+    // implementations reaches a resource is refused here by name (the loader checks it again, ATOMIC_ROLE).
+    for (id, declaration) in module.declarations.iter() {
+        if let Some(suffix) = declaration.name.strip_prefix("async.atomic.Atomic_")
+            && (suffix.starts_with("role_") || suffix.starts_with("t_"))
+            && layouts.get(&id.as_u32()).is_some_and(|layout| layout.runtime.may_reach_resource)
+        {
+            return Err(PipelineError::Phase { phase: "layout", message: format!("unsupported: Atomic/Cell over \
+                {suffix}, which may reach a resource (P2.4 §4.8: closed plain data only)") });
         }
     }
     Ok(layouts)

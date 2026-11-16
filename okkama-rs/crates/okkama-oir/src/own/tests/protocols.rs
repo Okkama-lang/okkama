@@ -62,6 +62,7 @@ fn commit4_high_characterization() {
         let golden = crate::text::parse(&golden).unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert_eq!(crate::text::print(&output.module).unwrap(), crate::text::print(&golden).unwrap(), "{name}");
         verify_output(&golden);
+        // `work.charged` includes classification's walk for foreign function types (#723).
         let stats = std::fs::read_to_string(expected.join(format!("{name}.stats"))).unwrap();
         assert_eq!(output.stats.report(&output.census), stats, "{name}");
         let parsed = roundtrip(&output.module);

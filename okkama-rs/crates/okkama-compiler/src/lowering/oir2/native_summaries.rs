@@ -83,8 +83,7 @@ impl P1NativeSummaries {
                     let managed = if !native && super::drivers::known(name) {
                         super::drivers::deps(module, id, &language.params)
                     } else {
-                        language.params.iter().filter(|ty| matches!(module.types.get(**ty),
-                            Ok(ir::Type::Object { .. } | ir::Type::Role { .. }))).count()
+                        language.params.iter().filter(|ty| carries_deps(module, **ty)).count()
                     };
                     if managed != 0 {
                         let deps = module.types.iter().find_map(|(id, ty)| {
@@ -258,8 +257,19 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
         (false, name) => {
             let (operation, suffix) = name.strip_prefix("okkama.atomic.Atomic.")
                 .and_then(|name| name.split_once('$')).ok_or_else(|| error(format!("unknown intrinsic {name}")))?;
-            let value = atomic_value(module, suffix)
-                .ok_or_else(|| error(format!("unsupported Atomic value {suffix}")))?;
+            // Other closed plain data (#778) has no registered spelling: the operation being declared names its
+            // value (`closed` and `close` take only the Atomic).
+            let declared = match operation {
+                "new_value" => signature.params.first().copied(),
+                "value" => signature.results.first().copied(),
+                "replace" | "compare_and_replace" => signature.params.get(1).copied(),
+                _ => atomic_operand(module, suffix),
+            };
+            let known = atomic_value(module, suffix).or_else(|| declared.filter(|_| suffix.starts_with("t_")));
+            let value = || known.ok_or_else(|| error(format!("unsupported Atomic value {suffix}")));
+            if !suffix.starts_with("t_") {
+                value()?;
+            }
             let object = module.types.iter().find_map(|(id, ty)| match ty {
                 ir::Type::Object { decl, args } if args.is_empty() => module.declarations.get(*decl).ok()
                     .filter(|decl| decl.name == format!("async.atomic.Atomic_{suffix}"))
@@ -269,21 +279,21 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
                 _ => None,
             }).ok_or_else(|| error("missing plain Atomic specialization"))?;
             match operation {
-                "new_value" => (vec![value], vec![object]),
+                "new_value" => (vec![value()?], vec![object]),
                 "value" => {
                     kind = ir::EntryKind::ObservationAdmissionStaysCaller;
                     failures.push(ir::FailureKind::Thrown);
-                    (vec![object], vec![value])
+                    (vec![object], vec![value()?])
                 }
                 "replace" => {
                     failures.push(ir::FailureKind::Thrown);
-                    (vec![object, value], vec![])
+                    (vec![object, value()?], vec![])
                 }
                 // Publishes `revised` only when the held value equals `expected`; a failed comparison
                 // publishes nothing. Plain values compare without failure.
                 "compare_and_replace" => {
                     failures.push(ir::FailureKind::Thrown);
-                    (vec![object, value, value], vec![find(ir::Type::Bool).ok_or_else(|| error("missing bool"))?])
+                    (vec![object, value()?, value()?], vec![find(ir::Type::Bool).ok_or_else(|| error("missing bool"))?])
                 }
                 "closed" => {
                     kind = ir::EntryKind::ObservationAdmissionStaysCaller;
@@ -319,9 +329,22 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
     })
 }
 
-/// The interned plain value type of a registered Atomic specialization suffix (P2.4 §4.8): a scalar
-/// or `array_` and a plain element suffix; `None` for any other suffix or a type the module lacks.
+/// The interned value type of a registered Atomic specialization suffix (P2.4 §4.8): a scalar, `array_` and a
+/// plain element suffix, or `role_` and a role declaration (#764); `None` for any other suffix or a type the
+/// module lacks.
 pub(super) fn atomic_value(module: &ir::Module, suffix: &str) -> Option<ir::TypeId> {
+    // Other closed plain data (#778): the value type the specialization's operations declare.
+    if suffix.starts_with("t_") {
+        return atomic_operand(module, suffix);
+    }
+    // A role value (#764): the role declared under that name; the loader admits only a plain one.
+    if let Some(name) = suffix.strip_prefix("role_") {
+        return module.types.iter().find_map(|(id, ty)| match ty {
+            ir::Type::Role { decl, args } if args.is_empty() => module.declarations.get(*decl).ok()
+                .filter(|declaration| declaration.name == name).map(|_| id),
+            _ => None,
+        });
+    }
     let ty = match suffix {
         "int" => ir::Type::Int,
         "string" => ir::Type::Str,
@@ -333,6 +356,48 @@ pub(super) fn atomic_value(module: &ir::Module, suffix: &str) -> Option<ir::Type
         _ => ir::Type::Array(atomic_value(module, suffix.strip_prefix("array_")?)?),
     };
     module.types.iter().find_map(|(id, value)| (*value == ty).then_some(id))
+}
+
+/// Whether an external's parameter of `ty` carries deps in its elaborated signature, as own gives them: an object
+/// or a role value, and (#778, an Atomic over closed plain data) an array of role values, which own tracks as
+/// references. A plain variant or map carries none. The SPB 17 P1 entries count the same (`p1::entry`).
+fn carries_deps(module: &ir::Module, ty: ir::TypeId) -> bool {
+    let mut leaf = ty;
+    while let Ok(ir::Type::Array(element)) = module.types.get(leaf) {
+        leaf = *element;
+    }
+    matches!(module.types.get(ty), Ok(ir::Type::Object { .. } | ir::Type::Role { .. }))
+        || leaf != ty && matches!(module.types.get(leaf), Ok(ir::Type::Role { .. }))
+}
+
+/// The value type of the Atomic specialization `suffix`, as its registered operations declare it (#778): the
+/// value `new_value` publishes, `value` reads or `replace` stores. All of them must agree.
+pub(super) fn atomic_operand(module: &ir::Module, suffix: &str) -> Option<ir::TypeId> {
+    let mut found = None;
+    for (_, function) in module.functions.iter() {
+        let Some(name) = function.attrs.iter().find_map(|attr| match attr {
+            ir::FunctionAttr::Intrinsic { name, .. } => Some(name.as_str()),
+            _ => None,
+        }) else { continue };
+        let Some((operation, rest)) = name.strip_prefix("okkama.atomic.Atomic.").and_then(|name| name.split_once('$'))
+            else { continue };
+        if rest != suffix {
+            continue;
+        }
+        let value = match operation {
+            "new_value" => function.signature.params.first().copied(),
+            "value" => function.signature.results.first().copied(),
+            "replace" | "compare_and_replace" => function.signature.params.get(1).copied(),
+            _ => None,
+        };
+        if let Some(value) = value {
+            if found.is_some_and(|found| found != value) {
+                return None;
+            }
+            found = Some(value);
+        }
+    }
+    found
 }
 
 /// The general synchronous native ABI (P2.4 §4.7). A symbol of the runtime table is admitted only

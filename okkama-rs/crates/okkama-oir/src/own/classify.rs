@@ -188,8 +188,9 @@ pub(super) fn classify(
         }
     }
     let free = free_parameters(module, budget)?;
+    let foreign = foreign_functions(module, budget)?;
     let context = Context { module, dictionaries: &dictionaries, captures: &captures, origins: &origins, open: &open,
-        free: &free };
+        free: &free, foreign: &foreign };
     let mut once_types = BTreeSet::new();
     for (_, declaration) in module.declarations.iter() {
         budget.work(1)?;
@@ -226,6 +227,69 @@ struct Context<'a> {
     origins: &'a BTreeSet<TypeId>,
     open: &'a BTreeSet<TypeId>,
     free: &'a BTreeMap<TypeId, BTreeSet<ParameterKey>>,
+    /// Function types a value from outside the module may have (#723): reached from a bodyless function's
+    /// results or the entry's parameters. The verifier's obligation formula counts the same set.
+    foreign: &'a BTreeSet<TypeId>,
+}
+
+/// The function types a value from outside the module may have: those the results of bodyless functions and the
+/// entry's parameters reach (#723, as the verifier's `closures`). Each function and each visited type is one unit of
+/// work.
+fn foreign_functions(module: &Module, budget: &mut Budget<'_>) -> Result<BTreeSet<TypeId>, OwnError> {
+    let mut pending = vec![];
+    for (_, function) in module.functions.iter() {
+        budget.work(1)?;
+        if function.body.is_none() {
+            pending.extend(function.signature.results.iter().copied());
+        }
+        if function.attrs.contains(&FunctionAttr::Entry) {
+            pending.extend(function.signature.params.iter().copied());
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut foreign = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        budget.work(1)?;
+        if !seen.insert(ty) {
+            continue;
+        }
+        budget.memory(64)?;
+        let fields = |decl: &DeclId, pending: &mut Vec<TypeId>| -> Result<(), OwnError> {
+            match &module.declarations.get(*decl).map_err(arena)?.kind {
+                DeclarationKind::Object { fields, .. } => pending.extend(fields.iter().map(|field| field.ty)),
+                DeclarationKind::Variant { cases, .. } => {
+                    for case in cases {
+                        if let DeclarationKind::Object { fields, .. } =
+                            &module.declarations.get(case.layout).map_err(arena)?.kind {
+                            pending.extend(fields.iter().map(|field| field.ty));
+                        }
+                    }
+                }
+                DeclarationKind::Cap { owner, .. } => pending.push(*owner),
+                _ => {}
+            }
+            Ok(())
+        };
+        match module.types.get(ty).map_err(arena)? {
+            Type::Fn(function) => {
+                foreign.insert(ty);
+                pending.extend(&function.params);
+                pending.extend(&function.result);
+            }
+            Type::Object { decl, args } | Type::Role { decl, args } | Type::Cap { decl, args } => {
+                pending.extend(args);
+                fields(decl, &mut pending)?;
+            }
+            Type::Variant(decl) => fields(decl, &mut pending)?,
+            Type::Successor(child) | Type::Array(child) | Type::Builder(child) | Type::LowCell(child) => {
+                pending.push(*child);
+            }
+            Type::Map(key, value) | Type::MapBuilder(key, value) => pending.extend([*key, *value]),
+            Type::Future(result) => pending.extend(result),
+            _ => {}
+        }
+    }
+    Ok(foreign)
 }
 
 /// The reachable graph of one type: its facts, whether it reaches a cap, `any` or Future, and the function
@@ -275,9 +339,14 @@ fn graph(context: &Context<'_>, root: TypeId, once: bool, budget: &mut Budget<'_
         }
         let (ty, mut env) = terms.nodes[term].clone();
         // A function type's dictionary is the cleanup contract of its open calls. The once graph resolves the
-        // type by the closures this module creates instead (`once_graph`).
+        // type by the closures this module creates instead (`once_graph`), and so does every graph in which the
+        // function type is a part, not the root (#723): a holder of action values owns what their closures may
+        // own, as a holder of role values owns what the role's implementations may own (P2.4 §4.1: a closure
+        // owns a captured resource only when it captured a fresh one). The function type itself keeps its
+        // dictionary for its own calls and cleanup.
         let function_type = matches!(module.types.get(ty).map_err(arena)?, Type::Fn(_));
-        if let Some(descriptor) = context.dictionaries.get(&ty).filter(|_| !(once && function_type)) {
+        let by_closures = function_type && (once || term != root_term && !context.foreign.contains(&ty));
+        if let Some(descriptor) = context.dictionaries.get(&ty).filter(|_| !by_closures) {
             module.functions.get(descriptor.cleanup).map_err(arena)?;
             module.summaries.get(descriptor.summary).map_err(arena)?;
             if !facts.descriptors.contains(descriptor) {
@@ -338,7 +407,10 @@ fn graph(context: &Context<'_>, root: TypeId, once: bool, budget: &mut Budget<'_
             }
             Type::Fn(_) | Type::Any => {
                 children.extend(context.captures.get(&ty).into_iter().flatten().copied());
-                if !context.origins.contains(&ty) || context.open.contains(&ty) {
+                // A part resolved by its closures (#723): every value of the type is one of the closures this
+                // module creates, whose captures are its children; a type without closures has no value.
+                let closed = by_closures && !once;
+                if !closed && (!context.origins.contains(&ty) || context.open.contains(&ty)) {
                     facts.unresolved.insert(ty);
                 }
                 functions.insert(ty);
