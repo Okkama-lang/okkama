@@ -1,4 +1,4 @@
-# Chapter 25. Building a web service
+# Chapter 24. Building a web service
 
 A command-line tool runs once and exits. A web service starts and keeps
 answering, many requests at a time, until someone stops it. This chapter
@@ -15,11 +15,11 @@ DELETE /api/notes/:id    remove it; 204, or 404
 The previous chapter's habits carry over: decide in values, keep the outside
 world behind a role, test without the real thing. What is new is
 concurrency. Requests overlap, so state shared between them needs an owner
-(Section 26.9), and every endpoint is an `async` action (Chapter 20). The
+(Section 25.9), and every endpoint is an `async` action (Chapter 20). The
 chapter builds the service over memory first, then puts PostgreSQL behind
 the same role without touching a line of the API.
 
-## 25.1 What a service is made of
+## 24.1 What a service is made of
 
 HTTP is a protocol of messages. A request carries a method, a target, header
 fields and perhaps a body; a response carries a status, header fields and
@@ -29,7 +29,7 @@ responses that keeps some state between them. The standard library's
 value:
 
 - **A route table** (`web/routing`) says which method and path reach which
-  endpoint. It is declared, like `cli/command`'s commands in Chapter 24, and
+  endpoint. It is declared, like `cli/command`'s commands in Chapter 23, and
   it is checked when it is built: two routes with the same shape are refused,
   a known path with the wrong method answers 405 with `Allow`, and `HEAD`
   follows `GET`.
@@ -46,7 +46,7 @@ The server itself (`web/app`) binds the table to an address and serves it.
 It is the only part that touches the network, and the tests in this chapter
 never start it.
 
-## 25.2 The service
+## 24.2 The service
 
 The notes service is one module. Its parts are shown together, then taken
 one at a time.
@@ -57,21 +57,21 @@ one at a time.
   form.
 - **`NoteStore`** is the role for storage. The API depends on the role, so
   memory today and a database tomorrow are two implementations of one
-  contract (Section 26.5). Its actions are `async`, because a database
-  answers later; Section 25.9 shows that doer.
+  contract (Section 25.5). Its actions are `async`, because a database
+  answers later; Section 24.9 shows that doer.
 - **`StoreRefusal`** is what a store may refuse: a title that is already
   taken. The store knows the rule; it does not know HTTP.
 - **`MemoryStore`** keeps every note in one `Shelf` value inside an `Atomic`.
-  Section 25.8 explains why it is built that way.
+  Section 24.8 explains why it is built that way.
 - **`NotesApi`** is the controller. Each endpoint reads what it needs from
   the request, asks the store, and returns a reply.
 - **`StoreRefusals`** is an exception scope: it turns the store's refusals
-  into statuses (Section 25.6).
+  into statuses (Section 24.6).
 - **`NotesService.routes()`** is the route table: one place that says which
   URL reaches which action. `Scope("/api", …)` writes the prefix once, and
   `Resource` writes a path once for several methods.
 
-## 25.3 Endpoints
+## 24.3 Endpoints
 
 An endpoint reads the request through typed accessors.
 `request.path().int("id")` reads the `:id` of the pattern as an `int`; a value
@@ -106,7 +106,7 @@ ask the store, answer 201. It has no status codes for the body's own
 failures, no header handling and no serialisation code, because each of
 those belongs to a value that already knows it.
 
-## 25.4 Lists come in pages
+## 24.4 Lists come in pages
 
 A list endpoint that returns every note works on the first day and fails
 on a later one, when a client asks for a hundred thousand notes and the
@@ -150,9 +150,9 @@ cursor that carries every key of the order, and services usually make it
 opaque (an encoded token) so that clients cannot build one by hand. The
 endpoint changes; the shape, items plus a link, does not.
 
-## 25.5 Failures become statuses
+## 24.5 Failures become statuses
 
-A service has the same three kinds of failure as a tool (Section 24.5), and
+A service has the same three kinds of failure as a tool (Section 23.5), and
 HTTP gives each a place.
 
 **The client's mistakes** are 4xx statuses. An endpoint states its own with
@@ -182,7 +182,7 @@ the database itself, a lost connection or a timeout, takes the same path: it
 is not the client's mistake, and nothing the client could change would fix
 it.
 
-## 25.6 Exception scopes
+## 24.6 Exception scopes
 
 The store refuses a duplicate title with `StoreRefusal.duplicate(title)`,
 an error of its own. It could have thrown `Exception.status(409, …)`
@@ -233,11 +233,11 @@ direct, and it lets a scope add header fields, a `Retry-After` for a quota
 for example.
 
 The test that checks it is a client's test: post the same title twice and
-read a 409 with the problem's `detail`. When Section 25.9 replaces the store,
+read a 409 with the problem's `detail`. When Section 24.9 replaces the store,
 the refusal comes from a database constraint instead of a scan, and this
 scope and this test stay as they are.
 
-## 25.7 Code around endpoints
+## 24.7 Code around endpoints
 
 Some concerns belong to every request rather than to one endpoint: an access
 log, authentication, a maintenance switch, headers that every reply carries.
@@ -249,7 +249,7 @@ does `Surrounding`: it receives the request and the rest of the chain as
 The standard library brings `AccessLog`, `BearerAuth` and `Cors`. The example
 below makes reading public and changing guarded, and adds its own around:
 
-{{example:25-guarded-tests}}
+{{example:24-guarded-tests}}
 
 - `Around(BearerAuth(token: …))` sits on the inner `Scope("/notes", …)` that
   holds only `POST` and `DELETE`, so the `GET` routes beside it are untouched.
@@ -271,13 +271,13 @@ are arounds; translating a layer's errors is a scope.
 
 An around is where cross-cutting code goes, and only there. An endpoint that
 checks a token itself, or writes its own log line, is the "same `defer` around
-every use" smell of Section 26.7 in HTTP form.
+every use" smell of Section 25.7 in HTTP form.
 
-## 25.8 State shared between requests
+## 24.8 State shared between requests
 
 Requests are served concurrently, so the store is shared by every task that
 serves a request. Okkama does not let objects change in place, and a `Cell`
-cannot cross into async code (Section 26.9). That leaves two shapes: an
+cannot cross into async code (Section 25.9). That leaves two shapes: an
 owner task that receives messages, or an `Atomic`, one value that tasks
 share and replace whole.
 
@@ -308,12 +308,12 @@ what notices that the shelf moved. The loop costs one comparison when it
 succeeds, and it keeps the store correct under a change that nobody will
 remember to review for concurrency.
 
-The owner-task shape of Section 26.9 suits stores that do slow work in
+The owner-task shape of Section 25.9 suits stores that do slow work in
 order, such as appending to a file. A store that already lives elsewhere,
 a database, needs neither: it is a role whose implementation sends queries,
 and the database is the owner.
 
-## 25.9 A database behind the role
+## 24.9 A database behind the role
 
 `NoteStore` was written for this moment. A store over PostgreSQL is another
 doer of the same role, in a module of its own:
@@ -337,7 +337,7 @@ doer of the same role, in a module of its own:
   a bare `throw;` (Section 10.6). There is no read-then-write, and no race
   between two servers: the constraint is checked where the data lives.
 - **Pages come from the index.** `WHERE id > $1 ORDER BY id LIMIT $2` is the
-  keyset page of Section 25.4 in SQL. With the primary key's index, the
+  keyset page of Section 24.4 in SQL. With the primary key's index, the
   thousandth page costs what the first does. `.all(count)` reads at most the
   rows it asked for.
 - **Each read takes only what it needs.** `.maybe()` is at most one row,
@@ -346,14 +346,14 @@ doer of the same role, in a module of its own:
   presence of a row and not a count to compare.
 
 What did not change is the point. `NotesApi`, `StoreRefusals`, the route
-table and every test of Section 25.10 are the same code. The duplicate title
+table and every test of Section 24.10 are the same code. The duplicate title
 is still a 409, because `StoreRefusals` translates the role's refusal,
 whichever doer raised it. The role's actions became `async` once, when the
 role was written, and the memory store pays little for it: an action that
 never awaits runs its body to the end the first time it is awaited
 (Section 20.3).
 
-Wiring is a different `main` (Section 25.11), and it is the only place that
+Wiring is a different `main` (Section 24.11), and it is the only place that
 names PostgreSQL:
 
 ```okkama
@@ -382,14 +382,14 @@ building a `PostgresStore` over a disposable database, in CI, where a
 database is part of the environment. One suite, two stores: the role is the
 contract, and both doers are tested against it.
 
-## 25.10 Testing without a network
+## 24.10 Testing without a network
 
 `web/testing` gives `WebTestClient`, which calls a route table the way a real
 HTTP client calls a server, without a socket. A request goes through the
 routes, their arounds and exception scopes, and comes back as the same
 `ClientResponse` a real client reads:
 
-{{example:25-notes-tests}}
+{{example:24-notes-tests}}
 
 - `Fresh().client()` builds the whole service over an empty `MemoryStore`, so
   every test starts from nothing and tests cannot see each other's notes.
@@ -411,7 +411,7 @@ list and expects identifiers 1 to 4. A lost update would show here: notes
 are keyed by identifier, so two creations that got the same one would leave
 three notes, not four.
 
-As Section 25.8 explained, this store cannot lose an update today, because
+As Section 24.8 explained, this store cannot lose an update today, because
 nothing interleaves inside `added`. The test is still worth its lines. It
 states the property that clients rely on, four creations make four notes,
 in the terms they see it, and it keeps stating it when someone adds an
@@ -419,7 +419,7 @@ in the terms they see it, and it keeps stating it when someone adds an
 would fail on a plausible wrong change is the kind worth keeping; one that
 only passes is not.
 
-## 25.11 Running it
+## 24.11 Running it
 
 The program that serves the API for real is short:
 
@@ -431,7 +431,7 @@ async main() is int {
 }
 ```
 
-With PostgreSQL, `main` builds the pool and the store of Section 25.9 instead
+With PostgreSQL, `main` builds the pool and the store of Section 24.9 instead
 of `MemoryStore()`, and keeps everything else.
 
 `listen` serves until the process receives SIGTERM or SIGINT. Then the
@@ -444,13 +444,13 @@ gets a graceful shutdown without any code in the service.
 
 The address is an IP literal; `web/app` does no name resolution. The port,
 the address, the database URL and other settings come in the same layers as
-a tool's (Section 24.8): a flag, then the environment, then a default, read
+a tool's (Section 23.8): a flag, then the environment, then a default, read
 in `main` and passed down. A database password does not belong in a URL that
 a log might print: `PostgresDatabase(url:, password:)` takes it separately,
 as `SecretBytes`. HTTPS takes a TLS identity, `listen(address:, port:, tls:)`,
 and then offers HTTP/2 and HTTP/1.1 to clients.
 
-## 25.12 What the design costs
+## 24.12 What the design costs
 
 The service is longer than a script that would answer the same four requests
 with a mutable dictionary and a handler per URL. What the extra length buys:
@@ -475,5 +475,4 @@ with a scan of every title on every creation. For a store of a few thousand
 notes both are invisible; for millions, the store belongs in a database
 behind the same role, where the index does the scan and there is no copy.
 The `async` endpoints and the `async` role cost a little per request compared
-to synchronous ones; Chapter 20 explains what that buys, and Chapter 23 what
-it costs.
+to synchronous ones; Chapter 20 explains what that buys.

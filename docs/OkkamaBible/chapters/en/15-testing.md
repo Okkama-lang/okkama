@@ -214,7 +214,7 @@ new value; the map inside is an ordinary immutable value, replaced whole.
   `Atomic`, so a fake and all its successors share one state, and data
   survives a transition without being copied.
 - The field cannot be a `Cell`. A cell stays inside one piece of synchronous
-  code and cannot be a field of anything (Section 26.3); a fake is an object
+  code and cannot be a field of anything (Section 25.3); a fake is an object
   like any other, and the rule is the same.
 - A missing key reads as it does anywhere else: `shelf.value()[id]` on an
   absent id is a runtime error, and `has` asks first.

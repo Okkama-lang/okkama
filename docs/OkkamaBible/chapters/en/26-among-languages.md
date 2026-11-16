@@ -1,4 +1,4 @@
-# Chapter 27. Okkama Among Languages
+# Chapter 26. Okkama Among Languages
 
 The earlier chapters compared Okkama with other languages one construct at a
 time: numbers in Chapter 5, types in Chapter 4, collections in Chapter 8,
@@ -17,7 +17,7 @@ choices sit among choices that working languages have made, so that a
 reader who knows one of them can see what is familiar, what is different,
 and what is missing.
 
-## 27.1 The rules side by side
+## 26.1 The rules side by side
 
 | | Java | Kotlin | Go | Rust | Haskell | OCaml | Okkama |
 |---|---|---|---|---|---|---|---|
@@ -37,7 +37,7 @@ literals default to, is unbounded like Okkama's `int`. Read down a column and th
 the table gives all of Okkama's answers at once, and that is the design's
 one new idea (Section 1.10).
 
-## 27.2 Java
+## 26.2 Java
 
 Java is the language Okkama argues with most, because *Elegant Objects*,
 the discipline Okkama turns into rules, was written for Java programmers
@@ -48,7 +48,7 @@ guarantee. A convention holds as long as every reviewer catches every
 exception to it; in Okkama the compiler does.
 
 Java answers some of the same problems with newer features. Records are
-immutable carriers of data [@gosling2023], close to what Section 28.4 calls
+immutable carriers of data [@gosling2023], close to what Section 27.4 calls
 a shorthand for data objects. Virtual threads make blocking code cheap
 [@jep444], and structured concurrency, still a preview in Java 21, gives
 tasks a parent scope that waits for them [@jep453]. Java keeps `null`,
@@ -57,7 +57,7 @@ installed base, removing them is not an option. Okkama had no installed
 base, which is the only reason it could start where Java's best practice
 ends.
 
-## 27.3 Kotlin
+## 26.3 Kotlin
 
 Kotlin took Java's runtime and changed its defaults: classes are final
 unless declared `open` [@kotlininheritance], nullability is part of a type
@@ -73,7 +73,7 @@ platform types from Java are all available when a programmer wants them.
 Okkama removes the other choice. A Kotlin team can write Okkama-style code;
 an Okkama program cannot be written any other way.
 
-## 27.4 Go
+## 26.4 Go
 
 Go and Okkama agree on more than their surfaces suggest. Neither has
 classes or inheritance, both treat errors as values that a function hands
@@ -89,7 +89,7 @@ Go chose simplicity of the language and left discipline to the programmer
 and to tools such as linters. Okkama chose simplicity of the *program*: a
 smaller set of things that can go wrong, bought with a stricter language.
 
-## 27.5 Rust
+## 26.5 Rust
 
 Rust is the closest relative in purpose. It has no `null`, no inheritance,
 values immutable unless declared `mut`, errors as `Result`, and resources
@@ -109,7 +109,7 @@ panics in debug builds and wraps in release builds [@klabnik2023], where
 Okkama's integers grow (Chapter 5). A program that needs Rust's control of
 memory should be written in Rust.
 
-## 27.6 Haskell
+## 26.6 Haskell
 
 Haskell is the purest language in the table: values never change, effects
 are confined to types such as `IO`, absence is `Maybe`, and contracts are
@@ -127,7 +127,7 @@ purity is enforced by types; Okkama's immutability is enforced by the
 absence of assignment, and its effects are ordinary calls on objects that
 carry the authority for them (Chapter 21).
 
-## 27.7 OCaml
+## 26.7 OCaml
 
 OCaml is ML with objects and an industrial track record. Bindings are
 immutable, absence is `option`, failures are exceptions or `result`, and
@@ -142,9 +142,9 @@ OCaml shows that an expression-oriented, immutable-by-default language with
 algebraic data types can be fast and practical. It keeps the escape
 hatches, mutable fields and classes, that Okkama removed, and it has the
 recursive variants and nested patterns that Okkama does not have yet
-(Section 28.2).
+(Section 27.2).
 
-## 27.8 Python
+## 26.8 Python
 
 Python is the language most readers have written something in, and its
 design statement says, among other things, that practicality beats purity
@@ -173,7 +173,7 @@ annotations checked in continuous integration, is close to an Okkama program
 in shape. What it lacks is the guarantee that a module someone else wrote
 follows the same conventions.
 
-## 27.9 Swift
+## 26.9 Swift
 
 Swift, introduced by Apple in 2014, is the industrial language closest to
 Okkama in its defaults [@swiftbook]. Values of `struct` and `enum` types are
@@ -195,7 +195,7 @@ and gives deterministic release only to objects with `destroy` (Chapter 11).
 A function that can fail is marked `throws`, and each call marks `try`; an
 Okkama signature does not say that an action can fail (Section 10.19).
 
-## 27.10 Erlang
+## 26.10 Erlang
 
 Erlang was built at Ericsson for telephone switches that must not stop
 [@armstrong2003]. Its data is immutable, a variable is bound once, integers
@@ -217,7 +217,7 @@ and nothing restarts automatically. Isolation by memory is what process
 workers give (Chapter 21), at the price of a separate program. Erlang is
 also dynamically typed, with static checking left to optional tools.
 
-## 27.11 Clojure
+## 26.11 Clojure
 
 Clojure is a Lisp for the JVM, which Rich Hickey released in 2007 after two
 years of work on his own time [@hickey2020]. Of all the languages in this
@@ -256,7 +256,7 @@ The differences come from typing and from Lisp.
   `finally`, and only code that remembers to use it gets the release.
   Okkama ties release to the owner's scope (Chapter 11).
 
-## 27.12 C#
+## 26.12 C#
 
 C# appeared in 2002 as Microsoft's answer to Java, and it has absorbed more
 of the ideas in this book than any other mainstream language
@@ -296,7 +296,7 @@ C# shows how far a language can travel toward these ideas while keeping
 every program that was written before. Okkama shows the language that
 results when nothing has to be kept.
 
-## 27.13 TypeScript
+## 26.13 TypeScript
 
 TypeScript adds static types to JavaScript, which it compiles to, and the
 types are erased in the output. Its type system is structural by design:
@@ -324,7 +324,7 @@ the program's own rules, and its run time keeps them: a value has one
 concrete type, and a role reference cannot be cast down to the object
 behind it (Section 14.3).
 
-## 27.14 A port, step by step
+## 26.14 A port, step by step
 
 The rules are easiest to compare on one small class. Here is a bank account
 in Java, written the way a Java course would write it:
@@ -379,7 +379,7 @@ in the map: ada 700
 
 The same program in Okkama:
 
-{{example:27-port}}
+{{example:26-port}}
 
 Each change in the port is a decision that the Java version left implicit.
 
@@ -408,7 +408,7 @@ program asks), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 
-## 27.15 What the comparison shows
+## 26.15 What the comparison shows
 
 Three things stand out.
 
@@ -421,7 +421,7 @@ Three things stand out.
   also keeps the less safe choice for the programs that need it. Okkama
   has fewer exits: `Cell` for synchronous code, `Atomic` for state shared
   between tasks, and natives for the host. A program that needs another one
-  is a program Okkama does not serve well, and Chapter 28 lists where that
+  is a program Okkama does not serve well, and Chapter 27 lists where that
   shows.
 - **Maturity is the largest difference.** Every language in the table has
   libraries, tools, books and production systems built over years or

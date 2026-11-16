@@ -38,7 +38,7 @@ that a decision written in the object, not a default.
 
 **Cost.** Some objects really are just data: a point, a date, a row from a
 database. For them, actions that return fields are boilerplate. Okkama's
-answer today is to write them; a future shorthand is discussed in Chapter 28.
+answer today is to write them; a future shorthand is discussed in Chapter 27.
 
 ## 3.2 Rule two: state is bound at construction, and constructors guard it
 

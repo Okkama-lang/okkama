@@ -81,24 +81,27 @@ current size of every chapter.
 | 20 | Async, futures and structured concurrency | 22 |
 | 21 | Processes, natives and capabilities | 14 |
 | 22 | The standard library and its style (the json reference) | 24 |
-| | **Part VI. Costs** | |
-| 23 | What things cost: the language's cost model, measured from the outside | 16 |
-| | **Part VII. Practice and judgement** | |
-| 24 | Building a CLI tool | 12 |
-| 25 | Building a web service | 16 |
-| 26 | Patterns and anti-patterns | 14 |
-| 27 | Okkama among languages: Java, Kotlin, Go, Rust, Haskell, OCaml | 16 |
-| 28 | Weaknesses, open problems and the road ahead | 14 |
+| | **Part VI. Practice and judgement** | |
+| 23 | Building a CLI tool | 12 |
+| 24 | Building a web service | 16 |
+| 25 | Patterns and anti-patterns | 14 |
+| 26 | Okkama among languages: Java, Kotlin, Go, Rust, Haskell, OCaml | 16 |
+| 27 | Weaknesses, open problems and the road ahead | 14 |
 | | **Appendices** | |
 | A | Grammar | 8 |
 | B | Builtin behaviour (generated) | 6 |
 | C | Standard library index (generated) | 12 |
 | D | Glossary | 6 |
 | E | References | 10 |
-| | **Total** | **≈ 478** |
+| | **Total** | **≈ 462** |
 
 The former Part VI (the compiler, the engines, Sparrow, safety by
 construction) moved to the separate internals book on 2026-11-14.
+
+The cost-model chapter (former chapter 23, Part VI “Costs”) was dropped on
+2026-11-17 by the owner: measurements mean nothing to the book’s reader.
+Chapters 24–28 became 23–27, with their examples; Part VII became Part VI.
+Progress entries dated before 2026-11-17 keep the old numbers.
 
 The page counts are a guide, not a floor: a chapter ends when its subject is
 covered (owner, 2026-11-17). The book aims at about 400 pages per language.
@@ -242,7 +245,8 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
   BigInt after #189 (ch. 5). Chapter 27 first version (4.0 pages EN): a
   matrix of the rules across Java, Kotlin, Go, Rust, Haskell, OCaml and
   Okkama, one section per language, what the comparison shows. Still
-  unwritten: chapter 23 (cost model, after Champ is production-ready).
+  unwritten: chapter 23 (cost model, after Champ is production-ready;
+  dropped 2026-11-17).
 - Editorial pass (2026-11-14): applied “The language, not its organs” to
   all 21 remaining existing chapter pairs (1–19, 21–22); Chapter 20 was
   used as the reference and left unchanged. Removed and rewritten source
@@ -373,36 +377,36 @@ Updated with each chapter: `build.py --stats`.
   commit, local changes kept); 19.4 and 19.11 the diagnostics of #338. Still
   no real project example: installing runs git, which the cage forbids.
 
-- Chapter 26 (patterns and anti-patterns), 2026-11-14: 12.8 pages (EN and
+- Chapter 25 (patterns and anti-patterns), 2026-11-14: 12.8 pages (EN and
   RU) of its floor of 14. Written:
   - patterns and what a language does to them (Alexander, GoF, Norvig;
     antipatterns after Koenig and Brown);
-  - composition instead of flags (`26-flags`), Composite (`26-composite`),
-    Strategy as a role or an action value (`26-strategy`);
-  - successor pipelines (`26-pipeline`), Builder as named options
-    (`26-options`, Bloch), typestate (`26-typestate`, `-rejected`), Memento
-    as a list of values (`26-undo`);
-  - named refusals (`26-refusals`), renamed at a layer boundary (→ 10.12);
-  - every dependency a role with its fake (`26-signup-tests`); decide, then
-    do (`26-decide`, Bernhardt's functional core);
-  - resources in scopes (`26-section`), absence decided at the edge
-    (`26-edge`), one owner for shared state (`26-owner`,
-    `26-shared-rejected`);
+  - composition instead of flags (`25-flags`), Composite (`25-composite`),
+    Strategy as a role or an action value (`25-strategy`);
+  - successor pipelines (`25-pipeline`), Builder as named options
+    (`25-options`, Bloch), typestate (`25-typestate`, `-rejected`), Memento
+    as a list of values (`25-undo`);
+  - named refusals (`25-refusals`), renamed at a layer boundary (→ 10.12);
+  - every dependency a role with its fake (`25-signup-tests`); decide, then
+    do (`25-decide`, Bernhardt's functional core);
+  - resources in scopes (`25-section`), absence decided at the edge
+    (`25-edge`), one owner for shared state (`25-owner`,
+    `25-shared-rejected`);
   - the anti-patterns the compiler refuses and the ones it allows;
-  - a worked refactoring (`26-before`, `26-after`), the GoF catalogue read
+  - a worked refactoring (`25-before`, `25-after`), the GoF catalogue read
     in Okkama, and costs.
 
   Fixed 2026-11-14: the chapter repeated each example's output in a manual
   `text` block after `{{example}}`, which already appends it.
 
-  2026-11-16: 26.6 a table of cases (`26-postage-tests`: rows as objects,
+  2026-11-16: 25.6 a table of cases (`25-postage-tests`: rows as objects,
   the row's input carried with its answer so a failure names the row,
   boundary rows after Myers; Go wiki, Fit), sections after it renumbered
-  (refs in ch. 25 too). The floor is reached: 14.2 pages EN, 14.3 RU.
-  Still thin: 26.14 (costs) and 26.1; candidate: the expression problem in
+  (refs in ch. 24 too). The floor is reached: 14.2 pages EN, 14.3 RU.
+  Still thin: 25.14 (costs) and 25.1; candidate: the expression problem in
   practice. Found while writing: #594 (an enum case list rejects a trailing
   comma); #809 (no named or selectable sub-cases for a table's rows,
-  POSTPONED). The failure reports quoted in 26.6 are the 0.6.0 form (#756);
+  POSTPONED). The failure reports quoted in 25.6 are the 0.6.0 form (#756);
   0.5.8 prints `Priced@…`.
 
 ## Naming (owner, 2026-11-10)
@@ -484,9 +488,9 @@ previous Sparrow, `sparrow-origin`).
 
 Examples cannot fork or reach the network in the cage, so process and network code stays in plain code blocks.
 
-## Chapter 24 notes (2026-11-15)
+## Chapter 23 notes (2026-11-15)
 
-8.9 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `24-tally` over tally/sample.txt; the tests are `24-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
+8.9 pages (EN and RU) of its floor of 14. The tool is `tally` (examples/tally/tool.ok, a module). The run example is `23-tally` over tally/sample.txt; the tests are `23-tally-tests`, with a Given implementation of Sources. Sources: McIlroy 1978, POSIX Utility Conventions, CLI Guidelines.
 
 Written:
 - what a tool owes its user (five rules);
@@ -499,21 +503,21 @@ Written:
 - shipping (help, completion, build/exec);
 - costs.
 
-Added: subcommands (`24-subcommands`), a streaming filter with grep's exit status (`24-filter`), and flag > environment > default precedence (`24-settings`). Found while writing: #637, a branch command refuses its own --help.
+Added: subcommands (`23-subcommands`), a streaming filter with grep's exit status (`23-filter`), and flag > environment > default precedence (`23-settings`). Found while writing: #637, a branch command refuses its own --help.
 
 Added 2026-11-15:
-- output for people and programs (`24-output`: DetectedTerminalCapabilities, NO_COLOR, JSON);
-- changing files safely (`24-rewrite`: a Change value, --dry-run, sibling write + move).
+- output for people and programs (`23-output`: DetectedTerminalCapabilities, NO_COLOR, JSON);
+- changing files safely (`23-rewrite`: a Change value, --dry-run, sibling write + move).
 
 Left out on purpose: interruption (Ctrl-C). The std has no public signal API for synchronous tools (only the internal runtime/signal used by web/app), and the book makes no unverified claim about Ctrl-C.
 
 To add for the floor:
 - a longer case study: grow `tally` into a two-subcommand tool end to end;
-- or move material from 24.3 into a guided walkthrough.
+- or move material from 23.3 into a guided walkthrough.
 
-## Chapter 25 notes (2026-11-15)
+## Chapter 24 notes (2026-11-15)
 
-First draft, 4.0 pages (EN and RU) of 16. The service is a notes JSON API (examples/notes/api.ok): NoteStore role, MemoryStore over Atomic<Shelf> with compare_and_replace, NotesApi controller, NotesService routes. Tests are `25-notes-tests` with WebTestClient, no network. Sources: RFC 9110, RFC 9457.
+First draft, 4.0 pages (EN and RU) of 16. The service is a notes JSON API (examples/notes/api.ok): NoteStore role, MemoryStore over Atomic<Shelf> with compare_and_replace, NotesApi controller, NotesService routes. Tests are `24-notes-tests` with WebTestClient, no network. Sources: RFC 9110, RFC 9457.
 
 Written:
 - what a service is made of;
@@ -524,11 +528,11 @@ Written:
 - costs.
 
 Second pass (2026-11-15), 9.9 pages:
-- arounds (`25-guarded-tests`: BearerAuth on a scope, an own Maintenance around);
+- arounds (`24-guarded-tests`: BearerAuth on a scope, an own Maintenance around);
 - keyset pagination (`?after=&limit=`, limit + 1, a `next` link; offset vs keyset);
 - an exception scope (`StoreRefusals`: `StoreRefusal.duplicate` from the store becomes 409);
 - the store role became `async`, so a database can do it; honest note that the CAS loop never retries while `added` has no suspension point (Section 20.3);
-- PostgreSQL behind NoteStore (`notes/postgres`: a pool, `$n` parameters, UNIQUE + SQLSTATE 23505 → the role's refusal, keyset in SQL); compiled through `25-postgres-wiring`, never connected in the sandbox;
+- PostgreSQL behind NoteStore (`notes/postgres`: a pool, `$n` parameters, UNIQUE + SQLSTATE 23505 → the role's refusal, keyset in SQL); compiled through `24-postgres-wiring`, never connected in the sandbox;
 - a concurrency test (four spawned creations, ids 1..4).
 
 To add for the floor:

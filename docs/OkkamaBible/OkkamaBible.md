@@ -317,71 +317,71 @@
   - [22.14 What the style costs](#2214-what-the-style-costs)
   - [22.15 Codecs: one object per direction](#2215-codecs-one-object-per-direction)
   - [22.16 A worked example: time zones without the host](#2216-a-worked-example-time-zones-without-the-host)
-- [Chapter 24. Building a CLI tool](#chapter-24-building-a-cli-tool)
-  - [24.1 What a tool owes its user](#241-what-a-tool-owes-its-user)
-  - [24.2 The command line as data](#242-the-command-line-as-data)
-  - [24.3 The tool](#243-the-tool)
-  - [24.4 Deciding, then printing](#244-deciding-then-printing)
-  - [24.5 Failures at the edge](#245-failures-at-the-edge)
-  - [24.6 Testing a tool without a terminal](#246-testing-a-tool-without-a-terminal)
-  - [24.7 Input: whole or streamed](#247-input-whole-or-streamed)
-  - [24.8 Output for people and for programs](#248-output-for-people-and-for-programs)
-  - [24.9 Changing files safely](#249-changing-files-safely)
-  - [24.10 Configuration and the environment](#2410-configuration-and-the-environment)
-  - [24.11 Growing: subcommands](#2411-growing-subcommands)
-  - [24.12 Shipping it](#2412-shipping-it)
-  - [24.13 What the design costs](#2413-what-the-design-costs)
-- [Chapter 25. Building a web service](#chapter-25-building-a-web-service)
-  - [25.1 What a service is made of](#251-what-a-service-is-made-of)
-  - [25.2 The service](#252-the-service)
-  - [25.3 Endpoints](#253-endpoints)
-  - [25.4 Lists come in pages](#254-lists-come-in-pages)
-  - [25.5 Failures become statuses](#255-failures-become-statuses)
-  - [25.6 Exception scopes](#256-exception-scopes)
-  - [25.7 Code around endpoints](#257-code-around-endpoints)
-  - [25.8 State shared between requests](#258-state-shared-between-requests)
-  - [25.9 A database behind the role](#259-a-database-behind-the-role)
-  - [25.10 Testing without a network](#2510-testing-without-a-network)
-  - [25.11 Running it](#2511-running-it)
-  - [25.12 What the design costs](#2512-what-the-design-costs)
-- [Chapter 26. Patterns and anti-patterns](#chapter-26-patterns-and-anti-patterns)
-  - [26.1 What a pattern is, and what a language does to it](#261-what-a-pattern-is-and-what-a-language-does-to-it)
-  - [26.2 Behaviour by composition, not by flags](#262-behaviour-by-composition-not-by-flags)
-  - [26.3 Change as a value: successor pipelines](#263-change-as-a-value-successor-pipelines)
-  - [26.4 Refusals have names](#264-refusals-have-names)
-  - [26.5 Every dependency is a role, every role has a fake](#265-every-dependency-is-a-role-every-role-has-a-fake)
-  - [26.6 A table of cases](#266-a-table-of-cases)
-  - [26.7 Resources belong to scopes](#267-resources-belong-to-scopes)
-  - [26.8 Absence is a type](#268-absence-is-a-type)
-  - [26.9 Shared state has one owner](#269-shared-state-has-one-owner)
-  - [26.10 Anti-patterns the compiler refuses](#2610-anti-patterns-the-compiler-refuses)
-  - [26.11 Anti-patterns the compiler allows](#2611-anti-patterns-the-compiler-allows)
-  - [26.12 A refactoring, step by step](#2612-a-refactoring-step-by-step)
-  - [26.13 The classic catalogue, read in Okkama](#2613-the-classic-catalogue-read-in-okkama)
-  - [26.14 What the patterns cost](#2614-what-the-patterns-cost)
-- [Chapter 27. Okkama Among Languages](#chapter-27-okkama-among-languages)
-  - [27.1 The rules side by side](#271-the-rules-side-by-side)
-  - [27.2 Java](#272-java)
-  - [27.3 Kotlin](#273-kotlin)
-  - [27.4 Go](#274-go)
-  - [27.5 Rust](#275-rust)
-  - [27.6 Haskell](#276-haskell)
-  - [27.7 OCaml](#277-ocaml)
-  - [27.8 Python](#278-python)
-  - [27.9 Swift](#279-swift)
-  - [27.10 Erlang](#2710-erlang)
-  - [27.11 Clojure](#2711-clojure)
-  - [27.12 C#](#2712-c)
-  - [27.13 TypeScript](#2713-typescript)
-  - [27.14 A port, step by step](#2714-a-port-step-by-step)
-  - [27.15 What the comparison shows](#2715-what-the-comparison-shows)
-- [Chapter 28. Weaknesses, Open Problems and the Road Ahead](#chapter-28-weaknesses-open-problems-and-the-road-ahead)
-  - [28.1 Closed while this book was written](#281-closed-while-this-book-was-written)
-  - [28.2 Missing from the language](#282-missing-from-the-language)
-  - [28.3 The library and the tools](#283-the-library-and-the-tools)
-  - [28.4 Open questions](#284-open-questions)
-  - [28.5 Costs accepted on purpose](#285-costs-accepted-on-purpose)
-  - [28.6 The road ahead](#286-the-road-ahead)
+- [Chapter 23. Building a CLI tool](#chapter-23-building-a-cli-tool)
+  - [23.1 What a tool owes its user](#231-what-a-tool-owes-its-user)
+  - [23.2 The command line as data](#232-the-command-line-as-data)
+  - [23.3 The tool](#233-the-tool)
+  - [23.4 Deciding, then printing](#234-deciding-then-printing)
+  - [23.5 Failures at the edge](#235-failures-at-the-edge)
+  - [23.6 Testing a tool without a terminal](#236-testing-a-tool-without-a-terminal)
+  - [23.7 Input: whole or streamed](#237-input-whole-or-streamed)
+  - [23.8 Output for people and for programs](#238-output-for-people-and-for-programs)
+  - [23.9 Changing files safely](#239-changing-files-safely)
+  - [23.10 Configuration and the environment](#2310-configuration-and-the-environment)
+  - [23.11 Growing: subcommands](#2311-growing-subcommands)
+  - [23.12 Shipping it](#2312-shipping-it)
+  - [23.13 What the design costs](#2313-what-the-design-costs)
+- [Chapter 24. Building a web service](#chapter-24-building-a-web-service)
+  - [24.1 What a service is made of](#241-what-a-service-is-made-of)
+  - [24.2 The service](#242-the-service)
+  - [24.3 Endpoints](#243-endpoints)
+  - [24.4 Lists come in pages](#244-lists-come-in-pages)
+  - [24.5 Failures become statuses](#245-failures-become-statuses)
+  - [24.6 Exception scopes](#246-exception-scopes)
+  - [24.7 Code around endpoints](#247-code-around-endpoints)
+  - [24.8 State shared between requests](#248-state-shared-between-requests)
+  - [24.9 A database behind the role](#249-a-database-behind-the-role)
+  - [24.10 Testing without a network](#2410-testing-without-a-network)
+  - [24.11 Running it](#2411-running-it)
+  - [24.12 What the design costs](#2412-what-the-design-costs)
+- [Chapter 25. Patterns and anti-patterns](#chapter-25-patterns-and-anti-patterns)
+  - [25.1 What a pattern is, and what a language does to it](#251-what-a-pattern-is-and-what-a-language-does-to-it)
+  - [25.2 Behaviour by composition, not by flags](#252-behaviour-by-composition-not-by-flags)
+  - [25.3 Change as a value: successor pipelines](#253-change-as-a-value-successor-pipelines)
+  - [25.4 Refusals have names](#254-refusals-have-names)
+  - [25.5 Every dependency is a role, every role has a fake](#255-every-dependency-is-a-role-every-role-has-a-fake)
+  - [25.6 A table of cases](#256-a-table-of-cases)
+  - [25.7 Resources belong to scopes](#257-resources-belong-to-scopes)
+  - [25.8 Absence is a type](#258-absence-is-a-type)
+  - [25.9 Shared state has one owner](#259-shared-state-has-one-owner)
+  - [25.10 Anti-patterns the compiler refuses](#2510-anti-patterns-the-compiler-refuses)
+  - [25.11 Anti-patterns the compiler allows](#2511-anti-patterns-the-compiler-allows)
+  - [25.12 A refactoring, step by step](#2512-a-refactoring-step-by-step)
+  - [25.13 The classic catalogue, read in Okkama](#2513-the-classic-catalogue-read-in-okkama)
+  - [25.14 What the patterns cost](#2514-what-the-patterns-cost)
+- [Chapter 26. Okkama Among Languages](#chapter-26-okkama-among-languages)
+  - [26.1 The rules side by side](#261-the-rules-side-by-side)
+  - [26.2 Java](#262-java)
+  - [26.3 Kotlin](#263-kotlin)
+  - [26.4 Go](#264-go)
+  - [26.5 Rust](#265-rust)
+  - [26.6 Haskell](#266-haskell)
+  - [26.7 OCaml](#267-ocaml)
+  - [26.8 Python](#268-python)
+  - [26.9 Swift](#269-swift)
+  - [26.10 Erlang](#2610-erlang)
+  - [26.11 Clojure](#2611-clojure)
+  - [26.12 C#](#2612-c)
+  - [26.13 TypeScript](#2613-typescript)
+  - [26.14 A port, step by step](#2614-a-port-step-by-step)
+  - [26.15 What the comparison shows](#2615-what-the-comparison-shows)
+- [Chapter 27. Weaknesses, Open Problems and the Road Ahead](#chapter-27-weaknesses-open-problems-and-the-road-ahead)
+  - [27.1 Closed while this book was written](#271-closed-while-this-book-was-written)
+  - [27.2 Missing from the language](#272-missing-from-the-language)
+  - [27.3 The library and the tools](#273-the-library-and-the-tools)
+  - [27.4 Open questions](#274-open-questions)
+  - [27.5 Costs accepted on purpose](#275-costs-accepted-on-purpose)
+  - [27.6 The road ahead](#276-the-road-ahead)
 
 # Part I. The Razor
 
@@ -709,7 +709,7 @@ the main ones; later chapters return to each.
   filed more than a hundred issues where the language or library lacks an
   operation that a smaller design needs — string searching, hashing for
   object keys, default parameters (issues #145–#155, #210–#216). The razor is
-  not an excuse for those gaps; Chapter 28 lists them openly.
+  not an excuse for those gaps; Chapter 27 lists them openly.
 
 ## 1.9 The razor at work: three decisions
 
@@ -753,7 +753,7 @@ an argument; it is weighed, not granted.
 
 ## 1.10 How to read this book
 
-The book has seven parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI describes the language’s cost model, measured from the outside. Part VII covers practice and judgement: real programs, comparisons with other languages and open problems.
+The book has six parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI covers practice and judgement: real programs, comparisons with other languages and open problems.
 
 Every program in the book lives in `docs/OkkamaBible/examples`, with expected output checked by `build.py --check`. Tables of builtin behaviour and the standard library are generated from code. A disagreement between the book and verified language behaviour is a book bug; please report it.
 
@@ -1225,7 +1225,7 @@ as values, Section 12.9). Okkama parts from them on the other side of
 Evans's distinction. A record is defined by its fields and hands them out,
 while Okkama keeps the manifesto's first rule even for values: an object
 answers questions and keeps its fields (Section 3.1), and a shorthand for
-data objects is still an open question (Section 28.4). Nor does Okkama have
+data objects is still an open question (Section 27.4). Nor does Okkama have
 entities in Evans's sense, mutable state behind a stable identity, except
 through `Cell` and `Atomic`. What persists through change is a name rebound
 to successors, or state owned by one task (Section 20.6).
@@ -1311,7 +1311,7 @@ that a decision written in the object, not a default.
 
 **Cost.** Some objects really are just data: a point, a date, a row from a
 database. For them, actions that return fields are boilerplate. Okkama's
-answer today is to write them; a future shorthand is discussed in Chapter 28.
+answer today is to write them; a future shorthand is discussed in Chapter 27.
 
 ## 3.2 Rule two: state is bound at construction, and constructors guard it
 
@@ -2461,7 +2461,7 @@ Three rows place Okkama.
 - **Annotation of empty collections.** An empty literal needs a declared
   type, because it carries no evidence of what it will hold.
 - **No explicit narrowing of `any` yet.** Opaque values can only be passed
-  on (Chapter 28).
+  on (Chapter 27).
 
 None of these is an accident. Each would add a kind of entity; the razor asks
 for the work each would do, and so far the answer has been "it saves an
@@ -2753,7 +2753,7 @@ This is a trade-off, not a free win. Numerical code that relies on IEEE
 special values — for example, using ∞ as an initial minimum — must be written
 differently, and a single overflow stops the computation instead of letting
 the program inspect a partial result. Such code can check magnitudes before
-the operation; Chapter 28 discusses whether an explicit non-finite type should
+the operation; Chapter 27 discusses whether an explicit non-finite type should
 exist.
 
 **Literals.** A float literal has a fraction, an exponent or both: `3.14`,
@@ -5275,7 +5275,7 @@ not compose yet. A set that has gone through `addition` can answer
 language does not have. The example keeps the order in an array of its own.
 The fix belongs to the language (role composition) or to the library (an
 `addition` that returns the concrete set). It is listed with the other gaps
-in Chapter 28.
+in Chapter 27.
 
 ## 8.12 Okkama among other languages
 
@@ -11704,7 +11704,7 @@ new value; the map inside is an ordinary immutable value, replaced whole.
   `Atomic`, so a fake and all its successors share one state, and data
   survives a transition without being copied.
 - The field cannot be a `Cell`. A cell stays inside one piece of synchronous
-  code and cannot be a field of anything (Section 26.3); a fake is an object
+  code and cannot be a field of anything (Section 25.3); a fake is an object
   like any other, and the rule is the same.
 - A missing key reads as it does anywhere else: `shelf.value()[id]` on an
   absent id is a runtime error, and `has` asks first.
@@ -18459,7 +18459,7 @@ input, and a toolchain update to receive new rules. What it buys is the
 library's promise in a domain where it is hardest to keep: an answer that
 does not depend on where the program happens to run.
 
-# Chapter 24. Building a CLI tool
+# Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
 one and the next put the pieces together into programs of the kind people
@@ -18485,7 +18485,7 @@ builds it in the order a reader would meet those questions, and each section
 leans on an earlier chapter: roles (Chapter 14), failures (Chapter 10),
 resources (Chapter 11) and the decide-then-do shape of Section 26.5.
 
-## 24.1 What a tool owes its user
+## 23.1 What a tool owes its user
 
 The conventions a command-line tool follows are older than most languages in
 use today. In the foreword to the 1978 issue of the *Bell System Technical
@@ -18520,7 +18520,7 @@ rules:
 None of this is specific to Okkama. What Okkama changes is how much of it the
 program has to do by hand.
 
-## 24.2 The command line as data
+## 23.2 The command line as data
 
 The usual way to read a command line is a loop over the arguments with a
 growing set of flags: a variable for each option, a branch for each
@@ -18573,7 +18573,7 @@ valid UTF-8 is refused with its index and byte offset rather than guessed
 at. Arguments are what the operating system passed, never shell text, so
 there is no quoting to undo and no word splitting to worry about.
 
-## 24.3 The tool
+## 23.3 The tool
 
 The whole of `tally` is one module. It is shown here entire and then taken
 apart.
@@ -18729,7 +18729,7 @@ The module has five parts, and each is a pattern from an earlier chapter.
 **`Sources`** is the role for "where text comes from" (Chapter 14). A real
 run uses `Disk`, which reads a file through `fs/file` and closes it with
 `defer` (Chapter 11), and reads the standard input through `Utf8Input`. A
-test gives its own implementation with prepared lines (Section 24.6). The
+test gives its own implementation with prepared lines (Section 23.6). The
 role is the only place where the tool touches the outside world on the way
 in. Everything after it works on arrays of strings.
 
@@ -18752,13 +18752,13 @@ value with three fields.
 **`Tool`** connects them. Its constructor builds the command declaration
 once. `outcome(arguments, sources)` reads the arguments, picks the sources,
 runs the counts and returns an `Outcome`. It catches the failures it can
-answer and turns them into messages and statuses (Section 24.5).
+answer and turns them into messages and statuses (Section 23.5).
 
-## 24.4 Deciding, then printing
+## 23.4 Deciding, then printing
 
 `Tool.outcome` writes nothing. It returns its decisions as a value, and a
 separate, very small shell carries them out. This is the decide-then-do
-shape of Section 26.5, and for a command-line tool it pays off at once: the
+shape of Section 25.5, and for a command-line tool it pays off at once: the
 part that has logic can be tested by comparing values, and the part that
 does input and output has no logic left to test.
 
@@ -18829,7 +18829,7 @@ the standard error are changes to how decisions are printed, and they stay
 in the shell. Counting differently is a change to the decisions, and it
 stays in `Tally`.
 
-## 24.5 Failures at the edge
+## 23.5 Failures at the edge
 
 A tool meets three kinds of failure, and they deserve three different
 answers.
@@ -18860,7 +18860,7 @@ can answer, `CliFailure`, `TallyError` and `FileError`, and nothing else.
 Each `catch` produces an `Outcome`, so the error paths are values too and are
 tested the same way as the happy path.
 
-## 24.6 Testing a tool without a terminal
+## 23.6 Testing a tool without a terminal
 
 A command-line tool is often tested last and worst, by running it in a shell
 and looking at the output, because its inputs and outputs are the process's
@@ -18953,7 +18953,7 @@ parameter, can still be tested: `ProcessArguments(arguments: …)` builds the
 same object from a prepared list. Taking arguments as a parameter is
 simpler, and is the shape this chapter recommends.
 
-## 24.7 Input: whole or streamed
+## 23.7 Input: whole or streamed
 
 `Disk` reads a file whole, `file.text().lines()`, and reads the standard
 input whole too, through `Utf8Input(origin: Stdin()).content()`. For a tool
@@ -19070,7 +19070,7 @@ instead of growing without bound. A tool that is meant to take huge argument
 lists, for example from `xargs`, can set other limits through the
 constructor that takes them.
 
-## 24.8 Output for people and for programs
+## 23.8 Output for people and for programs
 
 A tool's output has two readers. A person at a terminal wants alignment,
 emphasis and perhaps colour. A program reading a pipe wants a stable,
@@ -19177,7 +19177,7 @@ The JSON form is built with the `json` module's `Json` and `JsonField`, not by
 concatenating strings, so quoting and escaping are always right. A field
 added later does not break readers that ignore it, which is the usual reason
 to prefer an object over an array at the top level.
-## 24.9 Changing files safely
+## 23.9 Changing files safely
 
 A tool that only reads cannot damage anything. A tool that rewrites files —
 a formatter, a migration, a bulk rename — can, and its users expect two
@@ -19275,7 +19275,7 @@ after: 0 lines to change
 - The example works inside a `TemporaryDirectory` made in the current
   directory, and `defer scratch.close()` removes it with everything in it, so
   the run leaves nothing behind.
-## 24.10 Configuration and the environment
+## 23.10 Configuration and the environment
 
 `tally` has two options and no configuration, and many tools should stay
 that way. When a tool does grow settings, the *Command Line Interface
@@ -19350,7 +19350,7 @@ precedence becomes a sequence of layers, each laid over the one before. An
 option declared with an explicit `key` is stored under that key, which lets
 `--top` on the command line and `top = 5` in a file mean the same setting.
 
-## 24.11 Growing: subcommands
+## 23.11 Growing: subcommands
 
 Tools grow by verbs. `git` has `commit` and `log`, `cargo` has `build` and
 `test`, and a tool that started with one job often gains a second. In
@@ -19441,7 +19441,7 @@ The objects in `Commands` are the same values the program later compares
 against. A subcommand is renamed in one place, and a typo in a comparison is
 a compile error, not a branch that is never taken.
 
-## 24.12 Shipping it
+## 23.12 Shipping it
 
 A tool is used through its help text more than through its documentation.
 `tally --help` prints `command.usage(program: "tally")`: the summary, the
@@ -19459,7 +19459,7 @@ tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
 and their versions). The program is the same either way. Its behaviour does
 not depend on how it was started.
 
-## 24.13 What the design costs
+## 23.13 What the design costs
 
 The tool in this chapter is longer than the shortest program that would
 print the same counts. A twenty-line script with a loop over the arguments,
@@ -19477,13 +19477,13 @@ difference is in what the extra lines buy:
   files and no process.
 
 Two costs remain. Reading whole files holds the text in memory, which is the
-right trade for a counter and the wrong one for a filter (Section 24.7). And
+right trade for a counter and the wrong one for a filter (Section 23.7). And
 the successor style rebuilds a `Tally` for every line. For text in the
 megabytes this is fast enough. For gigabytes, a tool would count in larger
 steps or stream and keep only the counts, still without mutating anything it
 shares.
 
-# Chapter 25. Building a web service
+# Chapter 24. Building a web service
 
 A command-line tool runs once and exits. A web service starts and keeps
 answering, many requests at a time, until someone stops it. This chapter
@@ -19500,11 +19500,11 @@ DELETE /api/notes/:id    remove it; 204, or 404
 The previous chapter's habits carry over: decide in values, keep the outside
 world behind a role, test without the real thing. What is new is
 concurrency. Requests overlap, so state shared between them needs an owner
-(Section 26.9), and every endpoint is an `async` action (Chapter 20). The
+(Section 25.9), and every endpoint is an `async` action (Chapter 20). The
 chapter builds the service over memory first, then puts PostgreSQL behind
 the same role without touching a line of the API.
 
-## 25.1 What a service is made of
+## 24.1 What a service is made of
 
 HTTP is a protocol of messages. A request carries a method, a target, header
 fields and perhaps a body; a response carries a status, header fields and
@@ -19514,7 +19514,7 @@ responses that keeps some state between them. The standard library's
 value:
 
 - **A route table** (`web/routing`) says which method and path reach which
-  endpoint. It is declared, like `cli/command`'s commands in Chapter 24, and
+  endpoint. It is declared, like `cli/command`'s commands in Chapter 23, and
   it is checked when it is built: two routes with the same shape are refused,
   a known path with the wrong method answers 405 with `Allow`, and `HEAD`
   follows `GET`.
@@ -19531,7 +19531,7 @@ The server itself (`web/app`) binds the table to an address and serves it.
 It is the only part that touches the network, and the tests in this chapter
 never start it.
 
-## 25.2 The service
+## 24.2 The service
 
 The notes service is one module. Its parts are shown together, then taken
 one at a time.
@@ -19711,21 +19711,21 @@ object NotesService {
   form.
 - **`NoteStore`** is the role for storage. The API depends on the role, so
   memory today and a database tomorrow are two implementations of one
-  contract (Section 26.5). Its actions are `async`, because a database
-  answers later; Section 25.9 shows that doer.
+  contract (Section 25.5). Its actions are `async`, because a database
+  answers later; Section 24.9 shows that doer.
 - **`StoreRefusal`** is what a store may refuse: a title that is already
   taken. The store knows the rule; it does not know HTTP.
 - **`MemoryStore`** keeps every note in one `Shelf` value inside an `Atomic`.
-  Section 25.8 explains why it is built that way.
+  Section 24.8 explains why it is built that way.
 - **`NotesApi`** is the controller. Each endpoint reads what it needs from
   the request, asks the store, and returns a reply.
 - **`StoreRefusals`** is an exception scope: it turns the store's refusals
-  into statuses (Section 25.6).
+  into statuses (Section 24.6).
 - **`NotesService.routes()`** is the route table: one place that says which
   URL reaches which action. `Scope("/api", …)` writes the prefix once, and
   `Resource` writes a path once for several methods.
 
-## 25.3 Endpoints
+## 24.3 Endpoints
 
 An endpoint reads the request through typed accessors.
 `request.path().int("id")` reads the `:id` of the pattern as an `int`; a value
@@ -19760,7 +19760,7 @@ ask the store, answer 201. It has no status codes for the body's own
 failures, no header handling and no serialisation code, because each of
 those belongs to a value that already knows it.
 
-## 25.4 Lists come in pages
+## 24.4 Lists come in pages
 
 A list endpoint that returns every note works on the first day and fails
 on a later one, when a client asks for a hundred thousand notes and the
@@ -19804,9 +19804,9 @@ cursor that carries every key of the order, and services usually make it
 opaque (an encoded token) so that clients cannot build one by hand. The
 endpoint changes; the shape, items plus a link, does not.
 
-## 25.5 Failures become statuses
+## 24.5 Failures become statuses
 
-A service has the same three kinds of failure as a tool (Section 24.5), and
+A service has the same three kinds of failure as a tool (Section 23.5), and
 HTTP gives each a place.
 
 **The client's mistakes** are 4xx statuses. An endpoint states its own with
@@ -19836,7 +19836,7 @@ the database itself, a lost connection or a timeout, takes the same path: it
 is not the client's mistake, and nothing the client could change would fix
 it.
 
-## 25.6 Exception scopes
+## 24.6 Exception scopes
 
 The store refuses a duplicate title with `StoreRefusal.duplicate(title)`,
 an error of its own. It could have thrown `Exception.status(409, …)`
@@ -19887,11 +19887,11 @@ direct, and it lets a scope add header fields, a `Retry-After` for a quota
 for example.
 
 The test that checks it is a client's test: post the same title twice and
-read a 409 with the problem's `detail`. When Section 25.9 replaces the store,
+read a 409 with the problem's `detail`. When Section 24.9 replaces the store,
 the refusal comes from a database constraint instead of a scan, and this
 scope and this test stay as they are.
 
-## 25.7 Code around endpoints
+## 24.7 Code around endpoints
 
 Some concerns belong to every request rather than to one endpoint: an access
 log, authentication, a maintenance switch, headers that every reply carries.
@@ -20038,13 +20038,13 @@ are arounds; translating a layer's errors is a scope.
 
 An around is where cross-cutting code goes, and only there. An endpoint that
 checks a token itself, or writes its own log line, is the "same `defer` around
-every use" smell of Section 26.7 in HTTP form.
+every use" smell of Section 25.7 in HTTP form.
 
-## 25.8 State shared between requests
+## 24.8 State shared between requests
 
 Requests are served concurrently, so the store is shared by every task that
 serves a request. Okkama does not let objects change in place, and a `Cell`
-cannot cross into async code (Section 26.9). That leaves two shapes: an
+cannot cross into async code (Section 25.9). That leaves two shapes: an
 owner task that receives messages, or an `Atomic`, one value that tasks
 share and replace whole.
 
@@ -20075,12 +20075,12 @@ what notices that the shelf moved. The loop costs one comparison when it
 succeeds, and it keeps the store correct under a change that nobody will
 remember to review for concurrency.
 
-The owner-task shape of Section 26.9 suits stores that do slow work in
+The owner-task shape of Section 25.9 suits stores that do slow work in
 order, such as appending to a file. A store that already lives elsewhere,
 a database, needs neither: it is a role whose implementation sends queries,
 and the database is the owner.
 
-## 25.9 A database behind the role
+## 24.9 A database behind the role
 
 `NoteStore` was written for this moment. A store over PostgreSQL is another
 doer of the same role, in a module of its own:
@@ -20167,7 +20167,7 @@ object PostgresStore does NoteStore {
   a bare `throw;` (Section 10.6). There is no read-then-write, and no race
   between two servers: the constraint is checked where the data lives.
 - **Pages come from the index.** `WHERE id > $1 ORDER BY id LIMIT $2` is the
-  keyset page of Section 25.4 in SQL. With the primary key's index, the
+  keyset page of Section 24.4 in SQL. With the primary key's index, the
   thousandth page costs what the first does. `.all(count)` reads at most the
   rows it asked for.
 - **Each read takes only what it needs.** `.maybe()` is at most one row,
@@ -20176,14 +20176,14 @@ object PostgresStore does NoteStore {
   presence of a row and not a count to compare.
 
 What did not change is the point. `NotesApi`, `StoreRefusals`, the route
-table and every test of Section 25.10 are the same code. The duplicate title
+table and every test of Section 24.10 are the same code. The duplicate title
 is still a 409, because `StoreRefusals` translates the role's refusal,
 whichever doer raised it. The role's actions became `async` once, when the
 role was written, and the memory store pays little for it: an action that
 never awaits runs its body to the end the first time it is awaited
 (Section 20.3).
 
-Wiring is a different `main` (Section 25.11), and it is the only place that
+Wiring is a different `main` (Section 24.11), and it is the only place that
 names PostgreSQL:
 
 ```okkama
@@ -20212,7 +20212,7 @@ building a `PostgresStore` over a disposable database, in CI, where a
 database is part of the environment. One suite, two stores: the role is the
 contract, and both doers are tested against it.
 
-## 25.10 Testing without a network
+## 24.10 Testing without a network
 
 `web/testing` gives `WebTestClient`, which calls a route table the way a real
 HTTP client calls a server, without a socket. A request goes through the
@@ -20370,7 +20370,7 @@ list and expects identifiers 1 to 4. A lost update would show here: notes
 are keyed by identifier, so two creations that got the same one would leave
 three notes, not four.
 
-As Section 25.8 explained, this store cannot lose an update today, because
+As Section 24.8 explained, this store cannot lose an update today, because
 nothing interleaves inside `added`. The test is still worth its lines. It
 states the property that clients rely on, four creations make four notes,
 in the terms they see it, and it keeps stating it when someone adds an
@@ -20378,7 +20378,7 @@ in the terms they see it, and it keeps stating it when someone adds an
 would fail on a plausible wrong change is the kind worth keeping; one that
 only passes is not.
 
-## 25.11 Running it
+## 24.11 Running it
 
 The program that serves the API for real is short:
 
@@ -20390,7 +20390,7 @@ async main() is int {
 }
 ```
 
-With PostgreSQL, `main` builds the pool and the store of Section 25.9 instead
+With PostgreSQL, `main` builds the pool and the store of Section 24.9 instead
 of `MemoryStore()`, and keeps everything else.
 
 `listen` serves until the process receives SIGTERM or SIGINT. Then the
@@ -20403,13 +20403,13 @@ gets a graceful shutdown without any code in the service.
 
 The address is an IP literal; `web/app` does no name resolution. The port,
 the address, the database URL and other settings come in the same layers as
-a tool's (Section 24.8): a flag, then the environment, then a default, read
+a tool's (Section 23.8): a flag, then the environment, then a default, read
 in `main` and passed down. A database password does not belong in a URL that
 a log might print: `PostgresDatabase(url:, password:)` takes it separately,
 as `SecretBytes`. HTTPS takes a TLS identity, `listen(address:, port:, tls:)`,
 and then offers HTTP/2 and HTTP/1.1 to clients.
 
-## 25.12 What the design costs
+## 24.12 What the design costs
 
 The service is longer than a script that would answer the same four requests
 with a mutable dictionary and a handler per URL. What the extra length buys:
@@ -20434,10 +20434,9 @@ with a scan of every title on every creation. For a store of a few thousand
 notes both are invisible; for millions, the store belongs in a database
 behind the same role, where the index does the scan and there is no copy.
 The `async` endpoints and the `async` role cost a little per request compared
-to synchronous ones; Chapter 20 explains what that buys, and Chapter 23 what
-it costs.
+to synchronous ones; Chapter 20 explains what that buys.
 
-# Chapter 26. Patterns and anti-patterns
+# Chapter 25. Patterns and anti-patterns
 
 Every language comes with a second grammar that no parser checks: the shapes
 experienced programmers reach for when a problem has a familiar outline. Some
@@ -20448,7 +20447,7 @@ programs take, the ones it makes unnecessary, and the ones it forbids. Most
 of them have appeared already, one chapter at a time; here they are put side
 by side, with the reasons that connect them.
 
-## 26.1 What a pattern is, and what a language does to it
+## 25.1 What a pattern is, and what a language does to it
 
 The word comes from architecture. Christopher Alexander and his colleagues
 described a *pattern* as a problem that occurs over and over in an
@@ -20482,7 +20481,7 @@ is a language in which a handful of shapes are not patterns at all but the
 only way to write the program, and in which the remaining judgement is
 narrower than in Java or Kotlin, though not absent.
 
-## 26.2 Behaviour by composition, not by flags
+## 25.2 Behaviour by composition, not by flags
 
 A common way to make an object do several related things is to give it
 switches. A label that can be prefixed and framed gets a `prefix` field and
@@ -20745,7 +20744,7 @@ over 100: nobody
   become a policy and wants a name: a role, or at least an object that holds
   the action.
 
-## 26.3 Change as a value: successor pipelines
+## 25.3 Change as a value: successor pipelines
 
 Builders, setters and mutable "state" objects exist in other languages
 because an object there can change in place. In Okkama it cannot. A field is
@@ -21035,14 +21034,14 @@ main() is int {
 The compiler answers:
 
 ```text
-26-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
+25-typestate-rejected.ok:16:13: semantic error: Role "Created" has no action "refunded"
 ```
 
 Typestate costs one role and one object per state, and transitions that
 build new objects rather than successors, because the next state is a
 different type. It is worth it where a wrong step is expensive: payments,
 connections, documents that move through approval. Where the states are many
-and the transitions few, a successor with `confirm` checks (Section 26.3's
+and the transitions few, a successor with `confirm` checks (Section 25.3's
 `Order`) is the lighter tool.
 
 ### Memento: the past is a list of values
@@ -21133,7 +21132,7 @@ refused: Undo.nothing
 - Redo has the same shape mirrored: a second list for the drafts that undo
   dropped, emptied by the next `typed`.
 
-## 26.4 Refusals have names
+## 25.4 Refusals have names
 
 A function that cannot do what was asked has three classic ways to say so: a
 special value (`-1`, `""`, `null`), an untyped exception carrying a message,
@@ -21215,14 +21214,14 @@ failures that mean the program is broken. Okkama makes it hard: a typed
 at all, so they cannot be caught as one (Chapter 10). The other is the
 refusal that is not a refusal: an action that returns a default when it
 cannot do its work. When absence is a legitimate answer, the language has a
-type for it (Section 26.8); when it is not, the action should refuse.
+type for it (Section 25.8); when it is not, the action should refuse.
 
 At the scale of a module, the same rule makes refusals change their names at
 the boundary. A layer catches the refusals of the layer below that it
 understands and refuses in its own terms, so its callers never name the
 layer below and do not change when it is replaced (Section 10.12).
 
-## 26.5 Every dependency is a role, every role has a fake
+## 25.5 Every dependency is a role, every role has a fake
 
 Objects in Okkama reach the outside world through the objects they are given:
 there is no global state and no static field (Chapter 22). An object that
@@ -21449,9 +21448,9 @@ mail ada: paid 1620
 The same shape answers Observer in a language where objects do not change.
 An action does not notify listeners; it returns what happened, and its
 caller passes that on. Where the listeners are tasks, the values travel over
-a channel to their owner (Section 26.9).
+a channel to their owner (Section 25.9).
 
-## 26.6 A table of cases
+## 25.6 A table of cases
 
 Some actions have one rule and many inputs that matter. A tariff is the
 usual example: the price changes at fixed weights, and every change is a
@@ -21599,7 +21598,7 @@ thing. A row names itself only when it fails, and only because the row
 carries its input. When one row needs to run alone, for example while
 debugging it, the remedy is to copy it into a test of its own.
 
-## 26.7 Resources belong to scopes
+## 25.7 Resources belong to scopes
 
 A resource is an object with a `destroy` block. The scope that owns it
 destroys it when the scope ends, whatever way it ends, in reverse order of
@@ -21699,7 +21698,7 @@ then, and runs before the scope's resources are destroyed. A rule of thumb
 from code review: if the same `defer` appears around every use of an object,
 the object wants a `destroy`.
 
-## 26.8 Absence is a type
+## 25.8 Absence is a type
 
 Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
 the type system makes the caller decide what absence means: a fallback with
@@ -21791,7 +21790,7 @@ the honest answer. When a value is optional for a while and then becomes
 required, the change is visible in the types, and the compiler finds every
 caller that has to decide.
 
-## 26.9 Shared state has one owner
+## 25.9 Shared state has one owner
 
 Asynchronous code needs state that more than one task can see. Okkama's
 answer is structural: state shared between tasks lives in one task, the
@@ -21937,7 +21936,7 @@ main() is int {
 The compiler answers:
 
 ```text
-26-shared-rejected.ok:7:9: semantic error: Field "count" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
+25-shared-rejected.ok:7:9: semantic error: Field "count" cannot hold a Cell: a cell stays in synchronous code; state an object shares with tasks is an Atomic
 ```
 
 The diagnostic names the way out: state an object shares with tasks is an
@@ -21949,7 +21948,7 @@ the tasks still running are cancelled and their cleanup is awaited before
 the run ends. Work that runs "in the background, somewhere", outliving the
 program that started it, is not a shape the language provides.
 
-## 26.10 Anti-patterns the compiler refuses
+## 25.10 Anti-patterns the compiler refuses
 
 Several shapes that code review catches in other languages are diagnostics
 in Okkama. The table collects the ones the earlier chapters showed, with the
@@ -21973,12 +21972,12 @@ have to watch [[Bugayenko 2016](#ref-bugayenko2016); [Bugayenko 2017](#ref-bugay
 good design from bad, but it can make some bad designs impossible to write,
 and Okkama spends its rules there.
 
-## 26.11 Anti-patterns the compiler allows
+## 25.11 Anti-patterns the compiler allows
 
 The rest is judgement. These are the shapes that compile and still make a
 program worse, and the reasons Okkama code avoids them.
 
-- **The flag object.** Section 26.2: an object whose actions branch on its
+- **The flag object.** Section 25.2: an object whose actions branch on its
   own fields to choose a behaviour. Decorators through a role replace it
   once the options interact.
 - **The data bag.** An object that is a list of fields and one action per
@@ -22014,7 +22013,7 @@ programs. They are listed because each of them was found in real Okkama
 code, and each was replaced, in the standard library review or in the
 examples of this book, by one of the patterns above.
 
-## 26.12 A refactoring, step by step
+## 25.12 A refactoring, step by step
 
 The anti-patterns of the previous section rarely come alone. The next
 program has three of them: a status that is a string, an urgency that is a
@@ -22143,7 +22142,7 @@ the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
 format is a change in one object, and the compiler finds every place a new
 state has to be handled.
 
-## 26.13 The classic catalogue, read in Okkama
+## 25.13 The classic catalogue, read in Okkama
 
 The 23 patterns of Gamma and his co-authors are a useful checklist of what a
 language makes easy, hard or unnecessary [[Gamma 1994](#ref-gamma1994)]. The table goes
@@ -22151,18 +22150,18 @@ through the ones that change most.
 
 | Pattern | In Okkama |
 |---|---|
-| Strategy | A role and the objects that do it; an anonymous action for a one-off (Section 26.2) |
-| Decorator | A role, implemented by objects that hold another implementation (Section 26.2) |
+| Strategy | A role and the objects that do it; an anonymous action for a one-off (Section 25.2) |
+| Decorator | A role, implemented by objects that hold another implementation (Section 25.2) |
 | Composite | A role done by both the leaf and the container, which holds a collection of the role |
-| Builder | A chain of successors, or a constructor with named and defaulted fields (Section 26.3) |
+| Builder | A chain of successors, or a constructor with named and defaulted fields (Section 25.3) |
 | Prototype | Unneeded: objects are immutable, so sharing one is copying it |
 | Singleton | Not expressible: no global state and no static fields; one instance made in `main` and passed down |
 | Factory method | Several constructors, one per form (Chapter 12), or an action that returns a role |
 | Template method | No inheritance; a decorator, or an object that takes the varying step as a role |
-| Observer | Events returned as values (Section 26.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
-| Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 26.3) |
+| Observer | Events returned as values (Section 25.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
+| Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 25.3) |
 | Iterator | `for` over collections, ranges and async streams (`for await`) |
-| State | Typestate: a role per state, transitions as successors (Section 26.3) |
+| State | Typestate: a role per state, transitions as successors (Section 25.3) |
 | Command | An enum case per command, with a `match` that interprets it; or an action value |
 | Visitor | `match` over an enum; across roles, the expression problem stands (Chapter 16) |
 | Null object | Unneeded as a workaround: absence is `Maybe`; still useful as a real "do nothing" implementation of a role |
@@ -22175,7 +22174,7 @@ first among them, are replaced by composition because there is no
 inheritance to work around. And Singleton, a pattern for global state, has
 no expression at all.
 
-## 26.14 What the patterns cost
+## 25.14 What the patterns cost
 
 The patterns of this chapter trade size for change. A decorator chain has
 more declarations than a flag object; a role and its fake are more text than
@@ -22194,9 +22193,9 @@ impossible: there is no way to cache a value inside an object after
 construction other than `once let` (Chapter 13), no way to share a mutable
 counter between objects other than an `Atomic` or an owning task, and no way
 to write the small mutable helper object other languages reach for. Those
-limits are deliberate, and Chapter 28 discusses the ones that are not.
+limits are deliberate, and Chapter 27 discusses the ones that are not.
 
-# Chapter 27. Okkama Among Languages
+# Chapter 26. Okkama Among Languages
 
 The earlier chapters compared Okkama with other languages one construct at a
 time: numbers in Chapter 5, types in Chapter 4, collections in Chapter 8,
@@ -22215,7 +22214,7 @@ choices sit among choices that working languages have made, so that a
 reader who knows one of them can see what is familiar, what is different,
 and what is missing.
 
-## 27.1 The rules side by side
+## 26.1 The rules side by side
 
 | | Java | Kotlin | Go | Rust | Haskell | OCaml | Okkama |
 |---|---|---|---|---|---|---|---|
@@ -22235,7 +22234,7 @@ literals default to, is unbounded like Okkama's `int`. Read down a column and th
 the table gives all of Okkama's answers at once, and that is the design's
 one new idea (Section 1.10).
 
-## 27.2 Java
+## 26.2 Java
 
 Java is the language Okkama argues with most, because *Elegant Objects*,
 the discipline Okkama turns into rules, was written for Java programmers
@@ -22246,7 +22245,7 @@ guarantee. A convention holds as long as every reviewer catches every
 exception to it; in Okkama the compiler does.
 
 Java answers some of the same problems with newer features. Records are
-immutable carriers of data [[Gosling 2023](#ref-gosling2023)], close to what Section 28.4 calls
+immutable carriers of data [[Gosling 2023](#ref-gosling2023)], close to what Section 27.4 calls
 a shorthand for data objects. Virtual threads make blocking code cheap
 [[JEP 444](#ref-jep444)], and structured concurrency, still a preview in Java 21, gives
 tasks a parent scope that waits for them [[OpenJDK 2023](#ref-jep453)]. Java keeps `null`,
@@ -22255,7 +22254,7 @@ installed base, removing them is not an option. Okkama had no installed
 base, which is the only reason it could start where Java's best practice
 ends.
 
-## 27.3 Kotlin
+## 26.3 Kotlin
 
 Kotlin took Java's runtime and changed its defaults: classes are final
 unless declared `open` [[Kotlin documentation](#ref-kotlininheritance)], nullability is part of a type
@@ -22271,7 +22270,7 @@ platform types from Java are all available when a programmer wants them.
 Okkama removes the other choice. A Kotlin team can write Okkama-style code;
 an Okkama program cannot be written any other way.
 
-## 27.4 Go
+## 26.4 Go
 
 Go and Okkama agree on more than their surfaces suggest. Neither has
 classes or inheritance, both treat errors as values that a function hands
@@ -22287,7 +22286,7 @@ Go chose simplicity of the language and left discipline to the programmer
 and to tools such as linters. Okkama chose simplicity of the *program*: a
 smaller set of things that can go wrong, bought with a stricter language.
 
-## 27.5 Rust
+## 26.5 Rust
 
 Rust is the closest relative in purpose. It has no `null`, no inheritance,
 values immutable unless declared `mut`, errors as `Result`, and resources
@@ -22307,7 +22306,7 @@ panics in debug builds and wraps in release builds [[Klabnik 2023](#ref-klabnik2
 Okkama's integers grow (Chapter 5). A program that needs Rust's control of
 memory should be written in Rust.
 
-## 27.6 Haskell
+## 26.6 Haskell
 
 Haskell is the purest language in the table: values never change, effects
 are confined to types such as `IO`, absence is `Maybe`, and contracts are
@@ -22325,7 +22324,7 @@ purity is enforced by types; Okkama's immutability is enforced by the
 absence of assignment, and its effects are ordinary calls on objects that
 carry the authority for them (Chapter 21).
 
-## 27.7 OCaml
+## 26.7 OCaml
 
 OCaml is ML with objects and an industrial track record. Bindings are
 immutable, absence is `option`, failures are exceptions or `result`, and
@@ -22340,9 +22339,9 @@ OCaml shows that an expression-oriented, immutable-by-default language with
 algebraic data types can be fast and practical. It keeps the escape
 hatches, mutable fields and classes, that Okkama removed, and it has the
 recursive variants and nested patterns that Okkama does not have yet
-(Section 28.2).
+(Section 27.2).
 
-## 27.8 Python
+## 26.8 Python
 
 Python is the language most readers have written something in, and its
 design statement says, among other things, that practicality beats purity
@@ -22371,7 +22370,7 @@ annotations checked in continuous integration, is close to an Okkama program
 in shape. What it lacks is the guarantee that a module someone else wrote
 follows the same conventions.
 
-## 27.9 Swift
+## 26.9 Swift
 
 Swift, introduced by Apple in 2014, is the industrial language closest to
 Okkama in its defaults [[The Swift Programming Language](#ref-swiftbook)]. Values of `struct` and `enum` types are
@@ -22393,7 +22392,7 @@ and gives deterministic release only to objects with `destroy` (Chapter 11).
 A function that can fail is marked `throws`, and each call marks `try`; an
 Okkama signature does not say that an action can fail (Section 10.19).
 
-## 27.10 Erlang
+## 26.10 Erlang
 
 Erlang was built at Ericsson for telephone switches that must not stop
 [[Armstrong 2003](#ref-armstrong2003)]. Its data is immutable, a variable is bound once, integers
@@ -22415,7 +22414,7 @@ and nothing restarts automatically. Isolation by memory is what process
 workers give (Chapter 21), at the price of a separate program. Erlang is
 also dynamically typed, with static checking left to optional tools.
 
-## 27.11 Clojure
+## 26.11 Clojure
 
 Clojure is a Lisp for the JVM, which Rich Hickey released in 2007 after two
 years of work on his own time [[Hickey 2020](#ref-hickey2020)]. Of all the languages in this
@@ -22453,7 +22452,7 @@ The differences come from typing and from Lisp.
   `finally`, and only code that remembers to use it gets the release.
   Okkama ties release to the owner's scope (Chapter 11).
 
-## 27.12 C#
+## 26.12 C#
 
 C# appeared in 2002 as Microsoft's answer to Java, and it has absorbed more
 of the ideas in this book than any other mainstream language
@@ -22493,7 +22492,7 @@ C# shows how far a language can travel toward these ideas while keeping
 every program that was written before. Okkama shows the language that
 results when nothing has to be kept.
 
-## 27.13 TypeScript
+## 26.13 TypeScript
 
 TypeScript adds static types to JavaScript, which it compiles to, and the
 types are erased in the output. Its type system is structural by design:
@@ -22521,7 +22520,7 @@ the program's own rules, and its run time keeps them: a value has one
 concrete type, and a role reference cannot be cast down to the object
 behind it (Section 14.3).
 
-## 27.14 A port, step by step
+## 26.14 A port, step by step
 
 The rules are easiest to compare on one small class. Here is a bank account
 in Java, written the way a Java course would write it:
@@ -22652,7 +22651,7 @@ program asks), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 
-## 27.15 What the comparison shows
+## 26.15 What the comparison shows
 
 Three things stand out.
 
@@ -22665,7 +22664,7 @@ Three things stand out.
   also keeps the less safe choice for the programs that need it. Okkama
   has fewer exits: `Cell` for synchronous code, `Atomic` for state shared
   between tasks, and natives for the host. A program that needs another one
-  is a program Okkama does not serve well, and Chapter 28 lists where that
+  is a program Okkama does not serve well, and Chapter 27 lists where that
   shows.
 - **Maturity is the largest difference.** Every language in the table has
   libraries, tools, books and production systems built over years or
@@ -22673,7 +22672,7 @@ Three things stand out.
   rewritten, and this book. A comparison of designs is only half of a
   comparison of languages.
 
-# Chapter 28. Weaknesses, Open Problems and the Road Ahead
+# Chapter 27. Weaknesses, Open Problems and the Road Ahead
 
 Every chapter of this book ends by counting what its design costs and what
 does not work yet. This chapter gathers those counts in one place and sorts
@@ -22691,7 +22690,7 @@ number, so a reader can check the state after November 2026, when this
 chapter was written; items without one point to the section that argues
 them.
 
-## 28.1 Closed while this book was written
+## 27.1 Closed while this book was written
 
 Chapter 1 admitted that some removals were made before their replacements
 were complete, and that the standard library audit of November 2026 had
@@ -22752,7 +22751,7 @@ places where the implementation had fallen behind what the rules already
 said, which is the kind of gap a book of running examples is good at
 finding.
 
-## 28.2 Missing from the language
+## 27.2 Missing from the language
 
 Four open issues describe what the language plans to have and lacks. All
 four are about enums and patterns, and together they are the largest
@@ -22776,7 +22775,7 @@ and compilers are the classic programs written with recursive types and
 nested patterns, and in Okkama they are written today with more objects and
 more `match`es than in the languages Okkama compares itself with.
 
-## 28.3 The library and the tools
+## 27.3 The library and the tools
 
 The standard library was written quickly, before several builtins existed,
 and it is to be rewritten in the style Chapter 22 describes. Most of its
@@ -22809,7 +22808,7 @@ open items wait for that rewrite.
   group of natives, but not one call; finer, per-object capabilities for
   the library are future work.
 
-## 28.4 Open questions
+## 27.4 Open questions
 
 These are designs that have been considered and not decided. Each has a
 case on both sides, and the razor does not settle it by itself: it asks what
@@ -22873,7 +22872,7 @@ implementation repeats the role's signature exactly. With the exception, a
 reader could no longer tell from one implementation how the role is
 called.
 
-## 28.5 Costs accepted on purpose
+## 27.5 Costs accepted on purpose
 
 The rest of the limits named in this book are not gaps. They are what the
 language is, argued where they appear:
@@ -22902,11 +22901,11 @@ with the language, not a bug in it. The book has tried to state each one
 plainly enough that the disagreement can be had before the first program,
 not after the thousandth.
 
-## 28.6 The road ahead
+## 27.6 The road ahead
 
 This book does not predict versions. The road is the list above: the
-issues in Sections 28.2 and 28.3, each to be closed or declined with a
-reason, and the questions in Section 28.4, each to be answered by the
+issues in Sections 27.2 and 27.3, each to be closed or declined with a
+reason, and the questions in Section 27.4, each to be answered by the
 procedure Section 1.9 showed. Underneath the language its implementation is
 being rebuilt, and that work changes how fast programs run, not what they
 mean; it belongs to another book.

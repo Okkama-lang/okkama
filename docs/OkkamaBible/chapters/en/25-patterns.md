@@ -1,4 +1,4 @@
-# Chapter 26. Patterns and anti-patterns
+# Chapter 25. Patterns and anti-patterns
 
 Every language comes with a second grammar that no parser checks: the shapes
 experienced programmers reach for when a problem has a familiar outline. Some
@@ -9,7 +9,7 @@ programs take, the ones it makes unnecessary, and the ones it forbids. Most
 of them have appeared already, one chapter at a time; here they are put side
 by side, with the reasons that connect them.
 
-## 26.1 What a pattern is, and what a language does to it
+## 25.1 What a pattern is, and what a language does to it
 
 The word comes from architecture. Christopher Alexander and his colleagues
 described a *pattern* as a problem that occurs over and over in an
@@ -43,7 +43,7 @@ is a language in which a handful of shapes are not patterns at all but the
 only way to write the program, and in which the remaining judgement is
 narrower than in Java or Kotlin, though not absent.
 
-## 26.2 Behaviour by composition, not by flags
+## 25.2 Behaviour by composition, not by flags
 
 A common way to make an object do several related things is to give it
 switches. A label that can be prefixed and framed gets a `prefix` field and
@@ -57,7 +57,7 @@ for: one small object per behaviour, each holding the object it decorates,
 all doing the same role [@bugayenko2016]. Chapter 14 showed the technique on
 prices; here it is applied to the flags it replaces.
 
-{{example:26-flags}}
+{{example:25-flags}}
 
 The program prints:
 
@@ -91,7 +91,7 @@ bundles needs no special case. Gamma and his co-authors called this
 Composite [@gamma1994]; in Okkama it is a role, a leaf object and a
 container object whose field is an array of the role.
 
-{{example:26-composite}}
+{{example:25-composite}}
 
 `Bundle` sums its parts with a `Cell` inside one synchronous action, which is
 exactly the local use cells are for, and applies its own discount on top.
@@ -107,7 +107,7 @@ used in several places or is replaced in tests is a role with objects that
 do it. A question asked once, by one caller, is an action value passed to
 the call (Chapter 18).
 
-{{example:26-strategy}}
+{{example:25-strategy}}
 
 - `Ranking` is a policy of the board. The board keeps it, every leader
   query uses it, and a test can give the board another `Ranking`. `ByScore`
@@ -118,7 +118,7 @@ the call (Chapter 18).
   become a policy and wants a name: a role, or at least an object that holds
   the action.
 
-## 26.3 Change as a value: successor pipelines
+## 25.3 Change as a value: successor pipelines
 
 Builders, setters and mutable "state" objects exist in other languages
 because an object there can change in place. In Okkama it cannot. A field is
@@ -131,7 +131,7 @@ chain of successor calls. An undo stack is a list of earlier values. A
 snapshot before a risky step is a variable that is not touched. The next
 example takes an order through four stages and keeps all of them.
 
-{{example:26-pipeline}}
+{{example:25-pipeline}}
 
 Each stage is a value. `empty`, `basket`, `offer` and `paid` can be printed,
 compared, stored in a collection or passed to another task, and none of them
@@ -172,7 +172,7 @@ is unreadable where it is called, and one constructor per combination of
 options multiplies. Named arguments with defaults remove both problems, and
 the builder with them.
 
-{{example:26-options}}
+{{example:25-options}}
 
 - Every option is a field with a default. A call names the ones that
   differ, in any order, and the rest keep their defaults (Section 12.4).
@@ -195,20 +195,20 @@ authorized one offers `capture`; a captured one offers `refund`; and calling
 it *typestate* in 1986 [@strom1986]. In Okkama it needs nothing beyond roles and
 ordinary actions.
 
-{{example:26-typestate}}
+{{example:25-typestate}}
 
 Each object does exactly one role, and a variable typed by the role sees only
 the steps of that state. The guarantee holds even when the object itself
 has more actions than its role exposes. In the next program `NewPayment`
 does have a `refunded` action, but a value typed `Created` cannot reach it:
 
-{{example:26-typestate-rejected}}
+{{example:25-typestate-rejected}}
 
 Typestate costs one role and one object per state, and transitions that
 build new objects rather than successors, because the next state is a
 different type. It is worth it where a wrong step is expensive: payments,
 connections, documents that move through approval. Where the states are many
-and the transitions few, a successor with `confirm` checks (Section 26.3's
+and the transitions few, a successor with `confirm` checks (Section 25.3's
 `Order`) is the lighter tool.
 
 ### Memento: the past is a list of values
@@ -219,7 +219,7 @@ reverse itself [@gamma1994]. In Okkama a successor leaves the earlier value
 as it was, and nothing can change it later. Keeping the past means keeping
 the earlier values.
 
-{{example:26-undo}}
+{{example:25-undo}}
 
 - `typed` makes a new `Draft` and keeps the old one in `past`. Nothing has
   to be copied: a value that cannot change is its own snapshot.
@@ -229,7 +229,7 @@ the earlier values.
 - Redo has the same shape mirrored: a second list for the drafts that undo
   dropped, emptied by the next `typed`.
 
-## 26.4 Refusals have names
+## 25.4 Refusals have names
 
 A function that cannot do what was asked has three classic ways to say so: a
 special value (`-1`, `""`, `null`), an untyped exception carrying a message,
@@ -247,7 +247,7 @@ precondition is checked at the boundary, where the bad input arrives, with
 `confirm … else throw`. And a caller catches only the refusals it can
 answer, letting everything else go up.
 
-{{example:26-refusals}}
+{{example:25-refusals}}
 
 The teller turns refusals into a reply because replying is its job. A
 `Program` failure such as a broken invariant, or a refusal from some other
@@ -263,14 +263,14 @@ failures that mean the program is broken. Okkama makes it hard: a typed
 at all, so they cannot be caught as one (Chapter 10). The other is the
 refusal that is not a refusal: an action that returns a default when it
 cannot do its work. When absence is a legitimate answer, the language has a
-type for it (Section 26.8); when it is not, the action should refuse.
+type for it (Section 25.8); when it is not, the action should refuse.
 
 At the scale of a module, the same rule makes refusals change their names at
 the boundary. A layer catches the refusals of the layer below that it
 understands and refuses in its own terms, so its callers never name the
 layer below and do not change when it is replaced (Section 10.12).
 
-## 26.5 Every dependency is a role, every role has a fake
+## 25.5 Every dependency is a role, every role has a fake
 
 Objects in Okkama reach the outside world through the objects they are given:
 there is no global state and no static field (Chapter 22). An object that
@@ -280,7 +280,7 @@ can be replaced, and the replacement for tests comes with the role itself:
 every role may declare a `fake`, a test-only implementation that the
 compiler keeps out of production code (Chapter 15).
 
-{{example:26-signup-tests}}
+{{example:25-signup-tests}}
 
 The fake records what happened in its own fields, through successors, the
 same way production objects do. A test does not configure expectations the
@@ -318,7 +318,7 @@ Bernhardt called this shape a functional core in an imperative shell
 [@bernhardt2012]. Immutable objects and enums with payloads make it the
 natural shape in Okkama.
 
-{{example:26-decide}}
+{{example:25-decide}}
 
 - `Checkout.effects()` reads only its own fields. It writes nothing, sends
   nothing and reads no clock, so the same order always gives the same
@@ -332,9 +332,9 @@ natural shape in Okkama.
 The same shape answers Observer in a language where objects do not change.
 An action does not notify listeners; it returns what happened, and its
 caller passes that on. Where the listeners are tasks, the values travel over
-a channel to their owner (Section 26.9).
+a channel to their owner (Section 25.9).
 
-## 26.6 A table of cases
+## 25.6 A table of cases
 
 Some actions have one rule and many inputs that matter. A tariff is the
 usual example: the price changes at fixed weights, and every change is a
@@ -346,7 +346,7 @@ table-driven tests [@gotabledriven]. The idea is older: Ward Cunningham's
 Fit let customers write business rules as tables of examples that ran as
 tests [@mugridge2005].
 
-{{example:26-postage-tests}}
+{{example:25-postage-tests}}
 
 - A row is an object with named fields, so the table reads as a table:
   `Case(grams: 20, expected: Postage.letter(85))`. The named arguments are
@@ -404,7 +404,7 @@ thing. A row names itself only when it fails, and only because the row
 carries its input. When one row needs to run alone, for example while
 debugging it, the remedy is to copy it into a test of its own.
 
-## 26.7 Resources belong to scopes
+## 25.7 Resources belong to scopes
 
 A resource is an object with a `destroy` block. The scope that owns it
 destroys it when the scope ends, whatever way it ends, in reverse order of
@@ -422,7 +422,7 @@ is complete when the constructor returns; the end of its scope is the only
 cleanup point; and a result returned from an action carries its resources
 to the caller's scope, so the caller owns what it was given (Chapter 11).
 
-{{example:26-section}}
+{{example:25-section}}
 
 - `Section` writes `begin` in its constructor and `end` in its `destroy`.
   A caller writes one `let` and has nothing to remember.
@@ -439,7 +439,7 @@ then, and runs before the scope's resources are destroyed. A rule of thumb
 from code review: if the same `defer` appears around every use of an object,
 the object wants a `destroy`.
 
-## 26.8 Absence is a type
+## 25.8 Absence is a type
 
 Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
 the type system makes the caller decide what absence means: a fallback with
@@ -451,7 +451,7 @@ lookup that must find refuses with a typed error.
 The same pattern works for a whole program: decide absence at the edge,
 where data comes in, and let the objects inside hold values that are there.
 
-{{example:26-edge}}
+{{example:25-edge}}
 
 - `RawSettings` is the edge. It answers with `Maybe` where a key may be
   missing, and refuses with a typed error where the program cannot go on
@@ -470,7 +470,7 @@ the honest answer. When a value is optional for a while and then becomes
 required, the change is visible in the types, and the compiler finds every
 caller that has to decide.
 
-## 26.9 Shared state has one owner
+## 25.9 Shared state has one owner
 
 Asynchronous code needs state that more than one task can see. Okkama's
 answer is structural: state shared between tasks lives in one task, the
@@ -483,7 +483,7 @@ Section 20.6 is the pattern in full: an enum of commands, one task that owns
 the balance and serves them in a loop, and replies sent back over a channel
 the caller provides. The next example has several writers instead of one.
 
-{{example:26-owner}}
+{{example:25-owner}}
 
 - The count lives in `Tally`, a local of `Visits.run()`. The readers cannot
   reach it. Each holds a `Sending<Visit>` and nothing else.
@@ -500,7 +500,7 @@ by convention. In Okkama a `Cell` cannot cross into an async context and an
 object cannot hold one, so mutable state that tasks share is either inside
 its owner or in an `Atomic`, by construction.
 
-{{example:26-shared-rejected}}
+{{example:25-shared-rejected}}
 
 The diagnostic names the way out: state an object shares with tasks is an
 `Atomic`. State that is more than a counter or a flag goes to an owner.
@@ -511,7 +511,7 @@ the tasks still running are cancelled and their cleanup is awaited before
 the run ends. Work that runs "in the background, somewhere", outliving the
 program that started it, is not a shape the language provides.
 
-## 26.10 Anti-patterns the compiler refuses
+## 25.10 Anti-patterns the compiler refuses
 
 Several shapes that code review catches in other languages are diagnostics
 in Okkama. The table collects the ones the earlier chapters showed, with the
@@ -535,12 +535,12 @@ have to watch [@bugayenko2016; @bugayenko2017]. The language cannot tell
 good design from bad, but it can make some bad designs impossible to write,
 and Okkama spends its rules there.
 
-## 26.11 Anti-patterns the compiler allows
+## 25.11 Anti-patterns the compiler allows
 
 The rest is judgement. These are the shapes that compile and still make a
 program worse, and the reasons Okkama code avoids them.
 
-- **The flag object.** Section 26.2: an object whose actions branch on its
+- **The flag object.** Section 25.2: an object whose actions branch on its
   own fields to choose a behaviour. Decorators through a role replace it
   once the options interact.
 - **The data bag.** An object that is a list of fields and one action per
@@ -576,14 +576,14 @@ programs. They are listed because each of them was found in real Okkama
 code, and each was replaced, in the standard library review or in the
 examples of this book, by one of the patterns above.
 
-## 26.12 A refactoring, step by step
+## 25.12 A refactoring, step by step
 
 The anti-patterns of the previous section rarely come alone. The next
 program has three of them: a status that is a string, an urgency that is a
 flag, and a ticket that hands out its fields so that the caller can decide
 what to print.
 
-{{example:26-before}}
+{{example:25-before}}
 
 It works, and it is the kind of code the rules of the language do not
 prevent. The refactoring takes it apart one smell at a time, without
@@ -602,7 +602,7 @@ changing what it prints.
    `Queued`. A ticket that stops being urgent is the ticket without the
    wrapper; no field has to be reset.
 
-{{example:26-after}}
+{{example:25-after}}
 
 The output is the same, and the second program is longer. What it buys is
 the place where each decision lives. The meaning of "open" is in the enum;
@@ -611,7 +611,7 @@ the line of a ticket is in the ticket; the mark of urgency is in `Urgent`;
 format is a change in one object, and the compiler finds every place a new
 state has to be handled.
 
-## 26.13 The classic catalogue, read in Okkama
+## 25.13 The classic catalogue, read in Okkama
 
 The 23 patterns of Gamma and his co-authors are a useful checklist of what a
 language makes easy, hard or unnecessary [@gamma1994]. The table goes
@@ -619,18 +619,18 @@ through the ones that change most.
 
 | Pattern | In Okkama |
 |---|---|
-| Strategy | A role and the objects that do it; an anonymous action for a one-off (Section 26.2) |
-| Decorator | A role, implemented by objects that hold another implementation (Section 26.2) |
+| Strategy | A role and the objects that do it; an anonymous action for a one-off (Section 25.2) |
+| Decorator | A role, implemented by objects that hold another implementation (Section 25.2) |
 | Composite | A role done by both the leaf and the container, which holds a collection of the role |
-| Builder | A chain of successors, or a constructor with named and defaulted fields (Section 26.3) |
+| Builder | A chain of successors, or a constructor with named and defaulted fields (Section 25.3) |
 | Prototype | Unneeded: objects are immutable, so sharing one is copying it |
 | Singleton | Not expressible: no global state and no static fields; one instance made in `main` and passed down |
 | Factory method | Several constructors, one per form (Chapter 12), or an action that returns a role |
 | Template method | No inheritance; a decorator, or an object that takes the varying step as a role |
-| Observer | Events returned as values (Section 26.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
-| Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 26.3) |
+| Observer | Events returned as values (Section 25.5); a channel to an owning task, or an event that waiters await (Chapter 20) |
+| Memento | Unneeded as a mechanism: earlier values stay valid, and undo is a list of them (Section 25.3) |
 | Iterator | `for` over collections, ranges and async streams (`for await`) |
-| State | Typestate: a role per state, transitions as successors (Section 26.3) |
+| State | Typestate: a role per state, transitions as successors (Section 25.3) |
 | Command | An enum case per command, with a `match` that interprets it; or an action value |
 | Visitor | `match` over an enum; across roles, the expression problem stands (Chapter 16) |
 | Null object | Unneeded as a workaround: absence is `Maybe`; still useful as a real "do nothing" implementation of a role |
@@ -643,7 +643,7 @@ first among them, are replaced by composition because there is no
 inheritance to work around. And Singleton, a pattern for global state, has
 no expression at all.
 
-## 26.14 What the patterns cost
+## 25.14 What the patterns cost
 
 The patterns of this chapter trade size for change. A decorator chain has
 more declarations than a flag object; a role and its fake are more text than
@@ -662,4 +662,4 @@ impossible: there is no way to cache a value inside an object after
 construction other than `once let` (Chapter 13), no way to share a mutable
 counter between objects other than an `Atomic` or an owning task, and no way
 to write the small mutable helper object other languages reach for. Those
-limits are deliberate, and Chapter 28 discusses the ones that are not.
+limits are deliberate, and Chapter 27 discusses the ones that are not.

@@ -1,4 +1,4 @@
-# Chapter 24. Building a CLI tool
+# Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
 one and the next put the pieces together into programs of the kind people
@@ -24,7 +24,7 @@ builds it in the order a reader would meet those questions, and each section
 leans on an earlier chapter: roles (Chapter 14), failures (Chapter 10),
 resources (Chapter 11) and the decide-then-do shape of Section 26.5.
 
-## 24.1 What a tool owes its user
+## 23.1 What a tool owes its user
 
 The conventions a command-line tool follows are older than most languages in
 use today. In the foreword to the 1978 issue of the *Bell System Technical
@@ -59,7 +59,7 @@ rules:
 None of this is specific to Okkama. What Okkama changes is how much of it the
 program has to do by hand.
 
-## 24.2 The command line as data
+## 23.2 The command line as data
 
 The usual way to read a command line is a loop over the arguments with a
 growing set of flags: a variable for each option, a branch for each
@@ -112,7 +112,7 @@ valid UTF-8 is refused with its index and byte offset rather than guessed
 at. Arguments are what the operating system passed, never shell text, so
 there is no quoting to undo and no word splitting to worry about.
 
-## 24.3 The tool
+## 23.3 The tool
 
 The whole of `tally` is one module. It is shown here entire and then taken
 apart.
@@ -124,7 +124,7 @@ The module has five parts, and each is a pattern from an earlier chapter.
 **`Sources`** is the role for "where text comes from" (Chapter 14). A real
 run uses `Disk`, which reads a file through `fs/file` and closes it with
 `defer` (Chapter 11), and reads the standard input through `Utf8Input`. A
-test gives its own implementation with prepared lines (Section 24.6). The
+test gives its own implementation with prepared lines (Section 23.6). The
 role is the only place where the tool touches the outside world on the way
 in. Everything after it works on arrays of strings.
 
@@ -147,13 +147,13 @@ value with three fields.
 **`Tool`** connects them. Its constructor builds the command declaration
 once. `outcome(arguments, sources)` reads the arguments, picks the sources,
 runs the counts and returns an `Outcome`. It catches the failures it can
-answer and turns them into messages and statuses (Section 24.5).
+answer and turns them into messages and statuses (Section 23.5).
 
-## 24.4 Deciding, then printing
+## 23.4 Deciding, then printing
 
 `Tool.outcome` writes nothing. It returns its decisions as a value, and a
 separate, very small shell carries them out. This is the decide-then-do
-shape of Section 26.5, and for a command-line tool it pays off at once: the
+shape of Section 25.5, and for a command-line tool it pays off at once: the
 part that has logic can be tested by comparing values, and the part that
 does input and output has no logic left to test.
 
@@ -170,7 +170,7 @@ system. The example below runs the same tool twice from inside a program,
 with fixed arguments over a small file, `tally/sample.txt`, so that its output
 can be checked:
 
-{{example:24-tally}}
+{{example:23-tally}}
 
 - The first run lists the two most frequent words. "the" and "The" count
   as different words.
@@ -185,7 +185,7 @@ the standard error are changes to how decisions are printed, and they stay
 in the shell. Counting differently is a change to the decisions, and it
 stays in `Tally`.
 
-## 24.5 Failures at the edge
+## 23.5 Failures at the edge
 
 A tool meets three kinds of failure, and they deserve three different
 answers.
@@ -216,14 +216,14 @@ can answer, `CliFailure`, `TallyError` and `FileError`, and nothing else.
 Each `catch` produces an `Outcome`, so the error paths are values too and are
 tested the same way as the happy path.
 
-## 24.6 Testing a tool without a terminal
+## 23.6 Testing a tool without a terminal
 
 A command-line tool is often tested last and worst, by running it in a shell
 and looking at the output, because its inputs and outputs are the process's
 own. `tally` needs none of that. Its arguments are a parameter, its sources
 are a role, and its output is a value. A test gives all three:
 
-{{example:24-tally-tests}}
+{{example:23-tally-tests}}
 
 - `Given` implements `Sources` with a map of file names to lines and a list
   of lines for the standard input. A missing name throws the same
@@ -241,7 +241,7 @@ parameter, can still be tested: `ProcessArguments(arguments: …)` builds the
 same object from a prepared list. Taking arguments as a parameter is
 simpler, and is the shape this chapter recommends.
 
-## 24.7 Input: whole or streamed
+## 23.7 Input: whole or streamed
 
 `Disk` reads a file whole, `file.text().lines()`, and reads the standard
 input whole too, through `Utf8Input(origin: Stdin()).content()`. For a tool
@@ -266,7 +266,7 @@ The core then becomes a value that takes one line and returns the lines to
 print for it, and the shell prints them as it goes. The decide-then-do split
 survives, at the granularity of a line.
 
-{{example:24-filter}}
+{{example:23-filter}}
 
 - `Matcher` is the core. `shown(line)` says what to print for one line and
   `after(line)` returns the matcher for the next one, with the count of
@@ -286,7 +286,7 @@ instead of growing without bound. A tool that is meant to take huge argument
 lists, for example from `xargs`, can set other limits through the
 constructor that takes them.
 
-## 24.8 Output for people and for programs
+## 23.8 Output for people and for programs
 
 A tool's output has two readers. A person at a terminal wants alignment,
 emphasis and perhaps colour. A program reading a pipe wants a stable,
@@ -296,7 +296,7 @@ when the output is likely to be consumed by another program [@prasad2020].
 
 The decision belongs at the edge, made once, from facts the program is given:
 
-{{example:24-output}}
+{{example:23-output}}
 
 - `DetectedTerminalCapabilities` decides the colour depth from whether the
   output is a terminal, the environment (`NO_COLOR`, `TERM`) and a policy
@@ -312,7 +312,7 @@ The JSON form is built with the `json` module's `Json` and `JsonField`, not by
 concatenating strings, so quoting and escaping are always right. A field
 added later does not break readers that ignore it, which is the usual reason
 to prefer an object over an array at the top level.
-## 24.9 Changing files safely
+## 23.9 Changing files safely
 
 A tool that only reads cannot damage anything. A tool that rewrites files —
 a formatter, a migration, a bulk rename — can, and its users expect two
@@ -322,7 +322,7 @@ original that survives if the run is interrupted halfway.
 Both follow from the decide-then-do shape. The change is a value first, and
 writing it is a separate step:
 
-{{example:24-rewrite}}
+{{example:23-rewrite}}
 
 - `Tidy.planned` reads a file and returns a `Change` that holds the lines
   before and after. Nothing is written. `--dry-run` is simply "print the
@@ -336,7 +336,7 @@ writing it is a separate step:
 - The example works inside a `TemporaryDirectory` made in the current
   directory, and `defer scratch.close()` removes it with everything in it, so
   the run leaves nothing behind.
-## 24.10 Configuration and the environment
+## 23.10 Configuration and the environment
 
 `tally` has two options and no configuration, and many tools should stay
 that way. When a tool does grow settings, the *Command Line Interface
@@ -351,7 +351,7 @@ setting it needs, to the code that uses it. Nothing deep in the program
 reads a variable behind its caller's back, and a test passes a prepared
 environment the same way `tally`'s tests pass prepared sources.
 
-{{example:24-settings}}
+{{example:23-settings}}
 
 - `Environment(values: …)` is a snapshot that contains exactly the given
   variables and nothing of the process, so each case in the example is
@@ -371,7 +371,7 @@ precedence becomes a sequence of layers, each laid over the one before. An
 option declared with an explicit `key` is stored under that key, which lets
 `--top` on the command line and `top = 5` in a file mean the same setting.
 
-## 24.11 Growing: subcommands
+## 23.11 Growing: subcommands
 
 Tools grow by verbs. `git` has `commit` and `log`, `cargo` has `build` and
 `test`, and a tool that started with one job often gains a second. In
@@ -381,7 +381,7 @@ declare options shared by all of them. Reading the arguments selects one
 command, and `call.command()` returns the declared object, so the program
 compares objects rather than strings:
 
-{{example:24-subcommands}}
+{{example:23-subcommands}}
 
 - `top --n 5` selects `top` and reads its own option. `top` alone takes
   the default with `else`.
@@ -396,7 +396,7 @@ The objects in `Commands` are the same values the program later compares
 against. A subcommand is renamed in one place, and a typo in a comparison is
 a compile error, not a branch that is never taken.
 
-## 24.12 Shipping it
+## 23.12 Shipping it
 
 A tool is used through its help text more than through its documentation.
 `tally --help` prints `command.usage(program: "tally")`: the summary, the
@@ -414,7 +414,7 @@ tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
 and their versions). The program is the same either way. Its behaviour does
 not depend on how it was started.
 
-## 24.13 What the design costs
+## 23.13 What the design costs
 
 The tool in this chapter is longer than the shortest program that would
 print the same counts. A twenty-line script with a loop over the arguments,
@@ -432,7 +432,7 @@ difference is in what the extra lines buy:
   files and no process.
 
 Two costs remain. Reading whole files holds the text in memory, which is the
-right trade for a counter and the wrong one for a filter (Section 24.7). And
+right trade for a counter and the wrong one for a filter (Section 23.7). And
 the successor style rebuilds a `Tally` for every line. For text in the
 megabytes this is fast enough. For gigabytes, a tool would count in larger
 steps or stream and keep only the counts, still without mutating anything it

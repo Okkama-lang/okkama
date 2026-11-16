@@ -375,7 +375,7 @@ not compose yet. A set that has gone through `addition` can answer
 language does not have. The example keeps the order in an array of its own.
 The fix belongs to the language (role composition) or to the library (an
 `addition` that returns the concrete set). It is listed with the other gaps
-in Chapter 28.
+in Chapter 27.
 
 ## 8.12 Okkama among other languages
 

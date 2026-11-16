@@ -1,4 +1,4 @@
-# Chapter 28. Weaknesses, Open Problems and the Road Ahead
+# Chapter 27. Weaknesses, Open Problems and the Road Ahead
 
 Every chapter of this book ends by counting what its design costs and what
 does not work yet. This chapter gathers those counts in one place and sorts
@@ -16,7 +16,7 @@ number, so a reader can check the state after November 2026, when this
 chapter was written; items without one point to the section that argues
 them.
 
-## 28.1 Closed while this book was written
+## 27.1 Closed while this book was written
 
 Chapter 1 admitted that some removals were made before their replacements
 were complete, and that the standard library audit of November 2026 had
@@ -77,7 +77,7 @@ places where the implementation had fallen behind what the rules already
 said, which is the kind of gap a book of running examples is good at
 finding.
 
-## 28.2 Missing from the language
+## 27.2 Missing from the language
 
 Four open issues describe what the language plans to have and lacks. All
 four are about enums and patterns, and together they are the largest
@@ -101,7 +101,7 @@ and compilers are the classic programs written with recursive types and
 nested patterns, and in Okkama they are written today with more objects and
 more `match`es than in the languages Okkama compares itself with.
 
-## 28.3 The library and the tools
+## 27.3 The library and the tools
 
 The standard library was written quickly, before several builtins existed,
 and it is to be rewritten in the style Chapter 22 describes. Most of its
@@ -134,7 +134,7 @@ open items wait for that rewrite.
   group of natives, but not one call; finer, per-object capabilities for
   the library are future work.
 
-## 28.4 Open questions
+## 27.4 Open questions
 
 These are designs that have been considered and not decided. Each has a
 case on both sides, and the razor does not settle it by itself: it asks what
@@ -198,7 +198,7 @@ implementation repeats the role's signature exactly. With the exception, a
 reader could no longer tell from one implementation how the role is
 called.
 
-## 28.5 Costs accepted on purpose
+## 27.5 Costs accepted on purpose
 
 The rest of the limits named in this book are not gaps. They are what the
 language is, argued where they appear:
@@ -227,11 +227,11 @@ with the language, not a bug in it. The book has tried to state each one
 plainly enough that the disagreement can be had before the first program,
 not after the thousandth.
 
-## 28.6 The road ahead
+## 27.6 The road ahead
 
 This book does not predict versions. The road is the list above: the
-issues in Sections 28.2 and 28.3, each to be closed or declined with a
-reason, and the questions in Section 28.4, each to be answered by the
+issues in Sections 27.2 and 27.3, each to be closed or declined with a
+reason, and the questions in Section 27.4, each to be answered by the
 procedure Section 1.9 showed. Underneath the language its implementation is
 being rebuilt, and that work changes how fast programs run, not what they
 mean; it belongs to another book.

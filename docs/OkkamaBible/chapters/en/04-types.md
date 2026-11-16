@@ -347,7 +347,7 @@ Three rows place Okkama.
 - **Annotation of empty collections.** An empty literal needs a declared
   type, because it carries no evidence of what it will hold.
 - **No explicit narrowing of `any` yet.** Opaque values can only be passed
-  on (Chapter 28).
+  on (Chapter 27).
 
 None of these is an accident. Each would add a kind of entity; the razor asks
 for the work each would do, and so far the answer has been "it saves an

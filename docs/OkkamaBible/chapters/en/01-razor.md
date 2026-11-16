@@ -286,7 +286,7 @@ the main ones; later chapters return to each.
   filed more than a hundred issues where the language or library lacks an
   operation that a smaller design needs — string searching, hashing for
   object keys, default parameters (issues #145–#155, #210–#216). The razor is
-  not an excuse for those gaps; Chapter 28 lists them openly.
+  not an excuse for those gaps; Chapter 27 lists them openly.
 
 ## 1.9 The razor at work: three decisions
 
@@ -330,7 +330,7 @@ an argument; it is weighed, not granted.
 
 ## 1.10 How to read this book
 
-The book has seven parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI describes the language’s cost model, measured from the outside. Part VII covers practice and judgement: real programs, comparisons with other languages and open problems.
+The book has six parts. Part I gives the philosophy and history of Okkama. Parts II–V teach the language from values to whole programs, with runnable examples, sources and limits. Part VI covers practice and judgement: real programs, comparisons with other languages and open problems.
 
 Every program in the book lives in `docs/OkkamaBible/examples`, with expected output checked by `build.py --check`. Tables of builtin behaviour and the standard library are generated from code. A disagreement between the book and verified language behaviour is a book bug; please report it.
 

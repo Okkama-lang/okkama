@@ -320,7 +320,7 @@ as values, Section 12.9). Okkama parts from them on the other side of
 Evans's distinction. A record is defined by its fields and hands them out,
 while Okkama keeps the manifesto's first rule even for values: an object
 answers questions and keeps its fields (Section 3.1), and a shorthand for
-data objects is still an open question (Section 28.4). Nor does Okkama have
+data objects is still an open question (Section 27.4). Nor does Okkama have
 entities in Evans's sense, mutable state behind a stable identity, except
 through `Cell` and `Atomic`. What persists through change is a name rebound
 to successors, or state owned by one task (Section 20.6).
