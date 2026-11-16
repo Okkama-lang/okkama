@@ -233,12 +233,12 @@ struct Context<'a> {
 }
 
 /// The function types a value from outside the module may have: those the results of bodyless functions and the
-/// entry's parameters reach (#723, as the verifier's `closures`). The walk is linear in the functions and in the
-/// types it visits once each; it charges its memory, and its steps fall within the classification's own passes
-/// over the same functions and types.
+/// entry's parameters reach (#723, as the verifier's `closures`). Each function and each visited type is one unit of
+/// work.
 fn foreign_functions(module: &Module, budget: &mut Budget<'_>) -> Result<BTreeSet<TypeId>, OwnError> {
     let mut pending = vec![];
     for (_, function) in module.functions.iter() {
+        budget.work(1)?;
         if function.body.is_none() {
             pending.extend(function.signature.results.iter().copied());
         }
@@ -249,6 +249,7 @@ fn foreign_functions(module: &Module, budget: &mut Budget<'_>) -> Result<BTreeSe
     let mut seen = BTreeSet::new();
     let mut foreign = BTreeSet::new();
     while let Some(ty) = pending.pop() {
+        budget.work(1)?;
         if !seen.insert(ty) {
             continue;
         }
