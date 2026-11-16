@@ -1761,3 +1761,44 @@ fn champ_jit_runs_an_async_defer_entry_as_a_child_and_continues() {
         assert_eq!(destroyed(&runtime), "Res 1\n");
     }
 }
+
+/// #771 (ABI D25.1 and the ruling "How a stored Future leaves"): a scope split whose selection reaches a Champ
+/// Future takes that Future's entries from the state into the selected packet; another holder's entries stay.
+#[test]
+fn champ_d25_a_split_that_reaches_a_future_takes_its_entries() {
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let Escape { mut s, f, .. } = escape(&mut ctx, 0);
+        // F's duty and G's are entries of S's list, as after the packets of stored values were admitted.
+        absorb_into(&mut ctx, &mut s, f);
+        let inputs = empty(&mut ctx);
+        let g = new_future(&mut ctx, MAKE, &[], &mut s, inputs);
+        absorb_into(&mut ctx, &mut s, g);
+        let roots = [f];
+        let selection = Selection { roots: roots.as_ptr(), count: 1 };
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        let selected = super::super::helpers::packet(runtime, post.selected.record).unwrap();
+        assert_eq!(selected.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
+        let state = super::super::helpers::scope(runtime, post.state.record).unwrap();
+        assert_eq!(state.all().services, [Service { holder: g, kind: SERVICE_CACHE, target: None }]);
+        // #758: an array of Futures is walked like Future fields; its elements' entries move with it.
+        let mut s = post.state;
+        runtime.roots.push((s.record, Repr::Ref));
+        let array = runtime.heap.allocate_array(Repr::Ref, &[g]);
+        runtime.roots.push((array, Repr::Ref));
+        let roots = [array];
+        let selection = Selection { roots: roots.as_ptr(), count: 1 };
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        let selected = super::super::helpers::packet(runtime, post.selected.record).unwrap();
+        assert_eq!(selected.services, [Service { holder: g, kind: SERVICE_CACHE, target: None }]);
+        let state = super::super::helpers::scope(runtime, post.state.record).unwrap();
+        assert!(state.all().services.is_empty());
+    }
+}

@@ -253,8 +253,12 @@ fn partition(_runtime: &Runtime, packet: &Packet, selected: &HashSet<Word>) -> (
             rest.journals[index].append(&mut ordered_run(no, source.holder, source.owner).journals[0]);
         }
     }
-    // A selection picks identities; service entries stay where they are (ABI D25).
-    rest.services = packet.services.clone();
+    // A selection picks identities and the service entries of the Futures it reaches (ABI D25.1, #771): a
+    // Future stored in a field travels with the packet of the value that holds it; other entries stay.
+    let (moved, kept): (Vec<_>, Vec<_>) = packet.services.iter().cloned()
+        .partition(|service| selected.contains(&service.holder));
+    rest.services = kept;
+    picked.services = moved;
     (rest, picked)
 }
 fn static_selection(runtime: &Runtime, packet: &Packet, plan: PlanId) -> Result<HashSet<Word>, Error> {
@@ -312,7 +316,8 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, aut
         let header = runtime.heap.header_of(object);
         // A managed array (ARRAY_PLAIN admits resource object leaves) refers to identities it does not
         // own: its elements are selected like fields. Arrays are homogeneous, so the first element shows
-        // whether the elements can hold identities at all; text, numbers and plain leaves stop here.
+        // whether the elements can hold identities at all; text, numbers and plain leaves stop here. An array
+        // of Futures (#758) holds holders: each element is walked like a Future field.
         if heap::kind(header) == heap::ARRAY {
             if runtime.heap.is_bytes(object) {
                 continue;
@@ -320,7 +325,7 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, aut
             let elements = runtime.heap.elements(object);
             let nested = elements.iter().find(|&&element| element != 0 && element & 1 == 0)
                 .is_some_and(|&element| {
-                    matches!(heap::kind(runtime.heap.header_of(element)), heap::OBJECT | heap::ARRAY)
+                    matches!(heap::kind(runtime.heap.header_of(element)), heap::OBJECT | heap::ARRAY | heap::FRAME)
                 });
             if heap::element_repr(header) == crate::word::Repr::Ref && nested {
                 work.extend(elements.iter().map(|&element| (element, true)));
@@ -347,6 +352,12 @@ fn selection_walk(runtime: &Runtime, packet: &Packet, selection: &Selection, aut
         let range = heap::kind(header) == heap::PAYLOAD
             && runtime.heap.payload::<crate::ops::RangeValue>(object).is_some();
         if range || matches!(heap::kind(header), heap::STRING | heap::BIGINT) {
+            continue;
+        }
+        // A Champ Future reached as a root or through a field is a holder: the split moves its service entries,
+        // if the source holds them (a token absorbed by coro never was in it), and walks no further (D25.1, #771).
+        if heap::kind(header) == heap::FRAME && crate::tasks::get(object, crate::tasks::FLAGS) & super::CHAMP != 0 {
+            selected.insert(object);
             continue;
         }
         if heap::kind(header) != heap::OBJECT {
@@ -575,7 +586,7 @@ fn split(runtime: &mut Runtime, original: &Packet, selected: &HashSet<Word>) -> 
     for part in selected.runs() {
         preflight(runtime, &Packet::from_run(part.clone()), holder, part.owner)?;
     }
-    let mut output = Packet::default();
+    let mut output = Packet { services: selected.services, ..Packet::default() };
     for (index, runs) in selected.journals.into_iter().enumerate() {
         for part in runs {
             let owner = part.owner;
@@ -828,7 +839,9 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
         selection_walk(runtime, &all, unsafe { &*selection }, Authority::Any)?;
         if admissible {
             let eligible = scope.admission.words().collect::<HashSet<_>>();
-            selected.retain(|object| eligible.contains(object));
+            // A Future the walk reached is a holder, not a journal identity: its entries move as in any split.
+            selected.retain(|object| eligible.contains(object)
+                || heap::kind(runtime.heap.header_of(*object)) == heap::FRAME);
         }
         let (_, output) = split(runtime, &all, &selected)?;
         scope_partition(runtime, &mut scope, &selected);
@@ -948,7 +961,8 @@ fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *cons
             TransferFilter::Held => Some(source.admission.words().chain(source.bound.words()).collect()),
         };
         if let Some(eligible) = eligible {
-            selected.retain(|object| eligible.contains(object));
+            selected.retain(|object| eligible.contains(object)
+                || heap::kind(runtime.heap.header_of(*object)) == heap::FRAME);
         }
         if same {
             return Ok((from, 0));
