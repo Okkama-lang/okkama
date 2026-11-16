@@ -140,12 +140,12 @@ pub(super) fn summary_paths(module: &Module, summary: &Summary, params: &[TypeId
                     continue;
                 }
                 let valid = params.get(usize::from(*parameter))
-                    .is_some_and(|ty| path_type(module, *ty, fields, state));
+                    .is_some_and(|ty| path_type(module, *ty, fields, &mut || state.step(1)));
                 if !valid { state.error(R::T4, "summary path does not follow substituted object fields"); }
             }
             SummarySelection::Field { parameter, field } => {
                 let valid = params.get(usize::from(*parameter))
-                    .is_some_and(|ty| path_type(module, *ty, &[*field], state));
+                    .is_some_and(|ty| path_type(module, *ty, &[*field], &mut || state.step(1)));
                 if !valid { state.error(R::T4, "summary field does not belong to its parameter type"); }
             }
             _ => {}
@@ -155,11 +155,14 @@ pub(super) fn summary_paths(module: &Module, summary: &Summary, params: &[TypeId
 
 /// A path steps through object fields, and through the payload field of a variant case (`variant.get`
 /// retains its payload as a field of the case layout, as `once.load` of a Maybe slot does).
-fn path_type(module: &Module, mut ty: TypeId, fields: &[FieldRef], state: &mut State<'_>) -> bool {
+/// Whether `fields` is a path through the substituted object fields of `ty` (T4). `step` charges one step of work
+/// and answers whether the budget allows it.
+pub(crate) fn path_type(module: &Module, mut ty: TypeId, fields: &[FieldRef], step: &mut dyn FnMut() -> bool)
+    -> bool {
     let mut substitution = Substitution::default();
     for field in fields {
         loop {
-            if !state.step(1) { return false; }
+            if !step() { return false; }
             let Ok(Type::Parameter(parameter)) = module.types.get(ty) else { break;
                 };
             let Some((_, replacement)) = substitution.entries.iter().rev().find(|(key, _)| key == parameter)

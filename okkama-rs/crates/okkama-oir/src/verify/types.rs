@@ -6,6 +6,12 @@ mod operands;
 #[path = "elaboration_types.rs"]
 mod elaboration;
 
+/// See `verify::summary_path_follows`.
+pub(super) fn summary_path_follows(module: &Module, ty: TypeId, fields: &[FieldRef], step: &mut dyn FnMut() -> bool)
+    -> bool {
+    elaboration::path_type(module, ty, fields, step)
+}
+
 #[derive(Clone, Debug, Default)]
 struct Substitution { entries: Vec<(TypeParameterRef, TypeId)> }
 #[derive(Clone, Copy, Debug)]
