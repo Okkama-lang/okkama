@@ -636,6 +636,19 @@ fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
 
+- **Async role slots and bound async action values on Champ (#601 F1,
+  ruling PR-D).** An async action of a role (`role Loader { async load() is
+  int; }`) is a synchronous slot that returns the Future of its outcome. Each
+  implementation is reached through a creation thunk: a synchronous function
+  with the slot's signature that calls the async action, whose cold Future
+  own returns through `cache.rehome … target caller`. An implementation by an
+  async intrinsic (`Cancelling.wait` by the cancellation token) gets the same
+  thunk. An async action type `async (A) is T` is a synchronous `Fn` that
+  returns the Future; binding an async method binds its thunk, and calling the
+  value creates the cold Future. No new ABI. `L08.role-shape.async-dispatch`
+  runs; the other cases of the slice stop next on N1, G1, #775, #759 and
+  #735.
+
 - **Variadic role slots on Champ (#601 F1, ruling PR-D item 5).** A role
   action with a variadic tail (`WritingText.write(values is ...string)`) is an
   ordinary slot whose last parameter is the array the checker packs at every

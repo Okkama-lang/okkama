@@ -249,18 +249,21 @@ impl Declarations {
             };
             let span = role.decl.expect("source role").span;
             let methods = role.methods.iter().enumerate().map(|(slot, method)| {
-                if method.is_async {
-                    return Err(super::asynchronous::async_role_slot(&role.name, &method.name, span));
-                }
                 // A variadic tail is an array parameter (`@T`, §11.8.1): the checker packs it at every call site
                 // (`Pack`), so the slot is ordinary (ruling PR-D, item 5).
                 let overloaded = role.methods.iter().filter(|other| other.name == method.name).count() > 1;
                 let name = if overloaded { format!("{}#slot{slot}", method.name) } else { method.name.clone() };
+                let mut results = method.result.iter().map(|ty| this.ty(ty, span)).collect::<Result<Vec<_>>>()?;
+                // Ruling PR-D: an async slot is a synchronous slot that returns the Future of its outcome; each
+                // implementation is reached through a creation thunk (`roles::declare_witnesses`).
+                if method.is_async {
+                    results = vec![this.builder.intern_type(ir::Type::Future(results.first().copied()))?];
+                }
                 Ok(ir::RoleMethod {
                     name,
                     signature: ir::Signature {
                         params: method.params.iter().map(|(_, ty)| this.ty(ty, span)).collect::<Result<_>>()?,
-                        results: method.result.iter().map(|ty| this.ty(ty, span)).collect::<Result<_>>()?,
+                        results,
                         ownership_abi: ir::OwnershipAbi::Unelaborated,
                     },
                 })
@@ -782,15 +785,18 @@ impl Declarations {
                 ir::Type::Array(self.ty(element, span)?)
             }
             T::Action(action) => {
-                if action.is_async {
-                    return Err(super::asynchronous::async_action_type(span));
-                }
                 for ty in action.params.iter().chain(action.result.iter()) {
                     self.collection_type(ty, span)?;
                 }
+                let mut result = action.result.as_ref().map(|ty| self.ty(ty, span)).transpose()?;
+                // Ruling PR-D item 3: an async action value `async (A) is T` is a synchronous `Fn` that returns the
+                // Future of its outcome; calling it creates the cold Future.
+                if action.is_async {
+                    result = Some(self.builder.intern_type(ir::Type::Future(result))?);
+                }
                 ir::Type::Fn(ir::FnType {
                     params: action.params.iter().map(|ty| self.ty(ty, span)).collect::<Result<_>>()?,
-                    result: action.result.as_ref().map(|ty| self.ty(ty, span)).transpose()?,
+                    result,
                     is_async: false,
                 })
             }

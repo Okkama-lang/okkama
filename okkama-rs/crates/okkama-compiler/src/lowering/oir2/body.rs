@@ -24,6 +24,8 @@ pub(super) struct BodyContext<'t> {
     pub key: super::callables::BodyKey,
     pub calls: &'t std::cell::RefCell<super::open_calls::CallSpans>,
     pub bound_entries: &'t std::collections::HashSet<ir::FuncId>,
+    /// The creation thunk of each async method bound as a value (ruling PR-D item 3).
+    pub async_thunks: &'t HashMap<ir::FuncId, ir::FuncId>,
     pub lambdas: &'t [super::anonymous::Lambda],
     pub globals: &'t HashMap<usize, ir::DeclId>,
     pub test_intrinsics: &'t HashMap<String, ir::FuncId>,

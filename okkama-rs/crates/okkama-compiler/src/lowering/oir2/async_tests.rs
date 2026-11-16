@@ -472,33 +472,6 @@ fn oir2_std_async_intrinsics_outside_q1_name_their_slice() {
     }
 }
 
-#[test]
-fn oir2_v5_async_role_slot_keeps_its_diagnostic() {
-    assert_names(
-        concat!("module app; role Loader { async load() is int; } ",
-            "object Net does Loader { Net(); async load() is int { 5; } } ",
-            "async main() is int { let loader is Loader = Net(); await loader.load(); }"),
-        "async role slot Loader.load (P2.5 slice F1)",
-        None,
-    );
-}
-
-#[test]
-fn oir2_v5_bound_async_action_values_keep_their_diagnostic() {
-    assert_names(
-        concat!("module app; object E { E(); async fetch(n is int) is int { n; } } ",
-            "async main() is int { let work = E().fetch; 0; }"),
-        "bound async action value (P2.5 slice F1)",
-        Some("E().fetch"),
-    );
-    assert_names(
-        concat!("module app; object R { R(); ",
-            "async run(work is async (int) is int) is int { await work(1); } } main() is int { 0; }"),
-        "bound async action value (P2.5 slice F1)",
-        Some("work(1)"),
-    );
-}
-
 /// One W1 High golden through High -> verify_high -> own (V2) -> verify_own (Full) -> coro (V3)
 /// -> verify_coro (Full), plan §4 V2, V3 and V10. `Err` names the stage that stopped.
 fn w1_high_to_coro(id: &str) -> Result<ir::Module, String> {
@@ -648,3 +621,4 @@ fn oir2_v5_a_module_that_holds_futures_declares_the_services_protocol_once() {
     let module = lower("module app; async main() is int { 5; }");
     assert_eq!(services(&module), []);
 }
+

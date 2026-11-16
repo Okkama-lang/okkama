@@ -26,8 +26,6 @@ use crate::source::Span;
 const SPAWN_ASYNC: &str = "spawn of an async action that is not a direct call (P2.5 slice F1, fut.spawn)";
 /// `spawn` of a sync action or of a sync bound action value: a process worker.
 const SPAWN_WORKER: &str = "spawn of a process worker (P2.5 slice X1, proc.spawn)";
-/// A bound async action value and its call (Bible §20.11).
-const BOUND_ASYNC: &str = "bound async action value (P2.5 slice F1)";
 /// A `return` inside a deferred expression that awaits: an async defer entry has no replacement in 0.6.0
 /// (async ABI C-6, verifier rule `async-defer-replace`).
 const ASYNC_DEFER_REPLACE: &str = "return inside an awaiting defer (async ABI C-6, async-defer-replace)";
@@ -189,26 +187,13 @@ pub(super) fn async_native(name: &str, span: Span) -> LowerError {
     LowerError::unsupported(span, format!("async native {name} (P2.5 slice N1, D22)"))
 }
 
-/// The async role slot diagnostic: slot summaries with `suspends=true` arrive with F1.
-pub(super) fn async_role_slot(role: &str, slot: &str, span: Span) -> LowerError {
-    LowerError::unsupported(span, format!("async role slot {role}.{slot} (P2.5 slice F1)"))
-}
-
-/// The type of an async action value: only a bound async action has one (Bible §20.11).
-pub(super) fn async_action_type(span: Span) -> LowerError {
-    LowerError::unsupported(span, BOUND_ASYNC)
-}
-
 /// The async expressions outside plain async, with the diagnostic naming each.
 pub(super) fn outside_plain(expr: &thir::Expr) -> Option<&'static str> {
     use thir::ExprKind as E;
-    let async_action = |ty: &Option<Ty>| matches!(ty, Some(Ty::Action(action)) if action.is_async);
     match &expr.kind {
         E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) && !temporary(target) => Some(SPAWN_ASYNC),
         E::Spawn(target) if matches!(target.ty, Some(Ty::Future(_))) => None,
         E::Spawn(_) => Some(SPAWN_WORKER),
-        E::BoundAction { .. } | E::BoundRoleAction { .. } if async_action(&expr.ty) => Some(BOUND_ASYNC),
-        E::CallValue { callee, .. } if async_action(&callee.ty) => Some(BOUND_ASYNC),
         _ => None,
     }
 }
