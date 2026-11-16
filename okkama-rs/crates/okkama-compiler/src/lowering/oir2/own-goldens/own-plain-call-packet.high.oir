@@ -9,7 +9,7 @@ object encoding.utf.Utf8Encoded {
 scope S0 action in @main
 scope S1 action in @encoding.utf.Utf8Encoded.bytes#0
 scope S2 action in @encoding.utf.Utf8Encoded.new#0
-summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
 
 func @main() -> int [entry] {
     boundary B0 lexical in S0
@@ -54,7 +54,7 @@ func @encoding.utf.Utf8Encoded.bytes#0(%0: encoding.utf.Utf8Encoded) -> array<by
     want %2
     [i3] exit.prepare return %2 at B0
     result.exit edge normal(0), value %2, demand want, prepare #3
-    high.effects at #1 failures [native], suspends false
+    high.effects at #1 failures [program, native], suspends false
     ret %2
     ^b1(%3: failure) in S1:
     raise %3

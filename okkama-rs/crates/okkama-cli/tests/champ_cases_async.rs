@@ -96,6 +96,40 @@ fn k2_catch_cancelled_compiles_and_lets_other_failures_pass() {
     assert_eq!((run.stdout.as_str(), run.result), ("7\n-2\n", Ok(0)));
 }
 
+/// `catch e is Error` takes a cancellation and binds Cancelled, whose `text()` is "Operation was cancelled" (#738,
+/// language spec 9.5): the expected stdout is Tomato's for this program (okkama 0.5.8 in the cage). The cancelled
+/// body never runs; a catch of Error around an await that completes takes nothing.
+#[test]
+fn k2_catch_error_takes_a_cancellation() {
+    let run = run_source(concat!(
+        "module app v1.0.0;\n",
+        "import \"io/stdout\" take Stdout;\n",
+        "object Job {\n",
+        "    has result is int;\n",
+        "    Job(:result);\n",
+        "    async run() is int {\n",
+        "        Stdout().writeln(\"running\");\n",
+        "        result;\n",
+        "    }\n",
+        "}\n",
+        "async main() is int {\n",
+        "    let out = Stdout();\n",
+        "    let pending = Job(result: 1).run();\n",
+        "    pending.cancel();\n",
+        "    let text = try {\n",
+        "        (await pending).string();\n",
+        "    } catch e is Error {\n",
+        "        \"error: \" + e.text();\n",
+        "    };\n",
+        "    out.writeln(text);\n",
+        "    let done = try { (await Job(result: 2).run()).string(); } catch e is Error { e.text(); };\n",
+        "    out.writeln(done);\n",
+        "    0;\n",
+        "}\n",
+    )).unwrap();
+    assert_eq!((run.stdout.as_str(), run.result), ("error: Operation was cancelled\nrunning\n2\n", Ok(0)));
+}
+
 /// A resource that prints its destroy, so the run shows when each one closes.
 const LEASE: &str = concat!(
     "module app; import \"io/stdout\" take Stdout; ",

@@ -221,7 +221,7 @@ pub(crate) fn implementations(module: &o::Module, witnesses: &[o::Witness])
     }).collect()
 }
 
-fn placeholder(name: String, role: Option<s::RoleDecl>, implements: Vec<s::RoleImpl>) -> s::Object {
+pub(super) fn placeholder(name: String, role: Option<s::RoleDecl>, implements: Vec<s::RoleImpl>) -> s::Object {
     s::Object {
         error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false, name, fields: vec![],
         layout: s::ObjectRuntimeLayout {

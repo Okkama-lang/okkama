@@ -39,6 +39,9 @@ pub(super) struct BodyLowerer<'a, 't> {
     pub early_self: Option<ir::ValueId>,
     pub field_base: usize,
     pub field_end: usize,
+    /// Per constructor field, the env slot of its bound flag when the field may still be unbound at the end of
+    /// the body (#708): `false` on entry, `true` after each write; the completion checks it.
+    pub field_flags: Vec<Option<usize>>,
     // Locals, field slots, active catch failures and builder versions cross joins/backedges.
     // A scope exit restores the outer set; shadowed locals have distinct IDs.
     pub env: Vec<Option<ir::ValueId>>,
@@ -109,7 +112,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             registrations: HashMap::new(), loops: vec![], context,
             buffers: vec![], buffer_unwinds: HashMap::new(),
             failure_frames: vec![], caught: vec![], rethrows: HashMap::new(), rethrow_inputs: HashMap::new(),
-            receiver: None, early_self: None, field_base, field_end: count,
+            receiver: None, early_self: None, field_base, field_end: count, field_flags: vec![None; fields],
         };
         let lambda = this.context.lambdas.iter().find(|lambda| lambda.source.key == this.context.key);
         let layout = lambda.map(|lambda| lambda.source.captures.clone()).unwrap_or_default();
@@ -129,6 +132,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
         }
         if this.is_constructor() {
             this.initialize_constructor(&params)?;
+            this.initialize_field_flags()?;
         } else {
             let offset = if this.context.deferred.is_none() { layout.len().max(receiver) } else { receiver };
             if this.context.deferred.is_none() {

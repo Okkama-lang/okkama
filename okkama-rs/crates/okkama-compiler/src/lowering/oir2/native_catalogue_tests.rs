@@ -62,7 +62,7 @@ fn every_admitted_table_native_has_a_data_call_boundary_contract() {
             Ok(_) => {
                 let summary = result.unwrap_or_else(|error| panic!("{}: {}", native.symbol(), error.message));
                 assert_eq!(summary.entry_kind, ir::EntryKind::CallBoundary);
-                assert_eq!(summary.contract.failures, vec![ir::FailureKind::Native]);
+                assert_eq!(summary.contract.failures, vec![ir::FailureKind::Program, ir::FailureKind::Native]);
                 assert!(!summary.contract.suspends && !summary.contract.async_destroy);
                 assert!(summary.parameters.iter().all(|parameter| {
                     parameter.convention == ir::FreshConvention::Borrow && parameter.retention.is_none()
@@ -146,7 +146,7 @@ fn an_unknown_symbol_uses_the_checked_adapter_only_for_data_and_own_handles() {
     let module = builder.module();
     let summary = contract(module, "app@1::lookup/3", true, &signature(vec![string, port, table], vec![strings]))
         .unwrap();
-    assert_eq!(summary.contract.failures, vec![ir::FailureKind::Native]);
+    assert_eq!(summary.contract.failures, vec![ir::FailureKind::Program, ir::FailureKind::Native]);
     assert!(contract(module, "app@1::tick/0", true, &signature(vec![], vec![])).is_ok());
     for (name, wrong) in [
         ("app@1::lookup/1", signature(vec![thing], vec![])),

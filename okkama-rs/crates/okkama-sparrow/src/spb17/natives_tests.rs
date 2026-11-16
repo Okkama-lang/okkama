@@ -179,6 +179,24 @@ fn unresolved_natives_use_the_checked_adapter() {
     assert!(load(&program(objects, vec![retained])).is_err());
 }
 
+/// A native entry fails with the provider's `NativeFailure` or a program failure of the call (a missing provider,
+/// a refused permission), never with a thrown value or a panic (#719, language spec 9.5); a table native and an
+/// unresolved provider declare exactly that mask, and a declaration that narrows it to native failures is refused.
+#[test]
+fn native_entries_declare_native_and_program_failures() {
+    let hex = declaration("runtime/hex@1::hex_encode/1", vec![Type::Bytes], vec![Type::Str]);
+    let lookup = declaration("app@1::lookup/1", vec![Type::Int], vec![Type::Int]);
+    for function in [hex, lookup] {
+        load(&program(vec![], vec![function.clone()])).unwrap();
+        for mask in [8, 2, 1 | 2 | 8, 2 | 4 | 8] {
+            let mut narrowed = function.clone();
+            narrowed.proofs.entry.as_mut().unwrap().failures = mask;
+            let failure = load(&program(vec![], vec![narrowed])).unwrap_err();
+            assert_eq!(failure.rule, "EXTERNAL_SIGNATURE", "{} mask {mask}: {failure}", function.symbol);
+        }
+    }
+}
+
 #[test]
 fn atomic_entries_follow_the_registered_value_layout() {
     use super::p1::atomic_value;

@@ -1420,6 +1420,8 @@ fn champ_native_handles_are_registry_values_under_collection() {
     assert!(matches!(runtime.failure(post.failure).unwrap().kind, FailureKind::Native(_)));
 }
 
+/// A missing provider is a program failure of the call, with Tomato's message (#719, language spec 9.5): no catch
+/// takes it, unlike the provider's own `NativeFailure`.
 #[test]
 fn champ_unresolved_native_fails_as_a_missing_provider() {
     let mut runtime = p1_runtime();
@@ -1430,12 +1432,9 @@ fn champ_unresolved_native_fails_as_a_missing_provider() {
     assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
     let post = post.unwrap();
     assert_eq!(post.packet.record, 0);
-    let FailureKind::Native(payload) = runtime.failure(post.failure).unwrap().kind else { panic!("native failure") };
-    runtime.roots.push((payload, Repr::Ref));
-    ctx.status = OK;
-    ctx.failure = 0;
-    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
-    assert_eq!(runtime.heap.text(text), "Native symbol \"app@1::port_open/1\" is not registered");
+    let kind = &runtime.failure(post.failure).unwrap().kind;
+    let expected = "Native symbol \"app@1::port_open/1\" is not registered";
+    assert!(matches!(kind, FailureKind::Program(text) if text == expected), "{kind:?}");
 }
 
 /// An endless loop back-edge, and a self tail call compiled as a jump: each is a step, as in Tomato, so under a
@@ -1498,6 +1497,8 @@ fn champ_endless_loops_and_tail_calls_exhaust_the_step_budget() {
     }
 }
 
+/// An unknown operation of a table module is a missing provider: a program failure of the call with Tomato's
+/// wording (`natives::missing_native`), not a catchable `NativeFailure` (#719).
 #[test]
 fn champ_unknown_operation_of_a_table_module_fails_as_a_missing_provider() {
     let mut runtime = p1_runtime();
@@ -1506,11 +1507,7 @@ fn champ_unknown_operation_of_a_table_module_fails_as_a_missing_provider() {
     assert_eq!((outcome, ctx.status), (c::UNWIND, FAILED));
     let post = post.unwrap();
     assert_eq!(post.packet.record, 0);
-    let FailureKind::Native(payload) = runtime.failure(post.failure).unwrap().kind else { panic!("native failure") };
-    runtime.roots.push((payload, Repr::Ref));
-    ctx.status = OK;
-    ctx.failure = 0;
-    let (text, _) = p1_call(&mut runtime, &mut ctx, "okkama.Error.text", &[payload]);
-    // Tomato's wording for a runtime symbol without a provider (`natives::missing_native`).
-    assert_eq!(runtime.heap.text(text), "native provider is not implemented: runtime/buffer@1::unknown/0");
+    let kind = &runtime.failure(post.failure).unwrap().kind;
+    let expected = "native provider is not implemented: runtime/buffer@1::unknown/0";
+    assert!(matches!(kind, FailureKind::Program(text) if text == expected), "{kind:?}");
 }

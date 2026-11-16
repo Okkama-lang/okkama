@@ -301,7 +301,27 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
         });
     }
     roles::synthetic_objects(module, &mut objects)?;
+    // A catch of the Error role takes a cancellation and binds an object of the system Cancelled (#738, Tomato's
+    // `rt_catch`; SPB 17 `CATCH_TYPE`). A module that does not declare Cancelled gets its descriptor here, after
+    // every declaration and synthetic object, so that no other descriptor index moves.
+    if s::cancelled_in(&objects).is_none() && catches_error_role(module)? {
+        objects.push(roles::placeholder(s::CANCELLED.into(), None, vec![]));
+    }
     Ok(objects)
+}
+
+/// Whether a body of `module` catches the Error role.
+fn catches_error_role(module: &o::Module) -> Result<bool, GenerateError> {
+    for (_, function) in module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        for (_, block) in body.blocks.iter() {
+            if let o::TermKind::Catch { ty, .. } = &block.term.kind
+                && translate_type(module, *ty)? == s::Type::Error {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// SPB 17 collection shapes and Future outcomes of one module, in OIR type order. Equal shapes share one

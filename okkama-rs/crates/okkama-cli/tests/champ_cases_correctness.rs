@@ -261,6 +261,21 @@ fn champ_correctness_constructor_branches_before_binding() {
     check(&["L04.ctor.field-bind-forms"]);
 }
 
+/// A constructor whose body leaves a field unbound on some path checks it after the body, as Tomato does: the
+/// construction fails with "Object \"Gate\" field \"a\" was not initialized" (#708); a constructor that binds
+/// some fields and then fails, directly or in a nested construction, destroys the bound fields once and never
+/// completes.
+#[test]
+fn champ_correctness_constructor_fields_bound_on_some_paths() {
+    check(&["L04.ctor.unbound-field-dies-after-body", "L12.constructor-nested-resource-failure"]);
+}
+
+/// Left over from #705 (a dead unwind landing of a total construction): #702's pruning of dead blocks made it run.
+#[test]
+fn champ_correctness_csv_rows_and_round_trip() {
+    check(&["L09.csv.rows-and-round-trip"]);
+}
+
 /// A compiled observation callee is called directly: a million non-tail levels fit the VM stack.
 #[test]
 fn champ_deep_recursion_takes_one_machine_frame_per_level() {

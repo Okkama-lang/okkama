@@ -549,6 +549,33 @@ fn k1_low_goldens_compile_and_load() {
     }
 }
 
+/// A catch of the Error role binds the system Cancelled for a cancellation (#738), so a module that catches the role
+/// without declaring Cancelled gets its descriptor last, with Cancelled's exact shape; every other descriptor keeps
+/// its index. A module without such a catch gets none.
+#[test]
+fn a_catch_of_the_error_role_brings_the_system_cancelled() {
+    let module = golden("k1-cancel-unstarted");
+    let program = compile(&module).unwrap().program;
+    let without = translate(&{
+        let mut plain = module.clone();
+        for (_, function) in plain.functions.iter_mut() {
+            let Some(body) = function.body.as_mut() else { continue };
+            for (_, block) in body.blocks.iter_mut() {
+                if let o::TermKind::Catch { next, .. } = &block.term.kind {
+                    block.term.kind = o::TermKind::Br(next.clone());
+                }
+            }
+        }
+        plain
+    }).unwrap();
+    assert_eq!(s::cancelled(&without), None);
+    assert_eq!(program.objects.len(), without.objects.len() + 1);
+    assert_eq!(program.objects[..without.objects.len()], without.objects[..]);
+    assert_eq!(s::cancelled(&program), Some(without.objects.len() as u32));
+    assert!(program.objects.iter().filter(|object| object.name == s::CANCELLED).count() == 1);
+    assert_eq!(s::cancelled(&compile(&golden("async-plain-await")).unwrap().program), None);
+}
+
 /// #725: an async test is a void async body and a fixed root. TEST_ENTRY refuses one that publishes a value, and
 /// SPB_ASYNC_ENTRY one whose start holds an input.
 #[test]

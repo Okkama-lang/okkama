@@ -74,8 +74,8 @@ summary M10 call-boundary parameters [parameter_effect(convention=borrow, destin
 summary M11 call-boundary parameters [parameter_effect(convention=borrow, destination=none), parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<void>], failures=[program, panic, native], publication=atomic)
 summary M12 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
 summary M13 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
-summary M14 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
-summary M15 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[native], publication=atomic)
+summary M14 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M15 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
 protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
 
 func @app.Job.new#0(%0: str, %1: int) -> app.Job [ctor app.Job] {
@@ -628,7 +628,7 @@ func @io.stdout.Stdout.write_bytes#6(%0: io.stdout.Stdout, %1: array<byte>) -> v
     bind %2, binding b1
     %3: int = array.len %1
     %4: bool = int.eq %2, %3
-    high.effects at #1 failures [native], suspends false
+    high.effects at #1 failures [program, native], suspends false
     cond %4, ^b2(%1, %2), ^b3(%1, %2)
     ^b1(%5: failure) in S20:
     raise %5
@@ -664,7 +664,7 @@ func @encoding.utf.Utf8Encoded.bytes#0(%0: encoding.utf.Utf8Encoded) -> array<by
     want %2
     [i3] exit.prepare return %2 at B0
     result.exit edge normal(0), value %2, demand want, prepare #3
-    high.effects at #1 failures [native], suspends false
+    high.effects at #1 failures [program, native], suspends false
     ret %2
     ^b1(%3: failure) in S21:
     raise %3

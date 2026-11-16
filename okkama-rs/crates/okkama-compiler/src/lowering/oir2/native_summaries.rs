@@ -22,7 +22,8 @@
 //! Natives (#569 C7) follow the companion catalogue of the runtime table: an admitted
 //! synchronous data or handle operation is a call boundary whose declaration must equal the
 //! table's signature; any other canonical symbol takes the checked unresolved-provider adapter
-//! (see [`native_transport`]). Data and handles carry no ownership graph; failures have Native kind.
+//! (see [`native_transport`]). Data and handles carry no ownership graph; failures are the provider's
+//! `NativeFailure` (Native) and the call's program failures (Program: missing provider, permission, #719).
 //! All entries are synchronous, with no async destroy, publication receipt or resource result.
 //!
 //! Open sync callables and the opaque cleanup intrinsics (callables, #569 O1 and
@@ -208,7 +209,9 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
     let (params, results) = match (native, name) {
         (true, name) => {
             native_transport(module, name, signature)?;
-            failures.push(ir::FailureKind::Native);
+            // A provider refuses with its own `NativeFailure` or with a program failure of the call (a missing
+            // provider, a refused permission), which passes every catch uncaught (language spec 9.5, #719).
+            failures.extend([ir::FailureKind::Program, ir::FailureKind::Native]);
             (signature.params.clone(), signature.results.clone())
         }
         (false, "okkama.Error.text") => {

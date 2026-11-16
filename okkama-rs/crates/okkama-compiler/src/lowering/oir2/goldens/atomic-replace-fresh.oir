@@ -12,8 +12,8 @@ summary M0 call-boundary parameters [parameter_effect(convention=borrow, destina
 summary M1 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[str], failures=[thrown], publication=atomic)
 summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none), parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[thrown], publication=atomic)
 summary M3 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
-summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[native], publication=atomic)
-summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[native], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
 
 func @main() -> int [entry] {
     binding b0 "state": async.atomic.Atomic_string in S0
@@ -48,10 +48,10 @@ func @main() -> int [entry] {
     high.effects at #6 failures [thrown], suspends false
     high.effects at #7 failures [thrown], suspends false
     high.effects at #9 failures [], suspends false
-    high.effects at #10 failures [native], suspends false
-    high.effects at #11 failures [native], suspends false
-    high.effects at #13 failures [native], suspends false
-    high.effects at #14 failures [native], suspends false
+    high.effects at #10 failures [program, native], suspends false
+    high.effects at #11 failures [program, native], suspends false
+    high.effects at #13 failures [program, native], suspends false
+    high.effects at #14 failures [program, native], suspends false
     ret %9
     ^b1(%10: failure) in S0:
     raise %10
