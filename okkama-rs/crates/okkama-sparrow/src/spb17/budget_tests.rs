@@ -440,6 +440,17 @@ fn liveness_work_beyond_the_bound_is_rejected() {
     expect_budget(live_locations(&f).map(drop), "ALLOCATION_WORK", "allocation liveness work budget exceeded");
 }
 
+#[test]
+fn liveness_storage_beyond_the_bound_is_rejected() {
+    // 3000 registers live at 2801 instructions: 8.4 M stored entries, over the 8 Mi bound, while the work of
+    // visiting each PC once stays near 8.4 M, under its 50 M bound.
+    let mut f = empty_function();
+    f.registers = vec![Type::Int; 3000];
+    f.code = (1..=2800).map(branch).collect();
+    f.code.push(Instruction::Ret((0..3000).collect()));
+    expect_budget(live_locations(&f).map(drop), "ALLOCATION_MEMORY", "allocation liveness storage exceeded");
+}
+
 /// `count` unused parameters, then `used` constants that the ret reads.
 fn parameters(count: u32, used: u32) -> Function {
     let mut f = empty_function();
