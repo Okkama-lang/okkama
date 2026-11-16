@@ -5,9 +5,9 @@ time: numbers in Chapter 5, types in Chapter 4, collections in Chapter 8,
 roles in Chapter 14, tests in Chapter 15. This chapter turns the comparison
 around. It takes six languages that a reader of this book is likely to know,
 Java, Kotlin, Go, Rust, Haskell and OCaml, and asks of each the same
-questions the manifesto answered for Okkama (Chapter 3). Three more, Python,
-Swift and Erlang, follow in shorter sections, because readers come to
-Okkama from them as well.
+questions the manifesto answered for Okkama (Chapter 3). Six more, Python,
+Swift, Erlang, Clojure, C# and TypeScript, follow in shorter sections,
+because readers come to Okkama from them as well.
 
 A comparison of languages is easy to make unfair. Each of these languages
 was designed for a purpose, by people who weighed the same trade-offs and
@@ -217,7 +217,114 @@ and nothing restarts automatically. Isolation by memory is what process
 workers give (Chapter 21), at the price of a separate program. Erlang is
 also dynamically typed, with static checking left to optional tools.
 
-## 27.11 A port, step by step
+## 27.11 Clojure
+
+Clojure is a Lisp for the JVM, which Rich Hickey released in 2007 after two
+years of work on his own time [@hickey2020]. Of all the languages in this
+chapter, it has thought hardest about the question Okkama answers with
+successors: what changes when "nothing changes". Its answer separates
+*values* from *identities*.
+
+- A value never changes. Its vectors, maps and sets are persistent: an
+  "update" returns a new collection that shares most of its structure with
+  the old one, through Bagwell's hash array mapped tries [@bagwell2001;
+  @clojureds].
+- An identity is a reference, such as an atom, a ref or an agent, that
+  holds one value after another. Each one has its own rule for how the next
+  value replaces the current one.
+
+Okkama keeps the first half and drops the second. Its values are immutable,
+and its maps and arrays share structure in the same way (Chapter 8). A
+successor is Clojure's `assoc` with a name and a type. Okkama has no
+general reference type for identity, though. State that really changes
+lives in a task that owns it (Section 20.6), or in `Atomic` and `Cell`,
+which are ordinary library objects. Clojure makes the reference the central
+idea, and Okkama makes it a rare tool.
+
+The differences come from typing and from Lisp.
+
+- **Clojure is dynamically typed.** Its data is "just maps" with keyword
+  keys. Okkama data is named objects whose fields the compiler knows.
+- **`nil` is everywhere in Clojure.** A missing key yields `nil`, and much
+  of the core library is written to accept it. Okkama spells absence out
+  as `Maybe` and `else` (Chapter 7).
+- **Clojure's protocols are open.** `extend-protocol` makes a type that
+  already exists, `String` for example, satisfy a new protocol after the
+  fact. Okkama's roles are declared by the object itself, and it has no
+  retroactive conformance (Section 14.2).
+- **Resources are closed by `with-open`.** It is a macro around `try` and
+  `finally`, and only code that remembers to use it gets the release.
+  Okkama ties release to the owner's scope (Chapter 11).
+
+## 27.12 C#
+
+C# appeared in 2002 as Microsoft's answer to Java, and it has absorbed more
+of the ideas in this book than any other mainstream language
+[@csversions]. Each of them arrived as an addition, never as a default:
+
+- generics, iterators and nullable value types in 2005;
+- LINQ, with lazy queries over sequences, in 2007;
+- `async` and `await` in 2012;
+- nullable reference types, switch expressions, `using` declarations and
+  default interface members in 2019;
+- records with value equality and `with` expressions in 2020 [@csrecords];
+- union types and closed hierarchies in November 2026.
+
+Several of these look like Okkama. A record's `with` expression,
+`order with { Status = Paid }`, is a successor: a new value with one field
+changed. A `using` declaration disposes a resource when its scope ends, as
+Okkama's `destroy` does. A switch expression over a closed hierarchy is a
+`match` over a variant. The `async` model that C# introduced spread to
+JavaScript, Python and Rust (Section 20.2).
+
+The difference is the direction of the defaults.
+
+- **Mutability is the default.** A record is immutable, but a class is
+  mutable unless written otherwise.
+- **`null` stays.** Nullable reference types produce warnings, and a `!`
+  silences them (Section 7.12).
+- **Release is opt-in.** A resource is disposed only where its user wrote
+  `using`. Forgetting it leaves the object to a finalizer, if the object
+  has one.
+- **Behaviour is inherited.** Classes inherit implementations, and since
+  2019 interfaces can carry default ones.
+- **A task starts at once.** An `async` method begins as soon as it is
+  called, while an Okkama future waits for its first `await`
+  (Section 20.1).
+
+C# shows how far a language can travel toward these ideas while keeping
+every program that was written before. Okkama shows the language that
+results when nothing has to be kept.
+
+## 27.13 TypeScript
+
+TypeScript adds static types to JavaScript, which it compiles to, and the
+types are erased in the output. Its type system is structural by design:
+"type compatibility in TypeScript is based on structural subtyping", and a
+value fits an interface if it has the members, whatever it was declared to
+be [@tscompat]. That is the opposite of Okkama's roles, which an object
+must claim by name (Section 14.2). The choice suits a language that has to
+describe JavaScript written without any types.
+
+On absence, TypeScript went where Okkama did. Under `strictNullChecks`,
+`null` and `undefined` are types of their own. A `string` cannot hold
+them, and a union `string | undefined` must be narrowed before use
+[@tseveryday]. Unions of object types with a literal tag, the
+"discriminated unions", are checked by the same narrowing, which gives
+TypeScript something close to Okkama's variants without a separate kind of
+declaration.
+
+The language is deliberately unsound. The handbook says so itself: the type
+system "allows certain operations that can't be known at compile-time to
+be safe" [@tscompat]. `any` turns checking off. Function parameters were
+compared bivariantly until a strict flag was added, and casts are never
+checked at run time, because the types no longer exist then. TypeScript's
+types describe a program they cannot fully constrain. Okkama's types are
+the program's own rules, and its run time keeps them: a value has one
+concrete type, and a role reference cannot be cast down to the object
+behind it (Section 14.3).
+
+## 27.14 A port, step by step
 
 The rules are easiest to compare on one small class. Here is a bank account
 in Java, written the way a Java course would write it:
@@ -301,7 +408,7 @@ program asks), a `final` keyword (every field is final), and a check that
 `owner` is not null (a `string` cannot be absent). The port is about as long
 as the original; it says more about what can happen.
 
-## 27.12 What the comparison shows
+## 27.15 What the comparison shows
 
 Three things stand out.
 

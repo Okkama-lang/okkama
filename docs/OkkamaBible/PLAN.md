@@ -191,6 +191,11 @@ language.
   recording `Timing`, `Stub`, `RecordedCalls`, mutation-checked; why
   counting waits is right here); found #756 (test report prints object
   identities).
+- 2026-11-16: 27.11–27.13 Clojure (values and identities, open protocols,
+  `with-open`; Hickey's HOPL history), C# (the ideas added one by one, from
+  the official version history up to C# 15's unions), TypeScript (structural
+  and deliberately unsound; `strictNullChecks`); port and conclusion
+  renumbered to 27.14–27.15.
 
 - 2026-11-15 (idle work during the 0.6.0 rebuild): worked examples or
   comparison sections added to chapters 1–6, 8, 9, 11, 14–16 (harbour,

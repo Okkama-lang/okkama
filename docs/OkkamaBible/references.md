@@ -39,6 +39,7 @@ bibliographic data were checked are listed.
 - [@cox2007] Russ Cox (2007). Regular Expression Matching Can Be Simple And Fast (but is slow in Java, Perl, PHP, Python, Ruby, ...). January 2007. https://swtch.com/~rsc/regexp/regexp1.html
 - [@cox2018] Russ Cox (2018). Minimal Version Selection. research!rsc, 21 February 2018. https://research.swtch.com/vgo-mvs
 - [@csrecords] Microsoft (2026). Records (C# reference). *C# language reference*. https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record {label: C# language reference}
+- [@csversions] Microsoft (2026). The history of C#. *C# documentation*. https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history {label: C# documentation}
 - [@cwe] The MITRE Corporation (2026). *Common Weakness Enumeration (CWE)*, version 5.0. https://cwe.mitre.org/ {label: MITRE CWE}
 - [@cytron1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen, Mark N. Wegman, F. Kenneth Zadeck (1991). Efficiently Computing Static Single Assignment Form and the Control Dependence Graph. *ACM TOPLAS* 13(4): 451–490. https://doi.org/10.1145/115372.115320
 - [@dahl1966] Ole-Johan Dahl, Kristen Nygaard (1966). SIMULA — an ALGOL-Based Simulation Language. *Communications of the ACM* 9(9): 671–678. https://doi.org/10.1145/365813.365819
@@ -73,6 +74,7 @@ bibliographic data were checked are listed.
 - [@hewitt1973] Carl Hewitt, Peter Bishop, Richard Steiger (1973). A Universal Modular ACTOR Formalism for Artificial Intelligence. In *Proceedings of the 3rd International Joint Conference on Artificial Intelligence (IJCAI '73)*, 235–245.
 - [@hickey2008] Rich Hickey (2008). The Clojure Programming Language. In *Proceedings of the 2008 Symposium on Dynamic Languages (DLS '08)*. ACM. https://doi.org/10.1145/1408681.1408682
 - [@hickey2011] Rich Hickey (2011). Simple Made Easy. Talk at Strange Loop, 20 September 2011. https://www.infoq.com/presentations/Simple-Made-Easy/
+- [@hickey2020] Rich Hickey (2020). A History of Clojure. *Proceedings of the ACM on Programming Languages* 4(HOPL), Article 71: 1–46. https://doi.org/10.1145/3386321
 - [@higham2002] Nicholas J. Higham (2002). *Accuracy and Stability of Numerical Algorithms*, 2nd edition. Society for Industrial and Applied Mathematics. https://doi.org/10.1137/1.9780898718027
 - [@hoare1978] C. A. R. Hoare (1978). Communicating Sequential Processes. *Communications of the ACM* 21(8): 666–677. https://doi.org/10.1145/359576.359585
 - [@hoare1981] C. A. R. Hoare (1981). The Emperor's Old Clothes. *Communications of the ACM* 24(2): 75–83. https://doi.org/10.1145/358549.358561
