@@ -522,45 +522,62 @@ fn oir2_constructor_checks_fields_bound_on_some_paths() {
     assert!(unbound_traps(&module, "app.O").is_empty());
 }
 
-/// The construction self-check takes a field that may be unbound into a complete self only behind the check of
-/// that field's flag (#708): without the check, or with a check of another field, or with a check whose failing
-/// edge does not trap as an unbound field, it refuses the constructor.
-#[test]
-fn oir2_construction_self_check_requires_the_bound_check_of_each_maybe_unbound_field() {
-    let module = high_of(concat!("module app; object Gate { has a is int; Gate(flag is bool) { ",
-        "if flag { self.a = 1; } } } main() is int { Gate(true); 0; }"));
-    super::structure::check(&module).unwrap();
+/// Mutations of the bound-flag check of field `a` in the constructor of `module` (#708, #746, #770), each of which
+/// the construction self-check must refuse with `expected`:
+/// - the check reads field `b`'s flag (keeping `a`'s message): the flag, not the message, names the field;
+/// - the check reads the constructor's parameter, an ordinary bool;
+/// - the failing edge is not an unbound-field trap;
+/// - no check: the passing block is reached from both edges.
+fn refuses_broken_bound_checks(module: &ir::Module, expected: &str) {
+    super::structure::check(module).unwrap();
     let ctor = module.functions.iter().find(|(_, function)| {
         function.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Ctor(_)))
     }).unwrap().0;
-    let trap = |module: &ir::Module| module.functions.get(ctor).unwrap().body.as_ref().unwrap().blocks.iter()
-        .find(|(_, block)| matches!(block.term.kind, ir::TermKind::Trap { code: ir::TrapCode::Unbound, .. }))
-        .unwrap().0;
-    for mutation in 0..3 {
+    // The check of a field: its Cond block, its condition and its trap block.
+    let check = |module: &ir::Module, field: &str| {
+        let body = module.functions.get(ctor).unwrap().body.as_ref().unwrap();
+        body.blocks.iter().find_map(|(id, block)| match &block.term.kind {
+            ir::TermKind::Cond { condition, no, .. } => match &body.blocks.get(no.block).unwrap().term.kind {
+                ir::TermKind::Trap { code: ir::TrapCode::Unbound, message }
+                    if message.contains(&format!("field \"{field}\"")) => Some((id, *condition, no.block)),
+                _ => None,
+            },
+            _ => None,
+        }).unwrap_or_else(|| panic!("no check of {field}"))
+    };
+    let parameter = module.functions.get(ctor).unwrap().body.as_ref().unwrap().blocks
+        .get(module.functions.get(ctor).unwrap().body.as_ref().unwrap().entry).unwrap().params[0];
+    for mutation in 0..4 {
         let mut broken = module.clone();
-        let block = trap(&broken);
+        let (source, _, trap) = check(&broken, "a");
+        let (_, other, _) = check(&broken, "b");
         let body = broken.functions.get_mut(ctor).unwrap().body.as_mut().unwrap();
-        let term = &mut body.blocks.get_mut(block).unwrap().term.kind;
+        let term = &mut body.blocks.get_mut(source).unwrap().term.kind;
+        let ir::TermKind::Cond { yes, .. } = term.clone() else { unreachable!() };
         match mutation {
-            // The check names another field.
-            0 => *term = ir::TermKind::Trap { code: ir::TrapCode::Unbound,
-                message: "Object \"Gate\" field \"b\" was not initialized".into() },
-            // The failing edge is not an unbound-field trap.
-            1 => *term = ir::TermKind::Trap { code: ir::TrapCode::Confirm,
+            0 => *term = ir::TermKind::Cond { condition: other, yes: yes.clone(),
+                no: ir::Target { block: trap, args: vec![] } },
+            1 => *term = ir::TermKind::Cond { condition: parameter, yes: yes.clone(),
+                no: ir::Target { block: trap, args: vec![] } },
+            2 => body.blocks.get_mut(trap).unwrap().term.kind = ir::TermKind::Trap { code: ir::TrapCode::Confirm,
                 message: "Object \"Gate\" field \"a\" was not initialized".into() },
-            // No check: the passing block is reached from both edges.
-            _ => {
-                let source = body.blocks.iter().find(|(_, data)| matches!(&data.term.kind,
-                    ir::TermKind::Cond { no, .. } if no.block == block)).unwrap().0;
-                let ir::TermKind::Cond { yes, .. } = body.blocks.get(source).unwrap().term.kind.clone() else {
-                    unreachable!()
-                };
-                body.blocks.get_mut(source).unwrap().term.kind = ir::TermKind::Br(yes);
-            }
+            _ => *term = ir::TermKind::Br(yes.clone()),
         }
         let error = super::structure::check(&broken).expect_err("an unchecked maybe-unbound field");
-        assert!(error.to_string().contains("complete self has uninitialized fields"), "{mutation}: {error}");
+        assert!(error.to_string().contains(expected), "{mutation}: {error}");
     }
+}
+
+/// The construction self-check takes a field that may be unbound into a complete self only behind the check of
+/// that field's flag (#708). Since #770 the check is linked to the field by the flag it reads, not by its trap's
+/// message: a check of another field's flag or of an ordinary bool, a failing edge that does not trap as an
+/// unbound field, and a missing check are refused.
+#[test]
+fn oir2_construction_self_check_requires_the_bound_check_of_each_maybe_unbound_field() {
+    let module = high_of(concat!("module app; object Gate { has a is int; has b is int; ",
+        "Gate(x is bool, y is bool) { if x { self.a = 1; } if y { self.b = 2; } } } ",
+        "main() is int { Gate(true, true); 0; }"));
+    refuses_broken_bound_checks(&module, "complete self has uninitialized fields");
 }
 
 #[test]
@@ -2159,40 +2176,32 @@ fn oir2_early_self_checks_fields_bound_on_some_paths() {
 }
 
 /// The construction self-check completes an early self with a field that may be unbound only behind the check
-/// of that field's flag (#746): a check of another field, a failing edge that is not an unbound-field trap, or
-/// no check at all is refused.
+/// of that field's flag (#746, linked by the flag since #770): the same mutations are refused.
 #[test]
 fn oir2_early_self_completion_requires_the_bound_check_of_each_maybe_unbound_field() {
-    let module = high_of(concat!("module app; object Gate { has a is int; Gate(flag is bool) { ",
-        "let alias = self; if flag { self.a = 1; } } } main() is int { Gate(true); 0; }"));
+    let module = high_of(concat!("module app; object Gate { has a is int; has b is int; ",
+        "Gate(x is bool, y is bool) { let alias = self; if x { self.a = 1; } if y { self.b = 2; } } } ",
+        "main() is int { Gate(true, true); 0; }"));
+    refuses_broken_bound_checks(&module, "completion before field initialization");
+}
+
+/// A field bound inside a `try` has its bound flag carried through the unwind edge and the catch handler (the
+/// unwind edge passes the leading parameters, the failure follows): the flag reaches the check at the completion
+/// on every path (#770, L12.constructor-nested-resource-failure).
+#[test]
+fn oir2_bound_flags_cross_unwind_and_catch_edges() {
+    let module = high_of(concat!("module app; object R { has n is int; R(:n); n() is int { n; } } ",
+        "object H { has a is int; H() { let s = try { a = R(n: 1).n(); 1; } catch e is Error { 0; }; } } ",
+        "main() is int { H(); 0; }"));
+    assert_eq!(unbound_traps(&module, "app.H"), ["Object \"H\" field \"a\" was not initialized"]);
     super::structure::check(&module).unwrap();
-    let ctor = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Gate.new")).unwrap().0;
-    let trap = |module: &ir::Module| module.functions.get(ctor).unwrap().body.as_ref().unwrap().blocks.iter()
-        .find(|(_, block)| matches!(block.term.kind, ir::TermKind::Trap { code: ir::TrapCode::Unbound, .. }))
-        .unwrap().0;
-    for mutation in 0..3 {
-        let mut broken = module.clone();
-        let block = trap(&broken);
-        let body = broken.functions.get_mut(ctor).unwrap().body.as_mut().unwrap();
-        let term = &mut body.blocks.get_mut(block).unwrap().term.kind;
-        match mutation {
-            // The check names another field.
-            0 => *term = ir::TermKind::Trap { code: ir::TrapCode::Unbound,
-                message: "Object \"Gate\" field \"b\" was not initialized".into() },
-            // The failing edge is not an unbound-field trap.
-            1 => *term = ir::TermKind::Trap { code: ir::TrapCode::Confirm,
-                message: "Object \"Gate\" field \"a\" was not initialized".into() },
-            // No check: the completion is reached from both edges.
-            _ => {
-                let source = body.blocks.iter().find(|(_, data)| matches!(&data.term.kind,
-                    ir::TermKind::Cond { no, .. } if no.block == block)).unwrap().0;
-                let ir::TermKind::Cond { yes, .. } = body.blocks.get(source).unwrap().term.kind.clone() else {
-                    unreachable!()
-                };
-                body.blocks.get_mut(source).unwrap().term.kind = ir::TermKind::Br(yes);
-            }
-        }
-        let error = super::structure::check(&broken).expect_err("an unchecked maybe-unbound field");
-        assert!(error.to_string().contains("completion before field initialization"), "{mutation}: {error}");
-    }
+    let (_, ctor) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.H.new")).unwrap();
+    let body = ctor.body.as_ref().unwrap();
+    let declaration = module.declarations.iter().find(|(_, decl)| decl.name == "app.H").unwrap().0;
+    let flags = super::construction::field_flags(&module, body, declaration, 1, &Default::default()).unwrap();
+    let checked = body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+        ir::TermKind::Cond { condition, .. } => Some(*condition),
+        _ => None,
+    }).filter(|condition| flags[0].contains(condition)).count();
+    assert_eq!(checked, 1, "the completion's check reads the field's flag");
 }

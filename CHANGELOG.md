@@ -20,6 +20,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The bound-flag check of a constructor field is linked to the field by
+  its flag, not by its message (#770).** The verifier's construction rule
+  (A2) and the producer's construction self-check took a field as
+  initialized behind any `cond` whose failing edge trapped with that field's
+  `not initialized` message, so a check of another flag passed. Both now
+  compute each field's bound flags: values whose every definition is
+  `const false`, a `const true` that follows a write of the field in its
+  block (`obj.init` on the early self; also `stage` for the producer), or a
+  block parameter whose every incoming argument is such a flag; unwind edges
+  pass their leading parameters. The `cond` must read the field's flag; the
+  trap must still be `TrapCode::Unbound`. The producer's undef propagation
+  now follows unwind and catch edges too, so a field bound inside a `try`
+  whose body fails first gets its check and fails as on Tomato instead of
+  completing with an undef field. Verifier fixtures: a check of another
+  field's flag and a check of an ordinary bool are refused.
 - **Tomato: `e.text()` on a cancellation caught as `Error` no longer
   crashes (#744).** A catch of the Error role binds a `Cancelled` value,
   which Sparrow builds from the system `Cancelled` object; the OIR-1

@@ -302,6 +302,51 @@ main() is int {
     assert!(failure.contains("Object \"Gate\" field \"a\" was not initialized"), "{failure}");
 }
 
+/// A field bound inside a `try` whose body fails before the binding stays unbound on the handler's path: the
+/// constructor checks its flag after the body and fails as Tomato does (#770; the undef value and the flag
+/// cross the unwind and catch edges).
+#[test]
+fn champ_correctness_field_bound_in_a_failing_try() {
+    let source = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (refused);
+
+object Source {
+    has n is int;
+    Source(:n);
+    value() is int {
+        confirm n > 0 else throw Refused.refused;
+        n;
+    }
+}
+
+object Holder {
+    has a is int;
+    Holder(v is int) {
+        let staged = try {
+            a = Source(n: v).value();
+            1;
+        } catch e is Error {
+            0;
+        };
+    }
+    a() is int { a; }
+}
+
+main() is int {
+    Stdout().writeln(Holder(1).a().string());
+    let h = Holder(0);
+    Stdout().writeln("unreachable");
+    0;
+}"#;
+    let run = run_source(source);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    let failure = run.result.unwrap_err().0;
+    assert!(failure.contains("Object \"Holder\" field \"a\" was not initialized"), "{failure}");
+}
+
 /// The same early self binds its field on every path: no check fails and both objects complete.
 #[test]
 fn champ_correctness_early_self_fields_bound_on_every_path() {
