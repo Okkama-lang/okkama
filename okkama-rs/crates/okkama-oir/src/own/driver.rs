@@ -549,6 +549,8 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         for block in driver.blocks.values() {
             driver.ssa.seal(*block, driver.predecessors.get(block).copied().unwrap_or(0))?;
         }
+        // D25.2 revision (#771): a stored Future's duty leaves with its packet, never by a rehome.
+        super::stored::drop_stored_rehomes(driver.module, &mut driver.body)?;
         for schedule in &high.service_schedules {
             let mut schedule = schedule.clone();
             schedule.dictionary = schedule.dictionary.map(|value| {

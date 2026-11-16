@@ -2,7 +2,7 @@
 use crate::*;
 
 /// Successor blocks, one entry per edge.
-pub(super) fn successors(term: &TermKind) -> Vec<BlockId> {
+pub(crate) fn successors(term: &TermKind) -> Vec<BlockId> {
     let mut blocks = Vec::new();
     match term {
         TermKind::CleanupNext { selected, done, .. } => blocks.extend([selected.block, done.block]),
@@ -32,7 +32,7 @@ pub(super) fn successors(term: &TermKind) -> Vec<BlockId> {
 
 /// Predecessor edges of every block: one entry per edge, so a block reached twice from one terminator
 /// counts twice.
-pub(super) fn predecessors(body: &Body) -> Vec<Vec<BlockId>> {
+pub(crate) fn predecessors(body: &Body) -> Vec<Vec<BlockId>> {
     let mut predecessors = vec![Vec::new(); body.blocks.len()];
     for (block, data) in body.blocks.iter() {
         for target in successors(&data.term.kind) {
@@ -49,7 +49,7 @@ pub(super) fn predecessors(body: &Body) -> Vec<Vec<BlockId>> {
 }
 
 /// Append `value` to every edge of `term` that enters `target`.
-pub(super) fn push_argument(term: &mut TermKind, target: BlockId, value: ValueId) {
+pub(crate) fn push_argument(term: &mut TermKind, target: BlockId, value: ValueId) {
     let target_edge = |edge: &mut Target| {
         if edge.block == target {
             edge.args.push(value);
@@ -64,7 +64,7 @@ pub(super) fn push_argument(term: &mut TermKind, target: BlockId, value: ValueId
 }
 
 /// The argument at `index` of the first edge of `term` that enters `target`.
-pub(super) fn edge_argument(term: &TermKind, target: BlockId, index: usize) -> Option<EdgeArg> {
+pub(crate) fn edge_argument(term: &TermKind, target: BlockId, index: usize) -> Option<EdgeArg> {
     let found = std::cell::Cell::new(None);
     let mut term = term.clone();
     apply(&mut term, |edge| {
@@ -132,7 +132,7 @@ fn apply(term: &mut TermKind, mut target: impl FnMut(&mut Target), mut invoke: i
 }
 
 /// The invoke edges of a suspending terminator, mutably and in edge order.
-pub(super) fn invoke_edges(term: &mut TermKind) -> Vec<&mut InvokeEdge> {
+pub(crate) fn invoke_edges(term: &mut TermKind) -> Vec<&mut InvokeEdge> {
     match term {
         TermKind::InvokeOwn { normal, unwind, .. } => vec![normal, unwind],
         TermKind::InvokeDefer { continue_edge, replacements, unwind, .. } => {

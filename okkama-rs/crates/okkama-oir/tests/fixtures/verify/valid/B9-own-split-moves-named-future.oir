@@ -1,7 +1,9 @@
 oir 2 own
-// expect OIR2-B9.1 terminator:4:1
-// A plain scope.split selects the bound f of B9-own-shared-cache and takes its cache duty with
-// the Future: no selection extracts a cache duty, only cache.rehome moves it (C-4, ruling of #601 R1).
+// #771 (async ABI D25.2, revision of 2026-11-16): a scope.split that names the Future f takes f's cache duty and
+// what its cache holds into the selected packet, as the split before a constructor or array.new stores a Future.
+// The packet joins the scope again, so the duty is the scope's once more. Until #771 this was the invalid fixture
+// B9-own-split-steals-shared-cache under the R1 ruling "no selection extracts a cache duty"; the revision moves
+// a stored Future's duty with its packet, and an escape still leaves only through cache.rehome.
 module r1_cached_outcome
 entry @main
 

@@ -1,0 +1,332 @@
+oir 2 own
+// #771 (async ABI D25.2 revision): own output of make(n) is Holder { Holder(f: ...); } storing a spawned Future in
+// a field (OKKAMA_PIPELINE=oir2). The split before Holder.new names the Future; own emits no rehome for it.
+module app v1.0.0
+requires core, async
+entry @main
+
+object app.Child {
+    field n: int
+}
+
+object app.Holder {
+    field f: future<int>
+}
+
+object app.Maker {
+}
+scope S0 action in @app.Child.run#0
+scope S1 action in @app.Holder.get#0
+scope S2 action in @app.Maker.make#0
+scope S3 action in @main
+scope S4 action in @app.Child.new#0
+scope S5 action in @app.Holder.new#0
+scope S6 action in @app.Maker.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M5 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Child], failures=[program], publication=atomic)
+summary M7 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[cancelled], suspends=true, publication=atomic)
+summary M8 call-boundary parameters [parameter_effect(convention=take, retention=some(parameter(0)), deps=[0], destination=result)] results [result_relation(fresh=[63], aliases=[parameter(0)], external_deps=[0], provenance=unbound_result)] contract call_contract(results=[app.Holder], failures=[program], publication=atomic)
+summary M9 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M10 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Maker], failures=[program], publication=atomic)
+summary M11 call-boundary parameters [parameter_effect(convention=borrow, destination=none), parameter_effect(convention=borrow, destination=none)] results [result_relation(fresh=[46, 92], provenance=unbound_result)] contract call_contract(results=[app.Holder], failures=[program], publication=atomic)
+summary M12 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M13 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M14 call-boundary parameters [parameter_effect(convention=take, retention=some(parameter(0)), deps=[0], destination=cache)] results [result_relation(aliases=[parameter(0)], external_deps=[0], provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M15 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M16 internal contract call_contract(publication=atomic)
+summary M17 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Child], failures=[program], publication=atomic)
+summary M18 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Maker], failures=[program], publication=atomic)
+summary M19 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @app.Child.new#0(%0: int) -> app.Child [ctor app.Child] abi observation summary(M17) {
+    binding b0 "n": int in S4
+    boundary B0 lexical in S4
+    ^b0 in S4:
+    br ^b1(%0)
+    ^b1(%1: int) in S4:
+    %2: int = undef ty int
+    invoke.own obj.new app.Child { n: %1 }
+        normal ^b2($value, %1)
+        unwind ^b3($failure)
+    ^b2(%3: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %4: int) in S4:
+    ret %3
+    ^b3(%5: failure) in S4:
+    raise %5
+}
+
+func @app.Child.run#0(%0: app.Child facts(plain(certificate=closed_graph(ty=app.Child))); %1: own) -> (int, own) [method app.Child, async] abi explicit(input_packet=1, output_packet=1) summary(M7) async-creation(M13) async-body(M7) {
+    boundary B0 lexical in S0
+    boundary B1 lexical in S0
+    ^b0 in S0:
+    %2: scope<S0> = scope.begin S0
+    %3: scope<S0> = own.accept %2, %1
+    br ^b1(%0, %3)
+    ^b1(%4: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %5: scope<S0>) in S0:
+    %6: int = obj.get %4, n
+    %7: own = own.empty
+    %8: deps = deps.of %6
+    %9: pending = exit.prepare return %6, %7, deps(%8) at B1
+    invoke.own scope.end %5, reserve %9, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b2($closed, $pending, %6)
+        unwind ^b3($closed, $failure)
+    ^b2(%10: closed, %11: pending, %12: int) in S0:
+    (%13: int, %14: own, %15: deps) = exit.commit %11, destination caller, result int
+    ret %13, %14
+    ^b3(%16: closed, %17: failure) in S0:
+    raise %17
+}
+
+func @app.Holder.new#0(%0: future<int> facts(managed(deps=d1)); %1: deps, %2: own) -> (app.Holder, own) [ctor app.Holder] abi explicit(input_packet=2, output_packet=1) summary(M8) {
+    binding b0 "f": future<int> in S5
+    boundary B0 lexical in S5
+    boundary B1 lexical in S5
+    key k0: key = created(site=29, instance=%29)
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%1)
+    dependency d2: dependency = empty
+    dependency d3: dependency = from_ssa(%14)
+    dependency d4: dependency = from_ssa(%24)
+    dependency d5: dependency = from_ssa(%33)
+    dependency d6: dependency = key(k0)
+    dependency d7: dependency = union([d6, d4])
+    dependency d8: dependency = from_ssa(%47)
+    dependency d9: dependency = from_ssa(%47)
+    selection s0: selection = union([selection(%5)])
+    selection s1: selection = union([selection(%13)])
+    selection s2: selection = admissible(s1)
+    ^b0 in S5:
+    %3: scope<S5> = scope.begin S5
+    %4: scope<S5> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: future<int> facts(managed(deps=d0)), %6: deps, %7: scope<S5>) in S5:
+    %8: future<int> facts(managed(deps=d2)) = undef ty future<int>
+    %9: deps = deps.of %8
+    invoke.own scope.split %7, s0
+        normal ^b2($state, $selected, $external_deps, %5, %6)
+        unwind ^b3($state, $failure)
+    ^b2(%10: scope<S5>, %11: own, %12: deps, %13: future<int> facts(managed(deps=d3)), %14: deps) in S5:
+    %15: own = own.join [%11]
+    %16: scope<S5> = own.stage stage elaborated_stage(action=S5, field=field_ref(declaration=app.Holder, index=0), resource=resource_value(value=%13, packet=%15), states=same(%10))
+    invoke.own scope.split %16, s2
+        normal ^b4($state, $selected, $external_deps, %13, %14)
+        unwind ^b5($state, $failure)
+    ^b3(%17: scope<S5>, %18: failure) in S5:
+    %19: failure = scope.unwind %17, %18, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %19
+    ^b4(%20: scope<S5>, %21: own, %22: deps, %23: future<int> facts(managed(deps=d4)), %24: deps) in S5:
+    %25: own = own.join [%21]
+    invoke.own obj.new app.Holder { f: %23; %25 }
+        normal ^b6($value, $packet, %20, %23, %24)
+        unwind ^b7($packet, $failure, %20)
+    ^b5(%26: scope<S5>, %27: failure) in S5:
+    %28: failure = scope.unwind %26, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %28
+    ^b6(%29: app.Holder facts(managed(deps=d7)), %30: own, %31: scope<S5>, %32: future<int> facts(managed(deps=d5)), %33: deps) in S5:
+    %34: deps = deps.of %29
+    %35: scope<S5> = own.admit %31, %30
+    %36: own = own.empty
+    %37: pending = exit.prepare return %29, %36, deps(%34) at B1
+    invoke.own scope.split %35, selection(%29)
+        normal ^b8($state, $selected, $external_deps, %29, %34, %37)
+        unwind ^b9($state, $failure, %37)
+    ^b7(%38: own, %39: failure, %40: scope<S5>) in S5:
+    %41: scope<S5> = own.admit %40, %38
+    %42: failure = scope.unwind %41, %39, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %42
+    ^b8(%43: scope<S5>, %44: own, %45: deps, %46: app.Holder facts(managed(deps=d8)), %47: deps, %48: pending) in S5:
+    %49: pending = exit.extend %48, %44
+    (%50: closed, %51: pending) = scope.end %43, reserve %49, effects scope_effects(failures=[], suspends=false, cancel=false)
+    (%52: app.Holder facts(managed(deps=d9)), %53: own, %54: deps) = exit.commit %51, destination caller, result app.Holder
+    ret %52, %53
+    ^b9(%55: scope<S5>, %56: failure, %57: pending) in S5:
+    %58: failure = scope.unwind %55, %56, reserve %57, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %58
+}
+
+func @app.Holder.get#0(%0: app.Holder facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method app.Holder, async] abi explicit(input_packet=2, output_packet=1) summary(M9) async-creation(M14) async-body(M9) {
+    boundary B0 lexical in S1
+    boundary B1 lexical in S1
+    dependency d0: dependency = from_ssa(%6)
+    dependency d1: dependency = from_ssa(%1)
+    dependency d2: dependency = retention(value=%8, selection=selection(%8))
+    dependency d3: dependency = from_ssa(%14)
+    ^b0 in S1:
+    %3: scope<S1> = scope.begin S1
+    %4: scope<S1> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: app.Holder facts(managed(deps=d0)), %6: deps, %7: scope<S1>) in S1:
+    %8: future<int> facts(managed(deps=d2)) = obj.get %5, f
+    %9: deps = deps.of %8
+    invoke.own await %8, result int
+        normal ^b2($value, $deps, %7, %8, %9)
+        unwind ^b3($failure, $task, $receipt, %7)
+    ^b2(%10: int, %11: deps, %12: scope<S1>, %13: future<int> facts(managed(deps=d3)), %14: deps) in S1:
+    %15: own = own.empty
+    %16: deps = deps.of %10
+    %17: pending = exit.prepare return %10, %15, deps(%16) at B1
+    invoke.own scope.end %12, reserve %17, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b4($closed, $pending, %10)
+        unwind ^b5($closed, $failure)
+    ^b3(%18: failure, %19: task-state, %20: receipt, %21: scope<S1>) in S1:
+    (%22: scope<S1>, %23: failure) = await.unwind %21, %18, %19, %20, protocol P0
+    %24: failure = scope.unwind %22, %23, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %24
+    ^b4(%25: closed, %26: pending, %27: int) in S1:
+    (%28: int, %29: own, %30: deps) = exit.commit %26, destination caller, result int
+    ret %28, %29
+    ^b5(%31: closed, %32: failure) in S1:
+    raise %32
+}
+
+func @app.Maker.new#0() -> app.Maker [ctor app.Maker] abi observation summary(M18) {
+    boundary B0 lexical in S6
+    ^b0 in S6:
+    br ^b1
+    ^b1 in S6:
+    invoke.own obj.new app.Maker { }
+        normal ^b2($value)
+        unwind ^b3($failure)
+    ^b2(%0: app.Maker facts(plain(certificate=closed_graph(ty=app.Maker)))) in S6:
+    ret %0
+    ^b3(%1: failure) in S6:
+    raise %1
+}
+
+func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app.Maker))), %1: int; %2: own) -> (app.Holder, own) [method app.Maker] abi explicit(input_packet=2, output_packet=1) summary(M11) {
+    service.schedule Schedule0 owner S2, protocol P0, duties [%12, dynamic]
+    binding b0 "n": int in S2
+    boundary B0 lexical in S2
+    boundary B1 lexical in S2
+    key k0: key = service_of(value=%12, kind=cache)
+    dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%23)
+    dependency d2: dependency = from_ssa(%30)
+    dependency d3: dependency = from_ssa(%42)
+    dependency d4: dependency = from_ssa(%42)
+    selection s0: selection = union([selection(%12)])
+    selection s1: selection = admissible(s0)
+    ^b0 in S2:
+    %3: scope<S2> = scope.begin S2
+    %4: scope<S2> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: app.Maker facts(plain(certificate=closed_graph(ty=app.Maker))), %6: int, %7: scope<S2>) in S2:
+    invoke.own call @app.Child.new#0(%6)
+        normal ^b2($value, %7)
+        unwind ^b3($failure, %7)
+    ^b2(%8: app.Child facts(plain(certificate=closed_graph(ty=app.Child))), %9: scope<S2>) in S2:
+    %10: own = own.empty
+    %11: deps = deps.of %8
+    (%12: future<int> facts(managed(deps=d0)), %13: scope<S2>) = fut.new %10, %11, %9, environment deferred(function=@app.Child.run#0, arguments=[%8]), result int, owner S2
+    %14: deps = deps.of %12
+    %15: scope<S2> = fut.spawn %12, state %13
+    invoke.own scope.split %15, s1
+        normal ^b4($state, $selected, $external_deps, %12, %14)
+        unwind ^b5($state, $failure)
+    ^b3(%16: failure, %17: scope<S2>) in S2:
+    %18: failure = scope.unwind %17, %16, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %18
+    ^b4(%19: scope<S2>, %20: own, %21: deps, %22: future<int> facts(managed(deps=d1)), %23: deps) in S2:
+    %24: own = own.join [%20]
+    invoke.own call @app.Holder.new#0(consume %22; %24) deps [%23]
+        normal ^b6($value, $packet, $deps, %19)
+        unwind ^b7($failure, %19)
+    ^b5(%25: scope<S2>, %26: failure) in S2:
+    %27: failure = scope.unwind %25, %26, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %27
+    ^b6(%28: app.Holder facts(managed(deps=d2)), %29: own, %30: deps, %31: scope<S2>) in S2:
+    %32: scope<S2> = own.admit %31, %29
+    %33: own = own.empty
+    %34: pending = exit.prepare return %28, %33, deps(%30) at B1
+    invoke.own scope.split %32, selection(%28)
+        normal ^b8($state, $selected, $external_deps, %28, %30, %34)
+        unwind ^b9($state, $failure, %34)
+    ^b7(%35: failure, %36: scope<S2>) in S2:
+    %37: failure = scope.unwind %36, %35, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %37
+    ^b8(%38: scope<S2>, %39: own, %40: deps, %41: app.Holder facts(managed(deps=d3)), %42: deps, %43: pending) in S2:
+    %44: pending = exit.extend %43, %39
+    (%45: closed, %46: pending) = scope.end %38, reserve %44, effects scope_effects(failures=[], suspends=false, cancel=false)
+    (%47: app.Holder facts(managed(deps=d4)), %48: own, %49: deps) = exit.commit %46, destination caller, result app.Holder
+    ret %47, %48
+    ^b9(%50: scope<S2>, %51: failure, %52: pending) in S2:
+    %53: failure = scope.unwind %50, %51, reserve %52, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %53
+}
+
+func @main() -> int [entry, async] abi observation summary(M19) async-creation(M15) async-body(M19) {
+    service.schedule Schedule0 owner S3, protocol P0, duties [%36, dynamic]
+    binding b0 "h": app.Holder in S3
+    boundary B0 lexical in S3
+    key k0: key = service_of(value=%36, kind=cache)
+    dependency d0: dependency = from_ssa(%11)
+    dependency d1: dependency = from_ssa(%21)
+    dependency d2: dependency = from_ssa(%30)
+    dependency d3: dependency = key(k0)
+    dependency d4: dependency = from_ssa(%46)
+    selection s0: selection = admissible(selection(%9))
+    selection s1: selection = union([selection(%20)])
+    selection s2: selection = admissible(s1)
+    selection s3: selection = union([selection(%29)])
+    ^b0 in S3:
+    %0: scope<S3> = scope.begin S3
+    br ^b1(%0)
+    ^b1(%1: scope<S3>) in S3:
+    invoke.own call @app.Maker.new#0()
+        normal ^b2($value, %1)
+        unwind ^b3($failure, %1)
+    ^b2(%2: app.Maker facts(plain(certificate=closed_graph(ty=app.Maker))), %3: scope<S3>) in S3:
+    %4: int = const 7
+    %5: own = own.empty
+    invoke.own call @app.Maker.make#0(%2, %4; %5)
+        normal ^b4($value, $packet, $deps, %3)
+        unwind ^b5($failure, %3)
+    ^b3(%6: failure, %7: scope<S3>) in S3:
+    %8: failure = scope.unwind %7, %6, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %8
+    ^b4(%9: app.Holder facts(managed(deps=d0)), %10: own, %11: deps, %12: scope<S3>) in S3:
+    %13: scope<S3> = own.admit %12, %10
+    invoke.own scope.split %13, s0
+        normal ^b6($state, $selected, $external_deps, %9, %11)
+        unwind ^b7($state, $failure)
+    ^b5(%14: failure, %15: scope<S3>) in S3:
+    %16: failure = scope.unwind %15, %14, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %16
+    ^b6(%17: scope<S3>, %18: own, %19: deps, %20: app.Holder facts(managed(deps=d1)), %21: deps) in S3:
+    %22: scope<S3> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%20, packet=%18), state=%17, original_scope=S3)
+    invoke.own scope.split %22, s2
+        normal ^b8($state, $selected, $external_deps, %20, %21)
+        unwind ^b9($state, $failure)
+    ^b7(%23: scope<S3>, %24: failure) in S3:
+    %25: failure = scope.unwind %23, %24, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %25
+    ^b8(%26: scope<S3>, %27: own, %28: deps, %29: app.Holder facts(managed(deps=d2)), %30: deps) in S3:
+    %31: own = own.join [%27]
+    (%32: own, %33: own, %34: deps) = own.split %31, s3
+    %35: own = own.join [%32, %33]
+    (%36: future<int> facts(managed(deps=d3)), %37: scope<S3>) = fut.new %35, %34, %26, environment deferred(function=@app.Holder.get#0, arguments=[%29]), result int, owner S3
+    %38: deps = deps.of %36
+    invoke.own await %36, result int
+        normal ^b10($value, $deps, %36, %37, %38)
+        unwind ^b11($failure, $task, $receipt, %37)
+    ^b9(%39: scope<S3>, %40: failure) in S3:
+    %41: failure = scope.unwind %39, %40, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %41
+    ^b10(%42: int, %43: deps, %44: future<int> facts(managed(deps=d4)), %45: scope<S3>, %46: deps) in S3:
+    invoke.own scope.end %45, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b12($closed, %42)
+        unwind ^b13($closed, $failure)
+    ^b11(%47: failure, %48: task-state, %49: receipt, %50: scope<S3>) in S3:
+    (%51: scope<S3>, %52: failure) = await.unwind %50, %47, %48, %49, protocol P0
+    %53: failure = scope.unwind %51, %52, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %53
+    ^b12(%54: closed, %55: int) in S3:
+    ret %55
+    ^b13(%56: closed, %57: failure) in S3:
+    raise %57
+}

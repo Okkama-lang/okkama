@@ -275,7 +275,7 @@ impl Engine<'_, '_> {
                         piece.family = true;
                         piece.predicates.insert(Filter {
                             keys: BTreeSet::from([key]), fresh: false, possible: BTreeSet::new(),
-                            labels: SharedSet::new(), stale: false, whole_future: false, state: 0,
+                            labels: SharedSet::new(), stale: false, whole_future: false, futures: false, state: 0,
                         }, true);
                         packet.pieces.insert(piece);
                     }

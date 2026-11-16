@@ -89,7 +89,11 @@ impl Lowering<'_, '_> {
         self.check(is_async)?;
         let schedules = self.own_schedules()?;
         let duties = self.futures(&schedules)?;
-        let rehomed = self.rehomes(&duties)?;
+        // Rehomes first: a token that an exit rehomed is gone at the exit's split, which absorbs nothing. A stored
+        // Future's duty leaves with its packet (D25.2 revision, #771), so own emits no rehome after a store, and
+        // `absorbs` refuses a rehome that a store would precede.
+        let mut rehomed = self.rehomes(&duties)?;
+        self.absorbs(&duties, &mut rehomed)?;
         let mut slots = Slots::default();
         let mut continuations = Vec::new();
         let mut frame = None;
@@ -350,6 +354,158 @@ impl Lowering<'_, '_> {
             }
         }
         Ok(rehomed)
+    }
+
+    /// D25.2, revision of 2026-11-16 (#771, #758): own moves the entry of a Future that is stored in a field or an
+    /// array with a `scope.split` whose selection names the Future (key `service_of(%f, cache)`). In coro the duty of
+    /// a Future created here is its token, so the token moves with the selected packet: `service.absorb` of the
+    /// task duty of a spawned Future, then of its cache duty, at the start of the split's normal block. The
+    /// selection keeps naming the Future, whose entry is not in the state. Each absorbed token leaves the schedule
+    /// (`consumed` gains its absorbs), so the owner never settles it a second time.
+    fn absorbs(&mut self, duties: &[Duty], consumed: &mut BTreeMap<ValueId, Vec<InstId>>) -> Result<(), CoroError> {
+        let predecessors = graph::predecessors(&self.body);
+        // Splits in reverse postorder: a Future stored twice gives its entry to the first holder, and a later split
+        // that names it finds the token consumed on every path (a token held on some paths only is refused).
+        for block in self.reverse_postorder()? {
+            self.budget.step(1)?;
+            let TermKind::InvokeOwn { op, normal, .. } = &self.body.blocks.get(block)?.term.kind else {
+                continue;
+            };
+            let Operation::Ownership(OwnershipOp::ScopeSplit { state, selection }) = **op else {
+                continue;
+            };
+            let normal = normal.clone();
+            let owner = match self.module.types.get(self.ty(state)?)? {
+                Type::Service(ServiceType::Scope(scope)) => *scope,
+                _ => return Err(self.invalid("scope.split takes a scope state")),
+            };
+            let mut named = Vec::new();
+            let mut pending = vec![selection];
+            while let Some(selection) = pending.pop() {
+                self.budget.step(1)?;
+                match self.body.selections.get(selection)? {
+                    SelectionExpr::Union(items) => pending.extend(items.iter().rev()),
+                    SelectionExpr::Admissible(inner) => pending.push(*inner),
+                    SelectionExpr::Value(value) => named.push(*value),
+                    _ => {}
+                }
+            }
+            let mut tokens = Vec::new();
+            for value in named {
+                let origin = self.origin(value, &predecessors)?;
+                let Some(duty) = duties.iter().find(|duty| Some(duty.future) == origin && duty.scope == owner) else {
+                    continue;
+                };
+                for token in duty.tokens() {
+                    let kills = consumed.get(&token).cloned().unwrap_or_default();
+                    let (must, may) = self.available(token, &kills, &predecessors)?;
+                    let index = block.as_u32() as usize;
+                    let mut held = (must[index], may[index]);
+                    for inst in &self.body.blocks.get(block)?.insts {
+                        if self.body.insts.get(*inst)?.results.contains(&token) {
+                            held = (true, true);
+                        } else if kills.contains(inst) {
+                            held = (false, false);
+                        }
+                    }
+                    match held {
+                        (true, _) if !tokens.contains(&token) => tokens.push(token),
+                        (false, true) => {
+                            return Err(self.unsupported("a Future stored where its duty is held on some paths only"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if tokens.is_empty() {
+                continue;
+            }
+            let selected = normal.args.iter().position(|arg| {
+                *arg == EdgeArg::Produced(EdgeResult { outcome: Outcome::Normal, slot: 1 })
+            }).and_then(|index| self.body.blocks.get(normal.block).ok()?.params.get(index).copied())
+                .ok_or_else(|| self.invalid("a scope.split passes its selected packet to its normal block"))?;
+            if predecessors[normal.block.as_u32() as usize].len() != 1 {
+                return Err(self.invalid("a scope.split's normal block has one predecessor"));
+            }
+            let own = self.ty(selected)?;
+            let mut packet = selected;
+            for (position, token) in tokens.into_iter().enumerate() {
+                let absorbed = self.emit(normal.block, position, own,
+                    Operation::Async(AsyncOp::ServiceAbsorb { packet, token }))?;
+                let inst = match self.body.values.get(absorbed)?.def {
+                    Definition::InstResult { inst, .. } => inst,
+                    Definition::BlockParam { .. } => return Err(self.invalid("an absorb result is an instruction's")),
+                };
+                consumed.entry(token).or_default().push(inst);
+                // The packet's later uses read the packet with the entry.
+                let mut replace = repair::Replace::single(packet, absorbed);
+                visit::rewrite_uses(&mut self.body, &mut replace);
+                self.body.insts.get_mut(inst)?.op = Operation::Async(AsyncOp::ServiceAbsorb { packet, token });
+                packet = absorbed;
+            }
+        }
+        // A rehome takes a token its absorbs left on every path: own emits none after a store (ruling "How a
+        // stored Future leaves"), so a token absorbed before its rehome is invalid input.
+        let predecessors = graph::predecessors(&self.body);
+        for (token, insts) in consumed.clone() {
+            for &inst in &insts {
+                if !matches!(self.body.insts.get(inst)?.op, Operation::Async(AsyncOp::CacheRehome { .. })) {
+                    continue;
+                }
+                let others: Vec<_> = insts.iter().copied().filter(|other| *other != inst).collect();
+                if !self.held_at(token, &others, inst, &predecessors)?.0 {
+                    return Err(self.invalid("a Future rehomed after its duty was stored (D25.2)"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `token` is held just before the instruction `at` (on every path, on some path), with `kills` the
+    /// instructions that consume it.
+    fn held_at(&mut self, token: ValueId, kills: &[InstId], at: InstId, predecessors: &[Vec<BlockId>])
+        -> Result<(bool, bool), CoroError> {
+        let block = self.body.blocks.iter().find(|(_, block)| block.insts.contains(&at)).map(|(id, _)| id)
+            .ok_or_else(|| self.invalid("an instruction outside every block"))?;
+        let (must, may) = self.available(token, kills, predecessors)?;
+        let index = block.as_u32() as usize;
+        let mut held = (must[index], may[index]);
+        for inst in &self.body.blocks.get(block)?.insts {
+            if *inst == at {
+                break;
+            }
+            if self.body.insts.get(*inst)?.results.contains(&token) {
+                held = (true, true);
+            } else if kills.contains(inst) {
+                held = (false, false);
+            }
+        }
+        Ok(held)
+    }
+
+    /// The blocks in reverse postorder from the entry; unreachable blocks are left out.
+    fn reverse_postorder(&mut self) -> Result<Vec<BlockId>, CoroError> {
+        let mut order = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut stack = vec![(self.body.entry, false)];
+        while let Some((block, done)) = stack.pop() {
+            self.budget.step(1)?;
+            if done {
+                order.push(block);
+                continue;
+            }
+            if !visited.insert(block) {
+                continue;
+            }
+            stack.push((block, true));
+            for successor in graph::successors(&self.body.blocks.get(block)?.term.kind).into_iter().rev() {
+                if !visited.contains(&successor) {
+                    stack.push((successor, false));
+                }
+            }
+        }
+        order.reverse();
+        Ok(order)
     }
 
     /// The value that `value` stands for through block parameters, if every edge passes the same one.

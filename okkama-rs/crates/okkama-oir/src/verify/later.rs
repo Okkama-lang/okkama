@@ -90,10 +90,10 @@ fn protocols(module: &Module, state: &mut State<'_>) {
 }
 
 fn operation(module: &Module, function: &Function, body: &Body, op: &Operation, state: &mut State<'_>) {
-    // D25: these operations have no ownership model in the coro/low verifier until their slice, so the full
-    // verifier rejects them rather than accept what it cannot check. The token rehome of C-4 is modeled (R1) and
-    // produced by coro (#601 D25); spawn is modeled since P1 (D24).
-    let unmodeled = matches!(op, Operation::Async(AsyncOp::ServiceAbsorb { .. } | AsyncOp::ServiceMaterialize { .. }));
+    // D25: `service.materialize` has no ownership model in the coro/low verifier until its slice (G1), so the full
+    // verifier rejects it rather than accept what it cannot check. The token rehome of C-4 is modeled (R1) and
+    // produced by coro (#601 D25); spawn is modeled since P1 (D24); absorb since #771 (a stored Future, D25.2).
+    let unmodeled = matches!(op, Operation::Async(AsyncOp::ServiceMaterialize { .. }));
     if unmodeled && matches!(module.profile, Profile::Coro | Profile::Low) {
         state.error(R::AsyncUnmodeledOp, "packet duties are modeled from slice G1");
     }

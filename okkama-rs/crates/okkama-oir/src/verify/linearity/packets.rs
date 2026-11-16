@@ -4,18 +4,71 @@ impl Engine<'_, '_> {
     pub(super) fn partition(&mut self, flow: &Flow, token: &Token, selection: SelectionId) -> (Token, Token) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("packets::partition");
-        // A selection never extracts a cache duty or what its cache holds, even when it names the whole
-        // Future: the duty leaves its owner only through cache.rehome (C-4, ruling of #601 R1).
+        // A selection never extracts a cache duty or what its cache holds by naming part of it, a view of its
+        // outcome included: an escape leaves through cache.rehome (C-4, ruling of #601 R1). D25.2 revision (#771,
+        // #758): a selection of values that can hold a Future (the Future itself, or an object or array that stores
+        // it) moves the whole holder graph of each Future its keys reach into the selected packet.
         let mut rest = token.clone();
         let mut selected = Token::default();
+        let futures = self.selects_futures(selection);
         for (keys, fresh, labels) in self.selection_terms(flow, selection) {
             let possible = self.possible(flow, &keys);
-            let filter = Filter { keys, fresh, possible, labels, stale: false, whole_future: false, state: 0 };
+            let filter = Filter { keys, fresh, possible, labels, stale: false, whole_future: false, futures, state: 0 };
             let (next, part) = self.partition_filter(&rest, filter);
             rest = next;
             selected = self.union([selected, part], true);
         }
         (rest, selected)
+    }
+    /// Whether a selection names a value that can hold a Future (D25.2 revision, #771).
+    fn selects_futures(&mut self, selection: SelectionId) -> bool {
+        let mut pending = vec![selection];
+        let mut seen = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !self.state.step(1) || !seen.insert(id) {
+                continue;
+            }
+            match self.body.selections.get(id) {
+                Ok(SelectionExpr::Admissible(inner) | SelectionExpr::Held(inner)) => pending.push(*inner),
+                Ok(SelectionExpr::Union(items)) => pending.extend(items.iter().copied()),
+                Ok(SelectionExpr::Value(value))
+                    if self.body.values.get(*value).is_ok_and(|data| self.holds_futures(data.ty)) => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+    /// Whether `origin` is the identity of a Future created by a `fut.new` of this body.
+    fn future_origin(&self, origin: Origin) -> bool {
+        let Origin::Instruction(inst, 0) = origin else {
+            return false;
+        };
+        self.body.insts.get(inst).is_ok_and(|instruction| {
+            matches!(instruction.op, Operation::Async(AsyncOp::FutureNew { .. }))
+        })
+    }
+    /// Whether a value of `ty` can hold a Future: a Future, or an object, successor or array whose fields or
+    /// elements can (ABI D25.1). Roles, `any` and type parameters are not followed.
+    pub(super) fn holds_futures(&self, ty: TypeId) -> bool {
+        let mut pending = vec![ty];
+        let mut seen = BTreeSet::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            match self.module.types.get(ty) {
+                Ok(Type::Future(_)) => return true,
+                Ok(Type::Array(element) | Type::Successor(element)) => pending.push(*element),
+                Ok(Type::Object { decl, .. }) => {
+                    if let Ok(DeclarationKind::Object { fields, .. }) = self.module.declarations.get(*decl)
+                        .map(|declaration| &declaration.kind) {
+                        pending.extend(fields.iter().map(|field| field.ty));
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
     pub(super) fn partition_filter(&mut self, token: &Token, base: Filter) -> (Token, Token) {
         #[cfg(any(test, feature = "verifier-differential"))]
@@ -31,7 +84,7 @@ impl Engine<'_, '_> {
             let filter = Filter {
                 keys: keys.clone(), fresh: *fresh && !admits_all,
                 possible: possible.clone(), labels: labels.clone(), stale: false,
-                whole_future: base.whole_future,
+                whole_future: base.whole_future, futures: base.futures,
                 state: if *fresh && !admits_all { piece.provenance } else { 0 },
             };
             let unknown = piece.family || matches!(piece.origin, Origin::Input(_))
@@ -50,6 +103,25 @@ impl Engine<'_, '_> {
             let related = input_related
                 || keys.contains(&piece.origin) || possible.contains(&piece.origin)
                 || piece.holder.is_some_and(|holder| keys.contains(&holder));
+            // D25.2 revision (#771, #758): a selection of values that can hold a Future takes the whole holder graph
+            // of each Future its keys reach (the cache duty and what the cache holds) into its packet.
+            let reached = |holder: &Origin| keys.contains(holder) || possible.contains(holder);
+            if base.futures && related && eligible && !piece.channel && piece.holder.as_ref().is_some_and(reached) {
+                let mut moved = piece.clone();
+                if *fresh {
+                    moved.provenance &= FRESH;
+                }
+                selected.pieces.insert(moved);
+                continue;
+            }
+            // A Future whose duty another Future's holder graph carries (an earlier store into that Future's
+            // inputs) stays where it is: storing an alias of it takes nothing (D25.2 revision: a second store
+            // absorbs nothing).
+            if base.futures && related && piece.holder.is_some_and(|holder| holder != piece.origin)
+                && self.future_origin(piece.origin) {
+                rest.pieces.insert(piece.clone());
+                continue;
+            }
             if related && eligible && !keys.is_empty() && piece.holder.is_some() && !base.whole_future {
                 let rule = if piece.channel { R::B74 } else { R::B91 };
                 self.error(rule, "scope/packet selection cannot extract a private protocol holder graph");

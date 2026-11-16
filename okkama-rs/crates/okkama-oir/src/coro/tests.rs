@@ -580,3 +580,119 @@ fn a_nested_selection_of_a_saved_value_names_its_resumed_version() {
     assert!(matches!(definition.op, Operation::Async(AsyncOp::FrameResume { continuation: 1, .. })),
         "{named:?} is the version the await's resume restores");
 }
+
+const D25_COLD: &str = include_str!("../../tests/fixtures/async/own/d25-stored-cold.oir");
+const D25_SPAWNED: &str = include_str!("../../tests/fixtures/async/own/d25-stored-spawned.oir");
+
+/// The own exit of `make` with the rehome that the ruling "How a stored Future leaves" forbids after a store.
+pub(crate) fn d25_rehomed_after_store() -> String {
+    let rehomed = edited(D25_COLD, "    %33: pending = exit.prepare return %27, %32, deps(%29) at B1\n",
+        "    %33: pending = exit.prepare return %27, %32, deps(%29) at B1\n    (%900: scope<S2>, %901: pending) = \
+cache.rehome %31, %33, future %12, target caller, protocol P0\n");
+    let split = "    invoke.own scope.split %31, selection(%27)\n        normal ^b8($state, $selected, $external_deps, \
+%27, %29, %33)\n        unwind ^b9($state, $failure, %33)";
+    let rehomed_split = "    invoke.own scope.split %900, selection(%27)\n        normal ^b8($state, $selected, \
+$external_deps, %27, %29, %901)\n        unwind ^b9($state, $failure, %901)";
+    edited(&rehomed, split, rehomed_split)
+}
+
+/// The `service.absorb`s of a body, in block order: (packet, token).
+fn absorbs(body: &Body) -> Vec<(ValueId, ValueId)> {
+    body.blocks.iter().flat_map(|(_, block)| block.insts.iter()).filter_map(|inst| {
+        match body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::ServiceAbsorb { packet, token }) => Some((packet, token)),
+            _ => None,
+        }
+    }).collect()
+}
+
+/// The `cleanup.settle`s of `token` in a low body: those no absorb of it precedes, and those it does.
+fn settles_after_absorb(body: &Body, token: ValueId) -> (usize, usize) {
+    let mut after = std::collections::BTreeSet::new();
+    let mut pending: Vec<_> = body.blocks.iter().filter(|(_, block)| block.insts.iter().any(|inst| {
+        matches!(body.insts.get(*inst).unwrap().op, Operation::Async(AsyncOp::ServiceAbsorb { token: t, .. })
+            if t == token)
+    })).map(|(id, _)| id).collect();
+    while let Some(block) = pending.pop() {
+        if after.insert(block) {
+            pending.extend(graph::successors(&body.blocks.get(block).unwrap().term.kind));
+        }
+    }
+    let mut counts = (0, 0);
+    for (id, block) in body.blocks.iter() {
+        for inst in &block.insts {
+            if let Operation::Cleanup(CleanupOp::Settle { holder, .. }) = body.insts.get(*inst).unwrap().op
+                && holder == token
+            {
+                if after.contains(&id) { counts.1 += 1 } else { counts.0 += 1 }
+            }
+        }
+    }
+    counts
+}
+
+/// #771 (async ABI D25.2 revision): the split before `Holder.new` names the Future created here, so its cache
+/// token moves into the selected packet, once; low then settles it only where the split was refused, never after
+/// the absorb: the duty is never settled twice, from the schedule and from the packet (the first of the three
+/// properties). The full verifiers accept the result.
+#[test]
+fn a_stored_future_is_absorbed_once_and_leaves_its_schedules() {
+    let module = lowered("d25-stored-cold", D25_COLD);
+    let make = body(&module, "app.Maker.make#0");
+    let token = cache_tokens(make)[0];
+    assert_eq!(absorbs(make).iter().map(|(_, token)| *token).collect::<Vec<_>>(), [token]);
+    // Low settles the token only at the closes the absorb does not precede (the split refused).
+    let low = crate::low::lower_cleanup(module.clone(), &crate::low::LowOptions::default()).unwrap();
+    let lowered_make = body(&low, "app.Maker.make#0");
+    assert_eq!(settles_after_absorb(lowered_make, token), (1, 0));
+    // The absorb opens the split's normal block and the packet it gives is the one the call takes.
+    let (packet, _) = absorbs(make)[0];
+    let Definition::BlockParam { .. } = make.values.get(packet).unwrap().def else { panic!("the selected packet") };
+    // No rehome: the entry leaves with the Holder's packet.
+    assert!(rehomes(&module, make).is_empty());
+}
+
+/// #771, D24.1: a spawned Future stored in a field moves its task duty and its cache duty together, task first
+/// (the third property).
+#[test]
+fn a_stored_spawned_future_absorbs_its_task_then_its_cache() {
+    let module = lowered("d25-stored-spawned", D25_SPAWNED);
+    let make = body(&module, "app.Maker.make#0");
+    let absorbed = absorbs(make);
+    assert_eq!(absorbed.len(), 2, "{absorbed:?}");
+    let kinds: Vec<_> = absorbed.iter().map(|(_, token)| {
+        let ty = make.values.get(*token).unwrap().ty;
+        module.types.get(ty).unwrap().clone()
+    }).collect();
+    assert_eq!(kinds, [Type::Service(ServiceType::TaskState), Type::Service(ServiceType::CacheState)]);
+    // The second absorb takes the packet of the first.
+    let Definition::InstResult { inst, .. } = make.values.get(absorbed[1].0).unwrap().def else {
+        panic!("the cache absorb takes the task absorb's packet");
+    };
+    assert!(matches!(make.insts.get(inst).unwrap().op, Operation::Async(AsyncOp::ServiceAbsorb { .. })));
+    let low = crate::low::lower_cleanup(module.clone(), &crate::low::LowOptions::default()).unwrap();
+    let lowered_make = body(&low, "app.Maker.make#0");
+    for (_, token) in &absorbed {
+        assert_eq!(settles_after_absorb(lowered_make, *token), (1, 0), "{token:?}");
+    }
+}
+
+/// The ruling "How a stored Future leaves": own emits no rehome after a store, so a rehome that a store precedes
+/// is invalid input.
+#[test]
+fn a_rehome_after_a_store_is_refused() {
+    let error = lower(&d25_rehomed_after_store()).unwrap_err();
+    assert!(error.to_string().contains("rehomed after its duty was stored"), "{error}");
+}
+
+/// PR-B (OIR-2-async-remaining §2.2, §10), #784: `c` is bound (`let c = Child(n).run();`), so an aggregate only
+/// borrows it: neither store takes its duty, which stays with its lexical owner and leaves through `cache.rehome`.
+/// Today coro absorbs the bound Future's static token at the first store's admissible split.
+#[test]
+#[ignore = "#784: PR-B, a bound Future is not absorbed"]
+fn a_bound_future_is_not_absorbed_by_a_store() {
+    let module = lowered("d25-stored-twice",
+        include_str!("../../tests/fixtures/async/own/d25-stored-twice.oir"));
+    let make = body(&module, "app.Maker.make#0");
+    assert!(absorbs(make).is_empty(), "{:?}", absorbs(make));
+}

@@ -364,7 +364,7 @@ impl Engine<'_, '_> {
                     token.pieces = token.pieces.iter().cloned().map(|mut piece| {
                         piece.predicates.insert(Filter {
                             keys: keys.clone(), fresh: false, possible: BTreeSet::new(),
-                            labels: input_labels.clone(), stale: false, whole_future: false, state: 0,
+                            labels: input_labels.clone(), stale: false, whole_future: false, futures: false, state: 0,
                         }, true);
                         piece
                     }).collect();

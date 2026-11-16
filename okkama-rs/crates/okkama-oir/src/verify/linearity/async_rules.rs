@@ -359,6 +359,45 @@ impl Engine<'_, '_> {
                     }
                 }
             }
+            // D25.2, revision of 2026-11-16 (#771, #758): the duty token becomes a service entry of the packet. As
+            // in the token rehome, the duty and what its cache holds leave every carrier that still holds them;
+            // here they join the packet, which carries them to the field or array that stores the Future.
+            AsyncOp::ServiceAbsorb { token, .. } => {
+                let Some(key) = before.tokens[token.as_u32() as usize].cache else {
+                    self.error(R::B94, "service.absorb consumes the cache-state or task-state of a Future");
+                    return;
+                };
+                let mut moved = vec![];
+                for (index, holder) in flow.tokens.indexed_mut() {
+                    if flow.availability[index] != AVAILABLE {
+                        continue;
+                    }
+                    let held: Vec<_> = holder.pieces.iter().filter(|piece| piece.holder == Some(key)).cloned()
+                        .collect();
+                    for piece in held {
+                        holder.pieces.remove(&piece);
+                        // The entry is a fresh part of the packet, as own's admissible split selects it.
+                        let mut piece = piece;
+                        piece.provenance &= FRESH;
+                        moved.push(piece);
+                    }
+                }
+                // Snapshots of the absorbed duty's stable key no longer describe its holder (B7.2).
+                for (value, holder) in flow.tokens.indexed_mut() {
+                    if flow.availability[value] != AVAILABLE {
+                        continue;
+                    }
+                    if let Some((keys, stale)) = &mut holder.snapshot
+                        && keys.contains(&key) {
+                        *stale = true;
+                    }
+                }
+                for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
+                    if info.name == SlotName::Packet {
+                        slot.token.pieces.extend(moved.iter().cloned());
+                    }
+                }
+            }
             AsyncOp::FutureSettle { task, .. } => {
                 let mut token = before.tokens[task.as_u32() as usize].clone();
                 if token.settled {
