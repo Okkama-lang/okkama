@@ -302,3 +302,36 @@ fn f1_a_role_or_action_call_future_is_awaited_shared_without_a_take() {
     assert_eq!(takes, 0);
     full_low(MANAGED);
 }
+
+/// Two implementations of `Cancelling`: the std token (whose `wait` is a D22 intrinsic) and a user body.
+const TWO_CANCELLING: &str = concat!(
+    "module app v1.0.0; import \"async/cancellation\" take Cancellation, Cancelling; ",
+    "object Quiet does Cancelling { Quiet(); requested() is bool { true; } check() is void { } ",
+    "async wait() is Cancelling { Quiet(); } } ",
+    "object Probe { Probe(); async probe(c is Cancelling) is int { let woken = await c.wait(); ",
+    "if woken.requested() { 1; } else { 0; } } } ",
+    "async main() is int { let c = Cancellation(); let token = c.cancelling(); c.cancel(); ",
+    "await Probe().probe(token) + await Probe().probe(Quiet()); }",
+);
+
+/// #791 W3 (§4.8 item 3): an async slot implemented by an async intrinsic and by an async body. Both witnesses are
+/// creation thunks with the slot's signature, and own's Full verifier admits both: each thunk returns the fresh
+/// Future its call creates (I-F1: no suspension, no Cancelled). The SPB 17 half of W3 is in
+/// `codegen/sparrow_oir2/roles_tests.rs`.
+#[test]
+fn f1_two_implementations_of_an_async_slot_share_its_thunk_signature() {
+    let (own, _) = super::own_case_tests::own_stage(TWO_CANCELLING, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let slot = role_slot(&own, "Cancelling", 2);
+    for object in ["CancellationToken", "Quiet"] {
+        let thunk = own.functions.get(witness(&own, object, 2)).unwrap();
+        assert!(!thunk.attrs.contains(&ir::FunctionAttr::Async), "{}", thunk.symbol);
+        assert_eq!((&thunk.signature.results, &thunk.signature.params[1..]), (&slot.results, &slot.params[..]));
+        let summary = own.summaries.get(thunk.summary.unwrap()).unwrap();
+        assert!(!summary.contract.suspends && !summary.contract.async_destroy, "{}", thunk.symbol);
+        assert!(!summary.contract.failures.contains(&ir::FailureKind::Cancelled), "{}: {:?}", thunk.symbol,
+            summary.contract.failures);
+        let [result] = summary.results.as_slice() else { panic!("one result") };
+        assert!(!result.fresh.is_empty(), "{}: the created Future is fresh, with its cache duty", thunk.symbol);
+    }
+}

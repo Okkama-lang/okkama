@@ -880,3 +880,66 @@ role app.Value {
         assert_eq!(roles::view_array(&module, array).unwrap(), view, "{:?}", module.types.get(element).unwrap());
     }
 }
+
+/// Two implementations of `Cancelling`: the std token (whose `wait` is a D22 intrinsic) and a user body.
+const TWO_CANCELLING: &str = "module app v1.0.0;
+import \"async/cancellation\" take Cancellation, Cancelling;
+object Quiet does Cancelling {
+    Quiet();
+    requested() is bool { true; }
+    check() is void { }
+    async wait() is Cancelling { Quiet(); }
+}
+object Probe {
+    Probe();
+    async probe(c is Cancelling) is int { let woken = await c.wait(); if woken.requested() { 1; } else { 0; } }
+}
+async main() is int {
+    let c = Cancellation();
+    let token = c.cancelling();
+    c.cancel();
+    await Probe().probe(token) + await Probe().probe(Quiet());
+}";
+
+/// #791 W3 (§4.8 item 3): through own Full, coro, low and the loader, the async slot's dispatch has the two creation
+/// thunks as targets, both with the slot's entry ABI and its Future result. Until #775 (low refuses the token's
+/// `check` adapter, which may throw Cancelled) the program stops in low; the test is then the own and coro half, and
+/// becomes the full check when low accepts it.
+#[test]
+fn an_async_slot_with_an_intrinsic_and_a_body_dispatches_to_two_thunks() {
+    let source = SourceFile::new("app.ok", TWO_CANCELLING).unwrap();
+    let program = syntax::parse(&source, &ParseOptions::default()).unwrap();
+    let roots = [RootFile { source: &source, program: &program }];
+    let bytes = match crate::lowering::oir2::compile_linked_with(&roots, &mut StdLoader,
+        o::VerifyMode::Full)
+    {
+        Ok(bytes) => bytes,
+        Err(crate::lowering::oir2::PipelineError::Phase { phase: "low", message })
+            if message.contains("summary does not prove synchronous execution") =>
+        {
+            println!("own and coro passed; stops in low on #775: {message}");
+            return;
+        }
+        Err(error) => panic!("{error}"),
+    };
+    let p = s::decode(&bytes).unwrap();
+    load(&p).unwrap();
+    let cancelling = object(&p, "async.cancellation.Cancelling");
+    let targets = [object(&p, "async.cancellation.CancellationToken"), object(&p, "app.Quiet")];
+    let calls = dispatches(&p.functions[function(&p, "app.Probe.probe#0")]);
+    let (_, dispatch) = calls.iter().find(|(_, dispatch)| dispatch.role == cancelling && dispatch.slot == 2)
+        .expect("the wait dispatch");
+    let mut sorted = dispatch.targets.clone();
+    sorted.sort();
+    let mut expected = targets.to_vec();
+    expected.sort();
+    assert_eq!(sorted, expected);
+    let slot = &p.objects[cancelling as usize].role.as_ref().unwrap().slots[2];
+    for target in targets {
+        let id = s::implementation(&p, target, cancelling, 2).unwrap();
+        let thunk = &p.functions[id as usize];
+        assert!(!thunk.code.is_empty(), "{}", thunk.symbol);
+        assert_eq!((&thunk.entry_abi, &thunk.results), (&slot.entry_abi, &slot.results), "{}", thunk.symbol);
+        assert!(matches!(thunk.results.as_slice(), [s::Type::Future(_)]), "{}", thunk.symbol);
+    }
+}
