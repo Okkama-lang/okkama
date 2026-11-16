@@ -292,8 +292,9 @@ impl Engine<'_, '_> {
             let live = flow.clone();
             self.invalidate(&live, flow, &settled);
             for &slot in &language {
-                let refs = slots[slot].refs.union(&slots[slot].requirements).copied().collect();
-                if self.keys_invalidated(flow, &refs, &slots[slot].aliases, &settled) {
+                let refs: BTreeSet<_> = slots[slot].refs.union(&slots[slot].requirements).copied().collect();
+                let aliases = slots[slot].aliases.clone();
+                if self.result_invalidated(flow, &refs, &aliases, &settled) {
                     slots[slot].lifetime = 2;
                     self.error(R::B51, "call summary returns a borrow of an input settled by callee cleanup");
                 }
@@ -555,6 +556,61 @@ impl Engine<'_, '_> {
                     labels.extend(self.summary_labels(flow, &arguments, &selection));
                 }
             }
+            // PR-P (#749): a result may keep a carrier-free field of a parameter (no obligation, no Future
+            // reachable, D25.1) when its relation declares that field as an alias. The declaration admits the
+            // export of the piece the field names, which carries nothing; the shape of the piece alone never does.
+            // The caller gets the field's deps through the alias.
+            for relation in &summary.results {
+                let mut pending: Vec<&SummarySelection> = relation.aliases.iter().collect();
+                while let Some(alias) = pending.pop() {
+                    let last = match alias {
+                        SummarySelection::Union(items) => {
+                            pending.extend(items);
+                            continue;
+                        }
+                        SummarySelection::Field { field, .. } => Some(*field),
+                        SummarySelection::Path { fields, .. } => fields.last().copied(),
+                        _ => None,
+                    };
+                    if last.is_some_and(|field| self.carrier_free_field(field)) {
+                        permitted.extend(self.summary_selection(flow, &arguments, alias));
+                        labels.extend(self.summary_labels(flow, &arguments, alias));
+                    }
+                }
+            }
+            // PR-P §5.2 (#749, #789): a fresh result's own keys. Its creation keys select nothing of the accepted
+            // input, which never holds a later creation (`packets.rs`, partition_filter); what the fresh object
+            // keeps of the input is named by its other keys, and each of those must still be permitted. A view key
+            // joins only when every key it may stand for is permitted or is such a creation key.
+            let mut creations = BTreeSet::new();
+            let mut views = BTreeSet::new();
+            for (value, relation) in language.iter().zip(&summary.results) {
+                if relation.fresh.is_empty() {
+                    continue;
+                }
+                for key in &flow.refs[value.as_u32() as usize] {
+                    match key {
+                        Origin::Instruction(..) | Origin::Invoke(..) => {
+                            creations.insert(*key);
+                        }
+                        Origin::RetiredInstruction(..) | Origin::RetiredInvoke(..) => {
+                            creations.insert(*key);
+                            labels.extend(&flow.contained[value.as_u32() as usize]);
+                        }
+                        Origin::ViewInstruction(..) | Origin::ViewInvoke(..) => {
+                            views.insert(*key);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            permitted.extend(&creations);
+            for view in views {
+                let stands_for = view_candidates(flow, view);
+                if stands_for.iter().all(|key| permitted.contains(key) || creation_key(*key)) {
+                    permitted.insert(view);
+                }
+            }
             for &value in values {
                 for piece in &flow.tokens[value.as_u32() as usize].pieces {
                     let accepted = match piece.origin {
@@ -608,10 +664,14 @@ impl Engine<'_, '_> {
             // Fields do not retain their container (§4.1). Owner-dependent
             // views must expose their carried dependencies to summary checks (§4.2/§6.2).
             let mut keys = refs.clone();
-            let views = refs.iter().copied().filter(|key| matches!(key,
+            // A view exposes what it may stand for, through nested views; a projection among those is checked as
+            // a projection below, not unfolded to its container (PR-P, #749: §4.1, a field does not retain its
+            // container).
+            for view in refs.iter().copied().filter(|key| matches!(key,
                 Origin::ViewInstruction(..) | Origin::ViewInvoke(..)
-                | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..))).collect();
-            keys.extend(self.possible(flow, &views));
+                | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..))) {
+                keys.extend(view_candidates(flow, view));
+            }
             for key in keys {
                 if allowed.contains(&key) {
                     continue;
@@ -643,6 +703,65 @@ impl Engine<'_, '_> {
 
 impl Engine<'_, '_> {
     /// The view of a call result whose summary relation declares it opaque.
+    /// PR-P (#749): whether a field's static type is carrier-free: no obligation (`obligation_types`) and no
+    /// reachable Future (`holds_futures`, D25.1), so a packet can carry nothing through it.
+    fn carrier_free_field(&self, field: FieldRef) -> bool {
+        let Ok(DeclarationKind::Object { fields, .. }) = self.module.declarations.get(field.declaration)
+            .map(|declaration| &declaration.kind) else {
+            return false;
+        };
+        fields.get(field.index as usize).is_some_and(|field| {
+            !self.obligations.get(field.ty.as_u32() as usize).copied().unwrap_or(true)
+                && !self.holds_futures(field.ty)
+        })
+    }
+    /// PR-P (#749): whether settling `settled` invalidates a call result with these keys. A view stands for one of
+    /// its direct candidates (`view_candidates`): a piece invalidates it only when the piece does not exclude the
+    /// view itself and invalidates one of the candidates. A projection of a carrier-free field needs nothing alive:
+    /// no obligation is reachable through it, and a settled piece ends only obligations (P2.4 §4.8).
+    fn result_invalidated(&mut self, flow: &Flow, keys: &BTreeSet<Origin>, aliases: &SharedSet<ValueId>,
+        settled: &[Piece]) -> bool {
+        let mut direct = BTreeSet::new();
+        for &key in keys {
+            if self.carrier_free_projection(key) {
+                continue;
+            }
+            let retired = matches!(key, Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..));
+            if !retired && !matches!(key, Origin::ViewInstruction(..) | Origin::ViewInvoke(..)) {
+                direct.insert(key);
+                continue;
+            }
+            // A view with no recorded candidate is checked as itself.
+            let recorded = view_candidates(flow, key);
+            if recorded.is_empty() {
+                direct.insert(key);
+                continue;
+            }
+            let candidates: BTreeSet<_> = recorded.into_iter()
+                .filter(|candidate| !self.carrier_free_projection(*candidate)).collect();
+            for piece in settled {
+                let excluded = piece.predicates.iter().any(|(filter, selected)| {
+                    !*selected && !filter.fresh && filter.keys.contains(&key)
+                        && (!retired || (!filter.stale && !filter.labels.is_disjoint(aliases)))
+                });
+                if !excluded && self.keys_invalidated(flow, &candidates, aliases, std::slice::from_ref(piece)) {
+                    return true;
+                }
+            }
+        }
+        self.keys_invalidated(flow, &direct, aliases, settled)
+    }
+    /// PR-P (#749): whether a key is a projection whose last field is carrier-free.
+    fn carrier_free_projection(&self, key: Origin) -> bool {
+        let field = match key {
+            Origin::Projection(_, ProjectionKind::Field(declaration, index)) => Some((declaration, index)),
+            Origin::Projection(_, ProjectionKind::Path { fields, len }) => {
+                usize::from(len).checked_sub(1).and_then(|last| fields.get(last).copied())
+            }
+            _ => None,
+        };
+        field.is_some_and(|(declaration, index)| self.carrier_free_field(FieldRef { declaration, index }))
+    }
     fn opaque_call_view(&self, key: Origin) -> bool {
         let (op, slot) = match key {
             Origin::ViewInstruction(inst, slot) | Origin::RetiredViewInstruction(inst, slot) => {
@@ -683,4 +802,31 @@ fn summary_mentions(root: &SummarySelection, parameter: u16) -> bool {
         }
     }
     false
+}
+
+/// PR-P §5.2: what a view key may stand for, through nested views only. A projection, a creation or an external
+/// key is a candidate itself: unlike `possible`, a projection is not unfolded to its base.
+fn view_candidates(flow: &Flow, view: Origin) -> BTreeSet<Origin> {
+    let mut candidates = BTreeSet::new();
+    let mut seen = BTreeSet::from([view]);
+    let mut pending = vec![view];
+    while let Some(key) = pending.pop() {
+        for &candidate in flow.views.get(&key).into_iter().flatten() {
+            if matches!(candidate, Origin::ViewInstruction(..) | Origin::ViewInvoke(..)
+                | Origin::RetiredViewInstruction(..) | Origin::RetiredViewInvoke(..)) {
+                if seen.insert(candidate) {
+                    pending.push(candidate);
+                }
+            } else {
+                candidates.insert(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+/// A key of a creation in this body: no accepted input holds it.
+fn creation_key(key: Origin) -> bool {
+    matches!(key, Origin::Instruction(..) | Origin::Invoke(..) | Origin::RetiredInstruction(..)
+        | Origin::RetiredInvoke(..))
 }
