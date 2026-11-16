@@ -25,11 +25,15 @@ impl Universe {
         // nothing of it: the parameter stays borrowed (OIR-2 §7.2, §10.2; P2.4 §4.8: storage must not become
         // ownership).
         let mut borrowed = BTreeSet::new();
+        // PR-P (#749): the borrowed parameters by value, for the fields they lend. A block parameter fed by several
+        // borrowed parameters lends the fields of each of them.
+        let mut lent: BTreeMap<ValueId, BTreeSet<u16>> = BTreeMap::new();
         for value in &entry.params {
             let ty = body.values.get(*value).map_err(arena)?.ty;
             if !language(module, &[ty]).is_empty() {
                 if !types[&ty].may_own() && types[&ty].references {
                     borrowed.insert(parameter);
+                    lent.entry(*value).or_default().insert(parameter);
                 }
                 if types[&ty].may_own() {
                     let relation = &mut values[value.as_u32() as usize];
@@ -72,7 +76,22 @@ impl Universe {
                     completed.fresh.push(site.origin(body, 0, self.strides[&function]));
                     changed |= join_value(&mut values, *object, &completed, budget)?;
                 }
-                let output = self.operation_relations(module, function, body, *site, op, &values, types, budget)?;
+                let mut output = self.operation_relations(module, function, body, *site, op, &values, types, budget)?;
+                // PR-P (#749): a carrier-free field of a borrowed parameter is that field, lent: the relation names
+                // it, so a result that keeps it declares it. A borrowed parameter has no alias of its own to project
+                // (#700, #731: it is never taken).
+                if let Operation::Core(CoreOp::ObjGet { object, field }) = op
+                    && let Some(lenders) = lent.get(object)
+                    && let Some(relation) = output.first_mut() {
+                    let parameters = language_parameters(module, body);
+                    for &parameter in lenders {
+                        let selection = SummarySelection::Field { parameter, field: *field };
+                        if carrier_free_projection(module, types, &selection)
+                            && lent_path(module, &parameters, &selection) {
+                            relation.aliases.push(selection);
+                        }
+                    }
+                }
                 if let Site::Instruction(instruction) = site {
                     for (result, relation) in body.insts.get(*instruction).map_err(arena)?.results.iter().zip(&output) {
                         changed |= join_value(&mut values, *result, relation, budget)?;
@@ -84,6 +103,14 @@ impl Universe {
                 let mut edge = |target: &Target| -> Result<(), OwnError> {
                     for (parameter, argument) in body.blocks.get(target.block).map_err(arena)?.params.iter()
                         .zip(&target.args) {
+                        // PR-P (#749): a block parameter lends the fields of every borrowed parameter that reaches it.
+                        // Another value reaching it adds nothing: an alias only adds deps.
+                        if let Some(lenders) = lent.get(argument).cloned() {
+                            let target = lent.entry(*parameter).or_default();
+                            let before = target.len();
+                            target.extend(lenders);
+                            changed |= target.len() != before;
+                        }
                         let relation = values[argument.as_u32() as usize].clone();
                         changed |= join_value(&mut values, *parameter, &relation, budget)?;
                     }
@@ -266,7 +293,7 @@ impl Universe {
                         }
                         if let Some(selection) = &effect.retention {
                             let relation = instantiate(selection, &arguments, &values, budget)?;
-                            retain_inputs(&mut summary, &relation, effect.destination.clone(), &borrowed, budget)?;
+                            retain_inputs((module, types), &mut summary, &relation, effect.destination.clone(), &borrowed, budget)?;
                         }
                     }
                 }
@@ -294,7 +321,7 @@ impl Universe {
                     })) {
                         let relation = replacements.entry(label.clone()).or_insert_with(normal::empty_relation);
                         normal::relation(relation, &values[value.as_u32() as usize], budget)?;
-                        retain_inputs(&mut summary, &values[value.as_u32() as usize],
+                        retain_inputs((module, types), &mut summary, &values[value.as_u32() as usize],
                             TransferDestination::Result, &borrowed, budget)?;
                     }
                 }
@@ -353,9 +380,22 @@ impl Universe {
                 }
             }
         }
+        // PR-P (#749): a path that goes past a lent field (its own field, reached through a role or a type
+        // parameter) does not follow the substituted fields of its parameter's type (T4); it names the lent field
+        // whole instead: an over-approximation, so no dependency is lost.
+        // An async body's summary describes its Future's outcome, and coro gives the body a frame for parameters
+        // (OIR-2 §12): PR-P declarations are a synchronous call boundary's, so an async body keeps none.
+        let parameters = language_parameters(module, body);
+        let asynchronous = futures::is_async(module, function);
+        for result in &mut summary.results {
+            let lent: Vec<_> = std::mem::take(&mut result.aliases).into_iter()
+                .map(|alias| lent_prefix(module, types, &parameters, alias))
+                .filter(|alias| !(asynchronous && carrier_free_projection(module, types, alias))).collect();
+            result.aliases = normal::selections(&lent, budget)?;
+        }
         if summary.entry_kind == EntryKind::CallBoundary {
             for result in summary.results.clone() {
-                retain_inputs(&mut summary, &result, TransferDestination::Result, &borrowed, budget)?;
+                retain_inputs((module, types), &mut summary, &result, TransferDestination::Result, &borrowed, budget)?;
             }
         }
         if entry.params.iter().any(|value| body.values.get(*value).is_ok_and(|value| {
@@ -468,6 +508,10 @@ impl Universe {
                         result.external_deps.extend_from_slice(&actual.external_deps);
                         // Keep the full dependency positions without turning a
                         // selected field alias into retention of its container.
+                        // PR-P (#749): an argument that is a carrier-free field of a parameter is lent by that
+                        // field, and a result that depends on it keeps the field's alias.
+                        let lent = carrier_free_aliases(module, types, &language_parameters(module, body), actual);
+                        normal::relation(&mut result, &lent, budget)?;
                     }
                 }
                 // Creating a cold Future gives its owner the duty ServiceOf{future, Cache} (D12), a fresh
@@ -565,7 +609,14 @@ impl Universe {
                 // A construction with deps but no obligation keeps the relation to the fields it retains, and is
                 // no fresh identity (OIR-2 §3.2; P2.4 §4.8).
                 if !facts.may_own() && !(facts.references && created) {
-                    *result = normal::empty_relation();
+                    // PR-P (#749): a reference without obligation read from a carrier-free field of a parameter
+                    // keeps that field as its alias, so a result that keeps it declares the field and its caller
+                    // instantiates the field's deps through it. It owns nothing, so nothing else survives.
+                    *result = if (facts.references || facts.capabilities) && !created {
+                        carrier_free_aliases(module, types, &language_parameters(module, body), result)
+                    } else {
+                        normal::empty_relation()
+                    };
                 } else if created && facts.may_own() {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
@@ -604,6 +655,7 @@ fn join_value(
 /// `borrowed` parameter (deps, no obligation) is never taken: the relation's external deps already state that
 /// the result depends on it (#700, #731).
 fn retain_inputs(
+    (module, types): (&Module, &BTreeMap<TypeId, TypeClassification>),
     summary: &mut Summary,
     relation: &ResultRelation,
     destination: TransferDestination,
@@ -616,7 +668,10 @@ fn retain_inputs(
             selections.push(SummarySelection::OwnerGraph(*parameter));
         }
     }
-    selections.retain(|selection| !borrowed.contains(&normal::parameter(selection)));
+    // PR-P (#749): a carrier-free field is lent, never taken: the result's alias declares it, and no ownership
+    // transfer is recorded for it.
+    selections.retain(|selection| !borrowed.contains(&normal::parameter(selection))
+        && !carrier_free_projection(module, types, selection));
     for selection in selections {
         let parameter = normal::parameter(&selection);
         let effect = summary.parameters.get_mut(usize::from(parameter)).ok_or_else(|| {
@@ -640,6 +695,84 @@ fn retain_inputs(
         };
     }
     Ok(())
+}
+
+/// PR-P (#749): whether a summary selection is a projection (`field`, `path`) whose last field is carrier-free: its
+/// type owns nothing and can hold no Future (D25.1). Such a field is lent with its holder's deps; a packet can carry
+/// nothing through it.
+pub(crate) fn carrier_free_projection(module: &Module, types: &BTreeMap<TypeId, TypeClassification>,
+    selection: &SummarySelection) -> bool {
+    let last = match selection {
+        SummarySelection::Field { field, .. } => *field,
+        SummarySelection::Path { fields, .. } => match fields.last() {
+            Some(field) => *field,
+            None => return false,
+        },
+        _ => return false,
+    };
+    let Ok(DeclarationKind::Object { fields, .. }) = module.declarations.get(last.declaration)
+        .map(|declaration| &declaration.kind) else {
+        return false;
+    };
+    fields.get(last.index as usize).is_some_and(|field| {
+        types.get(&field.ty).is_some_and(|facts| !facts.may_own())
+            && !crate::verify::holds_futures(module, field.ty)
+    })
+}
+
+/// PR-P (#749): the carrier-free projections of `relation`, alone: no fresh family, no external deps. A projection
+/// is kept only along the substituted fields of its parameter's type (T4): a path that crossed a role, a type
+/// parameter or another value's fields does not name a field of the parameter.
+fn carrier_free_aliases(module: &Module, types: &BTreeMap<TypeId, TypeClassification>, parameters: &[TypeId],
+    relation: &ResultRelation) -> ResultRelation {
+    let mut kept = normal::empty_relation();
+    kept.aliases = relation.aliases.iter().filter(|selection| carrier_free_projection(module, types, selection)
+        && lent_path(module, parameters, selection)).cloned().collect();
+    kept
+}
+
+/// Whether a `field`/`path` selection follows the substituted object fields of its parameter's type (T4).
+fn lent_path(module: &Module, parameters: &[TypeId], selection: &SummarySelection) -> bool {
+    let (parameter, fields) = match selection {
+        SummarySelection::Field { parameter, field } => (*parameter, std::slice::from_ref(field)),
+        SummarySelection::Path { parameter, fields } => (*parameter, fields.as_slice()),
+        _ => return false,
+    };
+    parameters.get(usize::from(parameter))
+        .is_some_and(|ty| crate::verify::summary_path_follows(module, *ty, fields))
+}
+
+/// PR-P (#749): a projection that goes past a lent field of its parameter becomes that field: the longest prefix that
+/// follows the parameter's substituted fields (T4), when it ends at a carrier-free field. Any other selection is kept.
+fn lent_prefix(module: &Module, types: &BTreeMap<TypeId, TypeClassification>, parameters: &[TypeId],
+    selection: SummarySelection) -> SummarySelection {
+    let SummarySelection::Path { parameter, fields } = &selection else {
+        return selection;
+    };
+    let Some(&ty) = parameters.get(usize::from(*parameter)) else {
+        return selection;
+    };
+    if crate::verify::summary_path_follows(module, ty, fields) {
+        return selection;
+    }
+    let prefix = (1..fields.len()).rev()
+        .find(|length| crate::verify::summary_path_follows(module, ty, &fields[..*length]))
+        .map(|length| match length {
+            1 => SummarySelection::Field { parameter: *parameter, field: fields[0] },
+            _ => SummarySelection::Path { parameter: *parameter, fields: fields[..length].to_vec() },
+        });
+    match prefix {
+        Some(prefix) if carrier_free_projection(module, types, &prefix) => prefix,
+        _ => selection,
+    }
+}
+
+/// The types of a body's language parameters, in summary order.
+fn language_parameters(module: &Module, body: &Body) -> Vec<TypeId> {
+    body.blocks.get(body.entry).map(|entry| entry.params.iter().filter_map(|value| {
+        let ty = body.values.get(*value).ok()?.ty;
+        (!language(module, &[ty]).is_empty()).then_some(ty)
+    }).collect()).unwrap_or_default()
 }
 
 fn project_relation(

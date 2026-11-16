@@ -5,7 +5,7 @@
 
 mod champ_support;
 
-use champ_support::{case_dir, compile, run, run_source};
+use champ_support::{case_dir, compile, run, run_source, run_source_with};
 use okkama_compiler::SourceFile;
 use serde_json::Value;
 
@@ -154,6 +154,77 @@ fn r3_resource_result_is_cached_and_destroyed_once() {
         "let again = await f; Stdout().writeln(\"again \" + again.label()); } Stdout().writeln(\"end\"); 0; }",
     ));
     assert_eq!(stdout, "destroy L\nfirst R\nagain R\ndestroy R\nend\n");
+}
+
+/// #732: an async action with a resource receiver and a resource argument. Both are bound, so the split that would
+/// take them into the cold Future's inputs selects nothing (an empty packet: they are lent), and its static
+/// relocation is empty (EVIDENCE_SELECTIONS). Tomato (okkama 0.5.8) prints the same.
+#[test]
+fn r3_a_resource_receiver_and_argument_are_lent_to_an_async_action() {
+    let stdout = lease_run(concat!(
+        "object Reader { has name is string; Reader(name is string) { self.name = name; } ",
+        "async read(arg is Lease) is string { name + arg.label(); } destroy { Stdout().writeln(\"destroy \" + name); } } ",
+        "async main() is int { { let r = Reader(\"R\"); let a = Lease(\"A\"); let f = r.read(a); ",
+        "Stdout().writeln(\"created\"); let s = await f; Stdout().writeln(\"awaited \" + s); } ",
+        "Stdout().writeln(\"end\"); 0; }",
+    ));
+    assert_eq!(stdout, "created\nawaited RA\ndestroy A\ndestroy R\nend\n");
+}
+
+/// #732 (#791 W5): a bound resource borrowed by an awaited async action, under the Full ownership verifier too;
+/// the resource is destroyed once, at the end of its scope (Tomato's output).
+#[test]
+fn r3_a_bound_resource_is_lent_to_an_awaited_async_action() {
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has label is string; Res(:label); name() is string { label; } destroy { Stdout().writeln("destroy " + label); } }
+object U { U(); async use(r is Res) is int { r.name().length(); } }
+async main() is int { let kept = Res(label: "kept"); let n = await U().use(kept); Stdout().writeln("n " + n.string()); 0; }
+"#, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("n 4\ndestroy kept\n", Ok(0)), "{mode:?}");
+    }
+}
+
+/// #742: resources that keep the caller's Atomic (a borrowed capability, no obligation) as a receiver and an argument
+/// of an async action. The Atomic field reaches no resource, so a static selection of the resource stays a
+/// singleton. Tomato prints `RA:` then `AR`.
+#[test]
+fn r3_resources_holding_a_borrowed_atomic_are_lent_to_an_async_action() {
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(r#"module app v1.0.0;
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(name is string, log is Atomic<string>) { self.name = name; self.log = log; }
+    label() is string { name; }
+    destroy { log.replace(log.value() + name); }
+}
+object Receiver {
+    has name is string;
+    has log is Atomic<string>;
+    Receiver(name is string, log is Atomic<string>) { self.name = name; self.log = log; }
+    async read(arg is Res) is string { name + arg.label(); }
+    destroy { log.replace(log.value() + name); }
+}
+async main() is int {
+    let log = Atomic("");
+    defer log.close();
+    {
+        let r = Receiver("R", log);
+        let a = Res("A", log);
+        let f = r.read(a);
+        let s = await f;
+        Stdout().writeln(s + ":" + log.value());
+    }
+    Stdout().writeln(log.value());
+    0;
+}
+"#, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("RA:\nAR\n", Ok(0)), "{mode:?}");
+    }
 }
 
 /// OIR-2 §§10.2–10.3: an awaited temporary's fresh result belongs to the awaiting scope, a discarded one too

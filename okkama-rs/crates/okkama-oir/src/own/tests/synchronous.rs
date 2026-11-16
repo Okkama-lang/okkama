@@ -17,29 +17,18 @@ fn rewrite_source(source: &str) -> Result<OwnOutput, String> {
 
 #[test]
 fn successor_retention_triage() {
-    // Spec §4.1/§6.2 and P1.3 §8 permit the inherited field plus new self.
-    // Keep the B51 limitation reduced for the separate linearity state lane.
-    for (successor, source, golden) in [
-        (true, include_str!("triage-high/successor-retention.oir"),
-            include_str!("triage-goldens/successor-retention.oir")),
-        (false, include_str!("triage-high/field-retention.oir"),
-            include_str!("triage-goldens/field-retention.oir")),
+    // Spec §4.1/§6.2 and P1.3 §8 permit the inherited field plus new self: B5.1 admits a fresh result's own
+    // creation and view keys beside its take retention (PR-P §5.2, #749).
+    for (source, golden) in [
+        (include_str!("triage-high/successor-retention.oir"), include_str!("triage-goldens/successor-retention.oir")),
+        (include_str!("triage-high/field-retention.oir"), include_str!("triage-goldens/field-retention.oir")),
     ] {
         crate::verify_high(&crate::text::parse(source).unwrap()).unwrap();
         let output = rewrite_source(source).unwrap();
         let expected = crate::text::parse(golden).unwrap();
         assert!(crate::text::normalized_eq(&output.module, &expected).unwrap());
         for module in [&output.module, &roundtrip(&output.module), &expected] {
-            if successor {
-                let report = verify_own(module).unwrap_err();
-                assert_eq!(report.failure, VerifyFailure::Rejected);
-                assert_eq!(report.diagnostics.len(), 1);
-                assert_eq!(report.diagnostics[0].rule, RuleId::B51);
-                assert_eq!(report.diagnostics[0].message,
-                    "body exports accepted inputs beyond its declared take retention");
-            } else {
-                verify_own(module).unwrap();
-            }
+            verify_own(module).unwrap();
         }
     }
 }
@@ -232,6 +221,45 @@ fn early_cleanup_reopened_scope_and_exceptional_pending_are_rejected() {
             .filter(|diagnostic| diagnostic.rule == rule)
             .map(|diagnostic| diagnostic.primary.entity.clone()).collect::<Vec<_>>();
         assert_eq!(locations(&first), locations(&second));
+    }
+}
+
+/// PR-P (#749): a result that keeps a carrier-free field of a parameter declares it as an alias and never takes it.
+/// `Source.first` takes the receiver's resource `res` (its only take retention) and is lent `tag`, a role over a plain
+/// object; `Holder.mark`'s receiver holds no obligation, stays borrowed, and lends `tag` on both arms of a branch;
+/// `Holder.either`'s two borrowed receivers both lend it through the block parameter where they meet.
+#[test]
+fn a_lent_field_is_declared_and_never_taken() {
+    let module = crate::text::parse(include_str!("prp-high/lent-fields.oir")).unwrap();
+    let output = elaborate_ownership(module, &TestNatives::default(), &OwnOptions::default()).unwrap();
+    let module = &output.module;
+    let declaration = |name: &str| module.declarations.iter().find(|(_, declaration)| declaration.name == name)
+        .map(|(id, _)| id).unwrap_or_else(|| panic!("{name}"));
+    let summary = |symbol: &str| module.functions.iter().find(|(_, function)| function.symbol == symbol)
+        .and_then(|(_, function)| function.summary).and_then(|id| module.summaries.get(id).ok())
+        .unwrap_or_else(|| panic!("{symbol}"));
+    let field = |name: &str, index: u32| SummarySelection::Field {
+        parameter: 0, field: FieldRef { declaration: declaration(name), index },
+    };
+    let first = summary("app.Source.first#0");
+    assert_eq!(first.parameters[0].convention, FreshConvention::Take);
+    let retained = match first.parameters[0].retention.clone() {
+        Some(SummarySelection::Union(items)) => items,
+        other => other.into_iter().collect(),
+    };
+    assert_eq!(retained, [field("app.Source", 0)], "only `res` is taken");
+    assert!(first.results[0].aliases.contains(&field("app.Source", 1)), "{:?}", first.results[0]);
+    let mark = summary("app.Holder.mark#0");
+    assert_eq!(mark.parameters[0].convention, FreshConvention::Borrow);
+    assert!(mark.results[0].aliases.contains(&field("app.Holder", 0)), "{:?}", mark.results[0]);
+    // Both receivers lend `tag` through the block parameter where they meet.
+    let either = summary("app.Holder.either#0");
+    let lent_by = |parameter: u16| SummarySelection::Field {
+        parameter, field: FieldRef { declaration: declaration("app.Holder"), index: 0 },
+    };
+    assert!(either.parameters[..2].iter().all(|effect| effect.convention == FreshConvention::Borrow));
+    for parameter in [0, 1] {
+        assert!(either.results[0].aliases.contains(&lent_by(parameter)), "{parameter}: {:?}", either.results[0]);
     }
 }
 

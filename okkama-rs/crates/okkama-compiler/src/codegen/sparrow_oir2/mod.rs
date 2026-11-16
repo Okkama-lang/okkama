@@ -73,6 +73,17 @@ fn generate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<
             }
         }
     }
+    // #732: a static split relocates what its input packet holds. The loader reconstructs that from the program
+    // (`EVIDENCE_SELECTIONS`), and the emitted proof is that reconstruction: a split of a packet with an empty
+    // inventory (the admissible selection of a bound resource lent to an async action) relocates nothing, whatever
+    // resources its selection names. A function whose reconstruction fails keeps the emitted proof for the loader
+    // to refuse.
+    let selections = p.functions.iter().map(|function| s::static_selections(&p, function)).collect::<Vec<_>>();
+    for (function, selections) in p.functions.iter_mut().zip(selections) {
+        if let Ok(selections) = selections {
+            function.proofs.static_selections = selections;
+        }
+    }
     let mut allocations = Vec::new();
     for function in &p.functions {
         let live = s::Liveness::of(function)?;

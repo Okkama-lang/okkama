@@ -48,6 +48,16 @@ pub fn holds_futures(module: &crate::Module, ty: crate::TypeId) -> bool {
     linearity::holds_futures(module, ty)
 }
 
+/// Whether `fields` is a path through the substituted object fields of a parameter of type `ty`: the T4 rule on a
+/// summary's `field`/`path` selection, for producers of summaries (own's lent fields, PR-P).
+pub fn summary_path_follows(module: &crate::Module, ty: crate::TypeId, fields: &[crate::FieldRef]) -> bool {
+    let mut budget = 4096u32;
+    types::summary_path_follows(module, ty, fields, &mut || {
+        budget = budget.saturating_sub(1);
+        budget > 0
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ErrorPolicy { First, #[default] All }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

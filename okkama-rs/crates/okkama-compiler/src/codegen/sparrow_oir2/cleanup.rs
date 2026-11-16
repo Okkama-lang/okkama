@@ -951,8 +951,12 @@ impl Emitter<'_> {
                         if s::identity_free(self.objects, s::Type::Object(object)) && op_is_split(instruction) {
                             continue;
                         }
-                        if !layout.has_destroy || layout.storage_fields.iter().any(|ty| {
-                            matches!(ty, s::Type::Object(_) | s::Type::Successor(_))
+                        // #742: a field that reaches no resource (a borrowed Atomic, a plain object) is not an
+                        // identity of the static partition; the selected resource stays a singleton.
+                        if !layout.has_destroy || layout.storage_fields.iter().any(|ty| match ty {
+                            s::Type::Object(field) => self.objects[*field as usize].layout.may_reach_resource,
+                            s::Type::Successor(_) => true,
+                            _ => false,
                         }) {
                             return Err(error("static Low selection requires a finite singleton layout"));
                         }
