@@ -277,3 +277,64 @@ async main() is int {
 }
 "#, "child 1\n1\nchild 2\n2\n", 0);
 }
+
+/// #801 (S1): a fresh Future stored in a Holder and returned through its getter from the scope that stored it.
+/// The getter's result is a borrowed alias: no rehome takes it, and `pick`'s exit names it, which takes its entry
+/// out of the Holder. Tomato (okkama 0.5.8): `picked`, `child 1`, `1`.
+#[test]
+fn a_stored_future_returned_through_a_getter() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Holder {
+    has f is Future<int>;
+    Holder(:f);
+    first() is Future<int> { f; }
+}
+object Picker {
+    Picker();
+    pick() is Future<int> {
+        let h = Holder(f: Child(n: 1).run());
+        h.first();
+    }
+}
+async main() is int {
+    let f = Picker().pick();
+    Stdout().writeln("picked");
+    Stdout().writeln((await f).string());
+    0;
+}
+"#, "picked\nchild 1\n1\n", 0);
+}
+
+/// #801 (S3): a relay of a getter returns a borrowed alias of the Box's Future. Tomato (okkama 0.5.8): `child 5`, `5`.
+#[test]
+fn a_relay_of_a_future_getter() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Box {
+    has f is Future<int>;
+    Box(:f);
+    first() is Future<int> { f; }
+}
+object Relay {
+    Relay();
+    relay(b is Box) is Future<int> { b.first(); }
+}
+async main() is int {
+    let b = Box(f: Child(n: 5).run());
+    let g = Relay().relay(b);
+    Stdout().writeln((await g).string());
+    0;
+}
+"#, "child 5\n5\n", 0);
+}

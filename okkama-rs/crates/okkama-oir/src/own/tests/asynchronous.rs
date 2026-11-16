@@ -1337,3 +1337,26 @@ fn a_future_input_leaves_with_the_future_that_borrows_it() {
     let text = crate::text::print(&output.module).unwrap();
     assert_eq!(rejections(&text), []);
 }
+
+const D801: &str = include_str!("../../../tests/fixtures/async/high/d801-borrowed-results.oir");
+
+/// #801 (D25.1, PR-B2): a synchronous call's Future result brings its cache duty only when the callee's relation
+/// makes it fresh. `make` returns the Future it created: its duty leaves by `cache.rehome` (C-4). `first` and
+/// `relay` return an alias of a Future that a Box holds: no duty arrives with it, so no rehome takes it (the
+/// loader would refuse a rehome of an entry the state does not hold, `SPB_REHOME`), and the exit's selection names
+/// it, which takes its entry wherever the scope keeps it.
+#[test]
+fn a_borrowed_future_result_brings_no_cache_duty() {
+    let output = rewrite_async(D801).unwrap_or_else(|error| panic!("{error}"));
+    let (_, make) = function(&output.module, "app.Maker.make#0");
+    let make = make.body.as_ref().unwrap();
+    assert_eq!(rehomes(&output.module, make).len(), 1);
+    assert!(named_futures(&output.module, make).is_empty());
+    for symbol in ["app.Box.first#0", "app.Relay.relay#0"] {
+        let (_, function) = function(&output.module, symbol);
+        let body = function.body.as_ref().unwrap();
+        assert!(rehomes(&output.module, body).is_empty(), "{symbol}");
+        let named = named_futures(&output.module, body);
+        assert!(named.iter().any(|(admissible, _)| !admissible), "{symbol}: the exit names its result {named:?}");
+    }
+}

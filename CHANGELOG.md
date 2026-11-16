@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future returned through a getter or a relay runs on Champ (#801).**
+  Own took every Future result of a call as one that brings its cache duty,
+  so a caller that let a getter's result escape emitted a `cache.rehome` of
+  an entry its state never held, which the SPB 17 loader refused
+  (`SPB_REHOME`). A result whose callee relation names only aliases of its
+  parameters is now a borrowed alias: no rehome takes it, and the exit's
+  selection names it, which takes its entry wherever the scope keeps it.
+  The full verifier still refuses the getter case from the storing scope
+  (#808).
+
 - **A Future stored on some paths only runs on Champ (#783).** Checked
   after PR-B1: a bound Future stored on one path is an alias whose duty stays
   with its binding, and a fresh Future reaches a store on some paths only
