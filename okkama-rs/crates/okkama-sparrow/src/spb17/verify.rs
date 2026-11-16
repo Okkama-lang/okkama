@@ -2342,8 +2342,11 @@ pub(super) fn exit_carry(op: Opcode, tag: Tag) -> Carry {
     use Opcode::*;
     match (op, tag) {
         // A rehome puts a cache duty into the reserve; the reserve continues the same exit.
+        // cleanup.deliver_cancel gives the cleanup state back (D18; #741's async successor body).
         (ExitExtend | CleanupBegin | CleanupSettle | CleanupPlan | CleanupFailure | DestroyDirect
-            | CleanupDestroy | CacheRehome | CleanupSettleDynamic, Tag::Normal) => Carry::Slot(0),
+            | CleanupDestroy | CacheRehome | CleanupSettleDynamic | CleanupDeliverCancel, Tag::Normal) => {
+            Carry::Slot(0)
+        }
         (CleanupNext, Tag::Selected | Tag::Done) => Carry::Slot(0),
         (CleanupFinish, Tag::Normal) => Carry::Slot(2),
         (ExitDispatch, Tag::Pending) => Carry::Slot(1),

@@ -62,6 +62,7 @@ full_check! {
     w1_void_await_for_effect => "L08.void.await-for-effect",
     k2_future_cancel_unstarted => "L08.future.cancel-unstarted",
     r3_role_restriction_through_async => "L12.role-restriction-through-async",
+    b0_future_successor_obligation => "L12.future-successor-obligation",
 }
 
 /// `catch e is Cancelled` compiles through OIR-2 and SPB 17 and lets every other failure pass (#724, language spec
