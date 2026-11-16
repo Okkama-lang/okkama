@@ -914,7 +914,7 @@ fn n1_an_async_native_call_creates_an_external_future_with_an_empty_packet() {
         _ => None,
     }).collect();
     let [packet] = packets.as_slice() else { panic!("one external fut.new: {packets:?}") };
-    let definition = body.values.get(*packet).unwrap().def.clone();
+    let definition = body.values.get(*packet).unwrap().def;
     let Definition::InstResult { inst, .. } = definition else { panic!("{definition:?}") };
     assert!(matches!(body.insts.get(inst).unwrap().op, Operation::Ownership(OwnershipOp::Empty {})));
     assert_eq!(body.service_schedules.len(), 1, "the owner settles the driver Future's cache duty");
