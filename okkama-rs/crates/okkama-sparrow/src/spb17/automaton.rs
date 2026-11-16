@@ -185,11 +185,23 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                         rehome_scopes.get(&pc).copied().flatten()
                             .ok_or_else(|| violation(REHOME, "a rehomed entry leaves the state of one scope"))?
                     } else {
-                        let creation = locations.get(1).and_then(|duty| origins.get(duty)).copied().flatten()
-                            .map(|pc| &f.code[pc as usize]);
+                        let origin = locations.get(1).and_then(|duty| origins.get(duty)).copied().flatten();
+                        let creation = origin.map(|pc| &f.code[pc as usize]);
                         let Some(Instruction::Champ { op: FutureNew, arguments: created, .. }) = creation else {
                             return Err(violation(REHOME, "a rehomed duty has no single fut.new"));
                         };
+                        // #765, C-4 item 1: a spawned Future's task and cache duties leave together, and the task
+                        // is the one of the same Future.
+                        if let Some(task) = locations.get(2) {
+                            enforce(origins.get(task).copied().flatten() == origin, REHOME,
+                                "a rehome's task duty belongs to the Future of its cache duty")?;
+                        } else {
+                            let spawned = f.code.iter().any(|instruction| matches!(instruction,
+                                Instruction::Champ { op: FutureSpawn, arguments, .. }
+                                    if services::spawned_cache(arguments)
+                                        .is_some_and(|cache| origins.get(&cache).copied().flatten() == origin)));
+                            enforce(!spawned, REHOME, "a spawned Future's cache duty leaves without its task duty")?;
+                        }
                         created.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None })
                             .ok_or_else(|| error("fut.new has no owner scope"))?
                     };

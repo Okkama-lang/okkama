@@ -116,6 +116,11 @@ pub fn reaches_holder(p: &Program, ty: Type) -> bool {
 
 /// Whether `cache.rehome` with these location operands is the state form (reserve, scope state, Future): the token
 /// form takes the reserve, the cache duty and, for a spawned Future, its task duty (ABI C-4, D24.1).
+/// The cache-state operand of a `fut.spawn` (#765): the Future's cache duty, which the spawn forwards.
+pub(crate) fn spawned_cache(arguments: &[Argument]) -> Option<Location> {
+    locations(arguments).get(1).copied()
+}
+
 pub(crate) fn rehome_state_form(f: &Function, operands: &[Location]) -> bool {
     operands.len() == 3 && kind(f, operands[1]) == Some(ServiceKind::ScopeState)
 }

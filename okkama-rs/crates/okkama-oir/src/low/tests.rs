@@ -396,3 +396,23 @@ fn a_thrown_cancelled_is_an_ordinary_failure_of_a_synchronous_body() {
         assert!(matches!(refused, Err(LowError::Unsupported { .. })), "summary {summary}: {refused:?}");
     }
 }
+
+const TWO_SPAWNS: &str = include_str!("../../tests/fixtures/async/low/d765-two-spawns-returned.oir");
+
+/// #765, C-4 item 1: a spawned Future's task and cache duties leave together. The fixture rehomes `b` with its own
+/// task duty; a rehome without the task (a), or with the task duty of `a` (b), is refused.
+#[test]
+fn a_rehome_takes_the_task_duty_of_its_own_spawned_future() {
+    let rehome = "cache.rehome %34, %31, task %32, target caller";
+    assert_eq!(TWO_SPAWNS.matches(rehome).count(), 1);
+    verify_fixture(&parsed(TWO_SPAWNS)).unwrap_or_else(|report| panic!("{report:?}"));
+    let rejected = |source: &str, message: &str| {
+        let report = verify_fixture(&parsed(source)).map(|_| ()).unwrap_err();
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B94
+            && diagnostic.message == message), "{message}: {report:?}");
+    };
+    rejected(&TWO_SPAWNS.replace(rehome, "cache.rehome %34, %31, target caller"),
+        "cache.rehome leaves the task duty of a spawned Future behind");
+    rejected(&TWO_SPAWNS.replace(rehome, "cache.rehome %34, %31, task %16, target caller"),
+        "cache.rehome consumes the task-state of the same spawned Future");
+}

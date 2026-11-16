@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A spawned Future's task and cache duties leave together (#765).** The
+  SPB 17 loader admitted a `cache.rehome` that took a spawned Future's cache
+  duty without its task duty, or with the task duty of another Future; the
+  runtime then stopped. `SPB_REHOME` now refuses both shapes, and the full
+  OIR-2 verifier refuses a rehome that leaves a spawned Future's task duty
+  behind (B94).
+
 - **A Future returned through a getter or a relay runs on Champ (#801).**
   Own took every Future result of a call as one that brings its cache duty,
   so a caller that let a getter's result escape emitted a `cache.rehome` of

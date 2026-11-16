@@ -337,6 +337,15 @@ impl Engine<'_, '_> {
                     && before.tokens[task.as_u32() as usize].cache != Some(key) {
                     self.error(R::B94, "cache.rehome consumes the task-state of the same spawned Future");
                 }
+                // #765, C-4 item 1: a spawned Future's task duty leaves with its cache duty.
+                let task_left = task.is_none() && (0..before.availability.len()).any(|index| {
+                    let token = &before.tokens[index];
+                    before.availability[index] == AVAILABLE && token.cache == Some(key)
+                        && token.service.is_some_and(|service| self.spawn_task(service))
+                });
+                if task_left {
+                    self.error(R::B94, "cache.rehome leaves the task duty of a spawned Future behind");
+                }
                 self.borrowed_futures_left(before, key, *target);
                 let mut moved = vec![];
                 let mut source = None;
