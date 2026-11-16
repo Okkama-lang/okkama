@@ -271,7 +271,14 @@ impl Runtime {
         let plans = runtime.champ_verified_cleanup_plans(verified);
         let schedules = source.functions.iter().map(|function| {
             function.proofs.schedules.iter()
-                .map(|schedule| runtime.champ_register_schedule(schedule.services.len() as u64))
+                .map(|schedule| {
+                    let kinds = schedule.services.iter().map(|&duty| match duty {
+                        s::Location::Service(id) if function.services.get(id as usize)
+                            == Some(&s::ServiceKind::TaskState) => SERVICE_TASK,
+                        _ => SERVICE_CACHE,
+                    }).collect();
+                    runtime.champ_register_schedule(kinds)
+                })
                 .collect()
         }).collect();
         let mut selections = Vec::new();

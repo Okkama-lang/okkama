@@ -472,6 +472,10 @@ impl Runtime {
                     get(task, FLAGS) & OBSERVED == 0
                         && !matches!(self.failure(get(task, FAILURE)).map(|f| &f.kind), Some(FailureKind::Cancelled))
                 }
+                // Champ KL-1 (draft 3 §7.2, #699): a detached Future keeps its record while its outcome packet
+                // waits for the root closer at shutdown.
+                #[cfg(feature = "champ-abi")]
+                DONE => self.champ_retained(task),
                 _ => false,
             };
             if needed {
@@ -488,6 +492,17 @@ impl Runtime {
     /// After the root: cancel running spawned tasks and wait for them; an
     /// unobserved failure of a spawned task (not a cancellation) is reported.
     pub fn shutdown(&mut self, ctx: *mut Ctx) -> Option<Word> {
+        if !self.shutdown_drain(ctx) {
+            return None;
+        }
+        let failure = self.shutdown_report();
+        self.spawned.clear();
+        failure
+    }
+
+    /// Shutdown's first step: cancel every running spawned task and run the
+    /// scheduler until all have settled. False when the run stopped.
+    pub(crate) fn shutdown_drain(&mut self, ctx: *mut Ctx) -> bool {
         loop {
             let mut pending = None;
             for index in 0..self.spawned.len() {
@@ -501,20 +516,23 @@ impl Runtime {
                 Some(task) => {
                     self.schedule(ctx, task);
                     if unsafe { (*ctx).status } != OK {
-                        return None;
+                        return false;
                     }
                 }
-                None => break,
+                None => return true,
             }
         }
-        let failure = self.spawned.iter().copied().find_map(|task| {
+    }
+
+    /// The first unobserved failure of a spawned task that is not a
+    /// cancellation, in spawn order.
+    pub(crate) fn shutdown_report(&self) -> Option<Word> {
+        self.spawned.iter().copied().find_map(|task| {
             let failed = get(task, STATE) == FAILURE_STATE && get(task, FLAGS) & OBSERVED == 0;
             let failure = get(task, FAILURE);
             (failed && !matches!(self.failure(failure).map(|f| &f.kind), Some(FailureKind::Cancelled)))
                 .then_some(failure)
-        });
-        self.spawned.clear();
-        failure
+        })
     }
 
     pub(crate) fn cancel(&mut self, ctx: *mut Ctx, future: Word) {

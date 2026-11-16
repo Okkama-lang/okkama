@@ -1044,6 +1044,17 @@ impl Activation {
                 vec![vec![slot.record]]
             }
             O::FutureNew => self.future_new(arguments, &operands).ok_or(Step::Stop)?,
+            // D24.1 (#601 P1), class X: the task starts on this stack; the cache duty comes back with the task duty.
+            O::FutureSpawn => {
+                let future = self.word(operands[0]);
+                let mut cache = CacheSlot { record: self.word(operands[1]) };
+                let mut post = SpawnPost::default();
+                if self.call(|ctx| rt_future_spawn(ctx, future, &mut cache, &mut post)) != NORMAL {
+                    return Err(Step::Stop);
+                }
+                self.write(operands[1], &[0]);
+                vec![vec![post.cache], vec![post.task]]
+            }
             O::InvokeCallOwn => return Err(self.call_owned(pc, arguments, &operands, flow)),
             O::Await => return Err(self.await_step(pc, operands[0], flow)),
             O::AwaitTake => return Err(self.take_step(pc, arguments, operands[0], flow)),
@@ -1061,7 +1072,11 @@ impl Activation {
                 };
                 let mut pending = PendingSlot { record: self.word(operands[0]) };
                 let mut slot = RehomePost::default();
-                if let [_, state, future] = operands[..] {
+                let state_form = self.function().services.get(match operands[1] {
+                    Location::Service(id) => id as usize,
+                    Location::Register(_) => usize::MAX,
+                }) == Some(&K::ScopeState);
+                if let ([_, state, future], true) = (operands[..], state_form) {
                     // The state form takes the entry the scope admitted (ABI D25.3).
                     let mut source = ScopeSlot { record: self.word(state) };
                     let future = self.word(future);
@@ -1072,13 +1087,17 @@ impl Activation {
                     self.write(state, &[0]);
                     vec![vec![slot.state.record], vec![slot.pending.record]]
                 } else {
+                    // The token form; a spawned Future's task duty goes with its cache duty (D24.1).
                     let future = self.word(operands[1]);
                     let mut cache = CacheSlot { record: future };
+                    let mut task = TaskSlot { record: future };
+                    let task_slot: *mut TaskSlot = if operands.len() == 3 { &mut task } else { std::ptr::null_mut() };
                     let rehomed = self.call(|ctx| rt_cache_rehome(ctx, &mut pending, std::ptr::null_mut(), &mut cache,
-                        std::ptr::null_mut(), future, target, &mut slot));
+                        task_slot, future, target, &mut slot));
                     assert_eq!(rehomed, NORMAL, "{:?}", runtime_of(self.ctx).fatal);
-                    self.write(operands[0], &[0]);
-                    self.write(operands[1], &[0]);
+                    for &operand in &operands {
+                        self.write(operand, &[0]);
+                    }
                     vec![vec![slot.pending.record]]
                 }
             }
@@ -1617,7 +1636,7 @@ fn kind(runtime: &Runtime, failure: Word) -> String {
 /// Close `state` settling `duties` in schedule order with a merge plan; the close's failure.
 fn close(ctx: &mut Ctx, state: &mut ScopeSlot, duties: &[Word]) -> Word {
     let runtime = unsafe { &mut *ctx.runtime };
-    let schedule = runtime.champ_register_schedule(duties.len() as u64);
+    let schedule = runtime.champ_register_schedule(vec![SERVICE_CACHE; duties.len()]);
     let plan = runtime.champ_register_cleanup_plan(CleanupPlan { reserve: false, direct: false, may_fail: false });
     let inputs = CloseInputs {
         scope: state, packet: std::ptr::null_mut(), pending: std::ptr::null_mut(), failure: 0, settlements: 0,
@@ -1967,7 +1986,7 @@ fn cache_settle_rows(engine: Engine) {
     let done_cache = runtime.champ_cache(done).unwrap();
     assert_eq!((done_cache.flags, done_cache.packet), (RELEASED, 0));
     // A duty settled twice is refused before anything changes.
-    let schedule = runtime.champ_register_schedule(2);
+    let schedule = runtime.champ_register_schedule(vec![SERVICE_CACHE; 2]);
     let inputs = CloseInputs {
         scope: &mut other, packet: std::ptr::null_mut(), pending: std::ptr::null_mut(), failure: 0, settlements: 0,
     };
@@ -2517,3 +2536,6 @@ mod resources;
 
 #[path = "async_cancel_tests.rs"]
 mod cancel;
+
+#[path = "async_spawn_tests.rs"]
+mod spawn;
