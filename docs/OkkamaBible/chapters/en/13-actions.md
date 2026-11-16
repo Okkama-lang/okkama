@@ -432,8 +432,14 @@ A successor that has to wait before it can build the new state is declared
 - **The obligation follows the Future.** `await opened.deposited(200);`
   with its result thrown away is rejected, exactly like the synchronous
   call. Until it is awaited, the obligation belongs to the Future, which
-  must be awaited or handed on. The compiler does not yet reject a successor
-  Future that is bound to a name and then dropped (#754).
+  must be awaited or handed on: passed, returned, stored or spawned. A
+  Future bound to a name and then dropped is rejected at the binding, and
+  so is one that is only asked `done()` or `cancelled()`.
+- **Cancelling is a decision.** `f.cancel()` discharges the obligation.
+  The program says in its text that the transition will not happen, so
+  there is nothing left to lose, and no `await` is needed just to observe
+  `Cancelled`. Forgetting the Future silently is still an error. This was
+  the language owner's choice when the check was made complete (#754).
 
 ## 13.15 A worked example: an order's life
 

@@ -9967,8 +9967,14 @@ still 350
 - **The obligation follows the Future.** `await opened.deposited(200);`
   with its result thrown away is rejected, exactly like the synchronous
   call. Until it is awaited, the obligation belongs to the Future, which
-  must be awaited or handed on. The compiler does not yet reject a successor
-  Future that is bound to a name and then dropped (#754).
+  must be awaited or handed on: passed, returned, stored or spawned. A
+  Future bound to a name and then dropped is rejected at the binding, and
+  so is one that is only asked `done()` or `cancelled()`.
+- **Cancelling is a decision.** `f.cancel()` discharges the obligation.
+  The program says in its text that the transition will not happen, so
+  there is nothing left to lose, and no `await` is needed just to observe
+  `Cancelled`. Forgetting the Future silently is still an error. This was
+  the language owner's choice when the check was made complete (#754).
 
 ## 13.15 A worked example: an order's life
 
@@ -11943,9 +11949,9 @@ answer for example, needs a clock that holds its waiters until the test
 moves it. That is `ManualClock` from `testing/time`, and Section 20.11
 uses it to time out a courier after thirty seconds that never pass.
 
-A failed comparison of two `Duration`s currently reports their heap
-identities (`Duration@52e44f14340`) instead of their values (#756). The
-check itself is exact, but the report does not say how the values differ.
+A failed comparison of two `Duration`s reports both values by their
+fields, `expected Duration(origin: 2), got Duration(origin: 1)`, on both
+engines. Before 0.6.0 it printed heap identities (#756).
 
 ## 15.9 The rest of the toolbox
 
@@ -22182,20 +22188,23 @@ caught, each where an example did something ordinary.
   `rat.denominator()` returned their parts as text. The choice was made
   when `int` had a fixed width and kept after `int` became unbounded. They
   return `int` since 0.6.0.
-- **A successor's future could be dropped (#754, open).** The Book says
+- **A successor's future could be dropped (#754, fixed).** The Book says
   that an async successor's obligation moves into its future, which must
-  be awaited or handed on (Section 13.14). The checker rejects a dropped
-  call, but it accepts a future bound to a name and then never awaited.
-  The rule is right, and the check is incomplete.
-- **A failed test could not say why (#756, open).** When `test.is`
-  compares two objects that differ, the report prints their heap
+  be awaited or handed on (Section 13.14). The checker rejected a dropped
+  call but accepted a future bound to a name and never awaited. Since 0.6.0
+  the check is complete; making it complete raised one question for the
+  owner, and the answer is that `cancel()` discharges the obligation.
+- **A failed test could not say why (#756, fixed).** When `test.is`
+  compared two objects that differ, the report printed their heap
   identities, `Duration@52e44f14340`, instead of their values
-  (Section 15.8). The check is exact, but its report is not useful.
+  (Section 15.8). Since 0.6.0 it prints `Duration(origin: 2)`, the same on
+  both engines.
 
-Only the first changed what programs see, and it took the owner's
-decision. The other two are places where the implementation had fallen
-behind what the rules already said, which is the kind of gap a book of
-running examples is good at finding.
+The first changed what programs see, and the second settled a question
+the rule had left open; both took the owner's decision. All three are
+places where the implementation had fallen behind what the rules already
+said, which is the kind of gap a book of running examples is good at
+finding.
 
 ## 28.2 Missing from the language
 

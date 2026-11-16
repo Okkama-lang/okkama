@@ -59,20 +59,23 @@ caught, each where an example did something ordinary.
   `rat.denominator()` returned their parts as text. The choice was made
   when `int` had a fixed width and kept after `int` became unbounded. They
   return `int` since 0.6.0.
-- **A successor's future could be dropped (#754, open).** The Book says
+- **A successor's future could be dropped (#754, fixed).** The Book says
   that an async successor's obligation moves into its future, which must
-  be awaited or handed on (Section 13.14). The checker rejects a dropped
-  call, but it accepts a future bound to a name and then never awaited.
-  The rule is right, and the check is incomplete.
-- **A failed test could not say why (#756, open).** When `test.is`
-  compares two objects that differ, the report prints their heap
+  be awaited or handed on (Section 13.14). The checker rejected a dropped
+  call but accepted a future bound to a name and never awaited. Since 0.6.0
+  the check is complete; making it complete raised one question for the
+  owner, and the answer is that `cancel()` discharges the obligation.
+- **A failed test could not say why (#756, fixed).** When `test.is`
+  compared two objects that differ, the report printed their heap
   identities, `Duration@52e44f14340`, instead of their values
-  (Section 15.8). The check is exact, but its report is not useful.
+  (Section 15.8). Since 0.6.0 it prints `Duration(origin: 2)`, the same on
+  both engines.
 
-Only the first changed what programs see, and it took the owner's
-decision. The other two are places where the implementation had fallen
-behind what the rules already said, which is the kind of gap a book of
-running examples is good at finding.
+The first changed what programs see, and the second settled a question
+the rule had left open; both took the owner's decision. All three are
+places where the implementation had fallen behind what the rules already
+said, which is the kind of gap a book of running examples is good at
+finding.
 
 ## 28.2 Missing from the language
 

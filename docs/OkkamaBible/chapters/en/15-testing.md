@@ -323,9 +323,9 @@ answer for example, needs a clock that holds its waiters until the test
 moves it. That is `ManualClock` from `testing/time`, and Section 20.11
 uses it to time out a courier after thirty seconds that never pass.
 
-A failed comparison of two `Duration`s currently reports their heap
-identities (`Duration@52e44f14340`) instead of their values (#756). The
-check itself is exact, but the report does not say how the values differ.
+A failed comparison of two `Duration`s reports both values by their
+fields, `expected Duration(origin: 2), got Duration(origin: 1)`, on both
+engines. Before 0.6.0 it printed heap identities (#756).
 
 ## 15.9 The rest of the toolbox
 
