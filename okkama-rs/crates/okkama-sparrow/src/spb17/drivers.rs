@@ -388,6 +388,7 @@ pub struct Template {
     pub slice: Slice,
 }
 
+#[allow(clippy::too_many_arguments)]
 const fn holder(name: &'static str, params: &'static [Slot], results: &'static [Slot], abi: Abi, failures: u32,
     effect: Effect, related: &'static [&'static str], slice: Slice) -> Template
 {

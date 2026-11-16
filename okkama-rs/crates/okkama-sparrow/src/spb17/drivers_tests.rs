@@ -409,7 +409,7 @@ fn suffixes(template: &Template) -> Vec<&'static str> {
 /// (thrown, program and cancelled), none of them in the Q1 catalogue, and none admitted before their runtime.
 #[test]
 fn holder_rows_are_the_q2_and_g1_members() {
-    assert!(!d::HOLDERS_READY);
+    const { assert!(!d::HOLDERS_READY) };
     let q2 = d::HOLDERS.iter().filter(|template| template.slice == Slice::Q2).count();
     assert_eq!((q2, d::HOLDERS.len() - q2), (9, 13));
     let mut names = std::collections::BTreeSet::new();
