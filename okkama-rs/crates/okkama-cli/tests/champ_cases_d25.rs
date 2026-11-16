@@ -6,7 +6,7 @@
 
 mod champ_support;
 
-use champ_support::{run_case, run_source};
+use champ_support::{run_case, run_source, run_source_with};
 
 macro_rules! cases {
     ($($name:ident => $id:literal,)*) => {
@@ -25,7 +25,14 @@ cases! {
     d25_cancel_shared_awaited_survives => "L08.cancel.shared-awaited-survives",
     d25_cancel_nested_frame_next_await => "L08.cancel.nested-frame-next-await",
     d25_cancel_final_exit_window => "L08.cancel.final-exit-window",
-    d25_collect_race_empty => "L08.collect.race-empty",
+}
+
+/// A race of no Futures fails with NoFutures, as on Tomato. `Raced` is a D23 holder of slice G1: the producer refuses
+/// its members by their catalogue row until the slice brings the runtime (#810).
+#[test]
+#[ignore = "#810: Raced.winner is a G1 holder member, refused until the slice"]
+fn d25_collect_race_empty() {
+    run_case("L08.collect.race-empty").unwrap_or_else(|error| panic!("L08.collect.race-empty: {error}"));
 }
 
 fn expect(source: &str, stdout: &str, status: i64) {
@@ -337,4 +344,35 @@ async main() is int {
     0;
 }
 "#, "child 5\n5\n", 0);
+}
+
+/// #801 (wave/18 review): a synchronous relay of a freshly created Future (`id(Seed(n: 1).run())`) at the top of the
+/// body, in each branch of an `if` whose value leaves its block, and returned from a synchronous action. The relay's
+/// result is a borrowed alias, so the duty of the Future it was given leaves with it. Under the Full verifier, with
+/// Tomato's output (okkama 0.5.8): the Futures run when awaited, in order.
+#[test]
+fn a_relay_of_a_fresh_future_under_the_full_verifier() {
+    let run = run_source_with(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Seed {
+    has n is int;
+    Seed(:n);
+    async run() is int { Stdout().writeln("seed " + n.string()); n; }
+}
+object Relay {
+    Relay();
+    id(f is Future<int>) is Future<int> { f; }
+    made(n is int) is Future<int> { self.id(Seed(n: n).run()); }
+}
+async main() is int {
+    let relay = Relay();
+    let f = relay.id(Seed(n: 1).run());
+    let g = if f.done() { relay.id(Seed(n: 0).run()); } else { relay.id(Seed(n: 2).run()); };
+    let h = relay.made(3);
+    Stdout().writeln("relayed");
+    Stdout().writeln(((await f) + (await g) + (await h)).string());
+    0;
+}
+"#, okkama_compiler::oir2::VerifyMode::Full).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("relayed\nseed 1\nseed 2\nseed 3\n6\n", Ok(0)));
 }

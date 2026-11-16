@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Wave 18 review (Fable) follow-ups (#601).** The loader's refusal of a rehome
+  that names the task duty of another Future (#765 b) has its SPB negative. A
+  synchronous relay of a freshly created Future is checked end to end under the
+  Full verifier against Tomato's output (#801). A test that passed on the known
+  #732 gap is now an ignored test of the intended behaviour. `L08.collect.race-empty`
+  passed only because the std placeholder of `Raced.winner` throws `NoFutures`; it
+  waits for slice G1 (#810) like the other holder members (Q2: #811).
+
 - **A spawned Future's task and cache duties leave together (#765).** The
   SPB 17 loader admitted a `cache.rehome` that took a spawned Future's cache
   duty without its task duty, or with the task duty of another Future; the

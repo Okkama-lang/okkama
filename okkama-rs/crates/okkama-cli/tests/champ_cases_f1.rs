@@ -32,19 +32,6 @@ fn expect(source: &str, stdout: &str) {
     assert_eq!((run.stdout.as_str(), run.result), (stdout, Ok(0)));
 }
 
-/// [`expect`] of a program that stops in the SPB 17 load check on #732 until it is fixed.
-fn expect_after_732(source: &str, stdout: &str) {
-    match run_source(source) {
-        Err(error) if error.contains("EVIDENCE_SELECTIONS: static selection relocation mismatch") => {
-            println!("stops on #732: {error}");
-        }
-        run => {
-            let run = run.unwrap_or_else(|error| panic!("{error}"));
-            assert_eq!((run.stdout.as_str(), run.result), (stdout, Ok(0)));
-        }
-    }
-}
-
 /// PR-D: an async slot of a generic role implemented by a generic object, at two instantiations. A role call creates
 /// the cold Future; its body runs only when awaited.
 #[test]
@@ -265,12 +252,11 @@ async main() is int {
 }
 
 /// #791 W5: a borrowed resource through an async role slot. The creation thunk borrows `kept` into the cold Future,
-/// the body uses it when awaited, and `kept` is destroyed once, at the end of its scope (Tomato's output). Until #732
-/// (a resource argument of an async action fails the SPB 17 static selection check, with or without a role) the
-/// program stops there; the test becomes the full check when it compiles.
+/// the body uses it when awaited, and `kept` is destroyed once, at the end of its scope (Tomato's output).
 #[test]
+#[ignore = "#732: a resource argument of an async action fails the SPB 17 static selection check"]
 fn f1_a_borrowed_resource_goes_through_an_async_slot() {
-    expect_after_732(r#"module app v1.0.0;
+    expect(r#"module app v1.0.0;
 import "io/stdout" take Stdout;
 object Res {
     has label is string;
