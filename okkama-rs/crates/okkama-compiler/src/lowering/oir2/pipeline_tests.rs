@@ -100,7 +100,8 @@ fn oir2_pipeline_refuses_an_atomic_over_a_role_with_a_resource() {
         "main() is int { let first is Named = Res(n: \"a\"); let held = Cell(first); held.value().name().length(); }"))
         .unwrap_or_else(|error| panic!("{error}"));
     let error = compile_high_with(high, o::VerifyMode::Structural).unwrap_err().to_string();
-    assert!(error.contains("Atomic/Cell over the role app.Named") && error.contains("plain roles only"), "{error}");
+    // #778 words the refusal for every closed plain value; the role is named by its suffix.
+    assert!(error.contains("Atomic/Cell over role_app.Named") && error.contains("closed plain data only"), "{error}");
 }
 
 /// #723: an object that holds an action value whose closures capture only plain data is no identity. Own gives
@@ -119,3 +120,27 @@ fn oir2_pipeline_a_holder_of_plain_closures_is_no_identity() {
     }
 }
 
+
+/// #778: a Cell over a map of plain data registers an Atomic named by the encoded type, whose storage holds the
+/// map and the closed flag, and the program loads.
+#[test]
+fn oir2_pipeline_registers_an_atomic_over_a_plain_map() {
+    let high = super::super::tests::lower_std(concat!("module app; import \"cell\" take Cell; ",
+        "main() is int { let counts = Cell([\"a\": 1]); counts.replace([\"a\": 1, \"b\": 2]); ",
+        "counts.value().size(); }")).unwrap_or_else(|error| panic!("{error}"));
+    let bytes = compile_high_with(high, o::VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    let program = s::decode(&bytes).unwrap();
+    let atomic = program.objects.iter().find(|object| object.name.starts_with("async.atomic.Atomic_t_"))
+        .expect("the registered Atomic over the map");
+    assert!(matches!(atomic.layout.storage_fields.as_slice(), [s::Type::Map(_), s::Type::Bool]), "{atomic:?}");
+}
+
+/// #778 leaves Futures out (D25): an Atomic over an array of Futures stays a producer refusal.
+#[test]
+fn oir2_pipeline_refuses_an_atomic_over_futures() {
+    let source = concat!("module app; import \"async/atomic\" take Atomic; ",
+        "object Job { Job(); async run() is int { 1; } } ",
+        "main() is int { let pending is @Future<int> = []; let held = Atomic(pending); held.close(); 0; }");
+    let error = super::super::tests::lower_std(source).map(|_| ()).unwrap_err().to_string();
+    assert!(error.contains("std object async/atomic.Atomic"), "{error}");
+}

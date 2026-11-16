@@ -47,7 +47,10 @@ impl P1Contracts {
             let Some(suffix) = object.name.strip_prefix("async.atomic.Atomic_") else {
                 continue;
             };
-            let Some(value) = atomic_value(suffix).or_else(|| atomic_role(objects, suffix)) else {
+            // Other closed plain data (#778) is named by its encoded type: its value is the storage's first word,
+            // which the loader admits only as closed plain data (ATOMIC_PLAIN).
+            let stored = suffix.starts_with("t_").then(|| object.layout.storage_fields.first().copied()).flatten();
+            let Some(value) = atomic_value(suffix).or_else(|| atomic_role(objects, suffix)).or(stored) else {
                 continue;
             };
             let expected = vec![value, Type::Bool];
@@ -395,8 +398,13 @@ fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, fail
     if owned {
         params.push(Location::Service(0));
     }
-    // A role value (an Atomic over a role, #764) carries its deps like an object.
-    let deps = registers.iter().filter(|ty| matches!(ty, Type::Object(_) | Type::Error | Type::Role(_))).count();
+    // A role value (an Atomic over a role, #764) carries its deps like an object, and so does an array of role
+    // values (an Atomic over other closed plain data, #778), as own elaborates them.
+    let deps = registers.iter().filter(|ty| match ty {
+        Type::Object(_) | Type::Error | Type::Role(_) => true,
+        Type::Array(shape) => matches!(shape.leaf, ArrayLeaf::Role(_)),
+        _ => false,
+    }).count();
     let mut services = vec![ServiceKind::Deps; deps];
     // Proof parameters precede the owning packet, as in elaborated OIR signatures.
     if owned {

@@ -624,3 +624,44 @@ fn an_atomic_refuses_a_role_with_an_implementation_that_is_not_plain_data() {
     p.objects[1].fields = vec![Field { name: "f0".into(), storage: 0, once: false }];
     reject(&p, "ATOMIC_ROLE");
 }
+
+/// The program of `plain_main` with an Atomic over other data (#778) holding `value` and its closed flag.
+fn atomic_over(value: Type) -> Program {
+    let mut p = plain_main(vec![Type::Int], vec![], 0);
+    p.objects.push(Object { name: "async.atomic.Atomic_t_value".into(), fields: vec![],
+        ..object("async.atomic.Atomic_t_value", vec![value, Type::Bool], vec![]) });
+    p
+}
+
+/// ATOMIC_PLAIN: an Atomic holds other data (#778: objects, variants, maps, arrays of handles or roles) only as
+/// closed plain data, by its whole graph; its operations take the value type from the storage.
+#[test]
+fn an_atomic_holds_closed_plain_data() {
+    // `Plain` (3) has no fields; an array of `Named` role values whose implementations are plain.
+    accept(&atomic_over(Type::Object(3)));
+    let roles = Type::Array(ArrayType { leaf: ArrayLeaf::Role(0), depth: 1 });
+    accept(&atomic_over(roles));
+    let p = super::p1::P1Contracts::new(&atomic_over(roles).objects).unwrap();
+    let value = p.entries().iter().find(|f| f.symbol == "okkama.atomic.Atomic.new_value$t_value").unwrap();
+    assert_eq!(value.registers, [roles]);
+    // An array of role values carries its deps as own elaborates it.
+    assert_eq!(value.services, [ServiceKind::Deps, ServiceKind::Packet]);
+}
+
+#[test]
+fn an_atomic_refuses_data_that_reaches_a_resource() {
+    let mut p = atomic_over(Type::Int);
+    let resource = with_resource(&mut p);
+    let atomic = p.objects.iter().position(|object| object.name == "async.atomic.Atomic_t_value").unwrap();
+    p.objects[atomic].layout = layout(vec![Type::Object(resource), Type::Bool]);
+    reject(&p, "ATOMIC_PLAIN");
+}
+
+#[test]
+fn an_atomic_refuses_data_that_is_not_plain() {
+    let mut p = atomic_over(Type::Object(1));
+    p.objects[1].layout = layout(vec![Type::Failure]);
+    p.objects[1].layout.trace_layout = vec![0];
+    p.objects[1].fields = vec![Field { name: "f0".into(), storage: 0, once: false }];
+    reject(&p, "ATOMIC_PLAIN");
+}

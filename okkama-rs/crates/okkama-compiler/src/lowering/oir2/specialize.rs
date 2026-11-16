@@ -440,7 +440,14 @@ impl Specializer<'_, '_> {
     /// `role_` and the role's declaration name in the module (#764).
     fn atomic_suffix_of(&mut self, value: &ty::Ty, span: Span) -> Result<Option<String>> {
         let ty::Ty::Role(role, args) = value else {
-            return Ok(atomic_suffix(value));
+            if let Some(suffix) = atomic_suffix(value) {
+                return Ok(Some(suffix));
+            }
+            // Other closed plain data (#778): maps, objects and variants, arrays of handles and of roles. The
+            // value type is read from the specialization's operations; the loader admits it only as closed
+            // plain data (ATOMIC_PLAIN). A Future, an action value, `any` or a cap is never stored.
+            let storable = atomic_storable(value, &|object| self.input.registry.objects[object.0].destroy.is_none());
+            return Ok(storable.then(|| self.encode(value)).transpose()?.map(|name| format!("t_{name}")));
         };
         let id = self.role(*role, args, span)?;
         let info = &self.registry.roles[id.0];
@@ -946,6 +953,24 @@ impl Specializer<'_, '_> {
 /// Structural spelling shared by concrete signatures and specialization arguments.
 /// The name suffix of a registered plain Atomic/Cell value (P2.4 §4.8): `int`, `string`, `bool`, `byte`,
 /// `char`, `float`, `rat`, or `array_` and the suffix of a plain element. Other values have none.
+/// Whether a value of `value` may be the content of a registered Atomic beyond the scalar suffixes (#778): data
+/// made of scalars, maps, arrays, objects, variants, enums, roles and native handles. Futures (D25), action
+/// values, `any`, caps, successors and parameters are not, nor an object with a destroy (`plain_object`); a
+/// resource deeper in the graph is refused when the layouts are known, and by the loader (ATOMIC_PLAIN).
+fn atomic_storable(value: &ty::Ty, plain_object: &dyn Fn(ty::ObjectId) -> bool) -> bool {
+    use ty::Ty as T;
+    let storable = |value: &ty::Ty| atomic_storable(value, plain_object);
+    match value {
+        T::Int | T::Str | T::Bool | T::Byte | T::Char | T::Float | T::Rat | T::Range | T::Handle(_) => true,
+        T::Array(item) => storable(item),
+        T::Map(key, item) => storable(key) && storable(item),
+        T::Object(object, args) => plain_object(*object) && args.iter().all(storable),
+        T::Role(_, args) | T::Variant(_, args) => args.iter().all(storable),
+        T::Enum(_) => true,
+        _ => false,
+    }
+}
+
 /// A role's declaration name in the OIR-2 module, as `Declarations::new` gives it.
 pub(super) fn role_declaration_name(module: &str, name: &str) -> String {
     if name.contains('<') {

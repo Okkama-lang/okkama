@@ -20,6 +20,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Cell and Atomic over other closed plain data run on Champ (#778).**
+  After #764 the producer still refused Atomic/Cell over maps, variants of
+  plain objects, arrays of native handles or of plain roles and generic role
+  instances. Such a value now registers `async.atomic.Atomic_t_<type>`: its
+  operations name the value type, the storage holds it and the closed
+  flag, and an array of role values carries its deps as own elaborates it.
+  The SPB 17 loader admits it only as closed plain data by its whole graph
+  (`ATOMIC_PLAIN`); the producer refuses a value that may reach a resource
+  by name. Futures stay out (D25). `L04.fakes.failing-assertion` runs; the
+  other cases stop next on #780, #781, the allocation checker
+  (`L09.db.row-readers`), `spawn` (`L08.db.query-lifetime`) and Futures in
+  arrays (`L11.sqlite.prepared-pool-query`).
 - **A holder of action values is no identity when their closures own
   nothing (#723).** Own classified a function type by the runtime-managed
   dictionary of its open calls, so any object that held an action value

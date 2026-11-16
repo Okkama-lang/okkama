@@ -192,3 +192,41 @@ main() is int {
     0;
 }"#, "9\n10\n14\n");
 }
+
+/// Cells over other closed plain data (#778): a map, a variant of a plain object and an array of plain role values.
+/// Tomato prints the same.
+#[test]
+fn cells_hold_maps_variants_and_role_arrays() {
+    expect_output(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Shape { area() is int; }
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+}
+
+main() is int {
+    let out = Stdout();
+    let counts = Cell(["a": 1]);
+    counts.replace(["a": 1, "b": 2]);
+    out.writeln(counts.value().size().string());
+    let found is Maybe<Square> = Maybe.none;
+    let maybe = Cell(found);
+    maybe.replace(Maybe.some(Square(side: 4)));
+    match maybe.value() {
+        case Maybe.some(square) { out.writeln(square.area().string()); }
+        case Maybe.none { out.writeln("none"); }
+    }
+    let first is Shape = Square(side: 2);
+    let shapes = Cell([first]);
+    let second is Shape = Square(side: 3);
+    shapes.replace([first, second]);
+    out.writeln(shapes.value().size().string() + " " + shapes.value()[1].area().string());
+    0;
+}"#, "2\n16\n2 9\n");
+}

@@ -501,6 +501,12 @@ pub fn verify(p: &Program) -> Check {
             enforce(closed_plain(p, Type::Role(role)), "ATOMIC_ROLE",
                 "an Atomic holds a role whose implementations are not closed plain data")?;
         }
+        // An Atomic over other data (#778: maps, objects, variants, arrays of handles or roles) holds it only as
+        // closed plain data, by its whole graph.
+        if object.name.starts_with("async.atomic.Atomic_t_")
+            && let Some(&value) = object.layout.storage_fields.first() {
+            enforce(closed_plain(p, value), "ATOMIC_PLAIN", "an Atomic holds a value that is not closed plain data")?;
+        }
         // Natives name their handles by declaring module and name: one name, one declaration.
         enforce(!object.handle || handles.insert(object.name.as_str()), "HANDLE_NAME",
             "two native handle declarations share one name")?;

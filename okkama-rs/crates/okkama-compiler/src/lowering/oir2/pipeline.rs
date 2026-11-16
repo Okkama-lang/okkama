@@ -210,7 +210,9 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         };
         let atomic = declaration.name.strip_prefix("async.atomic.Atomic_")
             .filter(|_| builtin && fields.is_empty() && destroy.is_none())
-            .and_then(|suffix| atomic_role(module, suffix).or_else(|| s::p1::atomic_value(suffix)));
+            .and_then(|suffix| atomic_role(module, suffix).or_else(|| s::p1::atomic_value(suffix))
+                .or_else(|| super::native_summaries::atomic_operand(module, suffix)
+                    .and_then(|ty| sparrow_oir2::translate_type(module, ty).ok())));
         // A once slot is an ordinary Maybe field: the producer stores Maybe.none at construction and
         // once.load/once.store read and fill it (SPB 17 `Field::once` keeps it out of equality and keys).
         if builtin && atomic.is_none() {
@@ -322,12 +324,11 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
     // implementations reaches a resource is refused here by name (the loader checks it again, ATOMIC_ROLE).
     for (id, declaration) in module.declarations.iter() {
         if let Some(suffix) = declaration.name.strip_prefix("async.atomic.Atomic_")
-            && suffix.starts_with("role_")
+            && (suffix.starts_with("role_") || suffix.starts_with("t_"))
             && layouts.get(&id.as_u32()).is_some_and(|layout| layout.runtime.may_reach_resource)
         {
-            return Err(PipelineError::Phase { phase: "layout", message: format!("unsupported: Atomic/Cell over the \
-                role {} whose implementations reach a resource (P2.4 §4.8: plain roles only)",
-                &suffix["role_".len()..]) });
+            return Err(PipelineError::Phase { phase: "layout", message: format!("unsupported: Atomic/Cell over \
+                {suffix}, which may reach a resource (P2.4 §4.8: closed plain data only)") });
         }
     }
     Ok(layouts)
