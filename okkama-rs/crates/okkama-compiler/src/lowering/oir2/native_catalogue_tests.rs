@@ -1,7 +1,8 @@
-//! The general synchronous native ABI and Atomic storage contracts of the compiler catalogue (#569 C7).
+//! The general native ABI (#569 C7; async natives #601 N1) and Atomic storage contracts of the compiler catalogue.
 use super::native_summaries::{atomic_value, contract};
 use crate::oir2 as ir;
 use okkama_sparrow::abi::{self, catalogue};
+use okkama_sparrow::spb17 as s;
 
 fn builder() -> ir::ModuleBuilder {
     ir::ModuleBuilder::new("app", ir::Profile::High)
@@ -54,7 +55,7 @@ fn signature(params: Vec<ir::TypeId>, results: Vec<ir::TypeId>) -> ir::Signature
 #[test]
 fn every_admitted_table_native_has_a_data_call_boundary_contract() {
     let mut builder = builder();
-    let (mut admitted, mut rejected) = (0, 0);
+    let (mut admitted, mut rejected, mut drivers) = (0, 0, 0);
     for &native in abi::Native::ALL {
         let signature = declared(&mut builder, native);
         let result = contract(builder.module(), native.symbol(), true, &signature);
@@ -62,8 +63,15 @@ fn every_admitted_table_native_has_a_data_call_boundary_contract() {
             Ok(_) => {
                 let summary = result.unwrap_or_else(|error| panic!("{}: {}", native.symbol(), error.message));
                 assert_eq!(summary.entry_kind, ir::EntryKind::CallBoundary);
-                assert_eq!(summary.contract.failures, vec![ir::FailureKind::Program, ir::FailureKind::Native]);
-                assert!(!summary.contract.suspends && !summary.contract.async_destroy);
+                // An async native's contract is its driver's body summary (#601 N1): it suspends and can be cancelled.
+                let asynchronous = native.signature().is_async;
+                let mut failures = vec![ir::FailureKind::Program, ir::FailureKind::Native];
+                if asynchronous {
+                    failures.push(ir::FailureKind::Cancelled);
+                    drivers += 1;
+                }
+                assert_eq!(summary.contract.failures, failures);
+                assert!(summary.contract.suspends == asynchronous && !summary.contract.async_destroy);
                 assert!(summary.parameters.iter().all(|parameter| {
                     parameter.convention == ir::FreshConvention::Borrow && parameter.retention.is_none()
                         && parameter.deps.is_empty()
@@ -81,6 +89,8 @@ fn every_admitted_table_native_has_a_data_call_boundary_contract() {
     }
     assert_eq!(admitted + rejected, abi::Native::ALL.len());
     assert!(admitted > 0 && rejected > 0);
+    // #601 N1: the 51 async natives of std `runtime/`.
+    assert_eq!(drivers, 51);
 }
 
 #[test]
@@ -123,9 +133,10 @@ fn rejected_table_natives_name_their_reason() {
     let module = builder.module();
     let error = contract(module, "runtime/debug@1::data_dump/1", true, &signature(vec![any], vec![string]));
     assert!(error.unwrap_err().message.contains("trusted intrinsic bridge"));
-    let error = contract(module, "runtime/application@1::terminal_standard/1", true,
-        &signature(vec![int], vec![terminal]));
-    assert!(error.unwrap_err().message.contains("asynchronous"));
+    // #601 N1: an async native is admitted with its driver's body summary.
+    let summary = contract(module, "runtime/application@1::terminal_standard/1", true,
+        &signature(vec![int], vec![terminal])).unwrap();
+    assert!(summary.contract.suspends && summary.contract.failures.contains(&ir::FailureKind::Cancelled));
 }
 
 #[test]
@@ -235,4 +246,107 @@ fn atomic_rejects_unregistered_values_and_operations() {
     assert!(error.unwrap_err().message.contains("unknown Atomic operation"));
     let error = contract(module, "okkama.atomic.Atomic.value$range", false, &signature(vec![object], vec![value]));
     assert!(error.unwrap_err().message.contains("unsupported Atomic value"));
+}
+
+// --- #601 N1: async natives in the producer and through the pipeline ----------------------------------------------
+
+/// `SystemClock.wait` awaits the async native `sleep_nanoseconds` (std `time/clock`).
+const SLEEP: &str = concat!(
+    "module app; import \"time/clock\" take SystemClock; import \"time/duration\" take Duration; ",
+    "async main() is int { await SystemClock().wait(Duration(milliseconds: 1)); 0; }",
+);
+const SLEEP_SYMBOL: &str = "runtime/time@1::sleep_nanoseconds/1";
+
+fn async_native<'m>(module: &'m ir::Module, name: &str) -> (ir::FuncId, &'m ir::Function) {
+    module.functions.iter().find(|(_, function)| function.attrs.iter().any(|attr| {
+        matches!(attr, ir::FunctionAttr::Extern(found) if found == name)
+    })).unwrap_or_else(|| panic!("{name} is declared"))
+}
+
+#[test]
+fn n1_an_async_native_is_a_bodyless_async_extern_called_as_an_async_action() {
+    let module = super::tests::lower_std(SLEEP).unwrap_or_else(|error| panic!("{error}"));
+    super::tests::verify_high(&module, SLEEP);
+    let (id, function) = async_native(&module, SLEEP_SYMBOL);
+    // D22: `[async, extern]`, no body, the High creation envelope and the catalogue's body summary.
+    assert!(function.body.is_none() && function.attrs.contains(&ir::FunctionAttr::Async));
+    assert_eq!(function.summary, None);
+    let body = module.summaries.get(function.async_body_summary.unwrap()).unwrap();
+    assert!(body.contract.suspends);
+    assert_eq!(body.contract.failures, [ir::FailureKind::Program, ir::FailureKind::Native, ir::FailureKind::Cancelled]);
+    let creation = module.summaries.get(function.async_creation_summary.unwrap()).unwrap();
+    assert!(!creation.contract.suspends, "creating a driver's Future runs nothing");
+    // The call is an ordinary async call (a direct call whose result is the Future), never `call.native`.
+    let mut direct = 0;
+    for (_, caller) in module.functions.iter() {
+        let Some(body) = &caller.body else { continue };
+        for (_, instruction) in body.insts.iter() {
+            match &instruction.op {
+                ir::Operation::Call(ir::CallOp::Direct { function, .. }) if *function == id => direct += 1,
+                ir::Operation::Call(ir::CallOp::Native { function, .. }) => assert_ne!(*function, id),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(direct, 1);
+}
+
+#[test]
+fn n1_an_async_native_builds_to_an_spb17_driver_with_an_empty_inputs_packet() {
+    let high = super::tests::lower_std(SLEEP).unwrap_or_else(|error| panic!("{error}"));
+    let bytes = super::pipeline::compile_high_with(high, ir::verify::VerifyMode::Structural)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let program = s::decode(&bytes).unwrap();
+    let contracts = s::p1::P1Contracts::new(&program.objects).unwrap();
+    s::verify_load(&program, &contracts).unwrap_or_else(|error| panic!("{error}"));
+    let (index, function) = program.functions.iter().enumerate().find(|(_, function)| {
+        function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref()) == Some(SLEEP_SYMBOL)
+    }).unwrap();
+    // The trusted driver of the table (`p1`): its string argument in its register, no service, NATIVE_FAILURES.
+    let mut named = function.clone();
+    named.symbol = SLEEP_SYMBOL.into();
+    assert_eq!(Some(&named), contracts.native(SLEEP_SYMBOL));
+    assert_eq!((&function.entry_abi, function.registers.as_slice(), function.results.as_slice()),
+        (&s::EntryAbi::AsyncExternal, &[s::Type::Str][..], &[s::Type::Bool][..]));
+    assert_eq!(function.proofs.entry.as_ref().unwrap().failures, s::p1::NATIVE_FAILURES);
+    let created = program.functions.iter().flat_map(|function| &function.code).any(|instruction| matches!(
+        instruction, s::Instruction::Champ { op: s::Opcode::FutureNew, arguments, .. }
+            if arguments.contains(&s::Argument::Entry(index as u32))));
+    assert!(created, "fut.new names the driver");
+}
+
+#[test]
+fn n1_an_async_native_must_be_an_async_native_of_the_table() {
+    // A symbol outside the table has no driver (a synchronous one takes the unresolved-provider adapter).
+    let source = "module app; native async later(n is int) is int; async main() is int { await later(1); }";
+    let error = super::tests::lower_std(source).unwrap_err();
+    assert!(error.to_string().contains("has no driver"), "{error}");
+    // The catalogue: an async native's declaration is `[async]` exactly when the table's native is async.
+    type Types = fn(&mut ir::ModuleBuilder) -> (Vec<ir::TypeId>, ir::TypeId);
+    let declare = |name: &str, types: Types, asynchronous: bool| {
+        let mut builder = builder();
+        let (params, result) = types(&mut builder);
+        let mut attrs = vec![ir::FunctionAttr::Extern(name.into())];
+        if asynchronous {
+            attrs.insert(0, ir::FunctionAttr::Async);
+        }
+        builder.declare_function(ir::Function {
+            symbol: "f".into(), signature: signature(params, vec![result]), attrs, summary: None,
+            type_params: vec![], body: None, loc: None, async_creation_summary: None, async_body_summary: None,
+        }).unwrap();
+        super::native_summaries::P1NativeSummaries::for_module(builder.module()).map(|_| ())
+    };
+    let sleep: Types = |builder| {
+        (vec![builder.intern_type(ir::Type::Str).unwrap()], builder.intern_type(ir::Type::Bool).unwrap())
+    };
+    let hex: Types = |builder| {
+        let byte = builder.intern_type(ir::Type::Byte).unwrap();
+        (vec![builder.intern_type(ir::Type::Array(byte)).unwrap()], builder.intern_type(ir::Type::Str).unwrap())
+    };
+    assert!(declare(SLEEP_SYMBOL, sleep, true).is_ok());
+    assert!(declare("runtime/hex@1::hex_encode/1", hex, false).is_ok());
+    for (name, types, asynchronous) in [(SLEEP_SYMBOL, sleep, false), ("runtime/hex@1::hex_encode/1", hex, true)] {
+        let error = declare(name, types, asynchronous).unwrap_err();
+        assert!(error.message.contains("async differs from the runtime table"), "{name}: {}", error.message);
+    }
 }

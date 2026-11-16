@@ -741,6 +741,15 @@ fn accept_inputs(runtime: &mut Runtime, offered: Packet, holder: HolderId) -> Pa
     moved
 }
 
+/// Whether `function` is an async native of the runtime table: an `AsyncExternal` with a canonical native symbol
+/// (its map adapter included). The std async primitives' drivers are not.
+fn native_driver(runtime: &Runtime, function: usize) -> bool {
+    let source = &runtime.champ.machine.as_ref().expect("Champ program").source;
+    source.functions.get(function).is_some_and(|entry| entry.entry_abi == s::EntryAbi::AsyncExternal
+        && entry.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())
+            .is_some_and(super::machine::native_symbol))
+}
+
 /// `fut.new` (SPB 64), class G (draft 3 §§2.4, 14.4). The frame, its cache record and its emergency failure are
 /// allocated before any input is accepted: until Normal the inputs packet and the owner state stay with the
 /// caller. Acceptance moves the packet's runs to the Future's inputs holder and writes continuation 0, then
@@ -765,6 +774,15 @@ pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn,
             .ok_or_else(|| error("fut.new of a function that is not async"))?;
         if map.inputs() != args.len() {
             return Err(error("fut.new argument count"));
+        }
+        // Ruling PR-N (#601 N1): a native driver takes plain data and handles, so its inputs packet is empty,
+        // service entries included. The loader proves that it holds no resource key; an absorbed duty is a
+        // service entry, which its inventory does not count. This guard backs both, as `p1::invoke` backs the
+        // synchronous P1 boundary.
+        if native_driver(runtime, io.entry as usize) && (offered.words().next().is_some()
+            || !offered.services.is_empty())
+        {
+            return Err(error("fut.new: a native driver's inputs packet received obligations (PR-N)"));
         }
         let holder = runtime.champ_new_holder()?;
         for run in offered.runs() {

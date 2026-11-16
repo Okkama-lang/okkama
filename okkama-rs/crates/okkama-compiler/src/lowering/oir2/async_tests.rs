@@ -435,13 +435,13 @@ fn oir2_v5_async_destroy_keeps_its_diagnostic() {
 }
 
 #[test]
-fn oir2_v5_async_native_keeps_its_diagnostic() {
-    assert_names(
-        concat!("module app; import \"runtime/time\" take sleep_nanoseconds; ",
-            "async main() is int { await sleep_nanoseconds(\"1\"); 0; }"),
-        "async native runtime/time@1::sleep_nanoseconds/1 (P2.5 slice N1, D22)",
-        None,
-    );
+fn oir2_n1_an_async_native_without_a_driver_names_it() {
+    // #601 N1: async natives of the runtime table lower (`native_catalogue_tests`); one outside it has no driver,
+    // and its declaration is named at its source location.
+    let source = "module app; native async later(n is int) is int; async main() is int { await later(1); }";
+    let (message, span) = diagnostic(source);
+    assert!(message.contains("::later/1 has no driver"), "{message}");
+    assert!(source[span.start as usize..span.end as usize].starts_with("native async later"), "{message}");
 }
 
 /// #601 Q1: the std async primitives lower (`drivers`); the runtime intrinsics of channels (slice Q2) and of

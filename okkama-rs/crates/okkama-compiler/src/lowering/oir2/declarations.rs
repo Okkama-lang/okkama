@@ -667,15 +667,16 @@ impl Declarations {
             let module = &reg.modules[native.module];
             let name = format!("{}@{}::{}/{}", module.name, module.program.module.major(),
                 native.name, native.params.len());
-            if native.is_async {
-                return Err(super::asynchronous::async_native(&name, native.decl.span));
-            }
             if native.variadic {
-                return Err(LowerError::unsupported(native.decl.span, "async or variadic native"));
+                return Err(LowerError::unsupported(native.decl.span, "variadic native"));
             }
             let params = native.params.iter().map(|(_, ty)| this.ty(ty, native.decl.span)).collect::<Result<_>>()?;
             let results = native.result.iter().map(|ty| this.ty(ty, native.decl.span)).collect::<Result<_>>()?;
-            let function = this.external(&name, true, params, results, vec![], native.decl.span)?;
+            let function = if native.is_async {
+                this.async_native(&name, params, results, native.decl.span)?
+            } else {
+                this.external(&name, true, params, results, vec![], native.decl.span)?
+            };
             this.natives.insert(index, function);
         }
         super::roles::declare_witnesses(&mut this, analysis)?;
@@ -716,6 +717,9 @@ impl Declarations {
         let signature = ir::Signature { params, results, ownership_abi: ir::OwnershipAbi::Unelaborated };
         let summary = super::native_summaries::contract(self.builder.module(), name, native, &signature)
             .map_err(|error| LowerError::unsupported(span, error.message))?;
+        if summary.contract.suspends {
+            return Err(LowerError::invalid(span, format!("{name}: the runtime table's native is async (D22)")));
+        }
         let summary = Some(self.builder.add_summary(summary)?);
         let objects = if native { vec![] } else {
             super::native_summaries::intrinsic_objects(self.builder.module(), name, &signature)
@@ -728,6 +732,37 @@ impl Declarations {
             symbol: name.replace('/', ".").replace('@', ".v").replace('$', "#"), signature, attrs, summary,
             type_params: vec![], body: None, loc: None,
             async_creation_summary: None, async_body_summary: None,
+        })?)
+    }
+
+    /// An async native of the runtime table (#601 N1, async ABI D22): `[async, extern]` without a body. Its call is an
+    /// ordinary async call that creates a Future in the `external` environment, run by the native's driver. Its
+    /// creation summary is the High envelope and its body summary the catalogue's (`suspends`, `cancelled` among its
+    /// failures), as for an async intrinsic of the std async primitives. A symbol outside the runtime table has no
+    /// driver, so it is refused here.
+    fn async_native(&mut self, name: &str, params: Vec<ir::TypeId>, results: Vec<ir::TypeId>, span: Span)
+        -> Result<ir::FuncId>
+    {
+        let signature = ir::Signature { params, results, ownership_abi: ir::OwnershipAbi::Unelaborated };
+        let body = super::native_summaries::contract(self.builder.module(), name, true, &signature)
+            .map_err(|error| LowerError::unsupported(span, error.message))?;
+        if !body.contract.suspends {
+            return Err(super::asynchronous::async_native(name, span));
+        }
+        let module = self.builder.raw_mut();
+        if !module.requires.contains(&ir::Feature::Async) {
+            module.requires.push(ir::Feature::Async);
+        }
+        let outcome = signature.results.first().copied();
+        let future = self.builder.intern_type(ir::Type::Future(outcome))?;
+        let creation = super::asynchronous::creation_envelope(signature.params.len(), future);
+        let creation = self.builder.add_summary(creation)?;
+        let body = self.builder.add_summary(body)?;
+        Ok(self.builder.declare_function(ir::Function {
+            symbol: name.replace('/', ".").replace('@', ".v").replace('$', "#"), signature,
+            attrs: vec![ir::FunctionAttr::Async, ir::FunctionAttr::Extern(name.into())], summary: None,
+            type_params: vec![], body: None, loc: None,
+            async_creation_summary: Some(creation), async_body_summary: Some(body),
         })?)
     }
 

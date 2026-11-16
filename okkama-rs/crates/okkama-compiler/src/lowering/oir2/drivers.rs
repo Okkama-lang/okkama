@@ -33,76 +33,25 @@ const OBJECTS: [(&str, &str); 9] = [
 /// The OIR declaration of the Event cell, whose runtime layout replaces its source field.
 pub(super) const EVENT: &str = okkama_sparrow::spb17::drivers::EVENT;
 
-/// One catalogue entry: parameter and result types by name, its entry kind, failures, and whether it is async.
-struct Entry {
-    params: &'static [&'static str],
-    results: &'static [&'static str],
-    observation: bool,
-    failures: &'static [ir::FailureKind],
-    asynchronous: bool,
-    /// The objects the runtime creates or throws (`Self` first for a constructor), by declaration name.
-    objects: &'static [&'static str],
-}
-
-const LOCK: &str = "async.lock.Lock";
-const GUARD: &str = "async.lock.LockGuard";
-const SEMAPHORE: &str = "async.semaphore.Semaphore";
-const PERMIT: &str = "async.semaphore.Permit";
-const BARRIER: &str = "async.barrier.Barrier";
-const BARRIER_STATE: &str = "async.barrier.BarrierState";
-const BROKEN_BARRIER: &str = "async.barrier.BrokenBarrier";
-const CANCELLATION: &str = "async.cancellation.Cancellation";
-const TOKEN: &str = "async.cancellation.CancellationToken";
-const CANCELLING: &str = "async.cancellation.Cancelling";
-
+use okkama_sparrow::spb17::drivers::{self as catalogue, Abi, Row};
 use ir::FailureKind::{Cancelled, Program, Thrown};
 
-/// The catalogue (Tomato `intrinsics.rs` and `drivers.rs`). Program failures are the runtime's refusal of an
-/// object it did not create (Tomato's "Invalid async event"); they pass every catch.
-fn entry(name: &str) -> Option<Entry> {
-    let sync = |params, results, observation, failures, objects| Entry {
-        params, results, observation, failures, asynchronous: false, objects,
-    };
-    let driver = |params, results, failures, objects| Entry {
-        params, results, observation: false, failures, asynchronous: true, objects,
-    };
-    Some(match name {
-        "okkama.event.Event.new" => sync(&[], &[EVENT], false, &[], &[EVENT]),
-        "okkama.event.Event.new_ready" => sync(&["bool"], &[EVENT], false, &[], &[EVENT]),
-        "okkama.event.Event.set" => sync(&[EVENT], &[], true, &[Program], &[]),
-        "okkama.event.Event.ready" => sync(&[EVENT], &["bool"], true, &[Program], &[]),
-        "okkama.event.Event.wait" => driver(&[EVENT], &[EVENT], &[Program, Cancelled], &[]),
-        "okkama.lock.Lock.new" => sync(&[], &[LOCK], false, &[], &[LOCK]),
-        "okkama.lock.Lock.locked" => sync(&[LOCK], &["bool"], true, &[Program], &[]),
-        "okkama.lock.Lock.guard" => driver(&[LOCK], &[GUARD], &[Program, Cancelled], &[GUARD]),
-        "okkama.lock.LockGuard.closed" => sync(&[GUARD], &["bool"], true, &[Program], &[]),
-        "okkama.lock.LockGuard.close" => sync(&[GUARD], &[], true, &[Program], &[]),
-        "okkama.semaphore.Semaphore.permits" => sync(&[SEMAPHORE], &["int"], true, &[Program], &[]),
-        "okkama.semaphore.Semaphore.permit" => driver(&[SEMAPHORE], &[PERMIT], &[Program, Cancelled], &[PERMIT]),
-        "okkama.semaphore.Permit.closed" => sync(&[PERMIT], &["bool"], true, &[Program], &[]),
-        "okkama.semaphore.Permit.close" => sync(&[PERMIT], &[], true, &[Program], &[]),
-        "okkama.barrier.Barrier.wait" => {
-            driver(&[BARRIER], &["int"], &[Thrown, Program, Cancelled], &[BROKEN_BARRIER])
-        }
-        "okkama.barrier.Barrier.state" => sync(&[BARRIER], &[BARRIER_STATE], false, &[Program], &[BARRIER_STATE]),
-        "okkama.barrier.Barrier.abort" | "okkama.barrier.Barrier.reset" => {
-            sync(&[BARRIER], &[], true, &[Program], &[])
-        }
-        "okkama.barrier.BarrierState.parties" | "okkama.barrier.BarrierState.waiters"
-            | "okkama.barrier.BarrierState.generation" => sync(&[BARRIER_STATE], &["int"], true, &[Program], &[]),
-        "okkama.barrier.BarrierState.broken" => sync(&[BARRIER_STATE], &["bool"], true, &[Program], &[]),
-        "okkama.cancellation.Cancellation.new" => sync(&[], &[CANCELLATION], false, &[], &[CANCELLATION]),
-        "okkama.cancellation.Cancellation.cancelling" => {
-            sync(&[CANCELLATION], &[CANCELLING], false, &[Program], &[TOKEN])
-        }
-        "okkama.cancellation.Cancellation.cancel" => sync(&[CANCELLATION], &[], true, &[Program], &[]),
-        "okkama.cancellation.CancellationToken.new" => sync(&[], &[TOKEN], false, &[], &[TOKEN]),
-        "okkama.cancellation.CancellationToken.requested" => sync(&[TOKEN], &["bool"], true, &[Program], &[]),
-        // A requested cancellation raises Cancelled at the check, as Tomato's `TokenCheck`.
-        "okkama.cancellation.CancellationToken.check" => sync(&[TOKEN], &[], true, &[Program, Cancelled], &[]),
-        "okkama.cancellation.CancellationToken.wait" => driver(&[TOKEN], &[CANCELLING], &[Program, Cancelled], &[]),
-        _ => return None,
-    })
+/// The catalogue entry `name`: the SPB 17 catalogue's row, the one source of the members, their failures and their
+/// deps (#774 D3). Program failures are the runtime's refusal of an object it did not create (Tomato's "Invalid
+/// async event"); they pass every catch.
+fn entry(name: &str) -> Option<&'static Row> {
+    catalogue::row_named(name)
+}
+
+/// The failures of a member, from its row's mask; a cancellation has no bit and is listed last.
+fn failures(row: &Row) -> Vec<ir::FailureKind> {
+    let bits = [(catalogue::THROWN, Thrown), (catalogue::PROGRAM, Program)];
+    let mut failures = bits.iter().filter(|(bit, _)| row.failures & bit != 0).map(|(_, kind)| *kind)
+        .collect::<Vec<_>>();
+    if row.cancels {
+        failures.push(Cancelled);
+    }
+    failures
 }
 
 /// Whether `name` is a catalogue entry.
@@ -112,7 +61,7 @@ pub(super) fn known(name: &str) -> bool {
 
 /// Whether the catalogue entry `name` is an async external (D22).
 pub(super) fn asynchronous(name: &str) -> bool {
-    entry(name).is_some_and(|entry| entry.asynchronous)
+    entry(name).is_some_and(|entry| entry.abi == Abi::Driver)
 }
 
 /// Whether a std object's runtime layout replaces its source fields: the Event cell.
@@ -183,7 +132,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, signature: &ir::Signatur
         return Err(error(format!("invalid Q1 signature for {name}")));
     }
     Ok(Some(ir::Summary {
-        entry_kind: if entry.observation {
+        entry_kind: if entry.abi == Abi::Observation {
             ir::EntryKind::ObservationAdmissionStaysCaller
         } else {
             ir::EntryKind::CallBoundary
@@ -199,7 +148,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, signature: &ir::Signatur
             provenance: ir::AdmissionProvenance::UnboundResult,
         }).collect(),
         contract: ir::CallContract {
-            results, failures: entry.failures.to_vec(), suspends: entry.asynchronous, async_destroy: false,
+            results, failures: failures(entry), suspends: entry.abi == Abi::Driver, async_destroy: false,
             publication: ir::Publication::Atomic, protocol: None,
         },
     }))
@@ -211,27 +160,16 @@ pub(super) fn objects(module: &ir::Module, name: &str) -> Result<Option<Vec<ir::
     let Some(entry) = entry(name) else {
         return Ok(None);
     };
-    entry.objects.iter().map(|object| {
+    entry.related.iter().map(|object| {
         module.declarations.iter().find_map(|(id, declaration)| (declaration.name == *object).then_some(id))
             .ok_or_else(|| error(format!("{name} requires the {object} descriptor")))
     }).collect::<Result<Vec<_>, _>>().map(Some)
 }
 
-/// The deps parameters own's elaboration gives a catalogue entry over its language parameters `params` (own's
-/// external signatures): one for each managed reference, which among these types is the Event cell (a builtin
-/// capability). The other objects of the catalogue are plain values without references. A member that is a role slot
-/// of its object is reached through an adapter of the slot's ABI, never named by a witness table (ruling PR-D, #773),
-/// so its receiver takes no deps.
-///
-/// The same rule builds the trusted SPB 17 entries (`okkama_sparrow::spb17::drivers::deps`): change both together.
-pub(super) fn deps(module: &ir::Module, params: &[ir::TypeId]) -> usize {
-    params.iter().filter(|&&ty| match module.types.get(ty) {
-        Ok(ir::Type::Object { decl, .. }) => module.declarations.get(*decl).is_ok_and(|declaration| {
-            matches!(declaration.kind, ir::DeclarationKind::Object { builtin: true, .. })
-        }),
-        Ok(ir::Type::Role { .. }) => true,
-        _ => false,
-    }).count()
+/// The deps parameters own's elaboration gives the catalogue entry `name`: the SPB 17 catalogue's count (#774 D3),
+/// one for each Event cell parameter.
+pub(super) fn deps(name: &str) -> usize {
+    entry(name).map_or(0, catalogue::deps)
 }
 
 #[cfg(test)]

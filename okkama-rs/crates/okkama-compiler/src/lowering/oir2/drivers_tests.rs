@@ -126,14 +126,32 @@ fn q1_deps_follow_own_for_role_slots() {
     );
     let module = lower_std(source).unwrap_or_else(|error| panic!("{error}"));
     let deps = |name| {
-        let (_, function) = module.functions.iter().find(|(_, function)| function.attrs.iter().any(|attr| {
+        assert!(module.functions.iter().any(|(_, function)| function.attrs.iter().any(|attr| {
             matches!(attr, ir::FunctionAttr::Intrinsic { name: found, .. } if found == name)
-        })).unwrap();
-        super::deps(&module, &function.signature.params)
+        })), "{name} is declared");
+        super::deps(name)
     };
     assert_eq!(deps("okkama.lock.LockGuard.close"), 0);
     assert_eq!(deps("okkama.event.Event.set"), 1);
     assert_eq!(deps("okkama.lock.Lock.locked"), 0);
+}
+
+#[test]
+fn q1_the_producer_reads_the_spb17_catalogue_rows() {
+    // #774 D3: one source. Every SPB 17 row is a producer entry with the row's ABI, failures and deps; the
+    // producer has no member of its own.
+    for row in s::drivers::CATALOGUE {
+        assert!(super::known(row.name), "{}", row.name);
+        assert_eq!(super::asynchronous(row.name), row.abi == s::drivers::Abi::Driver, "{}", row.name);
+        assert_eq!(super::deps(row.name), row.params.iter().filter(|&&param| param == s::drivers::EVENT).count());
+        let failures = super::failures(row);
+        assert_eq!(failures.contains(&ir::FailureKind::Thrown), row.failures & s::drivers::THROWN != 0);
+        assert_eq!(failures.contains(&ir::FailureKind::Program), row.failures & s::drivers::PROGRAM != 0);
+        // Every driver can be cancelled; of the synchronous members only the token's check raises Cancelled.
+        let cancels = row.abi == s::drivers::Abi::Driver || row.name == "okkama.cancellation.CancellationToken.check";
+        assert_eq!(failures.contains(&ir::FailureKind::Cancelled), cancels, "{}", row.name);
+    }
+    assert!(!super::known("okkama.channel.Channel.new"), "channels are slice Q2");
 }
 
 /// Builds `source` through the pipeline and loads it against the trusted catalogue.

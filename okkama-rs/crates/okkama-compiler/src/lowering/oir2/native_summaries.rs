@@ -24,7 +24,8 @@
 //! table's signature; any other canonical symbol takes the checked unresolved-provider adapter
 //! (see [`native_transport`]). Data and handles carry no ownership graph; failures are the provider's
 //! `NativeFailure` (Native) and the call's program failures (Program: missing provider, permission, #719).
-//! All entries are synchronous, with no async destroy, publication receipt or resource result.
+//! An async native of the table (#601 N1, D22) gets its driver's body summary: it also suspends and may be
+//! cancelled. No entry has an async destroy, a publication receipt or a resource result.
 //!
 //! Open sync callables and the opaque cleanup intrinsics (callables, #569 O1 and
 //! C3b; `any` boxes, C6) come from the runtime catalogue of `okkama-oir`; own and
@@ -78,10 +79,14 @@ impl P1NativeSummaries {
                     language.ownership_abi = ir::OwnershipAbi::Unelaborated;
                 }
                 let summary = contract(module, name, native, &language)?;
+                // An async native is exactly an async native of the runtime table (#601 N1).
+                if native && summary.contract.suspends != function.attrs.contains(&ir::FunctionAttr::Async) {
+                    return Err(error(format!("native {name}: async differs from the runtime table")));
+                }
                 if module.profile != ir::Profile::High {
                     let mut expected = language.clone();
                     let managed = if !native && super::drivers::known(name) {
-                        super::drivers::deps(module, &language.params)
+                        super::drivers::deps(name)
                     } else {
                         language.params.iter().filter(|ty| carries_deps(module, **ty)).count()
                     };
@@ -218,12 +223,19 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
     let string = || find(ir::Type::Str).ok_or_else(|| error("missing string"));
     let mut kind = ir::EntryKind::CallBoundary;
     let mut failures = vec![];
+    let mut suspends = false;
     let (params, results) = match (native, name) {
         (true, name) => {
-            native_transport(module, name, signature)?;
             // A provider refuses with its own `NativeFailure` or with a program failure of the call (a missing
             // provider, a refused permission), which passes every catch uncaught (language spec 9.5, #719).
             failures.extend([ir::FailureKind::Program, ir::FailureKind::Native]);
+            // An async native (#601 N1, D22): this is its body summary, the driver's. It suspends and can be
+            // cancelled; its inputs are plain data and handles, borrowed, and its result is plain data or a handle
+            // the provider registered (async ABI §4.3: no fresh identity).
+            if native_transport(module, name, signature)? {
+                failures.push(ir::FailureKind::Cancelled);
+                suspends = true;
+            }
             (signature.params.clone(), signature.results.clone())
         }
         (false, "okkama.Error.text") => {
@@ -323,7 +335,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             provenance: ir::AdmissionProvenance::UnboundResult,
         }).collect(),
         contract: ir::CallContract {
-            results, failures, suspends: false, async_destroy: false, publication: ir::Publication::Atomic,
+            results, failures, suspends, async_destroy: false, publication: ir::Publication::Atomic,
             protocol: None,
         },
     })
@@ -406,8 +418,11 @@ pub(super) fn atomic_operand(module: &ir::Module, suffix: &str) -> Option<ir::Ty
 /// canonical symbol has no provider in the table: the checked unresolved-provider adapter carries
 /// it when every type is data or a handle of its own module. Invocation then resolves the provider
 /// at run time and fails as a missing provider; this is not a frontend rejection.
+///
+/// Returns whether the table's native is asynchronous (#601 N1): a driver whose call creates a Future. A symbol
+/// outside the table is synchronous.
 pub(super) fn native_transport(module: &ir::Module, name: &str, signature: &ir::Signature)
-    -> Result<(), NativeSummaryError> {
+    -> Result<bool, NativeSummaryError> {
     use okkama_sparrow::abi::catalogue::{self, Admission, Symbol};
     let symbol = Symbol::parse(name).ok_or_else(|| error(format!("native symbol {name} is not canonical")))?;
     let handle_prefix = format!("{}.", symbol.module.replace('/', "."));
@@ -429,7 +444,7 @@ pub(super) fn native_transport(module: &ir::Module, name: &str, signature: &ir::
             if !params || !results {
                 return Err(error(format!("native {name} does not match the runtime table signature")));
             }
-            Ok(())
+            Ok(contract.abi == catalogue::AbiKind::Async)
         }
         Err(Admission::Unknown) => {
             let transport = signature.params.iter().chain(&signature.results)
@@ -437,7 +452,7 @@ pub(super) fn native_transport(module: &ir::Module, name: &str, signature: &ir::
             if symbol.arity != signature.params.len() || signature.results.len() > 1 || !transport {
                 return Err(error(format!("native {name} has no provider contract and no data or handle transport")));
             }
-            Ok(())
+            Ok(false)
         }
         Err(rejection) => Err(error(format!("native {name}: {rejection}"))),
     }
