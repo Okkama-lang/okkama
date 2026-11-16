@@ -296,6 +296,10 @@ pub(crate) fn objects(module: &o::Module, layouts: &dyn LayoutRegistry) -> Resul
                 o::DeclarationKind::Enum { cases, is_error: false } => cases.iter().map(|case| {
                     format!("{}.{case}", declaration.name.rsplit('.').next().unwrap())
                 }).collect(),
+                // A plain variant names its cases too: an Error payload shows `Shape.rect(2, 3)` (#763).
+                o::DeclarationKind::Variant { cases, is_error: false } => cases.iter().map(|case| {
+                    format!("{}.{}", variant_name(&declaration.name), case.name)
+                }).collect(),
                 _ => vec![],
             },
         });
@@ -1545,6 +1549,14 @@ fn complete_codegen_roots(function: &mut s::Function) -> Result<(), GenerateErro
         pc, locations: locations.into_iter().collect(),
     }).collect();
     Ok(())
+}
+
+/// A variant's name as Tomato's texts give it: without its module, or its generic instance after `::` (#763).
+fn variant_name(name: &str) -> &str {
+    match name.rsplit_once("::") {
+        Some((_, instance)) => instance,
+        None => name.rsplit('.').next().unwrap_or(name),
+    }
 }
 #[cfg(test)]
 mod ordering_tests;

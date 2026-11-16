@@ -20,6 +20,50 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A loop scope of a resource holder closes on Champ (#753).** The SPB 17
+  loader (`D18_EXECUTOR`) checks a merge close's envelope against the
+  destroys its inventory may see. When it cannot reconstruct the inventory
+  it assumes every destroy the function's inputs and callees reach. A
+  packet carried around a loop (a `map` or `for` that builds an array,
+  through builder journals) is a cycle, which has no finite inventory, so a
+  method of an object holding a resource with a failing destroy was refused
+  ("fs.file.FileBytes.bytes#2 close 4: merge envelope 0 omits destroy
+  failures 11"), though own's empty envelope was right. Neither own nor
+  codegen was wrong: the loader's evidence was too weak. It now proves
+  emptiness flow-insensitively: a location may hold a key only when a
+  definition introduces one (a fresh call result, a committed resource, an
+  opaque input or an unrecognised producer) or passes one on, so cycles of
+  copies and journals stay empty. The proof never names a key, so it cannot
+  certify a direct plan. `L10.fs.missing-file` and
+  `L12.malformed-boundary-inputs` run on Champ.
+- **An Error payload of a plain variant runs on Champ (#763).** The SPB 17
+  P1 contract admitted an Error enum's payload of a variant type only when
+  every case of the variant was an Error case, and its test refused "a plain
+  variant", so `L05.variants.case-layouts` stopped at load with "invalid P1
+  plain Error layout". The language spec admits payload enums whose payloads
+  satisfy the same rule and shows a nested variant by its own text, as
+  Tomato does: `Fault.major(1, Shape.rect(2, 3))`. A plain variant now names
+  its cases in SPB 17 (`enum_names`, one per case; `ENUM_NAMES` admits it),
+  the P1 contract admits a named plain variant whose cases show their
+  payloads (recursively, a recursive variant included), and Champ's
+  `Error.text` writes the case and its payload. A plain variant without
+  names, with names that miss a case, or with a payload the text cannot
+  show (a `char`) is still refused.
+- **The bound-flag check of a constructor field is linked to the field by
+  its flag, not by its message (#770).** The verifier's construction rule
+  (A2) and the producer's construction self-check took a field as
+  initialized behind any `cond` whose failing edge trapped with that field's
+  `not initialized` message, so a check of another flag passed. Both now
+  compute each field's bound flags: values whose every definition is
+  `const false`, a `const true` that follows a write of the field in its
+  block (`obj.init` on the early self; also `stage` for the producer), or a
+  block parameter whose every incoming argument is such a flag; unwind edges
+  pass their leading parameters. The `cond` must read the field's flag; the
+  trap must still be `TrapCode::Unbound`. The producer's undef propagation
+  now follows unwind and catch edges too, so a field bound inside a `try`
+  whose body fails first gets its check and fails as on Tomato instead of
+  completing with an undef field. Verifier fixtures: a check of another
+  field's flag and a check of an ordinary bool are refused.
 - **Tomato: `e.text()` on a cancellation caught as `Error` no longer
   crashes (#744).** A catch of the Error role binds a `Cancelled` value,
   which Sparrow builds from the system `Cancelled` object; the OIR-1

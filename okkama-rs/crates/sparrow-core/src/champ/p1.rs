@@ -161,7 +161,29 @@ pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -
         let tag = runtime.small_or_big(runtime.heap.field(object, 0)).expect("enum tag") as usize;
         return declaration.error_cases[tag].clone();
     }
-    let mut text = declaration.error_cases[0].clone();
+    case_text(runtime, source, object, declaration.error_cases[0].clone())
+}
+
+/// The text of a case object of a plain variant (`variant`), by the variant's case names (#763): `Shape.dot`,
+/// or `Shape.rect(2, 3)` with its payload shown as an Error payload is.
+fn variant_text(runtime: &Runtime, source: &s::Program, variant: u32, object: Word) -> String {
+    let descriptor = heap::payload(runtime.heap.header_of(object));
+    if !source.objects[descriptor as usize].error_cases.is_empty() {
+        return error_text(runtime, source, object);
+    }
+    let cases = &source.objects[variant as usize];
+    let case = cases.variant_cases.iter().position(|&case| case == descriptor).expect("a case of the variant");
+    let name = cases.enum_names[case].clone();
+    if source.objects[descriptor as usize].fields.is_empty() {
+        return name;
+    }
+    case_text(runtime, source, object, name)
+}
+
+/// `name(payload, …)`: the payload fields of a case object in declaration order.
+fn case_text(runtime: &Runtime, source: &s::Program, object: Word, name: String) -> String {
+    let declaration = &source.objects[heap::payload(runtime.heap.header_of(object)) as usize];
+    let mut text = name;
     text.push('(');
     for (index, field) in declaration.fields.iter().enumerate() {
         if index != 0 {
@@ -178,7 +200,7 @@ pub(super) fn error_text(runtime: &Runtime, source: &s::Program, object: Word) -
             s::Type::Byte => text.push_str(&word.to_string()),
             s::Type::Float => text.push_str(&crate::scalar::float_text(f64::from_bits(word))),
             s::Type::Rat => text.push_str(&runtime.rational(word).to_string()),
-            s::Type::Variant(_) => text.push_str(&error_text(runtime, source, word)),
+            s::Type::Variant(variant) => text.push_str(&variant_text(runtime, source, variant, word)),
             s::Type::Object(id) if !source.objects[id as usize].error_cases.is_empty() => {
                 text.push_str(&error_text(runtime, source, word));
             }

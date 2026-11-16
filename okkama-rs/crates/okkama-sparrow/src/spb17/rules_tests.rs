@@ -349,6 +349,20 @@ fn enum_names_follow_the_cases_of_a_plain_enum() {
     assert_eq!(verify(&error).unwrap_err().rule, "ENUM_NAMES");
 }
 
+/// A plain variant names its cases, one per case, for the text of an Error payload (#763).
+#[test]
+fn a_plain_variant_names_each_case_or_none() {
+    let variant = |names: &[&str]| {
+        let mut objects = error_variant(false);
+        objects[0].enum_names = names.iter().map(|name| (*name).into()).collect();
+        Program { objects, ..Program::default() }
+    };
+    verify(&variant(&["V.a", "V.b"])).unwrap();
+    verify(&variant(&[])).unwrap();
+    assert_eq!(verify(&variant(&["V.a"])).unwrap_err().rule, "ENUM_NAMES");
+    assert_eq!(verify(&variant(&["V.a", "V.b", "V.c"])).unwrap_err().rule, "ENUM_NAMES");
+}
+
 // ---- typing of deps.empty, range.len, fail.caused and Move Object -> Error ----
 
 fn deps_empty(output: ServiceKind) -> Program {

@@ -11,8 +11,6 @@ struct Creation<'a> {
     layout: &'a [Field],
     pending_layout: bool,
     aliases: BTreeSet<ValueId>,
-    /// The object's name as a failure message gives it: without its module, or its generic instance.
-    name: &'a str,
 }
 fn undef(body: &Body, value: ValueId) -> bool {
     body.values.get(value).is_ok_and(|v| match v.def {
@@ -42,13 +40,9 @@ pub(super) fn check(module: &Module, function: FuncId, body: &Body, state: &mut 
         seeds.extend(&origin_values);
         let pending_layout = layout.last().is_some_and(|field| field.name == "$pending"
             && module.types.get(field.ty) == Ok(&Type::Bool));
-        let name = match decl.name.rsplit_once("::") {
-            Some((_, instance)) => instance,
-            None => decl.name.rsplit('.').next().unwrap_or(&decl.name),
-        };
         let mut creation = Creation {
             origin, initial: fields, status: *construction, layout, pending_layout,
-            aliases: origin_values.into_iter().collect(), name,
+            aliases: origin_values.into_iter().collect(),
         };
         let mut changed = true;
         while changed {
@@ -97,6 +91,7 @@ fn analyze(
     // 0 = this origin absent, 1 = uninitialized/incomplete, 2 = initialized/completed.
     // Union ignores absent alternatives; each SSA phi is also checked for definite local origins.
     // The final cell is the construction state. Creation resets each incarnation.
+    let Some(flags) = field_flags(module, body, edges, c, state) else { return; };
     let mut inputs: Vec<Option<Vec<u8>>> = vec![None; body.blocks.len()];
     inputs[body.entry.as_u32() as usize] = Some(vec![0; width]);
     let mut queue = VecDeque::from([body.entry]);
@@ -136,7 +131,7 @@ fn analyze(
                 transfer(body, op, Origin::Invoke(block_id), c, &mut next, None);
             }
             if !edge.entry && next[c.layout.len()] == 1 {
-                for index in bound_behind(body, &block.term.kind, edge.target, c) {
+                for index in bound_behind(body, &block.term.kind, edge.target, &flags) {
                     next[index] = 2;
                 }
             }
@@ -230,30 +225,90 @@ fn transfer(
     if is_pending { values[c.layout.len()] = 2; }
 }
 /// The fields of an incomplete self that the `yes` edge of a bound-flag check into `target` proves initialized
-/// (A2, #746): the check's `no` target traps with `TrapCode::Unbound` and the program failure for that field,
-/// `Object "X" field "y" was not initialized`, directly or through empty `br` blocks (own splits the edges).
-/// The producer keeps a flag per field that a path may leave unbound and checks it before the completion, as
-/// Tomato checks its field flags after the body.
-fn bound_behind(body: &Body, term: &TermKind, target: BlockId, c: &Creation<'_>) -> Vec<usize> {
-    let TermKind::Cond { yes, no, .. } = term else { return vec![]; };
-    if yes.block != target || no.block == target { return vec![]; }
-    let Some(message) = unbound_trap(body, no.block) else { return vec![]; };
-    c.layout.iter().enumerate().filter(|(_, field)| {
-        *message == format!("Object \"{}\" field \"{}\" was not initialized", c.name, field.name)
-    }).map(|(index, _)| index).collect()
+/// (A2, #746, #770): the `cond` reads the flag of the field (`flags`), and its `no` target traps with
+/// `TrapCode::Unbound`, directly or through empty `br` blocks (own splits the edges). The producer keeps a flag per
+/// field that a path may leave unbound and checks it before the completion, as Tomato checks its field flags
+/// after the body.
+fn bound_behind(body: &Body, term: &TermKind, target: BlockId, flags: &[BTreeSet<ValueId>]) -> Vec<usize> {
+    let TermKind::Cond { condition, yes, no } = term else { return vec![]; };
+    if yes.block != target || no.block == target || !unbound_trap(body, no.block) { return vec![]; }
+    flags.iter().enumerate().filter(|(_, flag)| flag.contains(condition)).map(|(index, _)| index).collect()
 }
-/// The message of the `TrapCode::Unbound` trap that `block` reaches through empty `br` blocks, if it does.
-fn unbound_trap(body: &Body, mut block: BlockId) -> Option<&String> {
-    let mut seen = BTreeSet::new();
-    while seen.insert(block) {
-        let data = body.blocks.get(block).ok()?;
-        match &data.term.kind {
-            TermKind::Trap { code: TrapCode::Unbound, message } => return Some(message),
-            TermKind::Br(next) if data.insts.is_empty() => block = next.block,
-            _ => return None,
+/// The bound flags of each field of the incomplete self (A2, #770): the bool values whose every definition is
+/// `const false`, a `const true` that follows an `obj.init` of that field on the self in its block, or a block
+/// parameter whose every incoming edge passes a flag of the field. A `true` flag proves, on every path that
+/// carries it, that the field was initialized. `None` when the work budget is exhausted.
+fn field_flags(module: &Module, body: &Body, edges: &[super::graph::Edge], c: &Creation<'_>,
+    state: &mut State<'_>)
+    -> Option<Vec<BTreeSet<ValueId>>> {
+    let mut flags = vec![BTreeSet::new(); c.layout.len()];
+    for (_, block) in body.blocks.iter() {
+        let mut written = BTreeSet::new();
+        for &id in &block.insts {
+            if !state.step(1) { return None; }
+            let Ok(inst) = body.insts.get(id) else { continue; };
+            match &inst.op {
+                Operation::Core(CoreOp::ObjInit { object, field, .. }) if c.aliases.contains(object) => {
+                    written.insert(field.index as usize);
+                }
+                Operation::Const(Literal::Bool(value)) => {
+                    for (index, flag) in flags.iter_mut().enumerate() {
+                        if !*value || written.contains(&index) { flag.extend(inst.results.iter().copied()); }
+                    }
+                }
+                _ => {}
+            }
         }
     }
-    None
+    // A parameter is a candidate when every edge into its block passes an argument for each parameter.
+    let mut incoming: Vec<Vec<&super::graph::Edge>> = vec![vec![]; body.blocks.len()];
+    for edge in edges {
+        if let Some(slot) = incoming.get_mut(edge.target.as_u32() as usize) { slot.push(edge); }
+    }
+    let mut candidates = vec![];
+    for (id, block) in body.blocks.iter() {
+        let into = &incoming[id.as_u32() as usize];
+        // An unwind edge passes the leading parameters; the failure follows them.
+        if id == body.entry || into.is_empty() || into.iter().any(|edge| edge.args.len() > block.params.len()
+            || !edge.entry && edge.args.len() != block.params.len()) {
+            continue;
+        }
+        for (index, &param) in block.params.iter().enumerate() {
+            if body.values.get(param).is_ok_and(|value| module.types.get(value.ty) == Ok(&Type::Bool)) {
+                candidates.push((id, index, param));
+            }
+        }
+    }
+    for flag in &mut flags {
+        flag.extend(candidates.iter().map(|&(_, _, param)| param));
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &(block, index, param) in &candidates {
+                if !state.step(1) { return None; }
+                let passes = |edge: &&super::graph::Edge| matches!(edge.args.get(index), Some(EdgeArg::Value(value))
+                    if flag.contains(value));
+                if flag.contains(&param) && !incoming[block.as_u32() as usize].iter().all(passes) {
+                    flag.remove(&param);
+                    changed = true;
+                }
+            }
+        }
+    }
+    Some(flags)
+}
+/// Whether `block` reaches a `TrapCode::Unbound` trap through empty `br` blocks.
+fn unbound_trap(body: &Body, mut block: BlockId) -> bool {
+    let mut seen = BTreeSet::new();
+    while seen.insert(block) {
+        let Ok(data) = body.blocks.get(block) else { return false; };
+        match &data.term.kind {
+            TermKind::Trap { code: TrapCode::Unbound, .. } => return true,
+            TermKind::Br(next) if data.insts.is_empty() => block = next.block,
+            _ => return false,
+        }
+    }
+    false
 }
 pub(super) fn is_false(body: &Body, value: ValueId) -> bool {
     body.values.get(value).is_ok_and(|v| match v.def {

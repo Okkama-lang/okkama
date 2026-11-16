@@ -519,10 +519,13 @@ pub fn verify(p: &Program) -> Check {
                 && !layout.may_reach_resource && layout.trace_layout.is_empty() && layout.selection_layout.is_empty();
             enforce(plain, "HANDLE_DECLARATION", "a native handle declaration has fields, cases or resources")?;
         }
-        // Case texts belong to a plain enum only, one per case; an enum may also carry none.
+        // Case texts belong to a plain enum or a plain variant only, one per case; either may also carry none
+        // (a variant names its cases for the text of an Error payload, #763).
         enforce(object.enum_names.is_empty()
-            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize),
-            "ENUM_NAMES", "enum case names belong to a plain enum, one per case")?;
+            || (object.enum_cases > 0 && object.enum_names.len() == object.enum_cases as usize)
+            || (object.error_cases.is_empty() && !object.variant_cases.is_empty()
+                && object.enum_names.len() == object.variant_cases.len()),
+            "ENUM_NAMES", "enum case names belong to a plain enum or variant, one per case")?;
         if !object.variant_cases.is_empty() {
             // A case object is never an identity, but it may refer to resources (Maybe<Resource>). The
             // variant declares that it reaches resources exactly when one of its cases does.
