@@ -1084,8 +1084,9 @@ fn settles_dynamically(body: &Body) -> bool {
 }
 
 /// PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope one that
-/// may admit them: a synchronous constructor with a Future parameter (a fresh Future stored through it arrives with
-/// its entry) and an async method whose receiver stores a Future. An input that reaches no holder does not.
+/// may hold them: a synchronous constructor with a Future parameter (a fresh Future stored through it arrives with
+/// its entry, which `own.accept` puts in the bound journal) and an async method whose receiver stores a Future. An
+/// input that reaches no holder does not.
 #[test]
 fn an_entry_packet_that_can_carry_entries_settles_dynamically() {
     let output = pr_b1_output();

@@ -562,7 +562,7 @@ fn a_selection_takes_the_entry_its_state_held() {
 }
 
 /// PR-B2 (#782), `SPB_FUTURE_INPUT`: `fut.new` gives @work an inputs packet that carries an entry, but @work's
-/// only start value is an int, so its body could never admit it (`entry_carries`). The same program that admits the
+/// only start value is an int, so its body could never hold it (`entry_carries`). The same program that admits the
 /// absorbed packet in @caller instead loads.
 #[test]
 fn an_inputs_packet_carries_entries_only_into_a_body_that_can_take_them() {

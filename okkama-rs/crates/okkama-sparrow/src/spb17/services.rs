@@ -310,8 +310,9 @@ fn language_inputs(p: &Program, f: &Function) -> Option<Vec<ProducedType>> {
     }
 }
 
-/// PR-B2 (#782): whether the entry packet of `f` may carry service entries, so that its scope may admit them
-/// (D25.3). A language input that can reach a holder brings its entries in the packet: a parameter of a synchronous
+/// PR-B2 (#782): whether the entry packet of `f` may carry service entries, so that its scope may hold them
+/// (D25.3). `own.accept` puts them in the scope's bound journal (`admit(.., bound = true)`), not its admission
+/// journal. A language input that can reach a holder brings its entries in the packet: a parameter of a synchronous
 /// function (a constructor or a synchronous owner stores it, D25.2), or an aggregate start value of an async body.
 /// A bare Future start value does not: own never offers a Future input to `fut.new` (OIR-2 §10.2), so the body
 /// borrows it.

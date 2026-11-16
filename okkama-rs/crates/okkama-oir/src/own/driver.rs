@@ -329,7 +329,9 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             let state = point.env.state(root)?;
             point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
             // PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope
-            // one that may admit them, so its schedule ends with the dynamic step. A bare Future input of an async
+            // one that may hold them, so its schedule ends with the dynamic step. `own.accept` puts the packet's
+            // entries in the scope's bound journal, not its admission journal: the callee borrows them as it borrows
+            // a parameter, and no admissible selection of the callee takes them. A bare Future input of an async
             // body brings none: own never offers a Future input to `fut.new` (OIR-2 §10.2).
             let asynchronous = super::futures::is_async(driver.module, function);
             let carries = high.blocks.get(high.entry).map_err(arena)?.params.iter().any(|original| {
