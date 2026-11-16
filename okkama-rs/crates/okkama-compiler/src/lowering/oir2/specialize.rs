@@ -352,8 +352,10 @@ impl Specializer<'_, '_> {
         }
         let module = self.input.registry.modules[source.module].name.as_str();
         let generic = matches!((module, source.name.as_str()), ("async/atomic", "Atomic") | ("cell", "Cell"));
-        // #810 (G1): a D23 holder family the runtime provides, named by its element's suffix like an Atomic.
-        let holder = matches!((module, source.name.as_str()), ("async/scope", "FutureGroup"));
+        // #810 (G1): a D23 holder family the runtime provides, named by its element's suffix like an Atomic. The
+        // timeouts keep their source fields; only their name carries the suffix their catalogue rows match.
+        let holder = matches!((module, source.name.as_str()), ("async/scope", "FutureGroup")
+            | ("async/timeout", "Within" | "Before"));
         let ordinary = self.finite_boundary(object);
         let imported = source.module < self.registry.root_start;
         // Registered Atomic/Cell specializations (P2.4 §4.8): plain scalars and arrays of them, and role values
@@ -379,6 +381,7 @@ impl Specializer<'_, '_> {
             "async/atomic" => Some("AtomicClosed"),
             "async/barrier" => Some("BrokenBarrier"),
             "async/scope" => Some("FinishedFutureGroup"),
+            "async/timeout" => Some("TimedOut"),
             _ => None,
         };
         if let Some(thrown) = thrown {

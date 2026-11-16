@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
+  - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
+  - A winning origin's outcome stays with its owner.
+  - A losing timer is cancelled.
+  - A deadline that has already passed counts as expired.
+
+  The timeout driver reads the clock and the limit through helper functions the compiler generates; the loader checks their shapes. The output matches Tomato built from the current tree, and conformance `timeout.before-and-within` passes. The sqlite cases now stop at #824.
+
 - **Champ: FutureGroup (#810, G1 step 1).** `async/scope`'s FutureGroup runs on Champ.
   - `start` registers a fresh Future and only retains a bound one, then starts it.
   - `wait`, `active` and `cancel` behave as on Tomato.

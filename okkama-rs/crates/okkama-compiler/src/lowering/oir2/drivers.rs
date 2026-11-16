@@ -92,12 +92,15 @@ fn member_parts(registry: &Registry<'_>, body: &thir::Body) -> Option<(String, S
     let family = module.rsplit('/').next().unwrap_or(module);
     // A specialization keeps its source name before its arguments (`Channel<int>`); a holder family's is named by
     // its element's suffix (`FutureGroup_int`, #810).
-    let object = info.name.split('<').next().unwrap_or(&info.name);
-    let (object, suffix) = match object.split_once('_') {
-        Some((base, suffix)) if catalogue::holder_named(&format!("okkama.{family}.{base}.{action}")).is_some() => {
+    // The suffix of a holder specialization is split from the whole name: an element type may be generic itself
+    // (`FutureGroup_t_object(async/scope::FutureGroup<app::Res>)`).
+    let (object, suffix) = match info.name.split_once('_') {
+        Some((base, suffix)) if !base.contains('<')
+            && catalogue::holder_named(&format!("okkama.{family}.{base}.{action}")).is_some() =>
+        {
             (base, Some(suffix.to_string()))
         }
-        _ => (object, None),
+        _ => (info.name.split('<').next().unwrap_or(&info.name), None),
     };
     Some((format!("okkama.{family}.{object}.{action}"), format!("{}.{object}", module.replace('/', ".")), suffix))
 }
@@ -211,9 +214,15 @@ fn holder_contract(module: &ir::Module, name: &str, row: &catalogue::Template, s
     }).collect();
     let results = signature.results.iter().map(|_| ir::ResultRelation {
         fresh: vec![],
-        aliases: if row.effect == catalogue::Effect::AliasesReceiver { vec![ir::SummarySelection::Parameter(0)] }
-            else { vec![] },
-        external_deps: vec![], opaque: false, provenance: ir::AdmissionProvenance::UnboundResult,
+        // A result that aliases the receiver (`wait`), or a view of its graph (a timeout's origin outcome, opaque:
+        // which member it is, is unknown).
+        aliases: if matches!(row.effect, catalogue::Effect::AliasesReceiver | catalogue::Effect::View) {
+            vec![ir::SummarySelection::Parameter(0)]
+        } else {
+            vec![]
+        },
+        external_deps: vec![], opaque: row.effect == catalogue::Effect::View,
+        provenance: ir::AdmissionProvenance::UnboundResult,
     }).collect();
     let mut failures = mask_failures(row.failures);
     if row.abi == Abi::Driver {

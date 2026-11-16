@@ -367,6 +367,85 @@ pub enum Effect {
     BorrowedFuture,
 }
 
+/// A program function a driver calls (#810, G1 step 2): `<entry>.helper<index>`, a synchronous function the producer
+/// synthesizes from the std declarations. The loader checks its shape (`HOLDER_HELPER`); the driver reads its result
+/// as that shape says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Helper {
+    /// `Duration -> rat`: `limit::Span::seconds`.
+    Seconds,
+    /// `(Timing, Duration) -> Future<void>`: `clock.wait(limit)`, the cold timer (an async role slot, PR-D).
+    Wait,
+    /// `Timing -> MonotonicInstant`: `clock.monotonic_instant()`.
+    Now,
+    /// `(MonotonicInstant, MonotonicInstant) -> Duration`: `deadline.minus(now)`.
+    Minus,
+}
+
+/// `Within.outcome`'s helpers, as Tomato's timeout driver indexes them.
+pub const WITHIN_HELPERS: &[Helper] = &[Helper::Seconds, Helper::Wait];
+/// `Before.outcome`'s helpers: the remaining time from the deadline first.
+pub const BEFORE_HELPERS: &[Helper] = &[Helper::Now, Helper::Minus, Helper::Seconds, Helper::Wait];
+/// The std declarations a helper's shape names.
+pub const DURATION: &str = "time.duration.Duration";
+pub const MONOTONIC_INSTANT: &str = "time.clock.MonotonicInstant";
+pub const TIMING: &str = "time.clock.Timing";
+
+/// The symbol of the helper `index` of the entry `entry` (`okkama.timeout.Within.outcome$int.helper1`).
+pub fn helper_symbol(entry: &str, index: usize) -> String {
+    format!("{entry}.helper{index}")
+}
+
+/// #810: the helpers of a ready row's driver are the program's functions of the shapes it reads, and the timeout
+/// object it reads by storage index has the layout it expects: `origin`, the limit (`Duration` for Within, a
+/// `MonotonicInstant` deadline for Before) and the `Timing` clock.
+pub const HOLDER_HELPER: &str = "HOLDER_HELPER";
+
+pub(super) fn check_helpers(p: &Program, f: &Function, name: &str) -> Result<(), Error> {
+    let Some(row) = ready_holder(name).filter(|row| !row.helpers.is_empty()) else { return Ok(()) };
+    let named = |ty: Type, wanted: &str| matches!(ty, Type::Object(id) | Type::Role(id)
+        if p.objects.get(id as usize).is_some_and(|object| object.name == wanted));
+    let limit = if row.name.starts_with("okkama.timeout.Within.") { DURATION } else { MONOTONIC_INSTANT };
+    let layout = match f.registers.first() {
+        Some(&Type::Object(id)) => p.objects.get(id as usize).map(|object| object.layout.storage_fields.as_slice()),
+        _ => None,
+    };
+    enforce(matches!(layout, Some([Type::Future(_), limit_field, clock]) if named(*limit_field, limit)
+        && named(*clock, TIMING)), HOLDER_HELPER,
+        &format!("{name}: the receiver is not origin, {limit} and Timing"))?;
+    // The driver returns the origin's result word as the outcome: the origin's outcome type is the entry's result
+    // (#810 review T2).
+    let origin = match layout {
+        Some([Type::Future(id), ..]) => p.tables.future_results.get(*id as usize).copied(),
+        _ => None,
+    };
+    enforce(origin == Some(f.results.first().copied()), HOLDER_HELPER,
+        &format!("{name}: the origin's outcome is not the entry's result"))?;
+    for (index, kind) in row.helpers.iter().enumerate() {
+        let symbol = helper_symbol(name, index);
+        let helper = p.functions.iter().find(|helper| helper.symbol == symbol)
+            .ok_or_else(|| violation(HOLDER_HELPER, format!("{name} has no {symbol}")))?;
+        let params: Vec<Type> = helper.params.iter().filter_map(|&location| match verify::loc_type(helper, location) {
+            Ok(ProducedType::Value(ty)) => Some(ty),
+            _ => None,
+        }).collect();
+        let results = helper.results.as_slice();
+        let shape = match kind {
+            Helper::Seconds => matches!(params.as_slice(), [d] if named(*d, DURATION)) && results == [Type::Rat],
+            Helper::Wait => matches!(params.as_slice(), [c, d] if named(*c, TIMING) && named(*d, DURATION))
+                && matches!(results, [Type::Future(id)] if p.tables.future_results.get(*id as usize) == Some(&None)),
+            Helper::Now => matches!(params.as_slice(), [c] if named(*c, TIMING))
+                && matches!(results, [i] if named(*i, MONOTONIC_INSTANT)),
+            Helper::Minus => matches!(params.as_slice(), [a, b] if named(*a, MONOTONIC_INSTANT)
+                && named(*b, MONOTONIC_INSTANT)) && matches!(results, [d] if named(*d, DURATION)),
+        };
+        let compiled = !helper.code.is_empty() && helper.proofs.entry.as_ref().is_none_or(|entry| entry.external.is_none())
+            && matches!(helper.entry_abi, EntryAbi::Observation | EntryAbi::Owned);
+        enforce(shape && compiled, HOLDER_HELPER, &format!("{symbol} is not a compiled {kind:?} helper"))?;
+    }
+    Ok(())
+}
+
 /// One row of a holder family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Template {
@@ -380,8 +459,8 @@ pub struct Template {
     pub effect: Effect,
     /// The declarations the runtime creates or throws: a holder by its family (specialized), an error as named.
     pub related: &'static [&'static str],
-    /// Whether the driver calls the program's helpers (`Within`, `Before`: the clock, PR-D thunks).
-    pub helpers: bool,
+    /// The program's helpers the driver calls, in the order it indexes them (`Within`, `Before`: the clock, #810).
+    pub helpers: &'static [Helper],
     pub slice: Slice,
     /// Whether the runtime runs this row: the producer declares it as an intrinsic and the loader trusts it (#810).
     pub ready: bool,
@@ -391,7 +470,7 @@ pub struct Template {
 const fn holder(name: &'static str, params: &'static [Slot], results: &'static [Slot], abi: Abi, failures: u32,
     effect: Effect, related: &'static [&'static str], slice: Slice) -> Template
 {
-    Template { name, params, results, abi, failures, effect, related, helpers: false, slice, ready: false }
+    Template { name, params, results, abi, failures, effect, related, helpers: &[], slice, ready: false }
 }
 
 /// A row the runtime runs (#810).
@@ -442,10 +521,10 @@ pub const HOLDERS: &[Template] = &[
         PROGRAM, Effect::Plain, &[], Slice::G1),
     holder("okkama.collect.FutureCompletions.completion", &[H(FUTURE_COMPLETIONS)], &[FUT], Abi::Driver,
         THROWN | PROGRAM, Effect::BorrowedFuture, &[NO_FUTURES], Slice::G1),
-    Template { helpers: true, ..holder("okkama.timeout.Within.outcome", &[H(WITHIN)], &[VAL], Abi::Driver,
-        THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) },
-    Template { helpers: true, ..holder("okkama.timeout.Before.outcome", &[H(BEFORE)], &[VAL], Abi::Driver,
-        THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) },
+    ready(Template { helpers: WITHIN_HELPERS, ..holder("okkama.timeout.Within.outcome", &[H(WITHIN)], &[VAL], Abi::Driver,
+        THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) }),
+    ready(Template { helpers: BEFORE_HELPERS, ..holder("okkama.timeout.Before.outcome", &[H(BEFORE)], &[VAL], Abi::Driver,
+        THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) }),
 ];
 
 /// The holder row named `name` (without its suffix).
@@ -607,7 +686,7 @@ pub fn instantiate(template: &Template, objects: &[Object], suffixes: &[&str], b
     };
     // A result that aliases the receiver retains it (#774 A6, as the producer's summary says).
     let mut function = function;
-    if template.effect == Effect::AliasesReceiver
+    if matches!(template.effect, Effect::AliasesReceiver | Effect::View)
         && let Some(entry) = function.proofs.entry.as_mut() {
         entry.retained_params = vec![0];
     }

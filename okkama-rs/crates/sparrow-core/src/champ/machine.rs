@@ -235,8 +235,15 @@ impl Runtime {
             // frame layout reads it for the RESULT word.
             let intrinsic = external.as_deref().and_then(|name| verified.p1.related(name).map(|objects| {
                 okkama_sparrow::Intrinsic {
-                    // A ready holder row runs Tomato's intrinsic of its base name (#810), by specialization.
-                    name: s::drivers::ready_holder(name).map_or(name, |row| row.name).to_owned(), helpers: vec![],
+                    // A ready holder row runs Tomato's intrinsic of its base name (#810), by specialization, with
+                    // the program's helpers the loader checked by symbol (`HOLDER_HELPER`).
+                    name: s::drivers::ready_holder(name).map_or(name, |row| row.name).to_owned(),
+                    helpers: s::drivers::ready_holder(name).map(|row| (0..row.helpers.len()).map(|index| {
+                        let symbol = s::drivers::helper_symbol(name, index);
+                        let index = source.functions.iter().position(|function| function.symbol == symbol)
+                            .expect("HOLDER_HELPER: every helper of a ready row is present");
+                        okkama_sparrow::FuncRef(index as u32)
+                    }).collect()).unwrap_or_default(),
                     objects: objects.iter().map(|&id| okkama_sparrow::ObjectRef(id)).collect(),
                 }
             }));

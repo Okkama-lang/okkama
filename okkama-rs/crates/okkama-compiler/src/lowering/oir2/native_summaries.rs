@@ -113,8 +113,10 @@ impl P1NativeSummaries {
                         return Err(error(format!("invalid elaborated P1 ABI {name}")));
                     }
                 }
+                // A ready holder row's driver calls the program's helpers, one per kind the row lists (#810).
+                let helper_count = okkama_sparrow::spb17::drivers::ready_holder(name).map_or(0, |row| row.helpers.len());
                 if let ir::FunctionAttr::Intrinsic { objects, helpers, .. } = attr
-                    && (*objects != intrinsic_objects(module, name, &language)? || !helpers.is_empty()) {
+                    && (*objects != intrinsic_objects(module, name, &language)? || helpers.len() != helper_count) {
                     return Err(error(format!("invalid P1 intrinsic descriptors for {name}")));
                 }
                 let entries = if native { &mut catalog.natives } else { &mut catalog.intrinsics };
