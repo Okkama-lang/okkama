@@ -126,3 +126,48 @@ fn typed_diagnostics_and_uncatchable_failures() {
         assert_eq!(support::report(&typed(body)), expected, "{body}");
     }
 }
+
+/// A cancellation caught by the Error role in a program that never names `Cancelled` (#744).
+fn cancelled_as_error() -> ir::Module {
+    let source = SourceFile::new("cancelled.ok", r#"module app v1.0.0;
+object Job {
+    has result is int;
+    Job(:result);
+    async run() is int { result; }
+}
+async main() is int {
+    let pending = Job(result: 1).run();
+    pending.cancel();
+    let text = try {
+        (await pending).string();
+    } catch e is Error {
+        "error: " + e.text();
+    };
+    confirm text == "error: Operation was cancelled";
+    0;
+}"#).unwrap();
+    lowering::lower_program(&syntax::parse(&source, &syntax::ParseOptions::default()).unwrap()).unwrap()
+}
+
+/// The catch binds a `Cancelled` value whose text is Tomato's (#744; it was an unbound word and `e.text()`
+/// crashed): every catch of the Error role brings the system `Cancelled` object into the program.
+#[test]
+fn a_cancellation_caught_as_error_binds_cancelled_without_naming_it() {
+    let module = cancelled_as_error();
+    let program = codegen::sparrow::generate(&module).unwrap();
+    assert!(program.objects.iter().any(|object| object.builtin && object.name == "Cancelled"));
+    support::assert_value(&module, "0");
+}
+
+/// A program without the builtin `Cancelled` object (only a crafted one can lack it) has no value to bind:
+/// the Error catch does not take the cancellation, which ends the program as an uncaught cancellation.
+#[test]
+fn without_the_builtin_cancelled_an_error_catch_leaves_the_cancellation_uncaught() {
+    let mut program = codegen::sparrow::generate(&cancelled_as_error()).unwrap();
+    let object = program.objects.iter_mut().find(|object| object.builtin && object.name == "Cancelled").unwrap();
+    object.builtin = false;
+    match support::run_program(&program) {
+        support::Ending::Failure { message, .. } => assert_eq!(message, "Operation was cancelled"),
+        other => panic!("expected the uncaught cancellation, got {other:?}"),
+    }
+}

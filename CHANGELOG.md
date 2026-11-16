@@ -20,6 +20,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Tomato: `e.text()` on a cancellation caught as `Error` no longer
+  crashes (#744).** A catch of the Error role binds a `Cancelled` value,
+  which Sparrow builds from the system `Cancelled` object; the OIR-1
+  lowering brought that object into the program only when a body named
+  `Cancelled`, so `rt_catch` bound an unbound word and the role call
+  `text()` read through it (SIGSEGV; 0.5.8's `sparrow` crashes on its own
+  bytecode of the program too). Every catch of the Error role now brings the
+  system object along, and the program prints `error: Operation was
+  cancelled`. Without the object (only a crafted SPB lacks it) the Error
+  catch no longer matches a cancellation, which keeps unwinding, instead of
+  binding the unbound word.
 - **An early-self constructor that may leave a field unbound runs on Champ
   (#746).** #708 checks a maybe-unbound field's flag before a complete
   `obj.new`; a constructor that hands out `self` first (language §12.10)
