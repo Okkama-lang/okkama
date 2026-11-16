@@ -34,11 +34,12 @@ pub(super) fn is_async(module: &Module, function: FuncId) -> bool {
         && !function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::DeferEntry { .. })))
 }
 
-/// An async intrinsic (D22, #601 Q1): a bodyless `[async, intrinsic]` whose call creates a driver Future.
-pub(super) fn is_async_intrinsic(module: &Module, function: FuncId) -> bool {
+/// An async external (D22): a bodyless `[async, intrinsic]` (#601 Q1) or `[async, extern]` (an async native, N1)
+/// whose call creates a driver Future. Own treats its `external` environment as `deferred` (async ABI §4.2).
+pub(super) fn is_async_external(module: &Module, function: FuncId) -> bool {
     module.functions.get(function).is_ok_and(|function| function.body.is_none()
         && function.attrs.contains(&FunctionAttr::Async)
-        && function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Intrinsic { .. })))
+        && function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Intrinsic { .. } | FunctionAttr::Extern(_))))
 }
 
 /// The language result of an async entry: the value its Future publishes.
@@ -71,18 +72,19 @@ pub(super) fn future_type(module: &Module, result: Option<TypeId>) -> Result<Typ
         .ok_or_else(|| flow_error("async entry has no interned Future type"))
 }
 
-/// An async entry that plain async cannot elaborate at all: async natives arrive
-/// with slice N1, async role slots with F1. An async intrinsic is a D22 driver
-/// (#601 Q1): its call creates a Future in the `external` environment, and its
-/// body summary is the trusted catalogue entry. Only async entries pay for the check.
+/// An async entry that plain async cannot elaborate at all: a bodyless one that is
+/// no external driver, and async role slots (F1). An async intrinsic (#601 Q1) or
+/// native (N1) is a D22 driver: its call creates a Future in the `external`
+/// environment, and its body summary is the trusted catalogue entry. Only async
+/// entries pay for the check.
 pub(super) fn check_boundary(module: &Module, id: FuncId, budget: &mut Budget<'_>) -> Result<(), OwnError> {
     let function = module.functions.get(id).map_err(arena)?;
     if !function.attrs.contains(&FunctionAttr::Async) {
         return Ok(());
     }
-    if function.body.is_none() && !is_async_intrinsic(module, id) {
+    if function.body.is_none() && !is_async_external(module, id) {
         return Err(unsupported_async(format!(
-            "async native or external {}: driver Futures of natives arrive with slice N1 (D22)", function.symbol,
+            "async function {} has neither a body nor an external driver (D22)", function.symbol,
         )));
     }
     for (_, declaration) in module.declarations.iter() {

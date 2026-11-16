@@ -27,11 +27,15 @@ pub(super) fn async_body(module: &o::Module, id: o::FuncId, function: &o::Functi
         return Ok(None);
     }
     if function.body.is_none() {
-        // An async intrinsic is a driver of the trusted catalogue (D22, #601 Q1): `cleanup::external` declares it.
-        if function.attrs.iter().any(|attr| matches!(attr, o::FunctionAttr::Intrinsic { .. })) {
+        // An async intrinsic (D22, #601 Q1) or an async native (N1) is a driver of the trusted catalogue:
+        // `cleanup::external` declares it as an `AsyncExternal` entry.
+        let external = |attr: &o::FunctionAttr| {
+            matches!(attr, o::FunctionAttr::Intrinsic { .. } | o::FunctionAttr::Extern(_))
+        };
+        if function.attrs.iter().any(external) {
             return Ok(None);
         }
-        return Err(later(&format!("{}: async native (D22, slice N1)", function.symbol)));
+        return Err(error(format!("{}: a bodyless async function without an external driver", function.symbol)));
     }
     if layout.is_none() {
         return Err(error(format!("{}: async body without its D21 frame layout", function.symbol)));

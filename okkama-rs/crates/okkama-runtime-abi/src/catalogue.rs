@@ -13,8 +13,11 @@
 //!
 //! Every operation of the table is classified: [`classify`] is total, and the
 //! module lists below are exhaustive (a test fails for a module in no list).
-//! Only a synchronous data or handle operation is admitted to the general
-//! synchronous native ABI; [`Contract::admission`] names the reason otherwise.
+//! A data or handle operation is admitted: a synchronous one to the general
+//! synchronous native ABI, an asynchronous one to the async native ABI (#601 N1,
+//! async ABI D22): its call creates a Future that a runtime driver runs, whose
+//! creation packet is empty (ruling PR-N) because data and handles carry no
+//! ownership graph. [`Contract::admission`] names the reason otherwise.
 //! A source declaration is admitted only when its signature equals the table's.
 use crate::{Native, Signature, Type};
 
@@ -22,7 +25,7 @@ use crate::{Native, Signature, Type};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AbiKind {
     Sync,
-    /// The result is a Future: outside the synchronous ABI (#570).
+    /// The result is a Future run by a driver (async ABI D22, #601 N1).
     Async,
 }
 
@@ -66,17 +69,15 @@ pub enum Failures {
     Native,
 }
 
-/// Why an operation is not admitted to the general synchronous native ABI.
+/// Why an operation is not admitted to the general native ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rejection {
-    Async,
     Opaque,
 }
 
 impl std::fmt::Display for Rejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Async => "an asynchronous native is outside the synchronous native ABI (#570)",
             Self::Opaque => "a native over `any` needs a trusted intrinsic bridge, not the general native ABI",
         })
     }
@@ -94,11 +95,8 @@ pub struct Contract {
 }
 
 impl Contract {
-    /// `Ok` for a synchronous data or handle operation.
+    /// `Ok` for a data or handle operation, synchronous or asynchronous.
     pub fn admission(&self) -> Result<(), Rejection> {
-        if self.abi == AbiKind::Async {
-            return Err(Rejection::Async);
-        }
         if self.transport == Transport::Opaque {
             return Err(Rejection::Opaque);
         }
@@ -198,7 +196,7 @@ pub fn admitted(symbol: &str) -> Result<Contract, Admission> {
     Ok(contract)
 }
 
-/// The outcome of looking a symbol up for the synchronous native ABI.
+/// The outcome of looking a symbol up for the native ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admission {
     /// Not a symbol of the table: only the checked unresolved-provider adapter may carry it.
@@ -259,7 +257,7 @@ mod tests {
             let contract = classify(native).unwrap_or_else(|| panic!("unclassified {}", native.symbol()));
             *counts.entry((contract.abi, contract.transport)).or_insert(0) += 1;
             let admitted = admitted(native.symbol());
-            assert_eq!(admitted.is_ok(), contract.abi == AbiKind::Sync && contract.transport != Transport::Opaque);
+            assert_eq!(admitted.is_ok(), contract.transport != Transport::Opaque);
         }
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
@@ -276,11 +274,34 @@ mod tests {
                 *effects.entry(contract.effect).or_insert(0) += 1;
             }
         }
-        let roles_expected = [(HandleRole::None, 235), (HandleRole::Uses, 261), (HandleRole::Publishes, 74),
+        // #601 N1: the 51 async natives are admitted too (4 data, 20 using and 27 publishing a handle, all host).
+        let roles_expected = [(HandleRole::None, 239), (HandleRole::Uses, 281), (HandleRole::Publishes, 101),
             (HandleRole::Closes, 24)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 340), (Effect::Stdio, 3), (Effect::Host, 251)];
+        let effects_expected = [(Effect::Pure, 340), (Effect::Stdio, 3), (Effect::Host, 302)];
         assert_eq!(effects, effects_expected.into_iter().collect());
+    }
+
+    /// #601 N1, audit item 1 of the slice: every asynchronous native of the table takes and publishes plain data
+    /// or native handles only, so its driver's creation packet is statically empty (ruling PR-N). The 51 natives,
+    /// by module, are the `native async` declarations of std `runtime/`.
+    #[test]
+    fn async_natives_carry_data_and_handles_only() {
+        let mut modules = std::collections::BTreeMap::new();
+        for contract in Native::ALL.iter().filter_map(|&native| classify(native)) {
+            if contract.abi != AbiKind::Async {
+                continue;
+            }
+            let signature = contract.native.signature();
+            assert!(types(signature).all(|ty| !mentions(ty, &|ty| *ty == Type::Any)), "{}", contract.native.symbol());
+            assert!(contract.admission().is_ok() && contract.effect == Effect::Host, "{}", contract.native.symbol());
+            assert_ne!(contract.handle, HandleRole::Closes, "{}", contract.native.symbol());
+            *modules.entry(contract.native.module()).or_insert(0) += 1;
+        }
+        let expected = [("runtime/application", 5), ("runtime/database", 19), ("runtime/fs", 1),
+            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 1),
+            ("runtime/time", 1), ("runtime/tls_transport", 4)];
+        assert_eq!(modules, expected.into_iter().collect());
     }
 
     #[test]
@@ -305,8 +326,12 @@ mod tests {
         assert_eq!(classify(Native::StdoutWrite).unwrap().effect, Effect::Stdio);
         assert_eq!(classify(Native::StdinRead).unwrap().effect, Effect::Host);
         assert_eq!(admitted("runtime/debug@1::data_dump/1"), Err(Admission::Rejected(Rejection::Opaque)));
-        assert_eq!(admitted("runtime/application@1::terminal_standard/1"),
-            Err(Admission::Rejected(Rejection::Async)));
+        // An async native is admitted to the async native ABI (#601 N1): a driver that publishes a handle.
+        let terminal = admitted("runtime/application@1::terminal_standard/1").unwrap();
+        assert_eq!((terminal.abi, terminal.transport, terminal.handle, terminal.effect),
+            (AbiKind::Async, Transport::Handle, HandleRole::Publishes, Effect::Host));
+        let sleep = admitted("runtime/time@1::sleep_nanoseconds/1").unwrap();
+        assert_eq!((sleep.abi, sleep.transport, sleep.handle), (AbiKind::Async, Transport::Data, HandleRole::None));
         assert_eq!(admitted("app@1::conformance_unlinked_symbol/1"), Err(Admission::Unknown));
     }
 

@@ -34,50 +34,94 @@ const CANCELLING: &str = "async.cancellation.Cancelling";
 
 /// Failure mask bits of an entry (`EntryContract::failures`): a thrown error, a program failure. A cancellation
 /// has no bit.
-const THROWN: u32 = 1;
-const PROGRAM: u32 = 2;
+pub const THROWN: u32 = 1;
+pub const PROGRAM: u32 = 2;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Abi {
+/// How a catalogue member is called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Abi {
+    /// A synchronous observation: no packet.
     Observation,
+    /// A synchronous owning entry.
     Owned,
+    /// An async member: its call creates a Future that a driver runs.
     Driver,
 }
 
-/// (name, parameters, results, ABI, failures, related declarations). Types are `bool`, `int` or a declaration.
-type Row = (&'static str, &'static [&'static str], &'static [&'static str], Abi, u32, &'static [&'static str]);
+/// One member of the trusted catalogue (#601 Q1). The rows are the one source of both its users (#774 D3): the
+/// loader's trusted entries ([`entries`]) and the producer's declarations and summaries (`okkama-compiler`,
+/// `lowering/oir2/drivers.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row {
+    /// The intrinsic's name, as Tomato names it.
+    pub name: &'static str,
+    /// Parameter and result types: `bool`, `int` or a declaration's name.
+    pub params: &'static [&'static str],
+    pub results: &'static [&'static str],
+    pub abi: Abi,
+    /// The failure mask: [`THROWN`], [`PROGRAM`].
+    pub failures: u32,
+    /// Whether the call raises Cancelled: every driver, and the check of a requested cancellation.
+    pub cancels: bool,
+    /// The declarations the runtime creates or throws, in Tomato's order.
+    pub related: &'static [&'static str],
+}
 
-const CATALOGUE: &[Row] = &[
-    ("okkama.event.Event.new", &[], &[EVENT], Abi::Owned, 0, &[EVENT]),
-    ("okkama.event.Event.new_ready", &["bool"], &[EVENT], Abi::Owned, 0, &[EVENT]),
-    ("okkama.event.Event.set", &[EVENT], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.event.Event.ready", &[EVENT], &["bool"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.event.Event.wait", &[EVENT], &[EVENT], Abi::Driver, PROGRAM, &[]),
-    ("okkama.lock.Lock.new", &[], &[LOCK], Abi::Owned, 0, &[LOCK]),
-    ("okkama.lock.Lock.locked", &[LOCK], &["bool"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.lock.Lock.guard", &[LOCK], &[GUARD], Abi::Driver, PROGRAM, &[GUARD]),
-    ("okkama.lock.LockGuard.closed", &[GUARD], &["bool"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.lock.LockGuard.close", &[GUARD], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.semaphore.Semaphore.permits", &[SEMAPHORE], &["int"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.semaphore.Semaphore.permit", &[SEMAPHORE], &[PERMIT], Abi::Driver, PROGRAM, &[PERMIT]),
-    ("okkama.semaphore.Permit.closed", &[PERMIT], &["bool"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.semaphore.Permit.close", &[PERMIT], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.barrier.Barrier.wait", &[BARRIER], &["int"], Abi::Driver, THROWN | PROGRAM, &[BROKEN_BARRIER]),
-    ("okkama.barrier.Barrier.state", &[BARRIER], &[BARRIER_STATE], Abi::Owned, PROGRAM, &[BARRIER_STATE]),
-    ("okkama.barrier.Barrier.abort", &[BARRIER], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.barrier.Barrier.reset", &[BARRIER], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.barrier.BarrierState.parties", &[BARRIER_STATE], &["int"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.barrier.BarrierState.waiters", &[BARRIER_STATE], &["int"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.barrier.BarrierState.generation", &[BARRIER_STATE], &["int"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.barrier.BarrierState.broken", &[BARRIER_STATE], &["bool"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.cancellation.Cancellation.new", &[], &[CANCELLATION], Abi::Owned, 0, &[CANCELLATION]),
-    ("okkama.cancellation.Cancellation.cancelling", &[CANCELLATION], &[CANCELLING], Abi::Owned, PROGRAM, &[TOKEN]),
-    ("okkama.cancellation.Cancellation.cancel", &[CANCELLATION], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.cancellation.CancellationToken.new", &[], &[TOKEN], Abi::Owned, 0, &[TOKEN]),
-    ("okkama.cancellation.CancellationToken.requested", &[TOKEN], &["bool"], Abi::Observation, PROGRAM, &[]),
-    ("okkama.cancellation.CancellationToken.check", &[TOKEN], &[], Abi::Observation, PROGRAM, &[]),
-    ("okkama.cancellation.CancellationToken.wait", &[TOKEN], &[CANCELLING], Abi::Driver, PROGRAM, &[]),
+const fn row(name: &'static str, params: &'static [&'static str], results: &'static [&'static str], abi: Abi,
+    failures: u32, related: &'static [&'static str]) -> Row
+{
+    Row { name, params, results, abi, failures, cancels: matches!(abi, Abi::Driver), related }
+}
+
+/// The catalogue (Tomato `intrinsics.rs` and `drivers.rs`). Program failures are the runtime's refusal of an object
+/// it did not create (Tomato's "Invalid async event"); they pass every catch.
+pub const CATALOGUE: &[Row] = &[
+    row("okkama.event.Event.new", &[], &[EVENT], Abi::Owned, 0, &[EVENT]),
+    row("okkama.event.Event.new_ready", &["bool"], &[EVENT], Abi::Owned, 0, &[EVENT]),
+    row("okkama.event.Event.set", &[EVENT], &[], Abi::Observation, PROGRAM, &[]),
+    row("okkama.event.Event.ready", &[EVENT], &["bool"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.event.Event.wait", &[EVENT], &[EVENT], Abi::Driver, PROGRAM, &[]),
+    row("okkama.lock.Lock.new", &[], &[LOCK], Abi::Owned, 0, &[LOCK]),
+    row("okkama.lock.Lock.locked", &[LOCK], &["bool"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.lock.Lock.guard", &[LOCK], &[GUARD], Abi::Driver, PROGRAM, &[GUARD]),
+    row("okkama.lock.LockGuard.closed", &[GUARD], &["bool"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.lock.LockGuard.close", &[GUARD], &[], Abi::Observation, PROGRAM, &[]),
+    row("okkama.semaphore.Semaphore.permits", &[SEMAPHORE], &["int"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.semaphore.Semaphore.permit", &[SEMAPHORE], &[PERMIT], Abi::Driver, PROGRAM, &[PERMIT]),
+    row("okkama.semaphore.Permit.closed", &[PERMIT], &["bool"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.semaphore.Permit.close", &[PERMIT], &[], Abi::Observation, PROGRAM, &[]),
+    row("okkama.barrier.Barrier.wait", &[BARRIER], &["int"], Abi::Driver, THROWN | PROGRAM, &[BROKEN_BARRIER]),
+    row("okkama.barrier.Barrier.state", &[BARRIER], &[BARRIER_STATE], Abi::Owned, PROGRAM, &[BARRIER_STATE]),
+    row("okkama.barrier.Barrier.abort", &[BARRIER], &[], Abi::Observation, PROGRAM, &[]),
+    row("okkama.barrier.Barrier.reset", &[BARRIER], &[], Abi::Observation, PROGRAM, &[]),
+    row("okkama.barrier.BarrierState.parties", &[BARRIER_STATE], &["int"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.barrier.BarrierState.waiters", &[BARRIER_STATE], &["int"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.barrier.BarrierState.generation", &[BARRIER_STATE], &["int"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.barrier.BarrierState.broken", &[BARRIER_STATE], &["bool"], Abi::Observation, PROGRAM, &[]),
+    row("okkama.cancellation.Cancellation.new", &[], &[CANCELLATION], Abi::Owned, 0, &[CANCELLATION]),
+    row("okkama.cancellation.Cancellation.cancelling", &[CANCELLATION], &[CANCELLING], Abi::Owned, PROGRAM, &[TOKEN]),
+    row("okkama.cancellation.Cancellation.cancel", &[CANCELLATION], &[], Abi::Observation, PROGRAM, &[]),
+    row("okkama.cancellation.CancellationToken.new", &[], &[TOKEN], Abi::Owned, 0, &[TOKEN]),
+    row("okkama.cancellation.CancellationToken.requested", &[TOKEN], &["bool"], Abi::Observation, PROGRAM, &[]),
+    // A requested cancellation raises Cancelled at the check, as Tomato's `TokenCheck`.
+    Row { cancels: true, ..row("okkama.cancellation.CancellationToken.check", &[TOKEN], &[],
+        Abi::Observation, PROGRAM, &[]) },
+    row("okkama.cancellation.CancellationToken.wait", &[TOKEN], &[CANCELLING], Abi::Driver, PROGRAM, &[]),
 ];
+
+/// The catalogue row named `name`.
+pub fn row_named(name: &str) -> Option<&'static Row> {
+    CATALOGUE.iter().find(|row| row.name == name)
+}
+
+/// The deps proofs of a member, as own elaborates its external signature: one for each Event cell parameter (a
+/// builtin capability: a reference with deps). The other declarations of the catalogue are plain values without
+/// references. A member that is a role slot of its object (LockGuard's `close` for `Closing`) is never named by a
+/// witness table: the slot reaches it through an adapter of the slot's ABI (ruling PR-D, #773), so its receiver is
+/// an ordinary plain argument. The producer reads this count (#774 D3).
+pub fn deps(row: &Row) -> usize {
+    row.params.iter().filter(|&&param| param == EVENT).count()
+}
 
 /// A declaration of the catalogue with its runtime layout, or None.
 fn declaration(objects: &[Object], name: &str) -> Option<u32> {
@@ -117,35 +161,21 @@ fn ty(objects: &[Object], name: &str) -> Option<Type> {
 /// creates or throws.
 pub(super) fn entries(objects: &[Object]) -> Vec<(Function, Vec<u32>)> {
     let mut entries = Vec::new();
-    for &(name, params, results, abi, failures, related) in CATALOGUE {
-        let registers = params.iter().map(|name| ty(objects, name)).collect::<Option<Vec<_>>>();
-        let results = results.iter().map(|name| ty(objects, name)).collect::<Option<Vec<_>>>();
-        let related = related.iter().map(|name| declaration(objects, name)).collect::<Option<Vec<_>>>();
+    for row in CATALOGUE {
+        let registers = row.params.iter().map(|name| ty(objects, name)).collect::<Option<Vec<_>>>();
+        let results = row.results.iter().map(|name| ty(objects, name)).collect::<Option<Vec<_>>>();
+        let related = row.related.iter().map(|name| declaration(objects, name)).collect::<Option<Vec<_>>>();
         let (Some(registers), Some(results), Some(related)) = (registers, results, related) else {
             continue;
         };
-        let deps = deps(objects, &registers);
-        let function = match abi {
-            Abi::Observation => entry(name, registers, deps, results, false, failures),
-            Abi::Owned => entry(name, registers, deps, results, true, failures),
-            Abi::Driver => driver(name, registers, results, failures),
+        let function = match row.abi {
+            Abi::Observation => entry(row.name, registers, deps(row), results, false, row.failures),
+            Abi::Owned => entry(row.name, registers, deps(row), results, true, row.failures),
+            Abi::Driver => driver(row.name, registers, results, row.failures),
         };
         entries.push((function, related));
     }
     entries
-}
-
-/// The deps proofs of an entry, as the producer's elaboration gives them: one for each Event cell parameter (a
-/// builtin capability: a reference with deps). The other declarations of the catalogue are plain values without
-/// references. A member that is a role slot of its object (LockGuard's `close` for `Closing`) is never named by a
-/// witness table: the slot reaches it through an adapter of the slot's ABI (ruling PR-D, #773), so its receiver is
-/// an ordinary plain argument.
-///
-/// The producer gives its declarations the same deps (`okkama-compiler`, `lowering/oir2/drivers.rs`, `deps`), as own
-/// elaborates external signatures: change both together.
-fn deps(objects: &[Object], registers: &[Type]) -> usize {
-    let event = declaration(objects, EVENT);
-    registers.iter().filter(|&&ty| Some(ty) == event.map(Type::Object)).count()
 }
 
 /// A synchronous entry: its registers, then its deps proofs, then the input packet of an owning entry
@@ -168,8 +198,9 @@ fn entry(name: &str, registers: Vec<Type>, deps: usize, results: Vec<Type>, owne
     }
 }
 
-/// A driver's trusted entry: its arguments are its registers, in order, with no service.
-fn driver(name: &str, registers: Vec<Type>, results: Vec<Type>, failures: u32) -> Function {
+/// A driver's trusted entry: its arguments are its registers, in order, with no service. The std async primitives'
+/// drivers and the async natives of the runtime table (#601 N1, `p1`) share it.
+pub(super) fn driver(name: &str, registers: Vec<Type>, results: Vec<Type>, failures: u32) -> Function {
     Function {
         symbol: name.into(), entry_abi: EntryAbi::AsyncExternal,
         params: (0..registers.len() as u32).map(Location::Register).collect(),
@@ -193,6 +224,50 @@ pub(super) fn check_declaration(f: &Function) -> Result<(), Error> {
     let registers = (0..f.registers.len() as u32).map(Location::Register).collect::<Vec<_>>();
     enforce(f.services.is_empty() && f.params == registers && f.results.len() <= 1, EXTERNAL_ASYNC,
         "an async external takes its registers in order, no service, and has at most one result")
+}
+
+/// Ruling PR-N (#601 N1): a native driver's inputs packet is statically empty. Native parameters are plain data and
+/// handles, which carry no ownership graph, so nothing may enter the driver's INPUTS (`SPB_EXTERNAL_ASYNC`).
+///
+/// What is checked: for each `fut.new` whose entry is an `AsyncExternal` with a canonical symbol (after the load
+/// rules, an async native of the runtime table or its map adapter), the packet operand's evidence inventory
+/// (`Evidence::inventory`) resolves and is empty. The form is free: `own.empty`, which own gives a native, and any
+/// packet of no resource key (splits and joins of it, a packet of a resource-free program) pass alike. An
+/// inventory that does not resolve is refused too, under `LOAD_WORK_BUDGET` when the evidence ran out of budget.
+///
+/// What is not: the inventory counts resource keys, not service entries (ABI D25). A cache duty absorbed into the
+/// packet leaves it empty here; the D25 rule `SPB_FUTURE_INPUT` refuses such a packet, and Champ's `fut.new` stops
+/// on a native driver's packet that holds a key or a service entry. The std async primitives' drivers are not
+/// natives; Q2 lifts the rule for `send` (PR-I).
+pub(super) fn check_native_inputs(p: &Program, f: &Function) -> Result<(), Error> {
+    let mut evidence = None;
+    for instruction in &f.code {
+        let Instruction::Champ { op: Opcode::FutureNew, arguments, .. } = instruction else {
+            continue;
+        };
+        let native = arguments.iter().find_map(|arg| match *arg {
+            Argument::Entry(id) => p.functions.get(id as usize),
+            _ => None,
+        }).filter(|callee| callee.entry_abi == EntryAbi::AsyncExternal)
+            .and_then(|callee| callee.proofs.entry.as_ref()?.external.as_deref())
+            .is_some_and(|name| crate::abi::catalogue::Symbol::parse(name).is_some());
+        if !native {
+            continue;
+        }
+        let packet = arguments.iter().find_map(|arg| match arg {
+            Argument::Location(location) if verify::loc_type(f, *location)
+                == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
+            _ => None,
+        });
+        let evidence = evidence.get_or_insert_with(|| super::evidence::Evidence::new(p, f));
+        let empty = packet.is_some_and(|packet| evidence.inventory(packet).is_some_and(|keys| keys.is_empty()));
+        if !empty {
+            evidence.check_budget()?;
+        }
+        enforce(empty, EXTERNAL_ASYNC, &format!("{}: a native driver's inputs packet is statically empty (PR-N)",
+            f.symbol))?;
+    }
+    Ok(())
 }
 
 /// The language argument types `fut.new` passes to the async external `callee`: its registers.

@@ -1426,7 +1426,7 @@ fn oir2_std_closed_specializations_and_error_cases() {
 }
 
 #[test]
-fn oir2_std_rejects_other_intrinsics_resources_and_async() {
+fn oir2_std_rejects_other_intrinsics_and_resources() {
     for body in [
         "let a = Atomic(R()); 0;",
         "let a = Cell(R()); 0;",
@@ -1436,11 +1436,6 @@ fn oir2_std_rejects_other_intrinsics_resources_and_async() {
         let error = lower_std(&source).expect_err("outside finite P1 boundary catalog");
         assert!(error.to_string().contains("unsupported in OIR-2 lowering"), "{error}");
     }
-    // Plain async lowers since P2.5 V5; async natives stay outside it (plan §4 N1).
-    let error = lower_std("module app; import \"async/atomic\" take Atomic; \
-        import \"runtime/time\" take sleep_nanoseconds; async main() is int { \
-        let a = Atomic(1); await sleep_nanoseconds(\"1\"); a.value(); }").expect_err("async remains unsupported");
-    assert!(error.to_string().contains("unsupported in OIR-2 lowering: async"), "{error}");
 }
 
 #[test]

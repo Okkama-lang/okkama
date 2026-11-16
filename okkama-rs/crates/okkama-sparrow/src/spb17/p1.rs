@@ -1,9 +1,10 @@
 //! Closed P1 host contracts, constructed independently of artifact function declarations.
 //!
-//! Natives (#569 C7): every operation the companion catalogue of the runtime table admits to the
-//! synchronous native ABI is a trusted owning entry built from the table's signature, never from
-//! the artifact. Handles are matched by their declaring module and name. A canonical symbol that is
-//! not in the table may only use the checked unresolved-provider adapter: data or handle transport
+//! Natives (#569 C7): every operation the companion catalogue of the runtime table admits is a trusted
+//! entry built from the table's signature, never from the artifact: an owning entry for a synchronous
+//! operation, a driver for an asynchronous one (#601 N1). Handles are matched by their declaring module
+//! and name. A canonical symbol that is not in the table may only use the checked unresolved-provider
+//! adapter: data or handle transport
 //! of its own module, an owning entry that can fail with a native failure, and runtime resolution.
 use super::*;
 use crate::abi::{self, catalogue};
@@ -117,7 +118,7 @@ impl P1Contracts {
             // An operation over a type this bridge does not carry (char and rat arrays) has no entry yet; one over
             // maps has its data adapter.
             if let (Some(registers), Some(results)) = (registers, results) {
-                let function = entry(native.symbol(), registers, results, true, NATIVE_FAILURES);
+                let function = native_entry(native, registers, results);
                 natives.insert(native.symbol().to_owned(), function);
             } else if signature.params.iter().chain([&signature.result]).any(|ty| matches!(ty, abi::Type::Map(..))) {
                 mapped.insert(native.symbol().to_owned(), native);
@@ -209,7 +210,7 @@ impl P1Contracts {
         {
             return None;
         }
-        Some(entry(native.symbol(), declared.registers.clone(), declared.results.clone(), true, NATIVE_FAILURES))
+        Some(native_entry(native, declared.registers.clone(), declared.results.clone()))
     }
 
     /// The opaque cleanup family, keyed by its first parameter (OIR-2 catalogue, #569 C3b and C6):
@@ -404,6 +405,16 @@ impl ExternalContracts for P1Contracts {
     fn adapter(&self, declared: &Function, composites: &[Composite]) -> Option<Function> {
         P1Contracts::adapter(self, declared, composites)
     }
+}
+
+/// The trusted entry of a table native: an owning synchronous entry, or for an asynchronous native a driver (#601
+/// N1, async ABI D22) that takes its arguments as its registers and has no service: its creation packet goes to
+/// `fut.new` and is statically empty (ruling PR-N), since data and handles carry no ownership graph.
+fn native_entry(native: abi::Native, registers: Vec<Type>, results: Vec<Type>) -> Function {
+    if native.signature().is_async {
+        return super::drivers::driver(native.symbol(), registers, results, NATIVE_FAILURES);
+    }
+    entry(native.symbol(), registers, results, true, NATIVE_FAILURES)
 }
 
 fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, failures: u32) -> Function {
