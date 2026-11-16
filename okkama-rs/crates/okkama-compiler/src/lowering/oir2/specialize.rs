@@ -982,9 +982,10 @@ impl Specializer<'_, '_> {
 /// The name suffix of a registered plain Atomic/Cell value (P2.4 §4.8): `int`, `string`, `bool`, `byte`,
 /// `char`, `float`, `rat`, or `array_` and the suffix of a plain element. Other values have none.
 /// Whether a value of `value` may be the content of a registered Atomic beyond the scalar suffixes (#778): data
-/// made of scalars, maps, arrays, objects, variants, enums, roles and native handles. Futures (D25), action
-/// values, `any`, caps, successors and parameters are not, nor an object with a destroy (`plain_object`); a
-/// resource deeper in the graph is refused when the layouts are known, and by the loader (ATOMIC_PLAIN).
+/// made of scalars, maps, arrays, objects, variants, enums, roles and native handles, and Futures, which the Atomic
+/// borrows (PR-A: a Future or an array of Futures, ATOMIC_BORROW). Action values, `any`, caps, successors and
+/// parameters are not, nor an object with a destroy (`plain_object`); a resource or a Future deeper in the graph is
+/// refused when the layouts are known, and by the loader (ATOMIC_PLAIN).
 fn atomic_storable(value: &ty::Ty, plain_object: &dyn Fn(ty::ObjectId) -> bool) -> bool {
     use ty::Ty as T;
     let storable = |value: &ty::Ty| atomic_storable(value, plain_object);

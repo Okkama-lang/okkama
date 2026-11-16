@@ -12,6 +12,7 @@ use okkama_compiler::SourceFile;
 use okkama_sparrow::spb17 as s;
 
 const SOURCE: &str = r#"module app v1.0.0;
+import "async/atomic" take Atomic;
 object Plain { has n is int; Plain(:n); grown() is ^Plain { ^n = n + 1; } }
 object Holder { has f is Future<int>; Holder(:f); again() is ^Holder { ^f = f; } }
 role Pending { pending() is int; }
@@ -20,6 +21,7 @@ role Quiet { quiet() is int; }
 object Calm does Quiet { has n is int; Calm(:n); quiet() is int { n; } }
 object Nested { has inner is Holder; Nested(:inner); }
 object Job { Job(); async run() is int { 1; } }
+object Kept { has slot is Atomic<@Future<int>>; Kept(:slot); }
 enum Slot = (empty, ready(f is Future<int>));
 enum Mark = (none, some(n is int));
 main() is int {
@@ -36,6 +38,8 @@ main() is int {
     let mark = Mark.some(1);
     let keep is (int) is int = (v is int) is int { let k = h; v; };
     let ff = [[Job().run()]];
+    let empty is @Future<int> = [];
+    let kept = Kept(slot: Atomic(empty));
     0;
 }
 "#;
@@ -80,12 +84,14 @@ fn holds_futures_and_reaches_holder_agree() {
     let program = s::decode(&compile(&[source]).unwrap_or_else(|error| panic!("{error}"))).unwrap();
     let name = |ty: o::TypeId| -> String { label(&module, ty) };
     // Review of D25, answer 6: maps, variants, successors, closures and nested arrays of Futures, each with its
-    // quiet twin where the language has one.
+    // quiet twin where the language has one; and an object that keeps an Atomic over Futures (PR-A).
     let expected = [("app.Plain", false), ("app.Holder", true), ("app.Pending", true), ("app.Waiting", true),
         ("app.Quiet", false), ("app.Calm", false), ("app.Nested", true), ("[app.Holder]", true),
         ("[app.Plain]", false), ("Any", true), ("%int:app.Holder", true), ("%int:app.Plain", false),
         ("app.Slot", true), ("app.Mark", false), ("^app.Holder", true), ("^app.Plain", false),
-        ("(int) is int", true), ("[[future]]", true)];
+        ("(int) is int", true), ("[[future]]", true),
+        // PR-A: an Atomic borrows the Futures it stores, so a value that keeps one reaches no holder through it.
+        ("app.Kept", false)];
     let mut checked = Vec::new();
     for (ty, _) in module.types.iter() {
         let label = name(ty);

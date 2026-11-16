@@ -292,7 +292,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             }).ok_or_else(|| error("missing plain Atomic specialization"))?;
             // PR-A (D25 tail): an Atomic over a value that can hold a Future borrows it. Every entry is an observation:
             // publication offers nothing, and the stored Future's duty stays with its owner.
-            let borrows = known.is_some_and(|value| ir::verify::holds_futures(module, value));
+            let borrows = known.is_some_and(|value| borrowed_future(module, value));
             if borrows {
                 kind = ir::EntryKind::ObservationAdmissionStaysCaller;
             }
@@ -378,6 +378,16 @@ pub(super) fn atomic_value(module: &ir::Module, suffix: &str) -> Option<ir::Type
         _ => ir::Type::Array(atomic_value(module, suffix.strip_prefix("array_")?)?),
     };
     module.types.iter().find_map(|(id, value)| (*value == ty).then_some(id))
+}
+
+/// PR-A: whether an Atomic's value is a Future or an array of Futures, which the Atomic borrows. The same structural
+/// test as SPB 17's `p1::borrowed_future`, so the entry kinds of both sides agree.
+fn borrowed_future(module: &ir::Module, ty: ir::TypeId) -> bool {
+    let mut leaf = ty;
+    while let Ok(ir::Type::Array(element)) = module.types.get(leaf) {
+        leaf = *element;
+    }
+    matches!(module.types.get(leaf), Ok(ir::Type::Future(_)))
 }
 
 /// Whether an external's parameter of `ty` carries deps in its elaborated signature, as own gives them: an object
