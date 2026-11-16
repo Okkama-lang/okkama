@@ -40,6 +40,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   dispatch target checks its own packet on entry, and the dispatch rule no
   longer has a branch for external targets.
 
+- **A synchronous function that returns an async intrinsic's or native's
+  Future passes own's Full verifier (#791 W3).** Own's summary inference gave
+  the Future of an async body's call a fresh family (its cache duty), but not
+  the Future of an async intrinsic or native (D22). The creation thunk of
+  `CancellationToken.wait` for `Cancelling.wait` (ruling PR-D) was then
+  refused with `B51` ("body returns a fresh identity absent from its declared
+  summary") in every program that imports the cancellation token.
+
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
   now binds the function type's dictionary even when the closures can own

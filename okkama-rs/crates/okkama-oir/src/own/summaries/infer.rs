@@ -471,8 +471,10 @@ impl Universe {
                     }
                 }
                 // Creating a cold Future gives its owner the duty ServiceOf{future, Cache} (D12), a fresh
-                // family named the way an identity is (D25.1): a returned Future carries it to the caller.
-                let creates = matches!(op, Operation::Call(CallOp::Direct { function: callee, .. })
+                // family named the way an identity is (D25.1): a returned Future carries it to the caller. The call
+                // of an async intrinsic or native (D22) creates one as an async body's call does (#791 W3).
+                let creates = matches!(op, Operation::Call(CallOp::Direct { function: callee, .. }
+                    | CallOp::Intrinsic { function: callee, .. } | CallOp::Native { function: callee, .. })
                     if futures::is_async(module, *callee));
                 if !relation.fresh.is_empty() || creates {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
