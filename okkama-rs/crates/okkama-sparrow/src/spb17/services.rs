@@ -85,7 +85,11 @@ pub fn reaches_holder(p: &Program, ty: Type) -> bool {
             Type::Future(_) => return true,
             Type::Object(id) | Type::Successor(id) | Type::Variant(id) => {
                 let Some(object) = p.objects.get(id as usize) else { return true };
-                pending.extend(&object.layout.storage_fields);
+                // PR-A: an Atomic over Futures borrows them; its value word holds no entry (ATOMIC_BORROW), as the
+                // ownership verifier's `holds_futures` reads a builtin Atomic.
+                let borrowing = object.name.starts_with("async.atomic.Atomic_t_")
+                    && object.layout.storage_fields.first().is_some_and(|value| super::p1::borrowed_future(*value));
+                pending.extend(object.layout.storage_fields.iter().skip(usize::from(borrowing)));
                 pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
             }
             Type::Error => {

@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: an Atomic holds Futures as borrowed views (PR-A, D25 tail).** Std keeps
+  optional Futures in `Atomic<@Future<T>>` slots (sqlite, tcp, http, logging). The
+  Atomic never holds a Future's duty: writing one offers nothing, reading gives a
+  view to await or cancel, and the scope that owns the Future settles it once. A
+  new loader rule, `ATOMIC_BORROW`, keeps the Atomic's value word out of every
+  selection; `compare_and_replace` over Futures is refused by name (Futures do not
+  compare). The L11 sqlite and tcp cases now stop later, at slice G1 (#810).
+
 - **Champ: Futures in array literals of eight or more parts (#802).** A literal of
   8+ parts is built through a builder, and fresh Futures in it stopped the build
   ("a cache duty that reaches its owner's close on some paths only"). A pushed
