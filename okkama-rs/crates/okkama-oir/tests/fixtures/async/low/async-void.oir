@@ -694,7 +694,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     [i9] %17: own = own.empty
     [i10] %18: deps = deps.of %16
     [i11] (%19: future<void> facts(managed(deps=d2)), %20: cache-state, %21:
-        scope<S1>) = fut.new %17, %18, %14, environment deferred(function=@note, arguments=[%16]), owner S1
+        scope<S1>) = fut.new %17, %18, %14, environment deferred(function=@note, arguments=[%16]), owner S1, binding b0
     [i12] %22: deps = deps.of %19
     [i13] %23: frame<@main> = frame.save %85, slots [frame_slot(slot=0, value=%21, mode=consume), frame_slot(slot=1,
         value=%22, mode=borrow), frame_slot(slot=2, value=%88, mode=consume), frame_slot(slot=4, value=%20,

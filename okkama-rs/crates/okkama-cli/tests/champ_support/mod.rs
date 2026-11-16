@@ -134,6 +134,21 @@ pub fn run_source(text: &str) -> Result<Run, String> {
     run(compile(&[source])?)
 }
 
+/// The High OIR module of inline roots, as the OIR-2 pipeline lowers them before its own pass.
+pub fn high(sources: &[SourceFile]) -> Result<okkama_compiler::oir2::Module, String> {
+    let mut programs = Vec::new();
+    for source in sources {
+        let program = syntax::parse(source, &ParseOptions::default()).map_err(|error| format!("parse: {error:?}"))?;
+        programs.push(syntax::prune::strip_test_items(program));
+    }
+    let roots = sources.iter()
+        .zip(&programs)
+        .map(|(source, program)| RootFile { source, program })
+        .collect::<Vec<_>>();
+    let stdlib = std::fs::canonicalize(root().join("std")).unwrap();
+    oir2::lower_linked_high(&roots, &mut CaseLoader { stdlib }).map_err(|error| format!("high: {error}"))
+}
+
 /// Compiles and runs one case; `Err` describes the first mismatch.
 pub fn run_case(id: &str) -> Result<(), String> {
     let dir = case_dir(id);

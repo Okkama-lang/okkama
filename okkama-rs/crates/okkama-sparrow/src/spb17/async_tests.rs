@@ -1411,18 +1411,6 @@ fn fut_new_produces_its_body_s_future_type() {
     reject_with(&p, verify::FUTURE_TYPES, "differs from the async body's result");
 }
 
-#[test]
-fn no_object_holds_a_future() {
-    let mut p = owner_program(true);
-    let mut holder = res();
-    holder.name = "Holder".into();
-    holder.layout = ObjectRuntimeLayout { storage_fields: vec![FUTURE_INT], allocation_words: 2, identity_offset: None,
-        has_destroy: false, may_reach_resource: false, may_async_destroy: false, trace_layout: vec![0],
-        selection_layout: vec![] };
-    p.objects.push(holder);
-    reject_with(&p, verify::FUTURE_TYPES, "object storage cannot hold a Future");
-}
-
 // --- Existing rules over the new forms -----------------------------------------------------------------------
 
 #[test]

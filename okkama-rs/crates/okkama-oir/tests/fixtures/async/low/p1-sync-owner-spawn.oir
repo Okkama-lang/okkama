@@ -260,7 +260,7 @@ func @app.Kick.start#0(%0: app.Kick facts(plain(certificate=closed_graph(ty=app.
     ^b2(%6: app.Work facts(plain(certificate=closed_graph(ty=app.Work))), %7: scope<S2>) in S2:
     [i2] %8: own = own.empty
     [i3] %9: deps = deps.of %6
-    [i4] (%10: future<int> facts(managed(deps=d0)), %11: cache-state, %12: scope<S2>) = fut.new %8, %9, %7, environment deferred(function=@app.Work.value#0, arguments=[%6]), result int, owner S2
+    [i4] (%10: future<int> facts(managed(deps=d0)), %11: cache-state, %12: scope<S2>) = fut.new %8, %9, %7, environment deferred(function=@app.Work.value#0, arguments=[%6]), result int, owner S2, binding b0
     [i5] %13: deps = deps.of %10
     invoke.own call @app.Watcher.new#0()
         normal ^b4($value, %10, %12, %13)

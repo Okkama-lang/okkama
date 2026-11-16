@@ -353,6 +353,9 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
                     // implementations or one of the any boxes reaches (#711).
                     Some(s::Type::Role(id) | s::Type::RoleSuccessor(id)) => role_reaches(&id),
                     Some(s::Type::Any) => any_reaches,
+                    // A Future field holds a service entry that travels with the object's packet (D25.1, #771): the
+                    // selection walk reaches its holder through the field.
+                    Some(s::Type::Future(_)) => true,
                     _ => false,
                 };
                 reaching.then_some(i as u32)

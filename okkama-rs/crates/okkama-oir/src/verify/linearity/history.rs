@@ -623,6 +623,7 @@ func @f() -> void {
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+                named_futures: Default::default(),
             };
             let mut flow = Flow::new(4, witnesses(module, body));
             flow.availability[1] = AVAILABLE;
@@ -684,7 +685,7 @@ func @f() -> void {
         let mut piece = Piece::new(Origin::Input(value(3)), AdmissionProvenance::Bound);
         piece.predicates.insert(Filter {
             keys: BTreeSet::new(), fresh: false, possible: BTreeSet::new(),
-            labels: SharedSet::from([value(2)]), stale: false, whole_future: false, state: 0,
+            labels: SharedSet::from([value(2)]), stale: false, whole_future: false, futures: false, state: 0,
         }, true);
         flow.closed_inputs.insert(piece);
         let globals = flow.closed_inputs.clone();
@@ -763,6 +764,7 @@ func @f() -> void {
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+                named_futures: Default::default(),
             };
             let before = flow.clone();
             let retired = Origin::RetiredInstruction(InstId::from_u32(1), 0);
@@ -791,6 +793,7 @@ func @f() -> void {
                 materialized_scopes: None, witnesses: witnesses(module, body),
                 diagnose: true, collecting: false, capture_returns: false, contract_invalid: false,
                 defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+                named_futures: Default::default(),
             };
             let value = ValueId::from_u32;
             let labels = |values: &[u32]| -> SharedSet<ValueId> { values.iter().map(|v| value(*v)).collect() };
@@ -800,7 +803,7 @@ func @f() -> void {
                 piece.family = true;
                 piece.predicates.insert(Filter {
                     keys: BTreeSet::from([key]), fresh: false, possible: BTreeSet::new(),
-                    labels: labels(recorded), stale: false, whole_future: false, state: 0,
+                    labels: labels(recorded), stale: false, whole_future: false, futures: false, state: 0,
                 }, true);
                 piece
             };

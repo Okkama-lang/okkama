@@ -165,7 +165,7 @@ func @f(%0: own) -> own [async] abi explicit(input_packet=0,
     (%20: own, %21: own, %22: deps) = own.split %19, s1
     %23: own = own.join [%20, %21]
     (%24: future<void> facts(managed(deps=d2)), %25:
-        scope<S4>) = fut.new %23, %22, %18, environment deferred(function=@task), owner S4
+        scope<S4>) = fut.new %23, %22, %18, environment deferred(function=@task), owner S4, binding b1
     %26: deps = deps.of %24
     invoke.own await %24
         normal ^b6($deps, %16, %17, %24, %25, %26)

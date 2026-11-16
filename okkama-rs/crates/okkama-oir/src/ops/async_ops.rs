@@ -175,7 +175,7 @@ operation_group! { AsyncOp {
     FutureCancelled { future: ValueId }
         => ("fut.cancelled", [future: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Bool), trap: false });
     FutureNew { packet: ValueId, deps: ValueId, owner_state: ValueId, environment: FutureEnvironment,
-        result: Option<TypeId>, owner: ScopeId }
+        result: Option<TypeId>, owner: ScopeId, binding: Option<BindingId> }
         => ("fut.new", [packet: Consume, deps: Observe, owner_state: Consume, environment: Borrow],
             Rule::FutureNew { environment: environment.clone(), packet: *packet, owner: *owner_state,
             result: *result });

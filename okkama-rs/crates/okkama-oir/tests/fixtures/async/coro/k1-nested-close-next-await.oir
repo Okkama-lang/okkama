@@ -129,7 +129,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     %16: int = const 1
     %17: own = own.empty
     %18: deps = deps.of %13
-    (%19: future<int> facts(managed(deps=d0)), %20: cache-state, %21: scope<S2>) = fut.new %17, %18, %15, environment deferred(function=@app.Inner.run#0, arguments=[%13, %16]), result int, owner S2
+    (%19: future<int> facts(managed(deps=d0)), %20: cache-state, %21: scope<S2>) = fut.new %17, %18, %15, environment deferred(function=@app.Inner.run#0, arguments=[%13, %16]), result int, owner S2, binding b0
     %22: deps = deps.of %19
     %23: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%14, mode=consume), frame_slot(slot=1, value=%21, mode=consume), frame_slot(slot=2, value=%22, mode=borrow), frame_slot(slot=3, value=%20, mode=consume)], continuation 1
     invoke.own await %19, result int
@@ -153,7 +153,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     %50: int = const 2
     %51: own = own.empty
     %52: deps = deps.of %47
-    (%53: future<int> facts(managed(deps=d2)), %54: cache-state, %55: scope<S1>) = fut.new %51, %52, %49, environment deferred(function=@app.Inner.run#0, arguments=[%47, %50]), result int, owner S1
+    (%53: future<int> facts(managed(deps=d2)), %54: cache-state, %55: scope<S1>) = fut.new %51, %52, %49, environment deferred(function=@app.Inner.run#0, arguments=[%47, %50]), result int, owner S1, binding b2
     %56: deps = deps.of %53
     %57: frame<@main> = frame.save %11, slots [frame_slot(slot=8, value=%48, mode=borrow), frame_slot(slot=0, value=%55, mode=consume), frame_slot(slot=2, value=%56, mode=borrow), frame_slot(slot=3, value=%54, mode=consume)], continuation 3
     invoke.own await %53, result int

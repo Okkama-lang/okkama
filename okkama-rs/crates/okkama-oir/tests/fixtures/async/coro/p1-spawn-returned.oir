@@ -132,13 +132,15 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M14)
         slot 5: receipt linear
     }
     continuation 0 start saves []
-    continuation 1 at ^b4 saves [0, 1] operands [2]
-    continuation 2 at #11 saves [] operands [1, 3, 4, 5]
+    continuation 1 at ^b6 saves [0, 1] operands [2]
+    continuation 2 at #14 saves [] operands [1, 3, 4, 5]
     service.schedule Schedule0 owner S2, protocol P0, duties [dynamic]
     binding b0 "f": future<int> in S2
     boundary B0 lexical in S2
     dependency d0: dependency = from_ssa(%12)
     dependency d1: dependency = from_ssa(%22)
+    dependency d2: dependency = from_ssa(%31)
+    selection s0: selection = admissible(selection(%10))
     ^b0 in S2:
     %1: frame<@main> = frame.resume %0, continuation 0
     %2: scope<S2> = scope.begin S2
@@ -158,37 +160,46 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M14)
     ret
     ^b4(%10: future<int> facts(managed(deps=d0)), %11: own, %12: deps, %13: scope<S2>) in S2:
     %14: scope<S2> = own.admit %13, %11
-    %15: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%12, mode=borrow), frame_slot(slot=1, value=%14, mode=consume)], continuation 1
-    invoke.own await %10, result int
-        normal ^b10($value, $deps)
-        unwind ^b11($failure, $task, $receipt)
-    ^b5(%16: failure, %17: scope<S2>) in S2:
-    %18: failure = scope.unwind %17, %16, effects scope_effects(failures=[], suspends=false, cancel=false)
-    fut.publish %1, failure(%18)
+    invoke.own scope.split %14, s0
+        normal ^b6($state, $selected, $external_deps, %10, %12)
+        unwind ^b7($state, $failure)
+    ^b5(%15: failure, %16: scope<S2>) in S2:
+    %17: failure = scope.unwind %16, %15, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %1, failure(%17)
     ret
-    ^b6(%19: int, %20: deps, %21: future<int> facts(managed(deps=d1)), %22: deps, %23: scope<S2>) in S2:
-    %24: deps = deps.of %19
-    invoke.own scope.end %23, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b8($closed, %19)
-        unwind ^b9($closed, $failure)
-    ^b7(%25: failure, %26: task-state, %27: receipt, %28: scope<S2>) in S2:
-    %29: frame<@main> = frame.save %47, continuation 2
-    [i11] (%30: scope<S2>, %31: failure) = await.unwind %28, %25, %26, %27, protocol P0
-    %32: frame<@main> = frame.resume %29, continuation 2
-    %33: failure = scope.unwind %30, %31, effects scope_effects(failures=[], suspends=false, cancel=false)
-    fut.publish %32, failure(%33)
+    ^b6(%18: scope<S2>, %19: own, %20: deps, %21: future<int> facts(managed(deps=d1)), %22: deps) in S2:
+    %23: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%21, packet=%19), state=%18, original_scope=S2)
+    %24: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%22, mode=borrow), frame_slot(slot=1, value=%23, mode=consume)], continuation 1
+    invoke.own await %21, result int
+        normal ^b12($value, $deps)
+        unwind ^b13($failure, $task, $receipt)
+    ^b7(%25: scope<S2>, %26: failure) in S2:
+    %27: failure = scope.unwind %25, %26, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %1, failure(%27)
     ret
-    ^b8(%34: closed, %35: int) in S2:
-    %36: own = own.empty
-    fut.publish %41, success(value=%35, packet=%36, deps=%24)
+    ^b8(%28: int, %29: deps, %30: future<int> facts(managed(deps=d2)), %31: deps, %32: scope<S2>) in S2:
+    %33: deps = deps.of %28
+    invoke.own scope.end %32, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b10($closed, %28)
+        unwind ^b11($closed, $failure)
+    ^b9(%34: failure, %35: task-state, %36: receipt, %37: scope<S2>) in S2:
+    %38: frame<@main> = frame.save %56, continuation 2
+    [i14] (%39: scope<S2>, %40: failure) = await.unwind %37, %34, %35, %36, protocol P0
+    %41: frame<@main> = frame.resume %38, continuation 2
+    %42: failure = scope.unwind %39, %40, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %41, failure(%42)
     ret
-    ^b9(%37: closed, %38: failure) in S2:
-    fut.publish %41, failure(%38)
+    ^b10(%43: closed, %44: int) in S2:
+    %45: own = own.empty
+    fut.publish %50, success(value=%44, packet=%45, deps=%33)
     ret
-    ^b10(%39: int, %40: deps) in S2:
-    (%41: frame<@main>, %42: deps, %43: scope<S2>) = frame.resume %15, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S2>, linear=true)]
-    br ^b6(%39, %40, %10, %42, %43)
-    ^b11(%44: failure, %45: task-state, %46: receipt) in S2:
-    (%47: frame<@main>, %48: deps, %49: scope<S2>) = frame.resume %15, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S2>, linear=true)]
-    br ^b7(%44, %45, %46, %49)
+    ^b11(%46: closed, %47: failure) in S2:
+    fut.publish %50, failure(%47)
+    ret
+    ^b12(%48: int, %49: deps) in S2:
+    (%50: frame<@main>, %51: deps, %52: scope<S2>) = frame.resume %24, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S2>, linear=true)]
+    br ^b8(%48, %49, %21, %51, %52)
+    ^b13(%53: failure, %54: task-state, %55: receipt) in S2:
+    (%56: frame<@main>, %57: deps, %58: scope<S2>) = frame.resume %24, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S2>, linear=true)]
+    br ^b9(%53, %54, %55, %58)
 }

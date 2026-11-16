@@ -1,8 +1,8 @@
 oir 2 coro
 // expect async-unmodeled-op instruction:1:20
-// #695 audit case c4b.
-// coro/coro-nested-cold-await.oir with a service.absorb of a cache-state token: D25 operations have no
-// ownership model before R1.
+// #695 audit case c4b, revised by #771: service.absorb is modeled since the D25.2 revision (a stored Future), so
+// the case takes the other D25 operation. coro/coro-nested-cold-await.oir with a service.materialize of the
+// awaited Future's cache entry: materialize has no ownership model before slice G1.
 module coro_nested_cold_await
 entry @main
 scope S0 action in @inner
@@ -111,7 +111,7 @@ func @outer(%0: frame<@outer>) -> void [async] summary(M7) async-creation(M10) a
     ^b6(%41: int, %42: deps) in S1:
     (%43: frame<@outer>, %44: scope<S1>, %45: deps, %46: cache-state) = frame.resume %14, continuation 1, slots [saved_slot(slot=2, ty=scope<S1>, linear=true), saved_slot(slot=3, ty=deps), saved_slot(slot=4, ty=cache-state, linear=true)]
     %90: own = own.empty
-    %91: own = service.absorb %90, %46
+    (%91: own, %92: cache-state) = service.materialize %90, holder %10, kind cache
     br ^b2(%41, %42, %10, %44, %45)
     ^b7(%47: failure, %48: task-state, %49: receipt) in S1:
     (%50: frame<@outer>, %51: scope<S1>, %52: deps, %53: cache-state) = frame.resume %14, continuation 1, slots [saved_slot(slot=2, ty=scope<S1>, linear=true), saved_slot(slot=3, ty=deps), saved_slot(slot=4, ty=cache-state, linear=true)]

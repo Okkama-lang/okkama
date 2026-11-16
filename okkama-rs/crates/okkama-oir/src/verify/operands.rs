@@ -1242,7 +1242,7 @@ impl Checker<'_, '_> {
             AsyncOp::FutureSpawnBound { future } => { self.future(*future)?; }
             AsyncOp::FutureCancel { future }
             | AsyncOp::FutureDone { future } | AsyncOp::FutureCancelled { future } => { self.future(*future)?; }
-            AsyncOp::FutureNew { environment, packet, deps, owner, owner_state, result } => {
+            AsyncOp::FutureNew { environment, packet, deps, owner, owner_state, result, .. } => {
                 match environment {
                     FutureEnvironment::Deferred { function, arguments, descriptors }
                     | FutureEnvironment::External { function, arguments, descriptors } => {

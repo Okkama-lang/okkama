@@ -1009,7 +1009,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     [i7] %18: deps = deps.of %13
     [i8] (%19: future<int> facts(managed(deps=d0)), %20: cache-state,
         %21: scope<S2>) = fut.new %17, %18, %15, environment deferred(function=@app.Inner.run#0, arguments=[%13,
-        %16]), result int, owner S2
+        %16]), result int, owner S2, binding b0
     [i9] %22: deps = deps.of %19
     [i10] %23: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%14, mode=consume), frame_slot(slot=1,
         value=%21, mode=consume), frame_slot(slot=2, value=%22, mode=borrow), frame_slot(slot=3, value=%20,
@@ -1049,7 +1049,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     [i25] %58: deps = deps.of %53
     [i26] (%59: future<int> facts(managed(deps=d2)), %60: cache-state,
         %61: scope<S1>) = fut.new %57, %58, %55, environment deferred(function=@app.Inner.run#0, arguments=[%53,
-        %56]), result int, owner S1
+        %56]), result int, owner S1, binding b2
     [i27] %62: deps = deps.of %59
     [i28] %63: frame<@main> = frame.save %11, slots [frame_slot(slot=8, value=%54, mode=borrow), frame_slot(slot=0,
         value=%61, mode=consume), frame_slot(slot=2, value=%62, mode=borrow), frame_slot(slot=3, value=%60,

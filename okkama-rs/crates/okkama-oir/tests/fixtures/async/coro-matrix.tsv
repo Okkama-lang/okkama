@@ -10,3 +10,5 @@ async-unmodeled-op	coro/coro-nested-cold-await.oir	audit-invalid/c4b.oir
 coro-missing-layout	../verify/valid/B9-unique-temporary-take.oir	coro-invalid/coro-missing-layout.oir
 d24-spawn-not-fresh	coro/p1-spawn-awaited.oir	coro-invalid/d24-spawn-not-fresh.oir
 d24-schedule-task-first	coro/p1-spawn-awaited.oir	coro-invalid/d24-schedule-task-first.oir
+b9-binding-attribute	coro/async-plain-await.oir	coro-invalid/b9-binding-attribute.oir
+b9-bound-future-absorbed	coro/d25-stored-cold.oir	coro-invalid/b9-bound-future-absorbed.oir

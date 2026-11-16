@@ -281,6 +281,19 @@ fn binding_a_managed_array_removes_its_elements_from_admission() {
     assert_eq!(redundant(1), Vec::<usize>::new());
 }
 
+/// PR-B (#784): the inventories compared here hold identities only. When `r` can reach a Future holder, the filtered
+/// and unfiltered splits can still differ in the service entries they take (a bound Future's entry stays with its
+/// owner only under the filter), so the filter is kept even where the identity partitions agree.
+#[test]
+fn an_admission_filter_whose_root_reaches_a_holder_is_never_redundant() {
+    let p = bound_then_split(2);
+    assert_eq!(evidence::redundant_admission_filters(&p, &p.functions[0]).unwrap(), vec![8]);
+    let mut p = bound_then_split(2);
+    p.objects[0].layout.storage_fields = vec![Type::Future(0)];
+    p.objects[0].layout.trace_layout = vec![0];
+    assert_eq!(evidence::redundant_admission_filters(&p, &p.functions[0]).unwrap(), Vec::<usize>::new());
+}
+
 /// A role value is its object: binding a role value of a resource object binds that object, so the admission
 /// filter of a later split is not redundant either (#711, #697: `reaches_resource` counts role values).
 #[test]

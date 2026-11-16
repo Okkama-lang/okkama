@@ -1,7 +1,8 @@
 oir 2 own
-// expect OIR2-B9.1 terminator:4:1
-// A plain scope.split selects the bound f of B9-own-shared-cache and takes its cache duty with
-// the Future: no selection extracts a cache duty, only cache.rehome moves it (C-4, ruling of #601 R1).
+// expect b9-bound-future-named terminator:4:1
+// Review of D25 (F4), restored after #771 turned it valid: valid/B9-own-split-moves-named-future.oir whose `fut.new`
+// carries `binding b0`. A plain scope.split names the bound f and would take its cache duty with the Future, but a
+// binding never moves a duty out of its owner; only cache.rehome does (C-4, PR-B1, В9).
 module r1_cached_outcome
 entry @main
 
@@ -172,7 +173,7 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     %2: own = own.empty
     (%3: own, %4: own, %5: deps) = own.split %2, s0
     %6: own = own.join [%3, %4]
-    (%7: future<Res> facts(managed(deps=d2)), %8: scope<S4>) = fut.new %6, %5, %1, environment deferred(function=@work), result Res, owner S4
+    (%7: future<Res> facts(managed(deps=d2)), %8: scope<S4>) = fut.new %6, %5, %1, environment deferred(function=@work), result Res, owner S4, binding b0
     %9: deps = deps.of %7
     invoke.own scope.split %8, selection(%7)
         normal ^steal($state, $selected, $external_deps, %7, %9)

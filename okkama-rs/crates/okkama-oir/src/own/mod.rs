@@ -23,6 +23,7 @@ mod routing;
 mod arrays;
 mod construction;
 mod futures;
+mod stored;
 
 use crate::*;
 use std::collections::BTreeMap;

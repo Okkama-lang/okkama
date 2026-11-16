@@ -1351,7 +1351,7 @@ opcodes!(AsyncOp {
     FutureCancel { future } => "fut.cancel",
     FutureDone { future } => "fut.done",
     FutureCancelled { future } => "fut.cancelled",
-    FutureNew { packet, deps, owner_state, environment, result, owner } => "fut.new",
+    FutureNew { packet, deps, owner_state, environment, result, owner, binding } => "fut.new",
     FuturePublish { frame, outcome } => "fut.publish",
     AwaitUnwind { state, failure, task, receipt, protocol } => "await.unwind",
     ServiceMaterialize { packet, entry } => "service.materialize",

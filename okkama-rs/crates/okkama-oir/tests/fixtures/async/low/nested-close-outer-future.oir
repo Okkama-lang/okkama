@@ -1071,7 +1071,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     [i6] %23: deps = deps.of %19
     [i7] (%24: future<int> facts(managed(deps=d3)), %25: cache-state,
         %26: scope<S1>) = fut.new %22, %23, %20, environment deferred(function=@app.Inner.run#0, arguments=[%19,
-        %21]), result int, owner S1
+        %21]), result int, owner S1, binding b0
     [i8] %27: deps = deps.of %24
     [i9] %28: bool = const true
     cond %28, ^b7, ^b8
@@ -1093,7 +1093,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     [i16] %42: deps = deps.of %35
     [i17] (%43: future<int> facts(managed(deps=d5)), %44: cache-state,
         %45: scope<S2>) = fut.new %41, %42, %39, environment deferred(function=@app.Inner.run#0, arguments=[%35,
-        %40]), result int, owner S2
+        %40]), result int, owner S2, binding b1
     [i18] %46: deps = deps.of %43
     [i19] %47: frame<@main> = frame.save %1, slots [frame_slot(slot=4, value=%36, mode=borrow), frame_slot(slot=1,
         value=%37, mode=borrow), frame_slot(slot=2, value=%38, mode=consume), frame_slot(slot=5, value=%45,

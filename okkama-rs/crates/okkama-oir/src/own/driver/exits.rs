@@ -115,13 +115,20 @@ impl Driver<'_, '_> {
         if let Some(replacement) = point.env.cleanup.replacement {
             values.push(replacement.value);
         } else {
+            // A Future whose duty a call gave this function (its creation, D12, or a call result, D25.1) is a cache:
+            // its duty and what the cache holds leave the scope only through cache.rehome (C-4), never through a
+            // split. Any other Future (a parameter, an element or a field read) is borrowed; a carrier entry
+            // packet (PR-B2, #782) may still have brought its entry, so the exit's selection takes it along.
             for original in point.env.cleanup.wanted.iter().chain(&point.env.cleanup.carried) {
+                let future = self.high.values.get(*original).is_ok_and(|value| {
+                    crate::own::futures::is_future(self.module, value.ty)
+                });
+                if future && !self.borrowed_future(scope, *original) {
+                    continue;
+                }
                 values.push(point.env.value(*original)?.value);
             }
         }
-        // A Future's graph is its cache: its duty and what the cache holds leave the scope only
-        // through cache.rehome (C-4), never through a split.
-        values.retain(|value| !crate::own::futures::is_future(self.module, self.body.values.get(*value).unwrap().ty));
         // An async body's plain result selects nothing from the closing scope.
         if self.async_exit(&point)? {
             values.retain(|value| self.managed(self.body.values.get(*value).unwrap().ty));

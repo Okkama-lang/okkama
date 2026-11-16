@@ -7,7 +7,7 @@ impl Engine<'_, '_> {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("summaries::graph_filter");
         let possible = self.possible(flow, &keys);
-        Filter { keys, possible, labels, fresh, state: 0, stale: false, whole_future: false }
+        Filter { keys, possible, labels, fresh, state: 0, stale: false, whole_future: false, futures: false }
     }
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
         #[cfg(any(test, feature = "verifier-differential"))]
@@ -64,6 +64,10 @@ impl Engine<'_, '_> {
                 }
             }
         }
+        // Arguments that can hold a Future reach its holder graph whole (D25.2 revision, #771).
+        let futures = arguments.iter().any(|value| {
+            self.body.values.get(*value).is_ok_and(|data| self.holds_futures(data.ty))
+        });
         for value in before.token_values() {
             if !self.scan_work(1) {
                 return;
@@ -71,7 +75,8 @@ impl Engine<'_, '_> {
             if Some(value) == call.packet || before.availability[value.as_u32() as usize] != AVAILABLE {
                 continue;
             }
-            let filter = self.graph_filter(before, graph.clone(), labels.clone(), true);
+            let mut filter = self.graph_filter(before, graph.clone(), labels.clone(), true);
+            filter.futures = futures;
             let (_, selected) = self.partition_filter(&before.tokens[value.as_u32() as usize], filter);
             if !selected.pieces.is_empty() {
                 self.error(R::B51, "fresh call inputs must enter callee cleanup, including borrow parameters");
@@ -273,9 +278,15 @@ impl Engine<'_, '_> {
                     labels.extend(self.summary_labels(before, &arguments, selection));
                 }
             }
-            let filter = self.graph_filter(flow, permitted, labels, false);
+            // A Future argument, or one stored in an argument, takes its whole holder graph along (D25.2, #771).
+            let futures = arguments.iter().any(|value| {
+                self.body.values.get(*value).is_ok_and(|data| self.holds_futures(data.ty))
+            });
+            let mut filter = self.graph_filter(flow, permitted, labels, false);
+            filter.futures = futures;
             let (denied, allowed) = self.partition_filter(&before.tokens[packet.as_u32() as usize], filter);
-            let filter = self.graph_filter(flow, all_refs.clone(), all_labels.clone(), false);
+            let mut filter = self.graph_filter(flow, all_refs.clone(), all_labels.clone(), false);
+            filter.futures = futures;
             let (unused, selected) = self.partition_filter(&allowed, filter);
             let settled: Vec<_> = denied.pieces.union(&unused.pieces).cloned().collect();
             let live = flow.clone();

@@ -170,9 +170,10 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             constructor_inputs: flows[&function].constructor_inputs.clone(),
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
             witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
-            dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(),
+            dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(), future_bindings: BTreeMap::new(),
         };
         driver.temporaries = driver.temporary_futures();
+        driver.future_bindings = driver.bound_futures();
         let captured: BTreeSet<_> = high.insts.iter().flat_map(|(_, instruction)| match &instruction.op {
             Operation::Lexical(LexicalOp::DeferRegister { action, .. }) => action.bindings.clone(),
             _ => vec![],
@@ -327,6 +328,22 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
             let state = point.env.state(root)?;
             point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
+            // PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope
+            // one that may hold them, so its schedule ends with the dynamic step. `own.accept` puts the packet's
+            // entries in the scope's bound journal, not its admission journal: the callee borrows them as it borrows
+            // a parameter, and no admissible selection of the callee takes them. A bare Future input of an async
+            // body brings none: own never offers a Future input to `fut.new` (OIR-2 §10.2).
+            let asynchronous = super::futures::is_async(driver.module, function);
+            let carries = high.blocks.get(high.entry).map_err(arena)?.params.iter().any(|original| {
+                high.values.get(*original).is_ok_and(|value| {
+                    driver.analysis.types.get(&value.ty)
+                        .is_some_and(|classification| !classification.service_types.is_empty())
+                        && !(asynchronous && super::futures::is_future(driver.module, value.ty))
+                })
+            });
+            if carries {
+                driver.dynamic_owners.insert(root);
+            }
         } else {
             signature.ownership_abi = OwnershipAbi::Observation;
             if driver.retained.contains(&root) {
@@ -558,6 +575,8 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
         for block in driver.blocks.values() {
             driver.ssa.seal(*block, driver.predecessors.get(block).copied().unwrap_or(0))?;
         }
+        // D25.2 revision (#771): a stored Future's duty leaves with its packet, never by a rehome.
+        super::stored::drop_stored_rehomes(driver.module, &mut driver.body)?;
         for schedule in &high.service_schedules {
             let mut schedule = schedule.clone();
             schedule.dictionary = schedule.dictionary.map(|value| {
@@ -650,6 +669,10 @@ struct Driver<'a, 'o> {
     dynamic_owners: BTreeSet<ScopeId>,
     /// High Futures that their awaiting scope takes (OIR-2 §10.2, §10.3).
     temporaries: BTreeSet<ValueId>,
+    /// PR-B1 (#784): every binding that holds each High Future this function binds, read from its `bind`s and
+    /// `rebind`s. An alias (`let g = f`) binds the same SSA value again, so one value can have several. A created
+    /// Future's `fut.new` carries the one that lives in the Future's owner.
+    future_bindings: BTreeMap<ValueId, Vec<BindingId>>,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:
@@ -746,9 +769,13 @@ impl Driver<'_, '_> {
                 let latest = point.env.value(original)?;
                 let owner = self.high.bindings.get(binding).map_err(arena)?.scope;
                 let ty = self.body.values.get(value).map_err(arena)?.ty;
-                // A Future's binding names it; its cache duty stays in the owner state (D12).
-                if self.managed(ty) && !super::futures::is_future(self.module, ty)
-                    && point.env.scopes.contains_key(&owner) {
+                // PR-B1 (#784): only an admitted Future's binding is a split and a bind: a call result, or a Future
+                // a nested scope rehomed into this one (an entry of the admission journal at run time). The binding
+                // of a Future created here emits nothing: its duty is a state key of its owner (D12), `fut.new …
+                // binding` already marks it bound, and a split would add an unwind edge to an infallible creation.
+                // A Future parameter is borrowed from the caller (OIR-2 §10.2): its binding takes nothing either.
+                let borrowed = super::futures::is_future(self.module, ty) && !self.admitted_future(original);
+                if self.managed(ty) && !borrowed && point.env.scopes.contains_key(&owner) {
                     let packet;
                     if point.env.scopes.len() == 1 {
                         let state = *point.env.scopes.values().next().unwrap();
