@@ -176,6 +176,14 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
             "the program entry cannot be an async external")?;
     }
     for (id, object) in p.objects.iter().enumerate() {
+        // I-F2, #773 (#791 N3): a witness table names a function with code, never an external. The producer reaches
+        // an async action, an intrinsic or a native through an adapter of the slot's signature, so a dispatch target
+        // always checks its own packet on entry.
+        for &function in object.implements.iter().flat_map(|table| &table.slots) {
+            let f = &p.functions[function as usize];
+            enforce(!f.code.is_empty() && f.proofs.entry.as_ref().is_none_or(|entry| entry.external.is_none()),
+                "ROLE_IMPL", &format!("{}: a witness table cannot name an external", f.symbol))?;
+        }
         let entries = p.functions.iter().filter(|function| function.proofs.entry.as_ref()
             .is_some_and(|entry| entry.destroy == Some(id as u32))).collect::<Vec<_>>();
         require(entries.len() == usize::from(object.layout.has_destroy),
@@ -650,8 +658,8 @@ pub(super) fn dispatch_callees<'a>(p: &'a Program, arguments: &[Argument]) -> Ve
 
 /// Every implementation a dispatch can enter refines the site contract: it fails, and retains its
 /// language parameters (receiver first), within the dispatch's bounds (`DISPATCH_TARGET`). A plain
-/// call packet is required where every target has plain inputs, or where a plain target is external:
-/// a target with code checks its packet on entry, an external one cannot.
+/// call packet is required where every target has plain inputs. Every target has code, which checks its packet on
+/// entry: no witness table names an external (`ROLE_IMPL`, #791 N3).
 fn check_dispatch_contract(p: &Program, f: &Function, arguments: &[Argument],
     reconstructed: &mut evidence::Evidence<'_>) -> Check
 {
@@ -677,8 +685,7 @@ fn check_dispatch_contract(p: &Program, f: &Function, arguments: &[Argument],
             == Ok(ProducedType::Service(ServiceKind::Packet)) => Some(*location),
         _ => None,
     });
-    let plain = callees.iter().all(|callee| plain_inputs(p, callee))
-        || callees.iter().any(|callee| callee.code.is_empty() && plain_inputs(p, callee));
+    let plain = callees.iter().all(|callee| plain_inputs(p, callee));
     if let Some(packet) = packet
         && plain
     {

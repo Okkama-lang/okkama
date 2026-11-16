@@ -74,6 +74,59 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   cancellation. Now they refuse only a body or call that suspends or runs an
   async destroy; delivery of a cancellation still needs a suspending
   operation, which a synchronous body cannot hold.
+- **A covariant successor result of an async role slot is a named refusal
+  (#791 D1).** An async action that narrows its role slot's successor result
+  (`async step() is ^Walker` for `async step() is ^Stepping`) made the
+  producer wrap the creation thunk's Future in `role.wrap`, which the High
+  verifier refused with an internal error. A Future's outcome type is fixed
+  at its creation, so the producer now refuses it as `unsupported`
+  ("covariant successor result of an async role slot").
+
+- **SPB 17: `verify` types `fut.spawn.bound` itself (#791 N1).** Opcode 87
+  has the operand shape `l` and the Future check of `fut.cancel`, so the
+  structural verifier refuses a service operand (`SPB_STRUCTURE`) or a
+  register that is not a Future (`SPB_FUTURE_TYPES`) without the load check.
+
+- **SPB 17: a witness table never names an external (#791 N3, I-F2).** The
+  load check refuses an implementation table whose slot is a catalogue
+  external (`ROLE_IMPL`); the producer reaches an async action, an intrinsic
+  or a native through an adapter with code (rulings PR-D, #773), so every
+  dispatch target checks its own packet on entry, and the dispatch rule no
+  longer has a branch for external targets.
+
+- **A synchronous function that returns an async intrinsic's or native's
+  Future passes own's Full verifier (#791 W3).** Own's summary inference gave
+  the Future of an async body's call a fresh family (its cache duty), but not
+  the Future of an async intrinsic or native (D22). The creation thunk of
+  `CancellationToken.wait` for `Cancelling.wait` (ruling PR-D) was then
+  refused with `B51` ("body returns a fresh identity absent from its declared
+  summary") in every program that imports the cancellation token.
+
+- **Every SPB 17 catalogue row is pinned end to end (#799).** One test
+  compiles programs that reach every row of the std async primitives'
+  catalogue and loads them against the trusted catalogue, checking each
+  declaration's ABI, failures and deps against its row; a row that no
+  program reaches fails it. It replaces a test that compared the producer's
+  formula with itself. The cancellation token's rows stop in low on #775
+  until it lands.
+
+- **The producer's catalogue objects and native failures come from SPB 17
+  (#799).** The std objects whose members are runtime intrinsics are now the
+  declarations the SPB 17 rows name (`drivers::has_members`), and a native's
+  failure kinds are read from `p1::NATIVE_FAILURES` through one mask
+  conversion; the producer's own copies (`OBJECTS`, `[Program, Native]`) are
+  gone.
+
+- **A std member of channels, groups, collectors or timeouts is refused by
+  its catalogue row on Champ (#601 B3).** Members whose std body is a
+  placeholder that does not say "VM intrinsic" (`Raced.winner`,
+  `FirstSuccessful.outcome`, `FutureCompletions.completion`,
+  `Within`/`Before.outcome`, `FutureGroup.start`) and the holders'
+  constructors were lowered as ordinary code: `await Raced(origins:
+  [...]).winner()` threw `NoFutures` where Tomato returns the winner. The
+  producer now refuses each of them as `unsupported` with its row and slice
+  ("std async intrinsic okkama.collect.Raced.winner (P2.5 slice G1, D23)")
+  until the runtime slices land.
 
 - **An accepted holder of closures binds their dictionary (#786, part).** An
   explicit entry that accepts a holder of action values (`Wrapped.value`)
@@ -866,6 +919,19 @@ for mutable synchronous test values and `Atomic` for async code or object and
 fake fields; role fakes and their ordinary typed fields remain available.
 
 ### Added
+
+- **SPB 17 catalogue rows of channels (Q2) and groups, collectors and
+  timeouts (G1) (#601 B3, memo §§5.2, 6.2).** The 22 members Tomato runs as
+  intrinsics (`Channel.new_capacity`, `sending`, `receiving`, the endpoints'
+  constructors, `send`, `item` and `close`; `FutureGroup.new`, `start`,
+  `active`, `cancel`, `wait`, `FutureScope.outcome`, the collectors'
+  `results`, `winner`, `outcome`, `remaining_count`, `completion`, and
+  `Within`/`Before.outcome`) are rows of `spb17::drivers::HOLDERS`, each
+  instantiated per specialization as the Atomic entries are
+  (`okkama.channel.Sending.send$int` over `async.channel.Sending_int`). A
+  holder's hidden word is a `RuntimeCell` (ruling PR-C); a Channel and a
+  FutureGroup hold duties. The rows wait for their runtime (lane A, A3/A4):
+  the loader does not admit them yet (`HOLDERS_READY`).
 
 - **Async natives on Champ (#601 N1, OIR-2 async ABI D22, ruling PR-N).**
   The 51 `native async` declarations of std `runtime/` (database, network,

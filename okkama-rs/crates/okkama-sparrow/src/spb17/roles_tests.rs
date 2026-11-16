@@ -316,9 +316,10 @@ fn plain_targets_need_an_empty_packet() {
 }
 
 #[test]
-fn a_plain_external_target_needs_an_empty_packet() {
-    // A resource implementation makes `Named` managed, so the caller's packet is opaque and the dispatch has
-    // mixed targets. A plain target with code checks its packet on entry; an external one cannot.
+fn a_witness_table_never_names_an_external() {
+    // I-F2, #773 (#791 N3): a resource implementation makes `Named` managed, so the caller's packet is opaque and
+    // the dispatch has mixed targets. A plain target with code checks its packet on entry; an external one could
+    // not, so no witness table names one: the producer reaches an external through an adapter with code.
     let program = |external: bool| {
         let mut p = role_caller(vec![1, 2], 0);
         let resource = with_resource(&mut p);
@@ -336,8 +337,12 @@ fn a_plain_external_target_needs_an_empty_packet() {
         }
         p
     };
-    reject(&program(true), "CALL_PLAIN_PACKET");
-    assert_ne!(verify_load(&program(false), &NoExternalContracts).unwrap_err().rule, "CALL_PLAIN_PACKET");
+    let failure = verify_load(&program(true), &NoExternalContracts).unwrap_err();
+    assert_eq!(failure.rule, "ROLE_IMPL", "{failure}");
+    assert!(failure.message.contains("Box.name: a witness table cannot name an external"), "{failure}");
+    // The same table naming a body passes this rule.
+    let failure = verify_load(&program(false), &NoExternalContracts).unwrap_err();
+    assert!(failure.rule != "ROLE_IMPL" && failure.rule != "CALL_PLAIN_PACKET", "{failure}");
 }
 
 /// The caller returns only the packet of a dispatch whose implementations return `int`.

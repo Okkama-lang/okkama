@@ -1243,7 +1243,8 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             input(locations.len() - 1, ScopeState)?;
             ctx.value = future;
         }
-        Await | FutureCancel | FutureDone | FutureCancelled => {
+        // PR-E (#791 N1): the bound spawn observes its Future, as a cancel does.
+        Await | FutureCancel | FutureDone | FutureCancelled | FutureSpawnBound => {
             let Some(Type::Future(index)) = locations.first().and_then(|&location| match loc_type(f, location) {
                 Ok(ProducedType::Value(ty)) => Some(ty),
                 _ => None,
@@ -1580,8 +1581,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         AwaitTake => shape == "lls",
         // The Future and its cache duty (D24.1).
         FutureSpawn => shape == "ll",
-        // PR-E: locations only; SPB_SPAWN requires exactly the Future (`suspension::check_spawns`).
-        FutureSpawnBound => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
+        // PR-E: the Future alone (#791 N1).
+        FutureSpawnBound => shape == "l",
         // The exit's destination, the pending reserve and the cache duty with a spawned Future's task duty (C-4,
         // token form), or the owner state and the Future whose admitted entry moves (state form).
         CacheRehome => shape == "xll" || shape == "xlll",

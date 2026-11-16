@@ -146,6 +146,22 @@ fn prune_moves_an_async_body_and_its_continuation_sites() {
     assert_eq!(sites, vec![None, Some(3)]);
 }
 
+/// #791 W8 (ruling PR-M): an async defer entry (`defer await`, C-6) has its own frame layout as an async body does,
+/// and the prune moves it the same way: the layout it names, not another.
+#[test]
+fn prune_moves_an_async_defer_entry_and_its_own_layout() {
+    let (mut f, layout) = async_pair();
+    f.entry_abi = s::EntryAbi::AsyncDefer { layout: 1 };
+    let untouched = s::FrameLayout { slots: vec![], continuations: layout.continuations.clone() };
+    let mut frames = vec![untouched.clone(), layout];
+    dead::prune_unreachable(&mut f, &mut frames).unwrap();
+    assert_eq!(f.code.len(), 6);
+    assert_eq!(f.code[4], frame(s::Opcode::FrameResume, 1));
+    let sites = frames[1].continuations.iter().map(|continuation| continuation.site).collect::<Vec<_>>();
+    assert_eq!(sites, vec![None, Some(3)]);
+    assert_eq!(frames[0], untouched);
+}
+
 #[test]
 fn prune_moves_the_sites_of_an_async_body_whose_dead_code_does_not_suspend() {
     let (mut f, mut layout) = async_pair();

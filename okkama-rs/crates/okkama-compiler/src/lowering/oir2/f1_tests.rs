@@ -239,3 +239,99 @@ fn f1_own_keeps_the_duty_form_only_for_a_spawn_right_after_its_creation() {
     assert_ne!(separated, text);
     assert_eq!(spawned(&separated), ["bound"]);
 }
+
+/// #791 D1 (W7): an async slot whose implementation narrows a successor result (`^Walker` for `^Stepping`, which the
+/// front end admits) would need the slot's Future of `^Stepping` from the body's Future of `^Walker`. No operation
+/// converts the outcome of a cold Future, so the producer refuses it with a named construct, not an internal error.
+#[test]
+fn f1_a_covariant_successor_result_of_an_async_slot_is_refused_by_name() {
+    let source = concat!(
+        "module app v1.0.0; ",
+        "role Stepping { async step() is ^Stepping; label() is int; } ",
+        "object Walker does Stepping { has n is int = 0; Walker() {} async step() is ^Walker { ^n = n + 1; } ",
+        "label() is int { n; } } ",
+        "async main() is int { let s is Stepping = Walker(); let t = await s.step(); t.label(); }",
+    );
+    match super::lower_std(source) {
+        Err(super::LowerError::Unsupported { message, span }) => {
+            assert!(message.contains("covariant successor result of an async role slot"), "{message}");
+            assert!(!span.is_empty());
+        }
+        Err(other) => panic!("expected the named refusal, got {other}"),
+        Ok(_) => panic!("expected the named refusal"),
+    }
+}
+
+const MANAGED: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "role Making { async make() is Res; } ",
+    "object Maker does Making { Maker(); async make() is Res { Res(l: \"made\"); } } ",
+    "async main() is int { let m is Making = Maker(); let r = await m.make(); ",
+    "let a is async () is Res = Maker().make; let s = await a(); r.n() + s.n(); }",
+);
+
+/// #791 W2 (§4.8 item 2): the Future of a role call and of an action value call is a dynamic entry of the awaiting
+/// scope (PR-D item 4), awaited shared. With a managed outcome own takes neither (no temporary take: no
+/// `unique_cache.proof`, no `await.take`), even where the producer marks the awaited call `temp` (OIR-2 §10.3): a
+/// Future this body did not create has no take capability, and its outcome is released by the dynamic step.
+#[test]
+fn f1_a_role_or_action_call_future_is_awaited_shared_without_a_take() {
+    let module = super::lower_std(MANAGED).unwrap_or_else(|error| panic!("{error}"));
+    super::verify_high(&module, "managed role call");
+    let (_, main) = function(&module, "main");
+    let body = main.body.as_ref().unwrap();
+    let futures = body.values.iter().filter(|(_, value)| {
+        matches!(module.types.get(value.ty).unwrap(), ir::Type::Future(_))
+    }).map(|(id, _)| id).collect::<Vec<_>>();
+    let awaited = body.insts.iter().filter(|(_, inst)| matches!(inst.op, ir::Operation::Async(ir::AsyncOp::Await {
+        future, .. }) if futures.contains(&future))).count();
+    assert_eq!(awaited, 2, "both Futures are awaited");
+    let (own, _) = super::own_case_tests::own_stage(MANAGED, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, main) = function(&own, "main");
+    let body = main.body.as_ref().unwrap();
+    let takes = body.insts.iter().map(|(_, inst)| &inst.op)
+        .chain(body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+            ir::TermKind::InvokeOwn { op, .. } => Some(&**op),
+            _ => None,
+        }))
+        .filter(|op| matches!(op, ir::Operation::Async(ir::AsyncOp::AwaitTake { .. }
+            | ir::AsyncOp::UniqueCacheProof { .. })))
+        .count();
+    assert_eq!(takes, 0);
+    full_low(MANAGED);
+}
+
+/// Two implementations of `Cancelling`: the std token (whose `wait` is a D22 intrinsic) and a user body.
+const TWO_CANCELLING: &str = concat!(
+    "module app v1.0.0; import \"async/cancellation\" take Cancellation, Cancelling; ",
+    "object Quiet does Cancelling { Quiet(); requested() is bool { true; } check() is void { } ",
+    "async wait() is Cancelling { Quiet(); } } ",
+    "object Probe { Probe(); async probe(c is Cancelling) is int { let woken = await c.wait(); ",
+    "if woken.requested() { 1; } else { 0; } } } ",
+    "async main() is int { let c = Cancellation(); let token = c.cancelling(); c.cancel(); ",
+    "await Probe().probe(token) + await Probe().probe(Quiet()); }",
+);
+
+/// #791 W3 (§4.8 item 3): an async slot implemented by an async intrinsic and by an async body. Both witnesses are
+/// creation thunks with the slot's signature, and own's Full verifier admits both: each thunk returns the fresh
+/// Future its call creates (I-F1: no suspension, no Cancelled). The SPB 17 half of W3 is in
+/// `codegen/sparrow_oir2/roles_tests.rs`.
+#[test]
+fn f1_two_implementations_of_an_async_slot_share_its_thunk_signature() {
+    let (own, _) = super::own_case_tests::own_stage(TWO_CANCELLING, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let slot = role_slot(&own, "Cancelling", 2);
+    for object in ["CancellationToken", "Quiet"] {
+        let thunk = own.functions.get(witness(&own, object, 2)).unwrap();
+        assert!(!thunk.attrs.contains(&ir::FunctionAttr::Async), "{}", thunk.symbol);
+        assert_eq!((&thunk.signature.results, &thunk.signature.params[1..]), (&slot.results, &slot.params[..]));
+        let summary = own.summaries.get(thunk.summary.unwrap()).unwrap();
+        assert!(!summary.contract.suspends && !summary.contract.async_destroy, "{}", thunk.symbol);
+        assert!(!summary.contract.failures.contains(&ir::FailureKind::Cancelled), "{}: {:?}", thunk.symbol,
+            summary.contract.failures);
+        let [result] = summary.results.as_slice() else { panic!("one result") };
+        assert!(!result.fresh.is_empty(), "{}: the created Future is fresh, with its cache duty", thunk.symbol);
+    }
+}

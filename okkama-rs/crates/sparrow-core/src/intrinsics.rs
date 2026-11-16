@@ -1127,3 +1127,22 @@ mod sort_tests {
         assert!(items.windows(2).all(|w| w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 < w[1].1)));
     }
 }
+
+#[cfg(test)]
+mod holder_rows {
+    use super::Intrinsic;
+    use okkama_sparrow::spb17::drivers;
+
+    /// #601 B3: every SPB 17 row of Q2 and G1 names one of Tomato's intrinsics, the one its runtime slice (A3, A4)
+    /// binds; a row without its suffix is Tomato's name. The Q1 rows likewise.
+    #[test]
+    fn every_catalogue_row_names_a_tomato_intrinsic() {
+        for template in drivers::HOLDERS {
+            assert!(Intrinsic::resolve(template.name).is_some(), "{}", template.name);
+            assert!(Intrinsic::resolve(&drivers::specialized(template, &["int"])).is_none(), "{}", template.name);
+        }
+        for row in drivers::CATALOGUE {
+            assert!(Intrinsic::resolve(row.name).is_some(), "{}", row.name);
+        }
+    }
+}
