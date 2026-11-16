@@ -50,6 +50,8 @@ struct Engine<'m, 's> {
     defer_stack: Vec<FuncId>,
     defer_outputs: Vec<defer::ReturnWitness>,
     defer_cache: std::collections::BTreeMap<FuncId, Vec<defer::ReturnWitness>>,
+    /// PR-B1 (#784): see the field of the linearity engine.
+    named_futures: std::collections::BTreeMap<Origin, bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,10 +140,15 @@ pub(super) fn check<'m>(module: &'m Module, selected: Option<FuncId>, state: &mu
             witnesses: witnesses(module, body), diagnose: true, collecting: false,
             capture_returns: false, contract_invalid: false,
             defer_stack: vec![function], defer_outputs: vec![], defer_cache: Default::default(),
+            named_futures: Default::default(),
         };
         engine.solve();
     }
 }
+
+/// The precise engine records no partitions; the test hook is the linearity engine's.
+#[cfg(test)]
+fn record_partition(_: FuncId, _: SelectionId, _: &Token, _: &Token) {}
 
 impl Engine<'_, '_> {
     fn scan_work(&mut self, _work: usize) -> bool {
@@ -364,7 +371,7 @@ impl Engine<'_, '_> {
                     token.pieces = token.pieces.iter().cloned().map(|mut piece| {
                         piece.predicates.insert(Filter {
                             keys: keys.clone(), fresh: false, possible: BTreeSet::new(),
-                            labels: input_labels.clone(), stale: false, whole_future: false, state: 0,
+                            labels: input_labels.clone(), stale: false, whole_future: false, futures: false, state: 0,
                         }, true);
                         piece
                     }).collect();

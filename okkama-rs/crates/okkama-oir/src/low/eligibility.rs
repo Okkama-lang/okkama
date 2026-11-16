@@ -193,8 +193,11 @@ impl Context<'_> {
             AsyncOp::CacheRehome { form: RehomeForm::State(_), .. } => Err(LowError::InvalidInput {
                 function: Some(function), message: "the pre-C-4 rehome form is not produced (C-4)".into(),
             }),
-            AsyncOp::ServiceMaterialize { .. } | AsyncOp::ServiceAbsorb { .. } => {
-                Err(unsupported(function, "packet duties in fields, arrays and groups (D25.2) come with G1"))
+            // D25.2, revision of 2026-11-16 (#771, #758): coro absorbs the token of a Future created here into the
+            // packet its stored value travels in; the token form back (`materialize`) waits for G1.
+            AsyncOp::ServiceAbsorb { .. } => Ok(()),
+            AsyncOp::ServiceMaterialize { .. } => {
+                Err(unsupported(function, "service.materialize (D25.2) comes with G1"))
             }
             // D24.1 (slice P1): the coro form, the cache duty in and out with the new task duty.
             AsyncOp::FutureSpawn { state: Some(_), .. } => Ok(()),

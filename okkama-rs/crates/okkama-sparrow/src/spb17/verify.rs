@@ -105,8 +105,9 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
             if let Type::Role(id) = element {
                 role_decl(p, id)?;
             }
-            // An array of native handles (#751) names a native handle declaration, as a handle type does.
-            if let Type::Handle(_) = element {
+            // An array of native handles (#751) names a native handle declaration, as a handle type does; an array
+            // of Futures (#758) names a `future_results` entry, as a Future type does.
+            if let Type::Handle(_) | Type::Future(_) = element {
                 ty_valid(element, p)?;
             }
             // An object with an async destroy is rejected for every use outside P1, arrays included.
@@ -129,8 +130,9 @@ pub(crate) fn ty_valid(ty: Type, p: &Program) -> Check {
     Ok(())
 }
 
-/// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; a Future is
-/// held only in registers (no object storage holds one before the service entries of D25).
+/// `Type::Future` indexes distinct `future_results`; await, fut.new and fut.publish agree with them; object
+/// storage holds a Future, or an array of them, only in a selected field of an object that reaches what its packet
+/// carries (D25.1, #771, #758).
 pub(crate) const FUTURE_TYPES: &str = "SPB_FUTURE_TYPES";
 /// A runtime cell (`Type::RuntimeCell`) is a storage word of an object with source fields, which no source field
 /// names and no selection walks; it is no value type (#601 Q1 audit A1).
@@ -141,12 +143,19 @@ pub(crate) const RUNTIME_CELL: &str = "SPB_RUNTIME_CELL";
 /// declares neither a destroy nor a resource is plain only if its whole graph is (`ARRAY_PLAIN`, `MAP_PLAIN`).
 /// A role or `any` leaf refers to an implementing object or an any box: the collection is managed when one of
 /// them may reach a resource (#711), and plain data otherwise.
+/// A storage type that holds Futures directly: a Future, or an array whose leaf is a Future (D25.2, #771, #758).
+pub(crate) fn future_storage(ty: Type) -> bool {
+    matches!(ty, Type::Future(_) | Type::Array(ArrayType { leaf: ArrayLeaf::Future(_), .. }))
+}
+
 fn collection_leaf(p: &Program, leaf: Type) -> bool {
     let resource = match leaf {
         Type::Object(id) => p.objects.get(id as usize)
             .is_some_and(|object| object.layout.has_destroy || object.layout.may_reach_resource),
         Type::Role(id) => role_reaches_resource(p, id),
         Type::Any => any_reaches_resource(p),
+        // An array of Futures is a packet whose elements carry service entries (D25.2 revision, #758).
+        Type::Future(_) => true,
         _ => false,
     };
     resource || closed_plain(p, leaf)
@@ -304,7 +313,12 @@ fn composite_valid(p: &Program, index: usize, composite: Composite) -> Check {
             enforce(key_type(p, key), "MAP_KEY", "map key is not a key type")?;
             // A managed map refers to resource objects as values; like a managed array it owns none.
             enforce(collection_leaf(p, value), "MAP_PLAIN",
-                "map value graph is neither plain data nor resource objects")
+                "map value graph is neither plain data nor resource objects")?;
+            // The leaf rule admits a Future for arrays of Futures (D25.2 revision, #758). A map selection's runtime
+            // walk enters object and array values only, never a Future's frame, so a map would keep the entries of
+            // its Futures in the closing scope while the static model believes the selection took them. Maps of
+            // Futures wait for their own design (#800).
+            enforce(!matches!(value, Type::Future(_)), "MAP_PLAIN", "map value is a Future")
         }
         Composite::Builder { array } => {
             enforce(earlier(array), "COMPOSITE_ORDER", "builder composite refers forward")?;
@@ -577,7 +591,15 @@ pub fn verify(p: &Program) -> Check {
                 continue;
             }
             ty_valid(ty, p)?;
-            enforce(!matches!(ty, Type::Future(_)), FUTURE_TYPES, "object storage cannot hold a Future")?;
+            // D25.1 (#771, #758): the service entry of a Future field, or of each element of a Future array field,
+            // travels with the packet of the value that holds it, so the field is selected (the runtime selection
+            // walk reaches the holder through it) and the object reaches what a packet carries. Where the entry
+            // comes from is the ownership verifier's proof (coro's absorb).
+            if future_storage(ty) {
+                enforce(layout.may_reach_resource && layout.selection_layout.contains(&(index as u32))
+                    && !object.any_box && object.role.is_none() && !object.handle && object.error_cases.is_empty(),
+                    FUTURE_TYPES, "a Future field is selected in an object that reaches what its packet carries")?;
+            }
             enforce(!matches!(ty, Type::Builder(_) | Type::MapBuilder(_)), "BUILDER_LINEAR",
                 "object storage cannot hold a unique builder")?;
             // No value of type never exists: a field of it would be read as a forged word.

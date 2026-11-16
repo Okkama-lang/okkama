@@ -10,6 +10,7 @@ mod verify;
 mod load;
 mod evidence;
 pub use evidence::{static_selections, plain_inputs, plain_results, redundant_admission_filters};
+pub use services::{identity_free, reaches_holder};
 mod automaton;
 pub use automaton::infer_plan_reserves;
 mod suspension;
@@ -267,7 +268,7 @@ impl Type {
     }
 }
 
-/// A finite array shape, including nested plain arrays. No resource/service leaf is representable.
+/// A finite array shape, including nested plain arrays. The one service leaf is a Future (D25.2 revision, #758).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ArrayType {
     pub leaf: ArrayLeaf,
@@ -294,6 +295,9 @@ pub enum ArrayLeaf {
     Handle(u32),
     /// The leaf of an uninferred empty literal: no element value exists.
     Never,
+    /// A Future of the `future_results` entry `id` (ABI D25.2 revision, #758): an array of Futures is a packet
+    /// whose elements carry service entries, settled by the dynamic step (D25.3).
+    Future(u32),
 }
 
 impl ArrayType {
@@ -316,6 +320,7 @@ impl ArrayType {
                 ArrayLeaf::Map(id) => Type::Map(id),
                 ArrayLeaf::Handle(id) => Type::Handle(id),
                 ArrayLeaf::Never => Type::Never,
+                ArrayLeaf::Future(id) => Type::Future(id),
             }),
             depth => Some(Type::Array(Self { depth: depth - 1, ..self })),
         }
@@ -340,6 +345,7 @@ impl ArrayType {
             Type::Map(id) => ArrayLeaf::Map(id),
             Type::Handle(id) => ArrayLeaf::Handle(id),
             Type::Never => ArrayLeaf::Never,
+            Type::Future(id) => ArrayLeaf::Future(id),
             Type::Byte => return Some(Type::Bytes),
             Type::Array(shape) => {
                 return shape.depth.checked_add(1).map(|depth| Type::Array(Self { depth, ..shape }));
@@ -1287,6 +1293,8 @@ mod spawn_tests;
 mod async_resources_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod stored_futures_tests;
 #[cfg(test)]
 mod roles_tests;
 #[cfg(test)]

@@ -9,16 +9,25 @@ impl Driver<'_, '_> {
             };
             let action = action.clone();
             let mut latest = vec![];
+            // PR-B1 (#784): a bound Future that the defer captures is borrowed; the offer never names it.
+            let mut bound = BTreeSet::new();
             for capture in &action.captures {
                 latest.push(point.env.value(*capture)?);
+                if self.bound_future(*capture) {
+                    bound.insert(latest.len() - 1);
+                }
             }
             for binding in &action.bindings {
                 latest.push(*point.env.bindings.get(binding)
                     .ok_or_else(|| flow_error("defer capture has no latest binding"))?);
+                let ty = self.high.bindings.get(*binding).map_err(arena)?.ty;
+                if crate::own::futures::is_future(self.module, ty) {
+                    bound.insert(latest.len() - 1);
+                }
             }
-            let values = latest.iter().filter(|latest| {
-                self.managed(self.body.values.get(latest.value).unwrap().ty)
-            }).map(|latest| latest.value).collect();
+            let values = latest.iter().enumerate().filter(|(index, latest)| {
+                !bound.contains(index) && self.managed(self.body.values.get(latest.value).unwrap().ty)
+            }).map(|(_, latest)| latest.value).collect();
             let (next, packet) = self.offered_values(point, values)?;
             point = next;
             for value in &mut latest {

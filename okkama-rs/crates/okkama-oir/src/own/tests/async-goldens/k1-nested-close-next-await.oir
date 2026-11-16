@@ -101,7 +101,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     %13: int = const 1
     %14: own = own.empty
     %15: deps = deps.of %10
-    (%16: future<int> facts(managed(deps=d0)), %17: scope<S2>) = fut.new %14, %15, %12, environment deferred(function=@app.Inner.run#0, arguments=[%10, %13]), result int, owner S2
+    (%16: future<int> facts(managed(deps=d0)), %17: scope<S2>) = fut.new %14, %15, %12, environment deferred(function=@app.Inner.run#0, arguments=[%10, %13]), result int, owner S2, binding b0
     %18: deps = deps.of %16
     invoke.own await %16, result int
         normal ^b9($value, $deps, %11, %16, %17, %18)
@@ -122,7 +122,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     %41: int = const 2
     %42: own = own.empty
     %43: deps = deps.of %38
-    (%44: future<int> facts(managed(deps=d2)), %45: scope<S1>) = fut.new %42, %43, %40, environment deferred(function=@app.Inner.run#0, arguments=[%38, %41]), result int, owner S1
+    (%44: future<int> facts(managed(deps=d2)), %45: scope<S1>) = fut.new %42, %43, %40, environment deferred(function=@app.Inner.run#0, arguments=[%38, %41]), result int, owner S1, binding b2
     %46: deps = deps.of %44
     invoke.own await %44, result int
         normal ^b14($value, $deps, %39, %44, %45, %46)

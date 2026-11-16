@@ -143,7 +143,8 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
                 let plain = value.facts == (o::ValueFacts::Plain {
                     certificate: o::PlainCertificate::ClosedGraph { ty: value.ty },
                 });
-                // A managed array or map refers to resource objects: own proves its deps on their owners.
+                // A managed array or map refers to resource objects, or holds Futures whose entries travel with its
+                // packet (#758): own proves its deps on their owners.
                 let leaf = match ty {
                     Ok(s::Type::Array(shape)) => s::ArrayType { depth: 1, ..shape }.element(),
                     Ok(s::Type::Map(id)) => match composites(module).entries().get(id as usize) {
@@ -153,8 +154,9 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
                     _ => None,
                 };
                 let managed = matches!(value.facts, o::ValueFacts::Managed { .. })
-                    && matches!(leaf, Some(s::Type::Object(id))
-                        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource));
+                    && (matches!(leaf, Some(s::Type::Object(id))
+                        if p.objects.get(id as usize).is_some_and(|object| object.layout.may_reach_resource))
+                        || matches!(leaf, Some(s::Type::Future(_))));
                 // Own tracks role, cap and action-value elements as references; the loader admits such an
                 // array only when every object it can reach is closed plain data (ARRAY_PLAIN).
                 let view = roles::view_array(module, value.ty)? && matches!(value.facts, o::ValueFacts::Managed { .. });

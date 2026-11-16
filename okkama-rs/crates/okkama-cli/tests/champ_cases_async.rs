@@ -263,3 +263,163 @@ async main() is int {
     let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!((run.stdout.as_str(), run.result), ("5s\n", Ok(0)));
 }
+
+/// PR-B1 (#784): a binding marks a Future bound, so an aggregate that stores it only borrows it. `f` is created
+/// here and bound (`fut.new … binding`); `g` is admitted with `make`'s result packet and bound by `own.bind`. Neither
+/// `Wrapper` takes the duty into `helper`'s packet, so `helper`'s return settles nothing and both Futures run when
+/// `main` awaits them. Tomato's output (okkama 0.5.8, the program of #784).
+#[test]
+fn pr_b1_a_bound_future_stored_in_an_argument_stays_with_its_binding() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Wrapper {
+    has pending is Future<int>;
+    Wrapper(:pending);
+}
+object Helper {
+    Helper();
+    take(w is Wrapper) is int { 1; }
+}
+object Maker {
+    Maker();
+    make(n is int) is Future<int> { Child(n: n).run(); }
+}
+async main() is int {
+    let f = Child(n: 4).run();
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: f)).string());
+    Stdout().writeln((await f).string());
+    let g = Maker().make(9);
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: g)).string());
+    Stdout().writeln((await g).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "helper 1\nchild 4\n4\nhelper 1\nchild 9\n9\n");
+}
+
+/// PR-B1 (#784), review of D25 (F1): an alias of `f` in a nested scope does not unbind `f`. High passes `f` into the
+/// branch through a block parameter; after the branch closes `f` is still bound in `main`, so `Wrapper` borrows it,
+/// `helper`'s return settles nothing, and `f` runs when `main` awaits it. Tomato's output (okkama 0.5.8).
+#[test]
+fn pr_b1_an_alias_in_a_nested_scope_keeps_a_future_bound() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Wrapper {
+    has pending is Future<int>;
+    Wrapper(:pending);
+}
+object Helper {
+    Helper();
+    take(w is Wrapper) is int { 1; }
+}
+async main() is int {
+    let f = Child(n: 4).run();
+    if true { let g = f; }
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: f)).string());
+    Stdout().writeln((await f).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "helper 1\nchild 4\n4\n");
+}
+
+/// F1 with retained nested scopes (a resource lives there): the alias of a created `f` and of an admitted `h` is
+/// stored and passed inside the branch, then the original outside it. Every `Wrapper` borrows; each Future runs once,
+/// when `main` awaits it, after the branch's resource is destroyed. Tomato's output (okkama 0.5.8).
+#[test]
+fn pr_b1_aliases_in_retained_nested_scopes_borrow() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Wrapper {
+    has pending is Future<int>;
+    Wrapper(:pending);
+}
+object Helper {
+    Helper();
+    take(w is Wrapper) is int { 1; }
+}
+object Maker {
+    Maker();
+    make(n is int) is Future<int> { Child(n: n).run(); }
+}
+async main() is int {
+    let f = Child(n: 4).run();
+    if true {
+        let r = Res(name: "r");
+        let g = f;
+        Stdout().writeln("inner " + Helper().take(Wrapper(pending: g)).string());
+    }
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: f)).string());
+    Stdout().writeln((await f).string());
+    let h = Maker().make(9);
+    if true {
+        let r = Res(name: "s");
+        let k = h;
+        Stdout().writeln("inner " + Helper().take(Wrapper(pending: k)).string());
+    }
+    Stdout().writeln("helper " + Helper().take(Wrapper(pending: h)).string());
+    Stdout().writeln((await h).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout,
+        "inner 1\ndestroy r\nhelper 1\nchild 4\n4\ninner 1\ndestroy s\nhelper 1\nchild 9\n9\n");
+}
+
+/// PR-B1 (#784), §2.2a runtime row: `pass` binds an admitted Future (`own.bind` moves its entry to the bound
+/// journal) and returns it, so the state form of `cache.rehome` takes the entry from the bound journal; the Future
+/// runs once when `main` awaits it.
+#[test]
+fn pr_b1_a_bound_admitted_future_is_rehomed_to_the_caller() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Child {
+    has n is int;
+    Child(:n);
+    async run() is int { Stdout().writeln("child " + n.string()); n; }
+}
+object Maker {
+    Maker();
+    make(n is int) is Future<int> { Child(n: n).run(); }
+    pass(n is int) is Future<int> {
+        let g = Maker().make(n);
+        g;
+    }
+}
+async main() is int {
+    let h = Maker().pass(9);
+    Stdout().writeln("passed");
+    Stdout().writeln((await h).string());
+    0;
+}
+"#;
+    let run = run_source(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run.result, Ok(0), "{}", run.stdout);
+    assert_eq!(run.stdout, "passed\nchild 9\n9\n");
+}

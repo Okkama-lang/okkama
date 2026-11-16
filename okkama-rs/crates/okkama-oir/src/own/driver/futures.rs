@@ -96,8 +96,12 @@ impl Driver<'_, '_> {
             FutureEnvironment::Deferred { function, arguments, descriptors }
         };
         let owner_state = point.env.scopes[&owner];
+        // PR-B1 (#784): a Future that High binds in its owner scope is bound from its creation.
+        // An alias binding in a nested scope (`if c { let g = f; }`) does not displace it.
+        let binding = self.future_bindings.get(original).into_iter().flatten().copied()
+            .find(|binding| self.high.bindings.get(*binding).is_ok_and(|data| data.scope == owner));
         point = self.emit(point, Operation::Async(AsyncOp::FutureNew {
-            packet, deps, owner_state, environment, result, owner,
+            packet, deps, owner_state, environment, result, owner, binding,
         }))?;
         let future = point.result(SlotName::Value)?;
         // A temporary Future has no use but its take: naming its deps would be another use of
@@ -267,6 +271,46 @@ impl Driver<'_, '_> {
         temporaries
     }
 
+    /// PR-B1 (#784): whether the High value is the Future an async call of this function creates (its `fut.new`).
+    pub(super) fn created_by_call(&self, original: ValueId) -> bool {
+        let Ok(Definition::InstResult { inst, .. }) = self.high.values.get(original).map(|value| value.def) else {
+            return false;
+        };
+        self.high.insts.get(inst).is_ok_and(|instruction| matches!(instruction.op,
+            Operation::Call(CallOp::Direct { function, .. } | CallOp::Intrinsic { function, .. })
+                if crate::own::futures::is_async(self.module, function)))
+    }
+
+    /// PR-B1 (#784): an admitted Future, whose duty is an entry of its scope's admission journal at run time: the
+    /// result of a synchronous call (D25.1) or a value a nested scope's exit rehomed (a block parameter after the
+    /// exit). Neither a Future created here nor a parameter of this function is one.
+    pub(super) fn admitted_future(&self, original: ValueId) -> bool {
+        match self.high.values.get(original).map(|value| value.def) {
+            Ok(Definition::InstResult { .. }) => !self.created_by_call(original),
+            Ok(Definition::BlockParam { block, .. }) => block != self.high.entry,
+            Err(_) => false,
+        }
+    }
+
+    /// PR-B1 (#784): High Future → the bindings of its `bind`s and `rebind`s, for every Future
+    /// value this function binds: one an async call creates here, or one admitted with a packet. An alias
+    /// (`let g = f`) binds the same value again, so every binding is kept, not the last.
+    pub(super) fn bound_futures(&self) -> BTreeMap<ValueId, Vec<BindingId>> {
+        let mut bindings: BTreeMap<ValueId, Vec<BindingId>> = BTreeMap::new();
+        for (_, instruction) in self.high.insts.iter() {
+            if let Operation::Lexical(LexicalOp::Bind { binding, value } | LexicalOp::Rebind { binding, value, .. })
+                = &instruction.op
+                && self.high.values.get(*value).is_ok_and(|data| is_future(self.module, data.ty))
+            {
+                let held = bindings.entry(*value).or_default();
+                if !held.contains(binding) {
+                    held.push(*binding);
+                }
+            }
+        }
+        bindings
+    }
+
     /// `@oir.await.unwind` on an await's exceptional landing (async ABI C-3).
     /// The adapter's failure continues the unwind; it is not a cleanup secondary.
     fn await_unwind(&mut self, landing: Landing, protocol: ProtocolId) -> Result<Landing, OwnError> {
@@ -379,6 +423,23 @@ impl Driver<'_, '_> {
             point.env.cleanup.rehomed = true;
         }
         Ok(point)
+    }
+
+    /// PR-B2 (#782): an escaping Future that reaches no cache duty of the closing scope, so `rehome_caches` takes
+    /// nothing for it: a parameter, an element or a field read, borrowed from a holder. Its entry can still be in the
+    /// scope when a carrier entry packet brought it, so the exit's selection names it.
+    pub(super) fn borrowed_future(&self, scope: ScopeId, original: ValueId) -> bool {
+        let Some(state) = self.flow.before_edges.get(&self.current_high) else {
+            return false;
+        };
+        let Some(value) = state.values.get(original) else {
+            return false;
+        };
+        !state.journals.iter().any(|((owner, atom), quantity)| {
+            *owner == scope && value.deps.contains(atom)
+                && !matches!(quantity.presence, domain::Presence::Absent | domain::Presence::Bottom)
+                && state.provenance.get(&(*owner, *atom)).is_some_and(|mask| mask & CACHE_DUTY != 0)
+        })
     }
 
     /// The High Futures whose cache duty a call gives the calling scope, in body order: Future creations

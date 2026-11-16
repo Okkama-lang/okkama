@@ -1,5 +1,6 @@
 use super::*;
 use crate::own::emit::{AdmissionComponent, ScopeExtraction};
+use crate::own::futures::CACHE_DUTY;
 
 impl Driver<'_, '_> {
     /// Extract one selection from each accessible admission component. Aliases
@@ -29,6 +30,10 @@ impl Driver<'_, '_> {
             if self.elide_offers && !self.may_offer(&point, *original) {
                 continue;
             }
+            // PR-B1 (#784): own never names a bound Future in an admissible selection for a store or an offer.
+            if self.bound_future(*original) {
+                continue;
+            }
             if self.managed(self.high.values.get(*original).map_err(arena)?.ty) {
                 values.insert(point.env.value(*original)?.value);
             }
@@ -55,6 +60,34 @@ impl Driver<'_, '_> {
         values: Vec<ValueId>,
     ) -> Result<(Landing, ValueId), OwnError> {
         self.extract_values(point, values, false)
+    }
+
+    /// PR-B1 (#784): a High Future whose duty a binding of this function marks bound at this point. A binding
+    /// marks its duty bound, so no admissible selection takes it: storing or offering it is an alias, and the duty
+    /// stays with its owner. The fact is flow-sensitive and read from the analysis (`analyze::transfer_selected`): a
+    /// binding adds the bound bit (2) to the cache-duty atoms of the bound value in its scope's journal. It follows
+    /// the value through block parameters (a Future that High passes through a branch, `if c { let g = f; }`) and
+    /// survives an alias's scope, since the bit sits on the owner's journal entry; a Future carried out of the scope
+    /// that holds its duty lands unbound until bound again (`edge_state`). The Future is bound when every cache-duty
+    /// atom it depends on is: a fresh Future made from a bound one (`chain(f)`) depends on `f`'s duty too, and stays
+    /// fresh. A created Future is bound from its creation (`fut.new … binding`): High binds it right after the call.
+    pub(super) fn bound_future(&self, original: ValueId) -> bool {
+        if !self.high.values.get(original).is_ok_and(|value| crate::own::futures::is_future(self.module, value.ty)) {
+            return false;
+        }
+        let flow = match self.current_instruction {
+            Some(inst) => self.flow.before_instructions.get(&inst),
+            None => self.flow.before_edges.get(&self.current_high),
+        };
+        let Some(state) = flow.and_then(|flow| flow.values.get(original)) else {
+            return false;
+        };
+        let flow = flow.unwrap();
+        let mut duties = flow.journals.iter().filter(|((_, atom), quantity)| {
+            state.deps.contains(atom)
+                && !matches!(quantity.presence, domain::Presence::Bottom | domain::Presence::Absent)
+        }).filter_map(|(key, _)| flow.provenance.get(key)).filter(|mask| *mask & CACHE_DUTY != 0).peekable();
+        duties.peek().is_some() && duties.all(|mask| mask & 2 != 0)
     }
 
     fn extract_values(

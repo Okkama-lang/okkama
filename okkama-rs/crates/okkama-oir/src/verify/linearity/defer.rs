@@ -40,7 +40,7 @@ impl Engine<'_, '_> {
                 diagnose: false, collecting: false, capture_returns: true, contract_invalid: false,
                 witnesses: witnesses(self.module, body),
                 defer_stack: stack, defer_outputs: vec![],
-                defer_cache: Default::default(),
+                defer_cache: Default::default(), named_futures: Default::default(),
             };
             helper.solve();
             let invalid = helper.contract_invalid;
@@ -275,7 +275,7 @@ impl Engine<'_, '_> {
                         piece.family = true;
                         piece.predicates.insert(Filter {
                             keys: BTreeSet::from([key]), fresh: false, possible: BTreeSet::new(),
-                            labels: SharedSet::new(), stale: false, whole_future: false, state: 0,
+                            labels: SharedSet::new(), stale: false, whole_future: false, futures: false, state: 0,
                         }, true);
                         packet.pieces.insert(piece);
                     }

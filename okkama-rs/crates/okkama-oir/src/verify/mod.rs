@@ -20,6 +20,8 @@ mod effects;
 mod low_phases;
 mod low_roots;
 mod linearity;
+#[cfg(test)]
+pub(crate) use linearity::take_partitions;
 // Instantiate the same transfers over two domains so the oracle cannot drift.
 #[cfg(any(test, feature = "verifier-differential"))]
 #[allow(clippy::duplicate_mod)]
@@ -39,6 +41,12 @@ mod high_defer;
 use crate::*;
 pub use diagnostic::*;
 pub use limits::*;
+
+/// Whether a value of `ty` can hold a Future, as the Full verifier's selection model reaches holders (ABI D25.1,
+/// PR-B item 4, #784). SPB 17's `reaches_holder` must agree on every type shape both can express.
+pub fn holds_futures(module: &crate::Module, ty: crate::TypeId) -> bool {
+    linearity::holds_futures(module, ty)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ErrorPolicy { First, #[default] All }

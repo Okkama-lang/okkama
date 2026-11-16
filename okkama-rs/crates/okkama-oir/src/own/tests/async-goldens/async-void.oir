@@ -63,7 +63,7 @@ func @main() -> int [entry, async] abi observation summary(M9) async-creation(M7
     %12: str = const "second"
     %13: own = own.empty
     %14: deps = deps.of %12
-    (%15: future<void> facts(managed(deps=d2)), %16: scope<S1>) = fut.new %13, %14, %10, environment deferred(function=@note, arguments=[%12]), owner S1
+    (%15: future<void> facts(managed(deps=d2)), %16: scope<S1>) = fut.new %13, %14, %10, environment deferred(function=@note, arguments=[%12]), owner S1, binding b0
     %17: deps = deps.of %15
     invoke.own await %15
         normal ^b4($deps, %15, %16, %17)

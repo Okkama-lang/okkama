@@ -5,13 +5,17 @@
 //!   carry entries when it is the result packet of a call or take whose language result can reach a service holder
 //!   (D25.1: the result relation names the fresh holder's duty), the packet of an absorb, or of an exit that
 //!   carries a rehomed duty (C-4), or when such a packet flows into it; a packet of unknown retention
-//!   (`own.dynamic`) is judged by its source the same way. A split
-//!   never selects an entry (C-4 ruling: the one escape mechanism is `cache.rehome`). Such a close needs exactly one
+//!   (`own.dynamic`) is judged by its source the same way. A dynamic split's selected packet carries what its
+//!   source carries when its selection can reach a holder (#771: a stored Future's entry moves with its packet);
+//!   a static split never selects an entry. Such a close needs exactly one
 //!   `cleanup.settle.dynamic` before its first plan (`SPB_SCHEDULE`).
 //! - **Holds** (D25.2): which entries a packet surely holds, by the Future value they name. An entry is known from
 //!   an absorb, from a rehome into a reserve that an exit commits, and from a call whose callee is proved, by the
 //!   same analysis of its returns, to return its Future's entry with its result. `service.materialize` takes only
-//!   an entry its packet surely holds (`SPB_MATERIALIZE`, fixture `d25-materialize-absent`).
+//!   an entry its packet surely holds (`SPB_MATERIALIZE`, fixture `d25-materialize-absent`). A dynamic selection
+//!   moves the entries of the holders it walks to (#771), so a state keeps only those it surely still holds, and an
+//!   exit that returns a value reaching a holder must take that value's selection, or its Future's rehome, into its
+//!   reserve (`SPB_EXIT_SELECTION`, ruling "How a stored Future leaves").
 use super::*;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -23,9 +27,54 @@ pub(crate) const MATERIALIZE: &str = "SPB_MATERIALIZE";
 /// Analysis steps one function may take before the loader refuses it.
 const STEP_BUDGET: usize = 4_000_000;
 
+/// Whether no value of `ty` reaches an identity (an object with destroy) through the fields the selection walk
+/// follows, variant cases, array elements, role implementations and any boxes: what such a value's packet carries
+/// is at most the service entries of the Futures it holds (D25.1, #771, #758), so a static selection of it selects
+/// no position. Maps and unknown declarations are not known to be free.
+pub fn identity_free(objects: &[Object], ty: Type) -> bool {
+    let mut pending = vec![ty];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        match ty {
+            Type::Object(id) | Type::Successor(id) | Type::Variant(id) => {
+                let Some(object) = objects.get(id as usize) else { return false };
+                if object.layout.has_destroy {
+                    return false;
+                }
+                let layout = &object.layout;
+                for &index in &layout.selection_layout {
+                    let Some(&field) = layout.storage_fields.get(index as usize) else { return false };
+                    pending.push(field);
+                }
+                pending.extend(object.variant_cases.iter().map(|&case| Type::Object(case)));
+            }
+            Type::Role(id) | Type::RoleSuccessor(id) => {
+                pending.extend(objects.iter().enumerate()
+                    .filter(|(_, object)| object.implements.iter().any(|table| table.role == id))
+                    .map(|(object, _)| Type::Object(object as u32)));
+            }
+            Type::Any => {
+                pending.extend(objects.iter().enumerate().filter(|(_, object)| object.any_box)
+                    .map(|(object, _)| Type::Object(object as u32)));
+            }
+            Type::Error => {
+                pending.extend(objects.iter().enumerate().filter(|(_, object)| !object.error_cases.is_empty())
+                    .map(|(object, _)| Type::Object(object as u32)));
+            }
+            Type::Array(shape) if shape.depth > 0 => pending.extend(ArrayType { depth: 1, ..shape }.element()),
+            Type::Map(_) | Type::MapBuilder(_) | Type::Builder(_) => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
 /// Whether a value of `ty` can reach a service holder (a Future), through object fields, variant cases, error
 /// cases, array and map elements, role implementations and any boxes. Unknown declarations can.
-pub(crate) fn reaches_holder(p: &Program, ty: Type) -> bool {
+pub fn reaches_holder(p: &Program, ty: Type) -> bool {
     let mut pending = vec![ty];
     let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
@@ -212,7 +261,9 @@ fn next_carriers(f: &Function, op: Opcode, arguments: &[Argument], ins: &[bool],
 }
 
 /// What the produced slots of one outcome carry.
-fn produced_carriers(p: &Program, op: Opcode, tag: Tag, schema: &[ProducedType], ins: &[bool]) -> Vec<bool> {
+fn produced_carriers(p: &Program, f: &Function, op: Opcode, arguments: &[Argument], tag: Tag, schema: &[ProducedType],
+    ins: &[bool]) -> Vec<bool>
+{
     use Opcode::*;
     let first = ins.first().copied().unwrap_or(false);
     let any = ins.iter().any(|carries| *carries);
@@ -225,10 +276,13 @@ fn produced_carriers(p: &Program, op: Opcode, tag: Tag, schema: &[ProducedType],
         (InvokeCallOwn | InvokeDispatchOwn | AwaitTake, Tag::Normal) | (InvokeDefer, Tag::Replace(_)) => {
             packets(result)
         }
-        // A selection never takes an entry; a refused check returns the packet unchanged.
-        (OwnSplitChecked, Tag::Normal) => vec![first, false, false],
+        // A selection takes the entries of the holders it walks to (#771); a refused check returns the packet
+        // unchanged.
+        (OwnSplitChecked | ScopeSplit, Tag::Normal) => {
+            let walks = selection_roots(f, arguments).iter().any(|&root| holder_value(p, f, root));
+            vec![first, first && walks, false]
+        }
         (OwnSplitChecked, Tag::Unwind) => vec![first, false],
-        (ScopeSplit, Tag::Normal) => vec![first, false, false],
         (ScopeSplit, Tag::Unwind) => vec![first, false],
         // A packet of unknown retention (D25.3): which obligations it holds is unknown, but its entries can only
         // name holders its source's language result reaches, which the packet's own fact already judges.
@@ -243,7 +297,37 @@ fn produced_carriers(p: &Program, op: Opcode, tag: Tag, schema: &[ProducedType],
     }
 }
 
-/// The begin pcs of closes whose scope state may have admitted a service entry on some path (D25.3).
+/// `fut.new` gives the callee an inputs packet that carries service entries only when some start value of the callee
+/// can bring one (`entry_carries`; PR-B2, #782): a bare Future input is borrowed and arrives without its entry.
+pub(crate) const FUTURE_INPUT: &str = "SPB_FUTURE_INPUT";
+
+/// The language inputs of an entry: the start values of an async body (its continuation 0, D21), or the
+/// parameters of a synchronous function; `None` for an async body without a start continuation.
+fn language_inputs(p: &Program, f: &Function) -> Option<Vec<ProducedType>> {
+    match p.frame_layout(f) {
+        Some(layout) => layout.saved_types(0),
+        None => Some(f.params.iter().filter_map(|&location| verify::loc_type(f, location).ok()).collect()),
+    }
+}
+
+/// PR-B2 (#782): whether the entry packet of `f` may carry service entries, so that its scope may hold them
+/// (D25.3). `own.accept` puts them in the scope's bound journal (`admit(.., bound = true)`), not its admission
+/// journal. A language input that can reach a holder brings its entries in the packet: a parameter of a synchronous
+/// function (a constructor or a synchronous owner stores it, D25.2), or an aggregate start value of an async body.
+/// A bare Future start value does not: own never offers a Future input to `fut.new` (OIR-2 §10.2), so the body
+/// borrows it.
+pub(crate) fn entry_carries(p: &Program, f: &Function) -> bool {
+    let asynchronous = p.frame_layout(f).is_some();
+    language_inputs(p, f).is_none_or(|inputs| inputs.into_iter().any(|ty| match ty {
+        ProducedType::Value(Type::Future(_)) if asynchronous => false,
+        ProducedType::Value(ty) => reaches_holder(p, ty),
+        _ => false,
+    }))
+}
+
+/// The begin pcs of closes whose scope state may have admitted a service entry on some path (D25.3). An entry
+/// packet that `entry_carries` is a carrier from the start (#782): the packet parameter of a synchronous entry, the
+/// start packet that an async body's continuation 0 resumes with.
 pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32>, Error> {
     let resumes = resumes(f);
     let mut saved = BTreeMap::<u32, Vec<bool>>::new();
@@ -253,7 +337,13 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
         previous.extend(next.iter().copied());
         previous.len() != before
     };
-    forward(f, Carriers::new(), join, |pc, state| {
+    let carries = entry_carries(p, f);
+    let start: Carriers = if carries && p.frame_layout(f).is_none() {
+        f.params.iter().copied().filter(|&location| kind(f, location) == Some(ServiceKind::Packet)).collect()
+    } else {
+        Carriers::new()
+    };
+    forward(f, start, join, |pc, state| {
         let mut out = state.clone();
         let mut successors = Vec::new();
         let mut revisit = Vec::new();
@@ -295,8 +385,13 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
                                 let stored = saved.get(&k).cloned().unwrap_or_default();
                                 facts.extend((1..outputs.len()).map(|index| {
                                     stored.get(index - 1).copied().unwrap_or(false)
+                                        || (k == 0 && carries && kind(f, outputs[index]) == Some(ServiceKind::Packet))
                                 }));
                                 facts
+                            }
+                            Opcode::FutureNew => {
+                                future_input(p, arguments, &ins)?;
+                                next_carriers(f, *op, arguments, &ins, outputs)
                             }
                             _ => next_carriers(f, *op, arguments, &ins, outputs),
                         };
@@ -310,7 +405,7 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
                     Flow::Outcomes(outcomes) => {
                         for outcome in outcomes {
                             let slots = schema(p, f, *op, arguments, outcome.tag)?;
-                            let produced = produced_carriers(p, *op, outcome.tag, &slots, &ins);
+                            let produced = produced_carriers(p, f, *op, arguments, outcome.tag, &slots, &ins);
                             successors.push((outcome.edge.target_pc as usize, assign(state, &outcome.edge,
                                 &produced)));
                         }
@@ -321,6 +416,25 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
         Ok((successors, revisit))
     })?;
     Ok(closes)
+}
+
+/// `SPB_FUTURE_INPUT` (#782): the inputs packet of `fut.new`, which follows the callee's start values, carries
+/// entries only when the callee's entry packet may (`entry_carries`).
+fn future_input(p: &Program, arguments: &[Argument], ins: &[bool]) -> Check {
+    let Some(callee) = arguments.iter().find_map(|argument| match argument {
+        Argument::Entry(id) => p.functions.get(*id as usize),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let Some(inputs) = language_inputs(p, callee) else {
+        return Ok(());
+    };
+    let values = inputs.iter().filter(|ty| matches!(ty, ProducedType::Value(_))).count();
+    let carried = ins.get(values).copied().unwrap_or(false);
+    enforce(!carried || entry_carries(p, callee), FUTURE_INPUT,
+        &format!("fut.new of {} gives an inputs packet that may carry service entries to a body whose inputs cannot \
+            bring them", callee.symbol))
 }
 
 /// The state after an edge's parallel assignments.
@@ -346,6 +460,15 @@ type Val = (u32, u32, u32);
 struct Held {
     /// Future registers and the value they hold.
     futures: BTreeMap<Location, Val>,
+    /// Registers whose type can reach a service holder, and the value they hold (a Future register's is its
+    /// Future's): what an exit returns and what a dynamic selection names (#771).
+    values: BTreeMap<Location, Val>,
+    /// Packets and the values whose holders a dynamic selection surely walked into them, or whose call returned
+    /// them with their entries (#771).
+    selected: BTreeMap<Location, BTreeSet<Val>>,
+    /// Reserves and their continuations whose exit returns a value that can reach a holder: that value, and
+    /// whether a selection or a rehome of it surely joined the reserve (`SPB_EXIT_SELECTION`).
+    needs: BTreeMap<Location, (Val, bool)>,
     /// Cache-state tokens and the Future whose duty they are.
     tokens: BTreeMap<Location, Val>,
     /// Packets, scope states, reserves and the cleanup and exit states that continue a reserve: the entries they
@@ -362,6 +485,9 @@ struct Slot {
     token: Option<Val>,
     entries: BTreeSet<Val>,
     exit: Option<Val>,
+    value: Option<Val>,
+    selected: BTreeSet<Val>,
+    need: Option<(Val, bool)>,
 }
 
 impl Held {
@@ -371,6 +497,9 @@ impl Held {
             token: self.tokens.get(&location).copied(),
             entries: self.entries.get(&location).cloned().unwrap_or_default(),
             exit: self.exits.get(&location).copied(),
+            value: self.values.get(&location).copied(),
+            selected: self.selected.get(&location).cloned().unwrap_or_default(),
+            need: self.needs.get(&location).copied(),
         }
     }
 
@@ -388,6 +517,15 @@ impl Held {
         if let Some(value) = slot.exit {
             self.exits.insert(location, value);
         }
+        if let Some(value) = slot.value {
+            self.values.insert(location, value);
+        }
+        if !slot.selected.is_empty() {
+            self.selected.insert(location, slot.selected);
+        }
+        if let Some(need) = slot.need {
+            self.needs.insert(location, need);
+        }
     }
 
     fn kill(&mut self, location: Location) {
@@ -395,6 +533,9 @@ impl Held {
         self.tokens.remove(&location);
         self.entries.remove(&location);
         self.exits.remove(&location);
+        self.values.remove(&location);
+        self.selected.remove(&location);
+        self.needs.remove(&location);
     }
 
     /// Keep what both states know; whether `self` changed.
@@ -408,6 +549,17 @@ impl Held {
             entries.retain(|value| theirs.contains(value));
             !entries.is_empty()
         });
+        self.values.retain(|location, value| other.values.get(location) == Some(value));
+        self.selected.retain(|location, values| {
+            let Some(theirs) = other.selected.get(location) else { return false };
+            values.retain(|value| theirs.contains(value));
+            !values.is_empty()
+        });
+        // A requirement on some path stays; it holds only where every path met it.
+        for (location, (value, covered)) in &other.needs {
+            let need = self.needs.entry(*location).or_insert((*value, *covered));
+            need.1 &= *covered && need.0 == *value;
+        }
         *self != before
     }
 }
@@ -424,13 +576,72 @@ fn meet_slot(slot: &mut Slot, other: &Slot) -> bool {
         slot.exit = None;
     }
     slot.entries.retain(|value| other.entries.contains(value));
+    if slot.value != other.value {
+        slot.value = None;
+    }
+    slot.selected.retain(|value| other.selected.contains(value));
+    match (&mut slot.need, other.need) {
+        (Some(need), Some(theirs)) => need.1 &= theirs.1 && need.0 == theirs.0,
+        (need @ None, theirs) => *need = theirs,
+        (Some(_), None) => {}
+    }
     *slot != before
 }
 
+/// `exit.commit` returns a value that can reach a service holder only when its exit selection (or the rehome of
+/// the returned Future) surely joined the reserve, so the holders' entries travel with the value (ruling "How a
+/// stored Future leaves", #771).
+pub(crate) const EXIT_SELECTION: &str = "SPB_EXIT_SELECTION";
+
+/// The roots of a dynamic selection argument.
+fn selection_roots<'f>(f: &'f Function, arguments: &[Argument]) -> &'f [Location] {
+    arguments.iter().find_map(|argument| match argument {
+        Argument::Selection(id) => {
+            f.proofs.selections.get(*id as usize).map(|selection| selection.locations.as_slice())
+        }
+        _ => None,
+    }).unwrap_or(&[])
+}
+
+/// Whether `location` holds a value whose type can reach a service holder.
+fn holder_value(p: &Program, f: &Function, location: Location) -> bool {
+    matches!(verify::loc_type(f, location), Ok(ProducedType::Value(ty)) if reaches_holder(p, ty))
+}
+
+/// The values whose holders a dynamic selection may walk to: `Some` with the known ones, `None` when a root that can
+/// reach a holder has no known value.
+fn walked(p: &Program, f: &Function, arguments: &[Argument], state: &Held) -> Option<BTreeSet<Val>> {
+    let mut values = BTreeSet::new();
+    for &root in selection_roots(f, arguments) {
+        if !holder_value(p, f, root) {
+            continue;
+        }
+        values.insert(*state.values.get(&root)?);
+    }
+    Some(values)
+}
+
+/// A selection moves the entries of the holders it walks to (ABI D25.1, #771): `kept` loses them, and the part
+/// gains those `kept` surely held. A root of unknown value may reach any holder, so `kept` keeps nothing sure.
+fn take_walked(kept: &mut BTreeSet<Val>, walked: &Option<BTreeSet<Val>>) -> BTreeSet<Val> {
+    match walked {
+        Some(values) => {
+            let moved = kept.intersection(values).copied().collect();
+            kept.retain(|value| !values.contains(value));
+            moved
+        }
+        None => {
+            kept.clear();
+            BTreeSet::new()
+        }
+    }
+}
+
 /// The facts of the outputs of a `Next` instruction at `pc`. When `check`, `Err` names a materialize whose entry is
-/// not held.
-fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state: &Held, outputs: &[Location],
-    check: bool) -> Result<Vec<Slot>, Error>
+/// not held, a state-form rehome whose entry is not held, or a commit whose exit selection is not met.
+#[allow(clippy::too_many_arguments)]
+fn next_held(p: &Program, f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state: &Held,
+    outputs: &[Location], check: bool) -> Result<Vec<Slot>, Error>
 {
     use Opcode::*;
     let operands = locations(arguments);
@@ -451,13 +662,20 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
             facts[0].entries = union(&mut [0, operands.len() - 1].into_iter());
         }
         AwaitUnwind | DeferRegister => facts[0].entries = read(0).entries,
-        OwnMove => facts[0].entries = read(0).entries,
-        OwnJoin => facts[0].entries = union(&mut (0..operands.len())),
+        OwnMove => {
+            facts[0].entries = read(0).entries;
+            facts[0].selected = read(0).selected;
+        }
+        OwnJoin => {
+            facts[0].entries = union(&mut (0..operands.len()));
+            facts[0].selected = (0..operands.len()).flat_map(|index| read(index).selected).collect();
+        }
         OwnSplit => facts[0].entries = read(0).entries,
         ServiceAbsorb => {
             let mut entries = read(0).entries;
             entries.extend(read(1).token);
             facts[0].entries = entries;
+            facts[0].selected = read(0).selected;
         }
         ServiceMaterialize => {
             let holder = read(1).future;
@@ -472,10 +690,24 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
             let packet = operands.len() - 1;
             facts[0].entries = read(packet).entries;
             facts[0].exit = (operands.len() == 2).then(|| read(0).future).flatten();
+            facts[0].need = (operands.len() == 2 && holder_value(p, f, operands[0])).then(|| {
+                read(0).value.map(|value| (value, read(packet).selected.contains(&value)))
+            }).flatten();
         }
         ExitExtend => {
             facts[0].entries = union(&mut (0..2));
             facts[0].exit = read(0).exit;
+            facts[0].need = read(0).need.map(|(value, covered)| (value, covered || read(1).selected.contains(&value)));
+        }
+        // The replacement reserve returns its own value, if any, from its own packet; the replaced reserve's content
+        // comes back as a packet.
+        ExitReplace => {
+            let packet = operands.len() - 1;
+            facts[0].entries = read(packet).entries;
+            facts[0].need = (operands.len() == 3 && holder_value(p, f, operands[1])).then(|| {
+                read(1).value.map(|value| (value, read(packet).selected.contains(&value)))
+            }).flatten();
+            facts[1].entries = read(0).entries;
         }
         // D24.1: the cache duty comes back and the task duty is new; both name the spawned Future.
         FutureSpawn => {
@@ -494,30 +726,39 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
             facts[0].entries = held;
             facts[1].entries = entries;
             facts[1].exit = read(0).exit;
+            // Rehoming the returned Future moves its entry with the reserve.
+            facts[1].need = read(0).need.map(|(value, covered)| (value, covered || holder == Some(value)));
         }
         CacheRehome => {
             let mut entries = read(0).entries;
             entries.extend(read(1).token);
             facts[0].entries = entries;
             facts[0].exit = read(0).exit;
+            facts[0].need = read(0).need.map(|(value, covered)| (value, covered || read(1).token == Some(value)));
         }
         CleanupBegin => {
             if let Some(index) = operands.iter().position(|&location| kind(f, location) == Some(ServiceKind::Pending)) {
                 facts[0].entries = read(index).entries;
                 facts[0].exit = read(index).exit;
+                facts[0].need = read(index).need;
             }
         }
         CleanupSettle | CleanupSettleDynamic | CleanupPlan | CleanupFailure | CleanupDeliverCancel
             | DestroyDirect | CleanupDestroy => {
             facts[0].entries = read(0).entries;
             facts[0].exit = read(0).exit;
+            facts[0].need = read(0).need;
         }
         CleanupFinish => {
             facts[2].entries = read(0).entries;
             facts[2].exit = read(0).exit;
+            facts[2].need = read(0).need;
         }
         ExitCommit => {
             let pending = read(0);
+            enforce(pending.need.is_none_or(|(_, covered)| covered) || !check, EXIT_SELECTION, &format!(
+                "{}: exit.commit at pc {pc} returns a value whose holders' entries its exit selection does not \
+                surely take", f.symbol))?;
             for (index, &location) in outputs.iter().enumerate() {
                 if kind(f, location) == Some(ServiceKind::Packet) {
                     facts[index].entries = pending.entries.clone();
@@ -533,8 +774,8 @@ fn next_held(f: &Function, pc: usize, op: Opcode, arguments: &[Argument], state:
 
 /// The facts of the produced slots of one outcome. `fresh` says which functions return their Future's entry.
 #[allow(clippy::too_many_arguments)]
-fn produced_held(p: &Program, pc: usize, ordinal: usize, op: Opcode, arguments: &[Argument], tag: Tag,
-    schema: &[ProducedType], state: &Held, fresh: &[bool]) -> Vec<Slot>
+fn produced_held(p: &Program, f: &Function, pc: usize, ordinal: usize, op: Opcode, arguments: &[Argument],
+    tag: Tag, schema: &[ProducedType], state: &Held, fresh: &[bool]) -> Vec<Slot>
 {
     use Opcode::*;
     let operands = locations(arguments);
@@ -554,24 +795,60 @@ fn produced_held(p: &Program, pc: usize, ordinal: usize, op: Opcode, arguments: 
         }
         _ => false,
     };
+    // Every produced value that can reach a holder is a new value, named by its slot.
+    for (slot, produced) in schema.iter().enumerate() {
+        if matches!(produced, ProducedType::Value(ty) if reaches_holder(p, *ty)) {
+            facts[slot].value = Some((pc as u32, ordinal as u32, slot as u32));
+        }
+    }
+    let packet = schema.iter().position(|slot| *slot == ProducedType::Service(ServiceKind::Packet));
     match (op, tag) {
         (InvokeCallOwn | InvokeDispatchOwn, Tag::Normal) if returns_entry => {
-            if let (Some(ProducedType::Value(Type::Future(_))), Some(packet)) = (schema.first(),
-                schema.iter().position(|slot| *slot == ProducedType::Service(ServiceKind::Packet)))
-            {
+            if let (Some(ProducedType::Value(Type::Future(_))), Some(packet)) = (schema.first(), packet) {
                 let value = (pc as u32, ordinal as u32, 0);
                 facts[0].future = Some(value);
                 facts[packet].entries = BTreeSet::from([value]);
+            }
+        }
+        _ => {}
+    }
+    match (op, tag) {
+        // A callee's result packet carries what its own exit selection took for the result (#771).
+        (InvokeCallOwn | InvokeDispatchOwn | AwaitTake, Tag::Normal) | (InvokeDefer, Tag::Replace(_)) => {
+            if let (Some(value), Some(packet)) = (facts.first().and_then(|slot| slot.value), packet) {
+                facts[packet].selected.insert(value);
+            }
+        }
+        // A dynamic selection moves the entries of the holders it walks to (ABI D25.1, #771); a refused check
+        // returns its input unchanged.
+        (OwnSplitChecked | ScopeSplit, Tag::Normal) => {
+            let walked = walked(p, f, arguments, state);
+            let mut kept = read(0).entries;
+            facts[1].entries = take_walked(&mut kept, &walked);
+            facts[1].selected = walked.unwrap_or_default();
+            facts[0].entries = kept;
+        }
+        (ScopeTransfer, Tag::Normal) => {
+            let walked = walked(p, f, arguments, state);
+            let mut kept = read(0).entries;
+            let moved = take_walked(&mut kept, &walked);
+            facts[0].entries = kept;
+            if schema.get(1) == Some(&ProducedType::Service(ServiceKind::ScopeState)) {
+                let mut target = read(1).entries;
+                target.extend(moved);
+                facts[1].entries = target;
             }
         }
         (OwnSplitChecked | ScopeSplit | ScopeTransfer | OwnDynamic, _) => facts[0].entries = read(0).entries,
         (CleanupNext, _) => {
             facts[0].entries = read(0).entries;
             facts[0].exit = read(0).exit;
+            facts[0].need = read(0).need;
         }
         (ExitDispatch, Tag::Pending) => {
             facts[1].entries = read(2).entries;
             facts[1].exit = read(2).exit;
+            facts[1].need = read(2).need;
         }
         _ => {}
     }
@@ -591,7 +868,13 @@ fn assign_held(state: &Held, edge: &Edge, produced: &[Slot]) -> Held {
 }
 
 /// The surely held entries at every pc of `f`. When `check`, a materialize whose entry is not held is refused.
-fn held(p: &Program, f: &Function, fresh: &[bool], check: bool) -> Result<Vec<Option<Held>>, Error> {
+///
+/// `admitting` names the closes whose state may hold admitted entries (D25.3): an exit's selection requirement
+/// stands only through such a close; elsewhere the returned value's holders have no entry in the closing state
+/// (a borrowed view, an element of a borrowed array).
+fn held(p: &Program, f: &Function, fresh: &[bool], check: bool, admitting: Option<&BTreeSet<u32>>)
+    -> Result<Vec<Option<Held>>, Error>
+{
     let resumes = resumes(f);
     let mut saved = BTreeMap::<u32, Vec<Slot>>::new();
     forward(f, Held::default(), Held::meet, |pc, state| {
@@ -602,10 +885,13 @@ fn held(p: &Program, f: &Function, fresh: &[bool], check: bool) -> Result<Vec<Op
             Instruction::Data { op, inputs, output, .. } => {
                 if let Some(id) = output {
                     let location = Location::Register(*id);
-                    let copied = match (op, inputs.as_slice()) {
+                    let mut copied = match (op, inputs.as_slice()) {
                         (DataOp::Move, [input]) => state.read(Location::Register(*input)),
                         _ => Slot::default(),
                     };
+                    if copied.value.is_none() && holder_value(p, f, location) {
+                        copied.value = Some((pc as u32, u32::MAX, 0));
+                    }
                     out.write(location, copied);
                 }
                 successors.push((pc + 1, out));
@@ -649,9 +935,32 @@ fn held(p: &Program, f: &Function, fresh: &[bool], check: bool) -> Result<Vec<Op
                             }));
                             facts
                         }
-                        _ => next_held(f, pc, *op, arguments, state, outputs, check)?,
+                        Opcode::ExitPrepare => {
+                            // A returned value joined from several definitions has no known value yet: it is the
+                            // one the prepare names, as the exit's selection names it.
+                            let mut named = state.clone();
+                            let operands = locations(arguments);
+                            if operands.len() == 2 && holder_value(p, f, operands[0])
+                                && !named.values.contains_key(&operands[0])
+                            {
+                                named.values.insert(operands[0], (pc as u32, u32::MAX - 1, 0));
+                                out.values.insert(operands[0], (pc as u32, u32::MAX - 1, 0));
+                            }
+                            next_held(p, f, pc, *op, arguments, &named, outputs, check)?
+                        }
+                        Opcode::CleanupBegin => {
+                            let mut facts = next_held(p, f, pc, *op, arguments, state, outputs, check)?;
+                            if admitting.is_some_and(|closes| !closes.contains(&(pc as u32))) {
+                                facts[0].need = None;
+                            }
+                            facts
+                        }
+                        _ => next_held(p, f, pc, *op, arguments, state, outputs, check)?,
                     };
-                    for (&location, slot) in outputs.iter().zip(facts) {
+                    for (index, (&location, mut slot)) in outputs.iter().zip(facts).enumerate() {
+                        if slot.value.is_none() && holder_value(p, f, location) {
+                            slot.value = Some(slot.future.unwrap_or((pc as u32, u32::MAX, index as u32)));
+                        }
                         out.write(location, slot);
                     }
                     if !matches!(op, Opcode::RetOwn | Opcode::RetDefer) {
@@ -661,8 +970,8 @@ fn held(p: &Program, f: &Function, fresh: &[bool], check: bool) -> Result<Vec<Op
                 Flow::Outcomes(outcomes) => {
                     for (ordinal, outcome) in outcomes.iter().enumerate() {
                         let slots = schema(p, f, *op, arguments, outcome.tag)?;
-                        let produced = produced_held(p, pc, ordinal, *op, arguments, outcome.tag, &slots, state,
-                            fresh);
+                        let produced = produced_held(p, f, pc, ordinal, *op, arguments, outcome.tag, &slots,
+                            state, fresh);
                         successors.push((outcome.edge.target_pc as usize, assign_held(state, &outcome.edge,
                             &produced)));
                     }
@@ -678,7 +987,7 @@ fn returns_entry(p: &Program, f: &Function, fresh: &[bool]) -> Result<bool, Erro
     if f.entry_abi != EntryAbi::Owned || !matches!(f.results.as_slice(), [Type::Future(_)]) {
         return Ok(false);
     }
-    let states = held(p, f, fresh, false)?;
+    let states = held(p, f, fresh, false, None)?;
     let mut returns = 0;
     for (pc, instruction) in f.code.iter().enumerate() {
         let (Instruction::Champ { op: Opcode::RetOwn, arguments, .. }, Some(state)) = (instruction, &states[pc])
@@ -720,16 +1029,21 @@ pub(crate) fn fresh_futures(p: &Program) -> Result<Vec<bool>, Error> {
 }
 
 /// `SPB_MATERIALIZE`: every materialize of `f` takes an entry its packet surely holds; `SPB_REHOME`: every
-/// state-form rehome takes an entry its state surely holds.
+/// state-form rehome takes an entry its state surely holds; `SPB_EXIT_SELECTION`: every exit that returns a value
+/// reaching a holder takes that value's selection (or its Future's rehome) into its reserve (#771).
 pub(crate) fn check_materialize(p: &Program, f: &Function, fresh: &[bool]) -> Check {
     if !f.code.iter().any(|instruction| match instruction {
         Instruction::Champ { op: Opcode::ServiceMaterialize, .. } => true,
         Instruction::Champ { op: Opcode::CacheRehome, arguments, .. } => rehome_state_form(f, &locations(arguments)),
+        Instruction::Champ { op: Opcode::ExitPrepare | Opcode::ExitReplace, arguments, .. } => {
+            locations(arguments).iter().any(|&location| holder_value(p, f, location))
+        }
         _ => false,
     }) {
         return Ok(());
     }
-    held(p, f, fresh, true).map(|_| ())
+    let admitting = admitting_closes(p, f)?;
+    held(p, f, fresh, true, Some(&admitting)).map(|_| ())
 }
 
 // --- Scopes of states (C-4, state form) ----------------------------------------------------------------------

@@ -1761,3 +1761,132 @@ fn champ_jit_runs_an_async_defer_entry_as_a_child_and_continues() {
         assert_eq!(destroyed(&runtime), "Res 1\n");
     }
 }
+
+/// #771 (ABI D25.1 and the ruling "How a stored Future leaves"): a scope split whose selection reaches a Champ
+/// Future takes that Future's entries from the state into the selected packet; another holder's entries stay.
+#[test]
+fn champ_d25_a_split_that_reaches_a_future_takes_its_entries() {
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let Escape { mut s, f, .. } = escape(&mut ctx, 0);
+        // F's duty and G's are entries of S's list, as after the packets of stored values were admitted.
+        absorb_into(&mut ctx, &mut s, f);
+        let inputs = empty(&mut ctx);
+        let g = new_future(&mut ctx, MAKE, &[], &mut s, inputs);
+        absorb_into(&mut ctx, &mut s, g);
+        let roots = [f];
+        let selection = Selection { roots: roots.as_ptr(), count: 1 };
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        let selected = super::super::helpers::packet(runtime, post.selected.record).unwrap();
+        assert_eq!(selected.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
+        let state = super::super::helpers::scope(runtime, post.state.record).unwrap();
+        assert_eq!(state.all().services, [Service { holder: g, kind: SERVICE_CACHE, target: None }]);
+        // #758: an array of Futures is walked like Future fields; its elements' entries move with it.
+        let mut s = post.state;
+        runtime.roots.push((s.record, Repr::Ref));
+        let array = runtime.heap.allocate_array(Repr::Ref, &[g]);
+        runtime.roots.push((array, Repr::Ref));
+        let roots = [array];
+        let selection = Selection { roots: roots.as_ptr(), count: 1 };
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        let selected = super::super::helpers::packet(runtime, post.selected.record).unwrap();
+        assert_eq!(selected.services, [Service { holder: g, kind: SERVICE_CACHE, target: None }]);
+        let state = super::super::helpers::scope(runtime, post.state.record).unwrap();
+        assert!(state.all().services.is_empty());
+    }
+}
+
+/// PR-B (OIR-2 async remaining §2.2, #784), review of D25 (F6): a transfer moves a Future's entry only from the
+/// journals its filter takes, as it moves identities. `f`'s entry is in S's bound journal (as `own.bind` puts it),
+/// `g`'s in its admission journal. An admissible transfer (`TRANSFER_ADMISSION`) of both moves `g`'s entry only; a
+/// held transfer (#697) moves both. Each moved entry joins the target's bound journal.
+#[test]
+fn champ_d25_a_transfer_moves_entries_from_the_journals_its_filter_takes() {
+    for configuration in configurations() {
+        for held in [false, true] {
+            let (stress, engine) = configuration;
+            let mut runtime = load_r5(stress, engine);
+            let mut ctx = context(&mut runtime);
+            ctx.entry_frame = frame_pointer!();
+            let Escape { mut t, mut s, f, .. } = escape(&mut ctx, 0);
+            let mut packet = empty(&mut ctx);
+            let mut absorbed = PacketSlot::default();
+            assert_eq!(rt_service_absorb(&mut ctx, &mut packet, f, SERVICE_CACHE, &mut absorbed), NORMAL);
+            let mut accepted = ScopeSlot::default();
+            assert_eq!(rt_own_accept(&mut ctx, &mut s, &mut absorbed, &mut accepted), NORMAL);
+            let mut s = accepted;
+            unsafe { &mut *ctx.runtime }.roots.push((s.record, Repr::Ref));
+            let inputs = empty(&mut ctx);
+            let g = new_future(&mut ctx, MAKE, &[], &mut s, inputs);
+            absorb_into(&mut ctx, &mut s, g);
+            let entry = |holder| Service { holder, kind: SERVICE_CACHE, target: None };
+            let runtime = unsafe { &mut *ctx.runtime };
+            let state = super::super::helpers::scope(runtime, s.record).unwrap();
+            let journals = (state.bound.services.clone(), state.admission.services.clone());
+            assert_eq!(journals, (vec![entry(f)], vec![entry(g)]));
+            let roots = [f, g];
+            let selection = Selection { roots: roots.as_ptr(), count: 2 };
+            let inputs = TransferInputs { from: &mut s, to: &mut t };
+            let mut post = TransferPost::default();
+            let outcome = if held {
+                rt_scope_transfer_held(&mut ctx, &inputs, &selection, &mut post)
+            } else {
+                rt_scope_transfer_admissible(&mut ctx, &inputs, &selection, &mut post)
+            };
+            assert_eq!(outcome, NORMAL, "{:?}", runtime.fatal);
+            let source = super::super::helpers::scope(runtime, post.from.record).unwrap();
+            let target = super::super::helpers::scope(runtime, post.to.record).unwrap();
+            let mut moved = target.bound.services.clone();
+            moved.sort_by_key(|service| service.holder);
+            let mut expected = if held { vec![entry(f), entry(g)] } else { vec![entry(g)] };
+            expected.sort_by_key(|service| service.holder);
+            assert_eq!(moved, expected, "held {held}");
+            let kept = if held { vec![] } else { vec![entry(f)] };
+            assert_eq!((source.bound.services, source.admission.services), (kept, vec![]), "held {held}");
+        }
+    }
+}
+
+/// PR-B (OIR-2 async remaining §2.2, #784): service entries follow the journals of identities. A bound Future's
+/// entry stays when an admissible split (an argument offer, a constructor's staging) reaches it; an exit's split
+/// takes it.
+#[test]
+fn champ_d25_an_admissible_split_leaves_a_bound_future_s_entry() {
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_r5(stress, engine);
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let Escape { mut s, f, .. } = escape(&mut ctx, 0);
+        // F's entry joins S's bound journal (`own.accept`, as `own.bind` of F classifies it).
+        let mut packet = empty(&mut ctx);
+        let mut absorbed = PacketSlot::default();
+        assert_eq!(rt_service_absorb(&mut ctx, &mut packet, f, SERVICE_CACHE, &mut absorbed), NORMAL);
+        let mut accepted = ScopeSlot::default();
+        assert_eq!(rt_own_accept(&mut ctx, &mut s, &mut absorbed, &mut accepted), NORMAL);
+        let mut s = accepted;
+        unsafe { &mut *ctx.runtime }.roots.push((s.record, Repr::Ref));
+        let roots = [f];
+        let selection = Selection { roots: roots.as_ptr(), count: 1 };
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split_admissible(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        assert!(super::super::helpers::packet(runtime, post.selected.record).unwrap().services.is_empty());
+        let state = super::super::helpers::scope(runtime, post.state.record).unwrap();
+        assert_eq!(state.bound.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
+        let mut s = post.state;
+        runtime.roots.push((s.record, Repr::Ref));
+        let mut post = ScopeSplitPost { state: ScopeSlot::default(), selected: PacketSlot::default(), failure: 0 };
+        assert_eq!(rt_scope_split(&mut ctx, &mut s, &selection, &mut post), NORMAL);
+        let runtime = unsafe { &mut *ctx.runtime };
+        let selected = super::super::helpers::packet(runtime, post.selected.record).unwrap();
+        assert_eq!(selected.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
+    }
+}

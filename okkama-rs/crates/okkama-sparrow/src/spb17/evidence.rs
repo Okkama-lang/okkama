@@ -16,6 +16,12 @@ pub fn plain_inputs(p: &Program, f: &Function) -> bool {
         },
         None => f.params.iter().map(|&location| verify::loc_type(f, location)).collect(),
     };
+    // An input that can bring service entries makes the packet a carrier (PR-B2, #782; D25.2 revision, #771): a
+    // value of a call that can reach a holder, or an aggregate start value of an async body that can. A bare Future
+    // start value is borrowed and arrives without its entry.
+    if super::services::entry_carries(p, f) {
+        return false;
+    }
     inputs.into_iter().all(|ty| match ty {
         Ok(ProducedType::Value(ty @ (Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)
             | Type::Variant(_)))) => {
@@ -76,12 +82,17 @@ fn dispatch_plain_results(p: &Program, arguments: &[Argument]) -> bool {
 }
 
 /// PCs where independently reconstructed selected inventories prove the admission filter redundant.
+///
+/// PR-B (#784): the inventories compared here hold identities only, so two partitions can be equal while they
+/// differ in which service entries they take: the filter keeps a bound Future's entry in its owner. A filter is
+/// therefore never redundant when a selected root can reach a Future holder (`services::reaches_holder`).
 pub fn redundant_admission_filters(p: &Program, f: &Function) -> Result<Vec<usize>, Error> {
     let mut evidence = Evidence::new(p, f);
     let mut result = Vec::new();
     for (pc, instruction) in f.code.iter().enumerate() {
         if let Instruction::Champ { op: Opcode::ScopeSplit, arguments, .. } = instruction
             && arguments.contains(&Argument::Flag(true))
+            && !selects_holder(p, f, arguments)
         {
             let mut unfiltered = arguments.clone();
             unfiltered.retain(|argument| !matches!(argument, Argument::Flag(_)));
@@ -94,6 +105,23 @@ pub fn redundant_admission_filters(p: &Program, f: &Function) -> Result<Vec<usiz
     }
     evidence.check_budget()?;
     Ok(result)
+}
+
+/// Whether a selection of these split arguments has a root that can reach a Future holder; an unknown selection or
+/// root type counts as one.
+fn selects_holder(p: &Program, f: &Function, arguments: &[Argument]) -> bool {
+    arguments.iter().any(|argument| {
+        let Argument::Selection(id) = argument else {
+            return false;
+        };
+        f.proofs.selections.get(*id as usize).is_none_or(|selection| selection.locations.iter().any(|&location| {
+            match verify::loc_type(f, location) {
+                Ok(ProducedType::Value(ty)) => super::services::reaches_holder(p, ty),
+                Ok(_) => false,
+                Err(_) => true,
+            }
+        }))
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -737,6 +765,10 @@ impl<'a> Evidence<'a> {
             ProducedType::Service(_) => return None,
         };
         match ty {
+            // An object that reaches no identity holds at most service entries (D25.1, #771, #758).
+            Type::Object(_) | Type::Successor(_) if super::services::identity_free(&self.program.objects, ty) => {
+                Some(Inventory::new())
+            }
             // A case object refers to resources without being an identity: no static inventory.
             Type::Variant(_) if verify::reaches_resource(self.program, ty) => None,
             Type::Object(_) | Type::Successor(_) | Type::Array(_) | Type::Map(_)

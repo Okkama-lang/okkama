@@ -969,8 +969,28 @@ func @main()");
     verify_own(&output.module).unwrap();
     let (_, main) = function(&output.module, "main");
     let body = main.body.as_ref().unwrap();
+    // PR-B1 (#784, approved 2026-11-16), item 4: `f` leaves the block SI and is bound in S, so it is an admitted
+    // Future whose binding is `scope.split admissible` + `own.bind`. That split names `f` for its binding; no other
+    // selection, the creation's offer included, names a Future.
+    let binding_split = |block: &Block| match &block.term.kind {
+        TermKind::InvokeOwn { op, normal, .. }
+            if matches!(**op, Operation::Ownership(OwnershipOp::ScopeSplit { .. })) => {
+            body.blocks.get(normal.block).unwrap().insts.first().is_some_and(|inst| matches!(
+                body.insts.get(*inst).unwrap().op, Operation::Ownership(OwnershipOp::Bind { .. })))
+        }
+        _ => false,
+    };
+    let sites: Vec<(&Operation, bool)> = body.blocks.iter().flat_map(|(_, block)| {
+        let binding = binding_split(block);
+        let term = match &block.term.kind {
+            TermKind::InvokeOwn { op, .. } => Some((op.as_ref(), binding)),
+            _ => None,
+        };
+        block.insts.iter().map(|inst| (&body.insts.get(*inst).unwrap().op, false)).chain(term)
+    }).collect();
     let mut offers = 0;
-    for op in operations(body) {
+    let mut bound = 0;
+    for (op, binding) in sites {
         let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. })
             = op else { continue };
         let mut pending = vec![*selection];
@@ -981,11 +1001,306 @@ func @main()");
                 SelectionExpr::Value(value) => {
                     offers += 1;
                     let ty = output.module.types.get(body.values.get(*value).unwrap().ty).unwrap();
-                    assert!(!matches!(ty, Type::Future(_)), "a selection names a Future: {op:?}");
+                    if matches!(ty, Type::Future(_)) {
+                        assert!(binding, "a selection names a Future: {op:?}");
+                        bound += 1;
+                    }
                 }
                 _ => {}
             }
         }
     }
-    assert!(offers > 0, "the managed inputs are offered");
+    assert!(offers > bound, "the managed inputs are offered");
+    assert_eq!(bound, 1, "the binding of the admitted f names it once");
+}
+
+// --- PR-B1 (#784, OIR-2-async-remaining §2.2a): what a binding does with a Future ---------------------------
+
+const PR_B1: &str = include_str!("../../../tests/fixtures/async/high/pr-b1-bindings.oir");
+
+/// Every value a selection of `body` names directly, through unions and admissible restrictions, with whether the
+/// selection is admissible.
+fn named_values(body: &Body) -> Vec<(bool, ValueId)> {
+    let mut named = Vec::new();
+    for op in operations(body) {
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. } | OwnershipOp::Split { selection, .. }
+            | OwnershipOp::ScopeTransfer { selection, .. }) = op else { continue };
+        let admissible = matches!(body.selections.get(*selection).unwrap(), SelectionExpr::Admissible(_));
+        let mut pending = vec![*selection];
+        while let Some(selection) = pending.pop() {
+            match body.selections.get(selection).unwrap() {
+                SelectionExpr::Union(items) => pending.extend(items),
+                SelectionExpr::Admissible(inner) => pending.push(*inner),
+                SelectionExpr::Value(value) => named.push((admissible, *value)),
+                _ => {}
+            }
+        }
+    }
+    named
+}
+
+fn named_futures(module: &Module, body: &Body) -> Vec<(bool, ValueId)> {
+    named_values(body).into_iter().filter(|(_, value)| {
+        matches!(module.types.get(body.values.get(*value).unwrap().ty).unwrap(), Type::Future(_))
+    }).collect()
+}
+
+/// The `binding` attribute of every `fut.new` of a body, in block order.
+fn creation_bindings(body: &Body) -> Vec<Option<BindingId>> {
+    body.blocks.iter().flat_map(|(_, block)| block.insts.iter()).filter_map(|inst| {
+        match body.insts.get(*inst).unwrap().op {
+            Operation::Async(AsyncOp::FutureNew { binding, .. }) => Some(binding),
+            _ => None,
+        }
+    }).collect()
+}
+
+fn pr_b1_output() -> OwnOutput {
+    let output = rewrite_async(PR_B1).unwrap();
+    verify_own(&output.module).unwrap_or_else(|report| panic!("{report:?}"));
+    output
+}
+
+/// `let c = Child(n: n).run(); Holder(f: c);`: the binding holds `c` from its creation, so `fut.new` carries it and
+/// the constructor's selection names nothing; `c` is borrowed by the Holder and leaves by `cache.rehome`.
+#[test]
+fn a_bound_created_future_is_not_named_by_a_store() {
+    let output = pr_b1_output();
+    let (_, bound) = function(&output.module, "app.Maker.bound#1");
+    let body = bound.body.as_ref().unwrap();
+    let c = body.bindings.iter().find(|(_, binding)| binding.name == "c").unwrap().0;
+    assert_eq!(creation_bindings(body), [Some(c)]);
+    assert!(named_futures(&output.module, body).is_empty(), "{:?}", named_futures(&output.module, body));
+    assert_eq!(rehomes(&output.module, body).len(), 1, "the returned Holder takes c's duty along by its rehome");
+}
+
+/// `Holder(f: Child(n: n).run());`: a fresh temporary has no binding, and the store's admissible selection names it,
+/// so its duty moves into the constructor's packet (D25.2) and no rehome remains.
+#[test]
+fn a_fresh_future_is_named_by_its_store() {
+    let output = pr_b1_output();
+    let (_, fresh) = function(&output.module, "app.Maker.fresh#2");
+    let body = fresh.body.as_ref().unwrap();
+    assert_eq!(creation_bindings(body), [None]);
+    assert_eq!(named_futures(&output.module, body).into_iter().filter(|(admissible, _)| *admissible).count(), 1);
+    assert!(rehomes(&output.module, body).is_empty());
+}
+
+/// `let g = Maker().make(9);`: an admitted Future (a call result) is bound like any managed call result: an
+/// admissible split that names it, then `own.bind`, which moves its entry to the bound journal at run time. The
+/// creation of a Future the function only awaits carries no binding.
+#[test]
+fn an_admitted_future_binding_is_a_split_and_a_bind() {
+    let output = pr_b1_output();
+    let (_, main) = function(&output.module, "main");
+    let body = main.body.as_ref().unwrap();
+    let g = body.bindings.iter().find(|(_, binding)| binding.name == "g").unwrap().0;
+    let split = body.blocks.iter().find_map(|(_, block)| {
+        let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind else { return None };
+        let Operation::Ownership(OwnershipOp::ScopeSplit { selection, .. }) = op.as_ref() else { return None };
+        let first = *body.blocks.get(normal.block).unwrap().insts.first()?;
+        matches!(&body.insts.get(first).unwrap().op,
+            Operation::Ownership(OwnershipOp::Bind { binding }) if binding.binding == g).then_some(*selection)
+    }).expect("the binding of g follows a split");
+    let SelectionExpr::Admissible(inner) = body.selections.get(split).unwrap() else { panic!("admissible") };
+    let SelectionExpr::Value(value) = body.selections.get(*inner).unwrap() else { panic!("names g") };
+    assert!(matches!(output.module.types.get(body.values.get(*value).unwrap().ty).unwrap(), Type::Future(_)));
+    assert!(creation_bindings(body).iter().all(Option::is_none), "{:?}", creation_bindings(body));
+}
+
+/// Whether a body's Services schedules end with the dynamic step (D25.3).
+fn settles_dynamically(body: &Body) -> bool {
+    body.service_schedules.iter().any(|schedule| schedule.duties.contains(&ScheduleDuty::Dynamic))
+}
+
+/// PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope one that
+/// may hold them: a synchronous constructor with a Future parameter (a fresh Future stored through it arrives with
+/// its entry, which `own.accept` puts in the bound journal) and an async method whose receiver stores a Future. An
+/// input that reaches no holder does not.
+#[test]
+fn an_entry_packet_that_can_carry_entries_settles_dynamically() {
+    let output = pr_b1_output();
+    for (symbol, dynamic) in [("app.Holder.new#0", true), ("app.Holder.get#0", true), ("app.Child.run#0", false)] {
+        let (_, function) = function(&output.module, symbol);
+        assert_eq!(settles_dynamically(function.body.as_ref().unwrap()), dynamic, "{symbol}");
+    }
+}
+
+/// PR-B2: a bare Future input of an async body is borrowed (own never offers it to `fut.new`), so its start packet
+/// brings no entry and the body's schedule has no dynamic step (golden start-deps: `Adder.plus(f: Future<int>)`).
+#[test]
+fn a_bare_future_input_of_an_async_body_brings_no_entry() {
+    let output = rewrite_async(&input("start-deps")).unwrap();
+    let (_, plus) = output.module.functions.iter().find(|(_, function)| function.symbol.contains("plus")).unwrap();
+    let body = plus.body.as_ref().unwrap();
+    assert!(!settles_dynamically(body));
+}
+
+/// PR-B2 (#782): `first() is Future<int> { f; }` returns a Future it borrows from its receiver. No cache duty of
+/// its scope reaches it, so no rehome takes it; a carrier entry packet may still have brought its entry, so the
+/// exit's selection names it (`SPB_EXIT_SELECTION`). A Future whose duty a call gave the function keeps leaving by
+/// `cache.rehome` only.
+#[test]
+fn a_returned_borrowed_future_is_named_by_its_exit_selection() {
+    let output = pr_b1_output();
+    let (_, first) = function(&output.module, "app.Box.first#0");
+    let body = first.body.as_ref().unwrap();
+    let named = named_futures(&output.module, body);
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert!(!named[0].0, "the exit selection is not admissible");
+    assert!(rehomes(&output.module, body).is_empty());
+    let (_, make) = function(&output.module, "app.Maker.make#0");
+    let make = make.body.as_ref().unwrap();
+    assert!(named_futures(&output.module, make).is_empty(), "{:?}", named_futures(&output.module, make));
+    assert_eq!(rehomes(&output.module, make).len(), 1);
+}
+
+// --- PR-B1 across nested scopes (review of D25, F1 and F3) --------------------------------------------------------
+
+const PR_B1_SCOPES: &str = include_str!("../../../tests/fixtures/async/high/pr-b1-scopes.oir");
+
+fn pr_b1_scopes() -> OwnOutput {
+    let output = rewrite_async(PR_B1_SCOPES).unwrap_or_else(|error| panic!("{error}"));
+    verify_own(&output.module).unwrap_or_else(|report| panic!("{report:?}"));
+    output
+}
+
+fn binding_named(body: &Body, name: &str) -> BindingId {
+    body.bindings.iter().find(|(_, binding)| binding.name == name).unwrap().0
+}
+
+/// The packet that `own.bind` of `binding` takes, and whether `own.empty` made it.
+fn bound_packet(body: &Body, binding: BindingId) -> (ValueId, bool) {
+    let packet = operations(body).into_iter().find_map(|op| match op {
+        Operation::Ownership(OwnershipOp::Bind { binding: elaborated }) if elaborated.binding == binding => {
+            Some(elaborated.resource.packet)
+        }
+        _ => None,
+    }).expect("an own.bind of the binding");
+    let empty = body.insts.iter().any(|(_, instruction)| instruction.results.contains(&packet)
+        && matches!(instruction.op, Operation::Ownership(OwnershipOp::Empty {})));
+    (packet, empty)
+}
+
+/// The Futures that admissible selections of `body` name, each once (a split per open scope repeats a selection).
+fn admissible_futures(module: &Module, body: &Body) -> Vec<ValueId> {
+    let named: BTreeSet<_> = named_futures(module, body).into_iter().filter(|(admissible, _)| *admissible)
+        .map(|(_, value)| value).collect();
+    named.into_iter().collect()
+}
+
+/// F1: `let f = Child(n: 4).run(); let e = f; if true { let r = Res(); let g = f; } Holder(f: f)`. High passes `f`
+/// into the branch through a block parameter and binds that parameter as `g` in a retained scope; `f` is bound in
+/// its owner before, inside and after the branch. `fut.new` carries `f`'s binding (the first one in the owner), the
+/// binding of `g` emits nothing (the duty never left its owner), and the store after the branch names no Future:
+/// the Holder borrows `f`, whose token stays scheduled.
+#[test]
+fn an_alias_in_a_nested_scope_keeps_a_created_future_bound() {
+    let output = pr_b1_scopes();
+    let (_, alias) = function(&output.module, "app.Cases.alias#0");
+    let body = alias.body.as_ref().unwrap();
+    assert_eq!(creation_bindings(body), [Some(binding_named(body, "f"))]);
+    assert!(admissible_futures(&output.module, body).is_empty(), "{:?}", named_futures(&output.module, body));
+}
+
+/// F1, admitted: `let g = Maker().make(9); if true { let r = Res(); let k = g; Holder(f: k); } Holder(f: g)`. Only
+/// `g`'s own binding is a split that names it. `k` aliases a Future already bound in the enclosing scope, so its
+/// `own.bind` takes an empty packet (the entry stays in the bound journal of `g`'s scope), and neither store names a
+/// Future.
+#[test]
+fn an_alias_of_a_bound_admitted_future_takes_nothing() {
+    let output = pr_b1_scopes();
+    let (_, retained) = function(&output.module, "app.Cases.retained#1");
+    let body = retained.body.as_ref().unwrap();
+    assert_eq!(admissible_futures(&output.module, body).len(), 1, "{:?}", named_futures(&output.module, body));
+    assert!(!bound_packet(body, binding_named(body, "g")).1, "g's binding takes its split's packet");
+    assert!(bound_packet(body, binding_named(body, "k")).1, "k's binding takes nothing");
+}
+
+/// F3 (PR-B1 item 4 with several open scopes): `if true { let r = Res(); let g = Maker().make(7); Holder(f: g); }`.
+/// The binding of an admitted Future in a nested retained scope is an admissible split that names it and an
+/// `own.bind` of the split's packet, as with one open scope; the Full verifier accepts it (no B51 at the store).
+#[test]
+fn an_admitted_future_first_bound_in_a_nested_scope_is_a_split_and_a_bind() {
+    let output = pr_b1_scopes();
+    let (_, nested) = function(&output.module, "app.Cases.nested#2");
+    let body = nested.body.as_ref().unwrap();
+    assert_eq!(admissible_futures(&output.module, body).len(), 1, "{:?}", named_futures(&output.module, body));
+    assert!(!bound_packet(body, binding_named(body, "g")).1, "g's binding takes its split's packet");
+}
+
+/// `let f = Child(n: 1).run(); Holder(f: Chain().after(f))`: the fresh Future depends on the bound `f`, and is still a
+/// fresh temporary: its store names it (D25.2), and only it.
+#[test]
+fn a_fresh_future_made_from_a_bound_one_is_named_by_its_store() {
+    let output = pr_b1_scopes();
+    let (_, chained) = function(&output.module, "app.Cases.chained#3");
+    let body = chained.body.as_ref().unwrap();
+    assert_eq!(creation_bindings(body), [Some(binding_named(body, "f")), None]);
+    let fresh = body.insts.iter().find_map(|(_, instruction)| match instruction.op {
+        Operation::Async(AsyncOp::FutureNew { binding: None, .. }) => instruction.results.first().copied(),
+        _ => None,
+    }).unwrap();
+    assert_eq!(admissible_futures(&output.module, body), [fresh]);
+}
+
+/// The instruction of the one `fut.new` of `body` that carries `binding` (`Some(true)`), carries none
+/// (`Some(false)`), or either (`None`).
+fn creation(body: &Body, bound: Option<bool>) -> InstId {
+    let found: Vec<_> = body.insts.iter().filter_map(|(inst, instruction)| match instruction.op {
+        Operation::Async(AsyncOp::FutureNew { binding, .. }) if bound.is_none_or(|bound| binding.is_some() == bound) => {
+            Some(inst)
+        }
+        _ => None,
+    }).collect();
+    let [inst] = found.as_slice() else { panic!("one fut.new: {found:?}") };
+    *inst
+}
+
+/// Review of D25, 4b: the Full verifier's partition of an admissible split that reaches a bound Future through an
+/// aggregate (`Holder(f: f)` offered to `take`) leaves the Future's holder graph in the rest, as the runtime's
+/// admission filter does; no partition of `alias` moves it into a selected part.
+#[test]
+fn a_bound_future_reached_through_an_aggregate_stays_in_the_rest() {
+    let output = rewrite_async(PR_B1_SCOPES).unwrap();
+    let (id, alias) = function(&output.module, "app.Cases.alias#0");
+    let body = alias.body.as_ref().unwrap();
+    let created = creation(body, Some(true));
+    crate::verify::take_partitions();
+    verify_own(&output.module).unwrap();
+    let records: Vec<_> = crate::verify::take_partitions().into_iter().filter(|record| record.function == id).collect();
+    assert!(records.iter().all(|record| !record.selected.contains(&created)), "{records:?}");
+    let holder = |value: &ValueId| matches!(output.module.types.get(body.values.get(*value).unwrap().ty),
+        Ok(Type::Object { decl, .. }) if output.module.declarations.get(*decl).unwrap().name == "app.Holder");
+    let offers: Vec<_> = records.iter().filter(|record| {
+        let Ok(SelectionExpr::Admissible(inner)) = body.selections.get(record.selection) else { return false };
+        matches!(body.selections.get(*inner), Ok(SelectionExpr::Union(items)) if items.iter().any(|item| {
+            matches!(body.selections.get(*item), Ok(SelectionExpr::Value(value)) if holder(value))
+        }))
+    }).collect();
+    assert!(!offers.is_empty(), "the offer of the Holder is partitioned");
+    assert!(offers.iter().all(|record| record.rest.contains(&created)), "{offers:?}");
+}
+
+const STEALS: &str = include_str!("../../../tests/fixtures/verify/invalid/B9-own-split-steals-shared-cache.oir");
+
+/// Review of D25, F4: no partition takes the holder graph of a bound Future it names directly, a plain one included
+/// (`scope.split %s, selection(%f)` with `fut.new … binding b0`). The structural rule `b9-bound-future-named`
+/// refuses the selection; the Full model keeps the duty with its owner as well.
+#[test]
+fn no_partition_takes_a_bound_future_it_names() {
+    let module = crate::text::parse(STEALS).unwrap();
+    let (id, main) = function(&module, "main");
+    let body = main.body.as_ref().unwrap();
+    let created = creation(body, Some(true));
+    crate::verify::take_partitions();
+    let report = verify_own(&module).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B9BoundFutureNamed), "{report:?}");
+    let named: Vec<_> = crate::verify::take_partitions().into_iter().filter(|record| record.function == id
+        && matches!(body.selections.get(record.selection), Ok(SelectionExpr::Value(value))
+            if matches!(module.types.get(body.values.get(*value).unwrap().ty), Ok(Type::Future(_)))))
+        .collect();
+    assert!(!named.is_empty(), "the split that names f is partitioned");
+    assert!(named.iter().all(|record| record.rest.contains(&created) && !record.selected.contains(&created)),
+        "{named:?}");
 }

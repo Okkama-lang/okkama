@@ -75,7 +75,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     ^b2(%2: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %3: scope<S1>) in S1:
     %4: own = own.empty
     %5: deps = deps.of %2
-    (%6: future<int> facts(managed(deps=d0)), %7: scope<S1>) = fut.new %4, %5, %3, environment deferred(function=@app.Job.run#0, arguments=[%2]), result int, owner S1
+    (%6: future<int> facts(managed(deps=d0)), %7: scope<S1>) = fut.new %4, %5, %3, environment deferred(function=@app.Job.run#0, arguments=[%2]), result int, owner S1, binding b0
     %8: deps = deps.of %6
     %9: scope<S1> = fut.spawn %6, state %7
     invoke.own await %6, result int

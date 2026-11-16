@@ -237,6 +237,75 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   whose body fails first gets its check and fails as on Tomato instead of
   completing with an undef field. Verifier fixtures: a check of another
   field's flag and a check of an ordinary bool are refused.
+- **OIR verifier: no selection names a bound Future (review of D25, F4,
+  #784).** `b9-bound-future-named` covered admissible selections only, and
+  the Full model kept a bound created Future's duty with its owner only in
+  an admissible partition. Both now hold for every selection: a plain
+  `scope.split` or a held transfer that names a bound Future is refused,
+  and no partition moves the holder graph of a bound Future it names. The
+  negative `invalid/B9-own-split-steals-shared-cache` is back, now with
+  `fut.new … binding b0`.
+- **SPB 17: a map value is never a Future (review of D25, F2).** The
+  leaf rule that admits arrays of Futures (#758) also admitted
+  `Map<K, Future<V>>`, but a map selection's runtime walk does not enter
+  Future values: the entries of its Futures would stay in the closing scope
+  while the static model believed the selection took them. `MAP_PLAIN` now
+  refuses a Future map value; maps of Futures get their own design
+  (#800).
+- **OIR own: an alias of a Future in a nested scope no longer unbinds it
+  (review of D25, F1, #784).** Whether a binding holds a Future is now the
+  flow-sensitive bound bit of its cache-duty atoms in the own analysis,
+  which follows the value through the block parameters High passes into a
+  branch and survives the alias's scope. Before, own kept one binding per
+  value and missed the branch's parameter: `let f = work(); if c { let g =
+  f; } helper(Wrapper(pending: f)); await f;` named `f` in the store's
+  admissible split and own stopped with an internal error ("a split names a
+  bound Future"). `fut.new … binding` names the first binding of the value
+  in the Future's owner.
+- **Champ: a bound Future stays with its binding when an aggregate stores it
+  (#784, PR-B1).** A binding marks a Future's duty bound and moves nothing:
+  `fut.new` gains the optional attribute `binding bN` for a Future that its
+  owner scope binds (SPB 17 does not carry it); an admitted Future (a call
+  result, a rehome from a nested scope) is bound by `scope.split admissible`
+  and `own.bind`. Own never names a bound Future in an offer or a store, coro
+  absorbs only a fresh Future's tokens, and the loader keeps the admission
+  filter of a split whose root can reach a Future holder. New verifier rules
+  `b9-binding-attribute`, `b9-bound-future-named` and
+  `b9-bound-future-absorbed`. `let f = work(); helper(Wrapper(pending: f));
+  await f;` now runs as on Tomato instead of ending Cancelled. A Done Future
+  stored in a bound holder now settles at the binding's close (#794).
+- **SPB 17: entry packets that can carry Future entries (#782, PR-B2).** An
+  aggregate input of an async body that reaches a Future holder makes the
+  body's inputs non-plain and its start packet a carrier; a bare `Future<T>`
+  input stays plain. The may-admit analysis seeds entry packets that can
+  carry entries (a synchronous entry's packet parameter, an async body's
+  start packet), so their closes settle dynamically; own ends those scopes'
+  schedules with the dynamic step and names a returned borrowed Future in
+  the exit selection. New loader rule `SPB_FUTURE_INPUT`: `fut.new` passes a
+  packet that carries entries only to a body whose inputs can bring them.
+- **Champ: Futures in object fields and in arrays (#771, #758).** Async
+  ABI D25.2, revision of 2026-11-16, and the ruling "How a stored Future
+  leaves". A Future created in a function and stored by a constructor
+  moves its duty with the constructor's packet: coro absorbs its cache
+  token (and the task token of a spawned Future, task first) into the
+  selected packet, own emits no `cache.rehome` for it, and the entry leaves
+  with its holder through the exit selection. SPB 17: a selected Future
+  field, or a field of an array of Futures (`ArrayLeaf::Future`, wire tag
+  23), in an object that reaches what its packet carries
+  (`SPB_FUTURE_TYPES`); a Future input of a call is no plain input
+  (`CALL_PLAIN_PACKET`); an object that reaches no identity takes no
+  static position; a dynamic split moves the entries it reaches; an exit
+  that returns a value reaching a holder takes that value's selection
+  (`SPB_EXIT_SELECTION`). The Champ selection walk treats a Champ Future,
+  as a root, a field or an array element, as a holder. The Full verifier
+  models `service.absorb` and a selection of Future holders. On Champ,
+  `L08.cancel.after-await-settled`, `late-after-last-await`,
+  `shared-awaited-survives`, `nested-frame-next-await`,
+  `final-exit-window` and `L08.collect.race-empty` print Tomato's output
+  (`okkama-cli/tests/champ_cases_d25.rs`, also under GC stress). Open:
+  a bound Future must not be absorbed (PR-B, #784), entry packets of async
+  bodies (#782), a store on some paths only (#783).
+
 - **Tomato: `e.text()` on a cancellation caught as `Error` no longer
   crashes (#744).** A catch of the Error role binds a `Cancelled` value,
   which Sparrow builds from the system `Cancelled` object; the OIR-1

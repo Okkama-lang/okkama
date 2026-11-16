@@ -18,7 +18,7 @@
 //! `cache-state` (C-1). Own declares the Services schedules (D16); the pass renames each Future of them to
 //! its token, and every close of the owner names the versions of the tokens that reach it, in own's order.
 mod body;
-mod graph;
+pub(crate) mod graph;
 mod layout;
 mod liveness;
 mod repair;

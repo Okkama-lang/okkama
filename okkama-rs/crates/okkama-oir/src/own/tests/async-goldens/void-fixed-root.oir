@@ -51,7 +51,7 @@ func @check() -> void [async] abi observation summary(M9) async-creation(M7) asy
     %2: str = const "effect"
     %3: own = own.empty
     %4: deps = deps.of %2
-    (%5: future<void> facts(managed(deps=d0)), %6: scope<S1>) = fut.new %3, %4, %1, environment deferred(function=@note, arguments=[%2]), owner S1
+    (%5: future<void> facts(managed(deps=d0)), %6: scope<S1>) = fut.new %3, %4, %1, environment deferred(function=@note, arguments=[%2]), owner S1, binding b0
     %7: deps = deps.of %5
     invoke.own await %5
         normal ^b2($deps, %5, %6, %7)

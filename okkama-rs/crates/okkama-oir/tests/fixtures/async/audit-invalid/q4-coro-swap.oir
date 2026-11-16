@@ -81,12 +81,12 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %4: int = const 1
     %5: own = own.empty
     %6: deps = deps.of %4
-    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S1>) = fut.new %5, %6, %3, environment deferred(function=@work, arguments=[%4]), result int, owner S1
+    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S1>) = fut.new %5, %6, %3, environment deferred(function=@work, arguments=[%4]), result int, owner S1, binding b0
     %10: deps = deps.of %7
     %11: int = const 2
     %12: own = own.empty
     %13: deps = deps.of %11
-    (%14: future<int> facts(managed(deps=d1)), %15: cache-state, %16: scope<S1>) = fut.new %12, %13, %9, environment deferred(function=@work, arguments=[%11]), result int, owner S1
+    (%14: future<int> facts(managed(deps=d1)), %15: cache-state, %16: scope<S1>) = fut.new %12, %13, %9, environment deferred(function=@work, arguments=[%11]), result int, owner S1, binding b1
     %17: deps = deps.of %14
     %18: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%16, mode=consume), frame_slot(slot=1, value=%17, mode=borrow), frame_slot(slot=2, value=%8, mode=consume), frame_slot(slot=3, value=%15, mode=consume)], continuation 1
     invoke.own await %14, result int

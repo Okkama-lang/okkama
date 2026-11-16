@@ -53,6 +53,9 @@ pub(super) struct Filter {
     /// A check reads the whole graph of a returned Future, its cache's holdings included; it extracts
     /// nothing. No selection sets it (C-4).
     pub whole_future: bool,
+    /// The selected values can hold a Future (async ABI D25.2 revision, #771): a Future whose holder graph the
+    /// keys reach moves whole with them, as a stored Future's entry moves with its holder's packet.
+    pub futures: bool,
     pub state: u8,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1318,7 +1321,7 @@ mod cell_tests {
     fn filter(keys: &[Origin], values: &[u32]) -> Filter {
         Filter {
             keys: keys.iter().copied().collect(), fresh: false, possible: BTreeSet::new(),
-            labels: labels(values), stale: false, whole_future: false, state: 0,
+            labels: labels(values), stale: false, whole_future: false, futures: false, state: 0,
         }
     }
 

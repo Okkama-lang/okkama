@@ -157,7 +157,7 @@ fn cache_schedules(module: &Module, function: FuncId, body: &Body, state: &mut S
 
 /// The SSA edges of a block: each target with the values its arguments forward
 /// (`None` for an edge result).
-fn forwarding_edges(block: &Block) -> Vec<(BlockId, Vec<Option<ValueId>>)> {
+pub(super) fn forwarding_edges(block: &Block) -> Vec<(BlockId, Vec<Option<ValueId>>)> {
     let target = |target: &Target| (target.block, target.args.iter().copied().map(Some).collect());
     let invoke = |edge: &InvokeEdge| (edge.block, edge.args.iter().map(|argument| match argument {
         EdgeArg::Value(value) => Some(*value),

@@ -96,7 +96,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M11)
     ^b2(%4: app.Work facts(plain(certificate=closed_graph(ty=app.Work))), %5: scope<S1>) in S1:
     %6: own = own.empty
     %7: deps = deps.of %4
-    (%8: future<int> facts(managed(deps=d0)), %9: cache-state, %10: scope<S1>) = fut.new %6, %7, %5, environment deferred(function=@app.Work.run#0, arguments=[%4]), result int, owner S1
+    (%8: future<int> facts(managed(deps=d0)), %9: cache-state, %10: scope<S1>) = fut.new %6, %7, %5, environment deferred(function=@app.Work.run#0, arguments=[%4]), result int, owner S1, binding b0
     %11: deps = deps.of %8
     %12: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%10, mode=consume), frame_slot(slot=1, value=%11, mode=borrow), frame_slot(slot=2, value=%9, mode=consume)], continuation 1
     invoke.own await %8, result int
