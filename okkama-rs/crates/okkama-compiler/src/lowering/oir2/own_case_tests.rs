@@ -768,3 +768,26 @@ fn oir2_holder_of_a_resource_closure_binds_the_closure_dictionary() {
             if matches!(module.types.get(*ty), Ok(ir::Type::Fn(_))))), "{source}");
     }
 }
+
+/// #786: an explicit entry that accepts a holder of action values binds the function type's dictionary even
+/// when the closures can own nothing: the verifier counts the accepted input's cleanup through it (B104, B112).
+#[test]
+fn oir2_explicit_entry_binds_the_closure_dictionary_of_an_accepted_holder() {
+    let source = concat!("module app; role Gen { value() is int; } ",
+        "object Base does Gen { has n is int; Base(:n); value() is int { n; } } ",
+        "object Wrapped does Gen { has origin is Gen; has condition is (int) is bool; ",
+        "Wrapped(:origin, :condition); value() is int { origin.value(); } } ",
+        "object Picker { has origin is Gen; has condition is (int) is bool; has attempts is int; ",
+        "Picker(:origin, :condition, :attempts); ",
+        "pick() is Gen { for (0..attempts) -> index { let sample = origin; if condition(sample.value() + index) { ",
+        "return Wrapped(origin: Base(n: index), condition: (v is int) is bool { v > 0; }); } } Base(n: 0); } } ",
+        "main() is int { let p = Picker(origin: Base(n: 3), condition: (n is int) is bool { n % 2 == 0; }, ",
+        "attempts: 5); p.pick().value(); }");
+    let (module, _) = own_stage(source, None, ir::verify::VerifyMode::Structural).unwrap();
+    let (_, value) = module.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Wrapped.value"))
+        .unwrap();
+    assert!(matches!(value.signature.ownership_abi, ir::OwnershipAbi::Explicit { .. }));
+    let body = value.body.as_ref().unwrap();
+    assert!(body.insts.iter().any(|(_, inst)| matches!(&inst.op, ir::Operation::Core(ir::CoreOp::TypeOf { ty, .. })
+        if matches!(module.types.get(*ty), Ok(ir::Type::Fn(_))))));
+}
