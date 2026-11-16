@@ -394,6 +394,14 @@ impl Runtime {
     /// close are the report's secondaries, or the report when there is none. Async destroys arrive with slice D1;
     /// until then the plan runs here rather than in a shielded root closer frame.
     pub(crate) fn champ_shutdown(&mut self, ctx: *mut Ctx) -> Result<Option<Word>, Error> {
+        // The root close's failure stays rooted until shutdown ends: a later drain runs bodies, which collect.
+        let base = self.roots.len();
+        let result = self.champ_shutdown_steps(ctx);
+        self.roots.truncate(base);
+        result
+    }
+
+    fn champ_shutdown_steps(&mut self, ctx: *mut Ctx) -> Result<Option<Word>, Error> {
         let mut cleanup = 0;
         loop {
             if !self.shutdown_drain(ctx) {
@@ -422,14 +430,14 @@ impl Runtime {
             let roots = self.roots.len();
             let mut slot = PacketSlot { record: store(self, Data::Packet(outcome)) };
             self.roots.push((slot.record, Repr::Ref));
-            if cleanup != 0 {
-                self.roots.push((cleanup, Repr::Ref));
-            }
             let closed = super::cleanup::close_packet(ctx, &mut slot, 0);
             self.roots.truncate(roots);
             match closed {
                 Ok(0) => {}
-                Ok(failure) if cleanup == 0 => cleanup = failure,
+                Ok(failure) if cleanup == 0 => {
+                    cleanup = failure;
+                    self.roots.push((cleanup, Repr::Ref));
+                }
                 Ok(failure) => {
                     self.heap.payload_mut::<runtime::Failure>(cleanup).expect("failure").secondary.push(failure);
                 }
@@ -482,11 +490,14 @@ impl Runtime {
     /// Settle-time view of a spawned task's duty, with no change (draft 3 §6.2; ABI D24.2). A running task
     /// detaches, and its cache duty, settled next, goes with it to the root; a settled task closes, and the
     /// registry keeps its report entry while its failure is unobserved and not Cancelled. A task whose cache
-    /// another owner holds settles to nothing.
+    /// another owner holds settles to nothing, and so does the duty of a Future that `fut.spawn` found settled
+    /// already (cancelled before the spawn, draft 3 §7.1): it never started, so there is no task to detach or
+    /// close, and its cache duty settles by its own row, as the dynamic settle does.
     pub(super) fn champ_task_settlement(&self, duty: Word, closing: Option<OwnerId>) -> Result<CacheSettle, Error> {
         let cache = self.champ_cache(duty)?;
-        if get(duty, tasks::FLAGS) & flags::SPAWNED == 0 {
-            return Err(error("a task duty of a Future that was not spawned"));
+        let running = get(duty, tasks::STATE) == tasks::RUNNING;
+        if get(duty, tasks::FLAGS) & flags::SPAWNED == 0 && running {
+            return Err(error("a task duty of a running Future that was not spawned"));
         }
         if cache.flags & RELEASED != 0 {
             return Err(error("task duty settled after its cache duty"));

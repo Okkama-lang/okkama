@@ -16,7 +16,10 @@ const SPAWNS_WORK: u32 = 2;
 const SPAWNS_FAILS: u32 = 3;
 const AWAITS_SPAWNED: u32 = 4;
 const RETURNS_SPAWNED: u32 = 5;
-const ASYNC_P1: u32 = 6;
+const CANCELS_THEN_SPAWNS: u32 = 6;
+const ASYNC_P1: u32 = 7;
+/// Object 1, `Bad`: its destroy fails.
+const BAD: u32 = 1;
 
 /// Slots of a spawner: 0 inputs, 1 owner state, 2 cache duty, 3 task duty, 4 the Future, 5–7 the unwind.
 fn spawner_slots() -> Vec<s::FrameSlot> {
@@ -92,20 +95,57 @@ fn returns_spawned() -> (s::Function, s::FrameLayout) {
     (b.finish(), layout)
 }
 
+/// `async cancels_then_spawns() is int { let f = work(7); f.cancel(); spawn f…; return 0; }` in the form the
+/// verifier and the loader accept (D24.1: only observations between the creation and the spawn): the spawn finds
+/// the Future settled as Cancelled, does not start it, and the close settles both duties without a report.
+fn cancels_then_spawns() -> (s::Function, s::FrameLayout) {
+    let slots = spawner_slots();
+    let index = CANCELS_THEN_SPAWNS;
+    let (mut b, frame) = Body::asynchronous("cancels_then_spawns", index, vec![s::Type::Int]);
+    let (body, inputs) = b.resume(frame, 0, &types(&slots, &[0]));
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(index), A::Boundary(index)], K::ScopeState);
+    let q1 = b.emit(O::OwnAccept, vec![l(q0), l(inputs[0])], K::ScopeState);
+    let seven = b.constant(s::Constant::Int("7".into()), s::Type::Int);
+    let (future, cache, q2) = future_new(&mut b, index, WORK, &[seven], q1);
+    b.next(O::FutureCancel, vec![l(future)], vec![]);
+    let [kept, task] = [b.service(K::CacheState), b.service(K::TaskState)];
+    b.next(O::FutureSpawn, vec![l(future), l(cache)], vec![kept, task]);
+    let zero = b.constant(s::Constant::Int("0".into()), s::Type::Int);
+    b.return_value(body, q2, index, Some(zero), &[task, kept], "done");
+    let layout = b.layout(slots, vec![(vec![0], vec![])]);
+    (b.finish(), layout)
+}
+
+/// The destroy of `Bad`, which fails with "bad destroy".
+fn destroy_bad() -> s::Function {
+    let mut b = Body::new("destroy_bad", s::EntryAbi::Observation, vec![]);
+    let target = b.register(s::Type::Object(BAD));
+    b.f.params = vec![target];
+    b.f.proofs.entry = Some(s::EntryContract { destroy: Some(BAD), failures: 2, ..s::EntryContract::default() });
+    b.block("entry", &[target]);
+    let failure = b.fail("bad destroy", "raised");
+    let Location::Register(id) = failure else { unreachable!() };
+    b.f.code.push(s::Instruction::Raise(id));
+    b.finish()
+}
+
 fn p1_program() -> s::Program {
     let mut functions = Vec::new();
     let mut frames = Vec::new();
     for (function, layout) in [work(), fails(), spawner("spawns_work", SPAWNS_WORK, WORK, false),
         spawner("spawns_fails", SPAWNS_FAILS, FAILS, false), spawner("awaits_spawned", AWAITS_SPAWNED, WORK, true),
-        returns_spawned()]
+        returns_spawned(), cancels_then_spawns()]
     {
         functions.push(function);
         frames.push(layout);
     }
     functions.push(destroy());
+    functions.push(destroy_bad());
+    let mut bad = res();
+    bad.name = "Bad".into();
     s::Program {
         module: "spawn".into(),
-        objects: vec![res()],
+        objects: vec![res(), bad],
         functions,
         tables: s::ChampTables {
             scopes: (0..ASYNC_P1).map(|index| s::Scope { function: index, parent: None, boundary: index }).collect(),
@@ -322,6 +362,8 @@ extern "C" fn parks(ctx: *mut Ctx, frame: Word) -> Word {
     }
     let delivered = get(frame, tasks::FLAGS) & tasks::DELIVER_NOW != 0;
     set(frame, tasks::FLAGS, get(frame, tasks::FLAGS) & !tasks::DELIVER_NOW);
+    // A collection while the body runs (every safepoint collects under GC stress).
+    runtime.safepoint(frame_pointer!(), unsafe { &*ctx }, &[]);
     let mut outcome = PacketSlot::default();
     assert_eq!(rt_own_empty(ctx, &mut outcome), NORMAL);
     let failure = if delivered { runtime.cancelled_failure() } else { 0 };
@@ -378,7 +420,7 @@ fn champ_p1_task_duty_rows() {
         assert_eq!(facts(&runtime, done), (false, false, true, 1));
         runtime.prune_spawned();
         assert_eq!(facts(&runtime, done).3, 0, "a settled success leaves the registry");
-        // A Future that is no longer cold is not started again; a second spawn changes nothing.
+        // A released cache duty is refused by the spawn, and nothing changes.
         let before = (get(done, tasks::STATE), get(done, tasks::FLAGS));
         let mut cache = CacheSlot { record: done };
         let mut post = SpawnPost::default();
@@ -387,24 +429,28 @@ fn champ_p1_task_duty_rows() {
         assert_eq!((get(done, tasks::STATE), get(done, tasks::FLAGS)), before);
         ctx.status = OK;
         runtime.fatal = None;
-        // The task duty of a Future that was never spawned is refused before anything changes.
+        // A Future cancelled before its spawn (draft 3 §7.1): the spawn does not start it and registers no task;
+        // its task duty settles to nothing and its cache duty by its FAILURE row, its inputs into the close.
         let mut other = owner(&mut ctx);
-        let inputs = empty(&mut ctx);
-        let cold = new_future(&mut ctx, WORK, &[word::small(4).unwrap()], &mut other, inputs);
-        let schedule = runtime.champ_register_schedule(vec![SERVICE_TASK, SERVICE_CACHE]);
-        let inputs = CloseInputs {
-            scope: &mut other, packet: std::ptr::null_mut(), pending: std::ptr::null_mut(), failure: 0,
-            settlements: 0,
-        };
-        let mut cleanup = CleanupSlot::default();
-        assert_eq!(rt_cleanup_begin(&mut ctx, &inputs, &mut cleanup), NORMAL);
-        runtime.roots.push((cleanup.record, Repr::Ref));
-        assert_eq!(rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 0, cold, &mut cleanup), OUTCOME_STOP);
-        assert!(runtime.fatal.as_deref().unwrap().contains("not spawned"));
-        assert_eq!(get(cold, tasks::STATE), tasks::COLD);
+        let other_owner = super::super::helpers::scope(&runtime, other.record).unwrap().owner;
+        let (r, inputs) = resource(&mut ctx, other_owner);
+        let cancelled = new_future(&mut ctx, WORK, &[word::small(4).unwrap()], &mut other, inputs);
+        assert_eq!(rt_cancel_request(&mut ctx, cancelled), NORMAL);
+        spawn(&mut ctx, cancelled);
+        assert_eq!(get(cancelled, tasks::FLAGS) & SPAWNED, 0);
+        assert_eq!(facts(&runtime, cancelled).3, 0);
+        let closing = super::super::helpers::scope(&runtime, other.record).unwrap().owner;
+        assert_eq!(runtime.champ_task_settlement(cancelled, Some(closing)).unwrap(), CacheSettle::Nothing);
+        let events = runtime.champ.destroy_events.len();
+        assert_eq!(close_duties(&mut ctx, &mut other, &[(cancelled, SERVICE_TASK), (cancelled, SERVICE_CACHE)]), 0);
+        assert_eq!(runtime.champ.destroy_events.len(), events + 1, "the unstarted inputs are destroyed once");
+        assert_eq!(runtime.heap.champ_identity(r).unwrap().life, Life::Dead);
+        assert_eq!(facts(&runtime, cancelled), (false, false, true, 0));
+        assert_eq!(runtime.shutdown_report(), None);
         // A cache duty that names another Future is refused by the spawn.
-        ctx.status = OK;
-        runtime.fatal = None;
+        let mut third = owner(&mut ctx);
+        let inputs = empty(&mut ctx);
+        let cold = new_future(&mut ctx, WORK, &[word::small(5).unwrap()], &mut third, inputs);
         let mut cache = CacheSlot { record: done };
         assert_eq!(rt_future_spawn(&mut ctx, cold, &mut cache, &mut post), OUTCOME_STOP);
         assert!(runtime.fatal.as_deref().unwrap().contains("another Future"));
@@ -438,4 +484,96 @@ fn champ_p1_a_returned_spawned_future_carries_both_duties_to_the_caller() {
         traces.record(configuration, &runtime);
     }
     traces.agree();
+}
+
+#[test]
+fn champ_p1_a_future_cancelled_before_its_spawn_closes_without_a_report() {
+    // D24.1, draft 3 §7.1 and the D24.2 rows: `fut.cancel` between the creation and the spawn is an observation;
+    // the spawn returns the duties without starting the Future, the close settles both, and the run succeeds.
+    let mut traces = Traces::default();
+    for configuration in configurations() {
+        let (stress, engine) = configuration;
+        let mut runtime = load_p1(stress, engine);
+        let result = runtime.run_function(CANCELS_THEN_SPAWNS as usize, crate::STACK_BYTES);
+        assert_eq!(result.unwrap(), word::small(0).unwrap());
+        assert!(steps(&runtime, WORK).is_empty(), "the cancelled Future never starts");
+        assert!(runtime.spawned.is_empty());
+        traces.record(configuration, &runtime);
+    }
+    traces.agree();
+}
+
+thread_local! {
+    /// The running Future whose cache entry a `holds_bad_and_entry` outcome carries.
+    static HELD: std::cell::Cell<Word> = const { std::cell::Cell::new(0) };
+}
+
+/// Waits for `GATE` at its first run, then publishes a success whose outcome holds a new `Bad` and the cache entry
+/// of the running Future `HELD` (D25.1), committed into its cache as `exit.commit` does.
+extern "C" fn holds_bad_and_entry(ctx: *mut Ctx, frame: Word) -> Word {
+    let runtime = runtime_of(ctx);
+    if get(frame, tasks::RESUME) == 0 {
+        let gate = GATE.with(|gate| gate.get());
+        set(frame, tasks::RESUME, 1);
+        set(frame, tasks::AWAITING, gate);
+        runtime.champ_add_waiter(gate, frame);
+        return 1;
+    }
+    let owner = runtime.champ_cache(frame).unwrap().owner;
+    let object = runtime.heap.object_new(BAD, &[]);
+    runtime.roots.push((object, Repr::Ref));
+    let mut packet = PacketSlot::default();
+    assert_eq!(rt_own_create_commit(ctx, object, u64::from(BAD), owner.get(), &mut packet), NORMAL);
+    let held = HELD.with(|held| held.get());
+    let mut absorbed = PacketSlot::default();
+    assert_eq!(rt_service_absorb(ctx, &mut packet, held, SERVICE_CACHE, &mut absorbed), NORMAL);
+    let inputs = ExitInputs { kind: 0, boundary: 0, value: 0, value_repr: 0, packet: &mut absorbed, selection: 0 };
+    let mut pending = PendingSlot::default();
+    assert_eq!(rt_exit_prepare(ctx, &inputs, &mut pending), NORMAL);
+    let mut destination = ExitDestination { holder: HolderId(0), owner: OwnerId(0) };
+    assert_eq!(rt_machine_future_destination(ctx, frame, &mut destination), NORMAL);
+    let mut committed = CommitPost::default();
+    assert_eq!(rt_exit_commit(ctx, &mut pending, &destination, &mut committed), NORMAL);
+    let published = PublishIn { tag: 0, value: word::small(0).unwrap(), packet: &mut committed.packet, failure: 0 };
+    assert_eq!(rt_future_publish(ctx, frame, &published), NORMAL);
+    0
+}
+
+#[test]
+fn champ_p1_the_root_close_failure_survives_a_second_drain() {
+    // Draft 3 §7.3: the first root close destroys a detached outcome's `Bad`, whose destroy fails, and settles the
+    // outcome's entry of a running Future, which detaches; the second drain cancels that Future and runs its body,
+    // which collects. The root close's failure is still the report, intact.
+    for stress in [false, true] {
+        let mut runtime = load_p1(stress, Engine::Jit);
+        runtime.champ.captured_trace = Some(Vec::new());
+        let mut ctx = context(&mut runtime);
+        ctx.entry_frame = frame_pointer!();
+        let mut state = owner(&mut ctx);
+        let mut elsewhere = owner(&mut ctx);
+        let gate = gate(&mut ctx, &mut elsewhere);
+        GATE.with(|cell| cell.set(gate));
+        // The running Future whose entry the outcome will hold: parked, owned elsewhere, not spawned.
+        let inputs = empty(&mut ctx);
+        let held = new_future(&mut ctx, SPAWNS_FAILS, &[], &mut elsewhere, inputs);
+        runtime.invocations[SPAWNS_FAILS as usize].code = parks as *const () as u64;
+        runtime.champ_future_start(&mut ctx, 0, held);
+        assert_eq!(get(held, tasks::STATE), tasks::RUNNING);
+        HELD.with(|cell| cell.set(held));
+        let inputs = empty(&mut ctx);
+        let task = new_future(&mut ctx, FAILS, &[], &mut state, inputs);
+        runtime.invocations[FAILS as usize].code = holds_bad_and_entry as *const () as u64;
+        spawn(&mut ctx, task);
+        assert_eq!(close_duties(&mut ctx, &mut state, &[(task, SERVICE_TASK), (task, SERVICE_CACHE)]), 0);
+        open_gate(&mut ctx, gate, 5);
+        runtime.schedule(&mut ctx, task);
+        assert_eq!((ctx.status, get(task, tasks::STATE)), (OK, tasks::DONE), "{:?}", runtime.fatal);
+        assert!(runtime.champ_retained(task));
+        let report = runtime.champ_shutdown(&mut ctx).unwrap().expect("the root close failed");
+        assert_eq!(ctx.status, OK);
+        assert!(kind(&runtime, report).contains("bad destroy"), "{}", kind(&runtime, report));
+        assert_eq!(destroyed(&runtime), "Bad 1\n");
+        assert!(failed_cancelled(&runtime, held), "the second drain cancelled the detached Future");
+        assert!(runtime.spawned.is_empty());
+    }
 }
