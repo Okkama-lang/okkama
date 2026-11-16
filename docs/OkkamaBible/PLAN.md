@@ -1,9 +1,16 @@
 # The Okkama Bible — plan
 
 Working plan of the book (not part of the published text). A page is counted
-as 2,500 characters of text, code included. The book has no page limit: at
-least 600 pages per language, and more is better — it is a Bible.
-`build.py --stats` prints the current size of every chapter.
+as 2,500 characters of text, code included. The target is about 400 pages per
+language (owner, 2026-11-17; it was "at least 600"), and the book is measured
+by coverage, not pages:
+- every construct of the language is explained and shown in a running example;
+- every rule has its reason and its cost;
+- every family of std modules is shown on a task;
+- every part says honestly what Okkama does not do yet, linked to its issue.
+
+No chapter is padded to reach a page count. `build.py --stats` prints the
+current size of every chapter.
 
 ## Principles
 
@@ -93,10 +100,8 @@ least 600 pages per language, and more is better — it is a Bible.
 The former Part VI (the compiler, the engines, Sparrow, safety by
 construction) moved to the separate internals book on 2026-11-14.
 
-The page counts are a floor, not a ceiling: a chapter is written to its
-substance and grows with it. The planned floors add up to about 552 pages, so
-chapters are expected to exceed them until the whole book passes 600 pages per
-language.
+The page counts are a guide, not a floor: a chapter ends when its subject is
+covered (owner, 2026-11-17). The book aims at about 400 pages per language.
 
 ## Language changes to reflect (0.6.0)
 
