@@ -102,3 +102,20 @@ fn oir2_pipeline_refuses_an_atomic_over_a_role_with_a_resource() {
     let error = compile_high_with(high, o::VerifyMode::Structural).unwrap_err().to_string();
     assert!(error.contains("Atomic/Cell over the role app.Named") && error.contains("plain roles only"), "{error}");
 }
+
+/// #723: an object that holds an action value whose closures capture only plain data is no identity. Own gives
+/// its construction no fresh creation, the full verifier counts the function type's obligations by the same
+/// closures, and the loader finds no fresh result without a creation (FRESH_ORIGIN).
+#[test]
+fn oir2_pipeline_a_holder_of_plain_closures_is_no_identity() {
+    let source = concat!("module app; object Filter { has keep is (int) is bool; Filter(:keep); ",
+        "passes(value is int) is bool { keep(value); } } ",
+        "object Sets { Sets(); ",
+        "above(limit is int) is Filter { Filter(keep: (value is int) is bool { value > limit; }); } } ",
+        "main() is int { let f = Sets().above(3); if f.passes(5) { 1; } else { 0; } }");
+    for mode in [o::VerifyMode::Structural, o::VerifyMode::Full] {
+        let high = super::super::tests::lower_std(source).unwrap_or_else(|error| panic!("{error}"));
+        compile_high_with(high, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+    }
+}
+

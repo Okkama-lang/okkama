@@ -20,6 +20,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A holder of action values is no identity when their closures own
+  nothing (#723).** Own classified a function type by the runtime-managed
+  dictionary of its open calls, so any object that held an action value
+  (`OrderedSet` through `Filtered`'s condition) counted as owning a
+  resource. It got a fresh creation summary that the SPB 17 layout, which
+  gives an identity only to an object with a destroy, has no identity for
+  (`FRESH_ORIGIN`, `L09.collections.ordered-sets`). Now a function type
+  inside another type's graph counts by the closed set of closures the
+  module creates of it, as a role counts by its implementations (P2.4 §4.1:
+  a closure owns a captured resource only when it captured a fresh one);
+  a function type a value from outside the module may have (an entry
+  parameter, a bodyless function's result) keeps its dictionary, and so
+  does the function type itself. The full verifier's obligation formula
+  counts function types the same way. The case runs; #777 is the
+  remaining defect of holders whose closures capture a resource.
 - **Cell and Atomic over a plain role run on Champ (#764).** The OIR-2
   specializer registered Atomic/Cell only for plain scalars and arrays, so
   `std/config/ini.ok`'s `Cell<List<string>>` stopped `L09.ini.native-
