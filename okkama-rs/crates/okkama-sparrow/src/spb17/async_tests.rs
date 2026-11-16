@@ -428,6 +428,9 @@ enum Main {
     CancelBeforeSettle,
     /// The final close delivers its deferred cancellation in the given way.
     Delivers(Delivery),
+    /// The Future's inputs packet is no `own.empty` but the join of the parts of an `own.split` of one with another
+    /// `own.empty`: still an empty inventory (#601 N1, ruling PR-N).
+    JoinedEmpty,
 }
 
 /// @main's slots: 0 inputs, 1 owner state, 2 cache duty, 3 the Future, 4–6 the unwind operands, 7–9 a second
@@ -483,7 +486,16 @@ fn main(variant: Main) -> (Function, FrameLayout) {
     let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAIN), A::Boundary(MAIN)], K::ScopeState);
     let q1 = b.emit(O::OwnAccept, vec![l(q0), l(start[0])], K::ScopeState);
     let seven = b.constant(Constant::Int("7".into()), Type::Int);
-    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let offered = if variant == Main::JoinedEmpty {
+        let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+        let selection = b.selection();
+        let [rest, selected, deps] = [b.service(K::Packet), b.service(K::Packet), b.service(K::Deps)];
+        b.next(O::OwnSplit, vec![l(empty), A::Selection(selection)], vec![rest, selected, deps]);
+        let other = b.emit(O::OwnEmpty, vec![], K::Packet);
+        b.emit(O::OwnJoin, vec![l(rest), l(selected), l(other)], K::Packet)
+    } else {
+        b.emit(O::OwnEmpty, vec![], K::Packet)
+    };
     let external = b.emit(O::DepsOf, vec![l(seven)], K::Deps);
     b.f.proofs.dependencies.push(Dependency { value: external, obligations: vec![seven] });
     let [future, cache, q2] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
@@ -609,6 +621,16 @@ pub(super) fn plain() -> Program {
     plain_with(Main::Plain)
 }
 
+/// [`plain`] with the Future's inputs packet joined from splits of `own.empty` ([`Main::JoinedEmpty`]).
+pub(super) fn plain_joined() -> Program {
+    let mut p = plain_with(Main::JoinedEmpty);
+    // The proof records the split's static selection as the loader reconstructs it.
+    let main = &p.functions[1];
+    let selections = super::evidence::static_selections_with(&p, main, &mut super::evidence::Evidence::new(&p, main));
+    p.functions[1].proofs.static_selections = selections.unwrap();
+    p
+}
+
 fn main_of(p: &mut Program) -> &mut Function {
     &mut p.functions[1]
 }
@@ -628,6 +650,7 @@ fn plain_await_loads() {
     for variant in [Main::Plain, Main::Cancelling] {
         verify_load(&plain_with(variant), &NoExternalContracts).unwrap();
     }
+    verify_load(&plain_joined(), &NoExternalContracts).unwrap();
 }
 
 /// Creates `futures` Futures of @work, reads and cancels the first, and never awaits any: each cache duty is

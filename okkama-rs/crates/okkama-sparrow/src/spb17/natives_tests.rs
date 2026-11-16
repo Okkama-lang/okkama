@@ -131,6 +131,26 @@ fn table_async_natives_are_trusted_drivers() {
     assert_eq!(load(&program(vec![], vec![quiet])).unwrap_err().rule, "EXTERNAL_SIGNATURE");
 }
 
+/// #601 N1, D22: an unknown canonical symbol is an unresolved provider, whose checked adapter is a synchronous
+/// owning entry and never a driver. Declared as a driver it is refused under `SPB_EXTERNAL_ASYNC`, before the
+/// adapter's signature is compared, and so is one for which no adapter exists.
+#[test]
+fn an_unknown_canonical_symbol_is_no_driver() {
+    let refused = |function: Function| {
+        let refusal = load(&program(vec![], vec![function])).unwrap_err();
+        assert_eq!(refusal.rule, super::drivers::EXTERNAL_ASYNC, "{refusal}");
+        assert!(refusal.message.contains("resolves to a catalogue driver"), "{refusal}");
+    };
+    let later = driver("app@1::later/1", vec![Type::Int], vec![Type::Int]);
+    let adapter = P1Contracts::new(&[]).unwrap().adapter(&later, &[]).unwrap();
+    assert_eq!(adapter.entry_abi, EntryAbi::Owned);
+    refused(later);
+    // No adapter: the arity names one register the declaration does not have.
+    refused(driver("app@1::later/1", vec![], vec![Type::Int]));
+    // Declared synchronous, the same symbol loads through its adapter.
+    load(&program(vec![], vec![declaration("app@1::later/1", vec![Type::Int], vec![Type::Int])])).unwrap();
+}
+
 /// #601 N1 with #752: an async native whose result is a map has a driver adapter over the program's composite.
 #[test]
 fn table_async_natives_with_maps_have_driver_adapters() {

@@ -138,6 +138,22 @@ fn fut_new_creates_the_future_of_a_native_driver_with_an_empty_packet() {
     verify_load(&driven_native(), &Catalogue(vec![driver(NATIVE)])).unwrap();
 }
 
+#[test]
+fn a_native_drivers_inputs_packet_may_be_any_packet_of_empty_inventory() {
+    // Ruling PR-N states the inventory, not the form: the parts of an `own.split` of `own.empty`, joined with
+    // another `own.empty`, hold no resource key either, so the native's Future is created from them.
+    let mut p = super::async_tests::plain_joined();
+    p.functions.push(driver(NATIVE));
+    let main = &mut p.functions[1];
+    for op in [O::OwnSplit, O::OwnJoin] {
+        assert!(main.code.iter().any(|instruction| matches!(instruction,
+            Instruction::Champ { op: found, .. } if *found == op)), "fixture changed");
+    }
+    let new = find(main, O::FutureNew);
+    arguments(main, new)[0] = A::Entry(2);
+    verify_load(&p, &Catalogue(vec![driver(NATIVE)])).unwrap();
+}
+
 /// `async_tests::leaking`'s body, which commits a `Res` into a packet and offers it to `fut.new`, with the driver
 /// `name` (function 3) as the created Future's entry: an inputs packet that is not empty.
 fn leaking(name: &str) -> Program {
