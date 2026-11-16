@@ -333,6 +333,14 @@ impl BodyLowerer<'_, '_> {
         Ok(values.first().copied())
     }
 
+    /// Whether some object of the module, a builtin adapter included, witnesses the role type `ty`.
+    pub(super) fn inhabited(&self, ty: ir::TypeId) -> Result<bool> {
+        Ok(self.b.module().declarations.iter().any(|(_, declaration)| {
+            matches!(&declaration.kind, ir::DeclarationKind::Object { witnesses, .. }
+                if witnesses.iter().any(|witness| witness.role == ty))
+        }))
+    }
+
     pub fn direct_call(&mut self, expr: &thir::Expr) -> Result<Option<ir::ValueId>> {
         let thir::ExprKind::Call { callee, args } = &expr.kind else {
             unreachable!("direct call dispatch");
@@ -353,12 +361,11 @@ impl BodyLowerer<'_, '_> {
             if *slot >= methods.len() {
                 return Err(LowerError::invalid(expr.span, "unknown role slot"));
             }
-            let reachable = self.b.module().declarations.iter().any(|(_, declaration)| {
-                matches!(&declaration.kind, ir::DeclarationKind::Object { witnesses, .. }
-                    if witnesses.iter().any(|witness| witness.role == ty))
-            });
-            if !reachable {
-                return Err(LowerError::unsupported(expr.span, "role has no reachable implementation"));
+            if !self.inhabited(ty)? {
+                // No object or builtin adapter witnesses the role, so no value of it exists (`role.wrap`
+                // needs a witness): the dispatch joins an empty set of implementations (#757).
+                self.terminate(ir::TermKind::Unreachable)?;
+                return Ok(None);
             }
             let mut values = vec![];
             for arg in args {

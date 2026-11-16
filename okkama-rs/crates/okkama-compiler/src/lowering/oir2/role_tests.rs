@@ -133,11 +133,18 @@ fn oir2_c3_role_negatives() {
         let diagnostic = errors.iter().map(|error| format!("frontend: {}\n", error.message)).collect::<String>();
         compare_golden(name, "txt", &diagnostic);
     }
+}
+
+/// #757: a call on a role that no object or builtin adapter witnesses joins an empty set of implementations
+/// (no value of the role exists), so it lowers as `unreachable`; before #757 it was a lowering diagnostic.
+#[test]
+fn oir2_c3_role_without_implementation_is_unreachable() {
     with_analysis(include_str!("fixtures/p2_3/role-no-implementation.ok"), |analysis| {
-        let error = super::lower_to_oir2(analysis).unwrap_err();
-        assert!(matches!(error, super::LowerError::Unsupported { .. }));
-        assert!(error.to_string().contains("no reachable implementation"), "{error}");
-        compare_golden("role-no-implementation", "txt", &format!("lowering: {error}\n"));
+        let module = super::lower_to_oir2(analysis).unwrap();
+        let read = module.functions.iter().find(|(_, function)| function.symbol == "app.Reader.read#0").unwrap().1;
+        let body = read.body.as_ref().unwrap();
+        assert!(body.blocks.iter().any(|(_, block)| block.term.kind == ir::TermKind::Unreachable));
+        golden("role-no-implementation", &module);
     });
 }
 
@@ -221,8 +228,9 @@ fn oir2_c3_golden_inventory_is_exact() {
     }).collect();
     names.sort();
     let mut expected: Vec<_> = GOLDENS.iter().map(|name| format!("{name}.oir")).collect();
+    // #757: role-no-implementation is an OIR golden (an unreachable call), no longer a diagnostic.
     for name in ["role-builtin.oir", "role-concrete-return-adapter.oir", "role-unknown-slot.txt",
-        "role-narrow-forbidden.txt", "role-no-implementation.txt"] {
+        "role-narrow-forbidden.txt", "role-no-implementation.oir"] {
         expected.push(name.into());
     }
     expected.sort();

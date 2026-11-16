@@ -18,6 +18,8 @@ pub(super) struct Declarations {
     pub defers: Vec<super::defer::Deferred>,
     pub lambdas: Vec<super::anonymous::Lambda>,
     pub builtin_adapters: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
+    /// The array adapter constructors by (array type, role element type), #757.
+    pub array_sequences: HashMap<(ir::TypeId, ir::TypeId), ir::FuncId>,
     pub ctor_fields: HashMap<ir::FuncId, Vec<usize>>,
     /// Registered test intrinsics (`okkama.test.*`) by assertion name; the test profile only.
     pub test_intrinsics: HashMap<String, ir::FuncId>,
@@ -46,6 +48,7 @@ impl Declarations {
             constructors: HashMap::new(),
             ctor_fields: HashMap::new(),
             builtin_adapters: HashMap::new(),
+            array_sequences: HashMap::new(),
             defers: vec![],
             lambdas: vec![],
             test_intrinsics: HashMap::new(),
