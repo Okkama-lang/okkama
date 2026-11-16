@@ -359,7 +359,13 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             }
             // A closure type inside an owned type needs its dictionary here too (#777): the owner's cleanup
             // reaches its closures through it.
-            let required = driver.analysis.scopes.iter().any(|(scope, facts)| {
+            // So does one inside an input that an explicit entry accepts (#786): the verifier counts the accepted
+            // input's cleanup whether or not its closures can own.
+            let accepted = explicit && high.blocks.get(high.entry).map_err(arena)?.params.iter().any(|value| {
+                high.values.get(*value).ok().and_then(|value| driver.analysis.types.get(&value.ty))
+                    .is_some_and(|input| input.closures.contains_key(ty))
+            });
+            let required = accepted || driver.analysis.scopes.iter().any(|(scope, facts)| {
                 driver.module.scopes.get(*scope).is_ok_and(|scope| scope.function == function)
                     && facts.potential_owned_types.iter().any(|owned| {
                         let owned = &driver.analysis.types[owned];

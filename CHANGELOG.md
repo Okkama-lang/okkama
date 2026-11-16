@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An accepted holder of closures binds their dictionary (#786, part).** An
+  explicit entry that accepts a holder of action values (`Wrapped.value`)
+  now binds the function type's dictionary even when the closures can own
+  nothing: the full verifier counts the accepted input's cleanup through it
+  and no longer rejects the envelope (`B104`, `B112`). The `B51` summary
+  rejections of the same program remain open.
+
 - **A constructor that binds a role parameter passes the load check (#785).**
   When a constructor binds a parameter whose role may reach a resource (the
   parent of `TemporaryDirectory`), the binding's checked split asked for the
