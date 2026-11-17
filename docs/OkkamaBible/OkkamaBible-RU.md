@@ -19854,6 +19854,131 @@ sum 0, accurate 1
 слагаемые, которые теряет обычная сумма float: `1e16 + 1 - 1e16` во
 float — это `0`, а точно — `1`.
 
+### Секреты: `crypto`
+
+```okkama
+module bible/crypto v1.0.0;
+
+// Passwords are stored as Argon2id hashes and checked in constant time; a
+// message is signed with HMAC; data is sealed with AES-GCM, and a changed
+// byte is refused, not decrypted into something else. Keys are secrets.
+import "crypto/password" take PasswordHash, PasswordCheck, Argon2Policy;
+import "crypto/hmac" take Hmac, HmacHash;
+import "crypto/aes_gcm" take AesGcm;
+import "crypto/nonce" take SystemEntropy, RandomNonce;
+import "crypto/secret" take SecretBytes;
+import "crypto/error" take AuthenticationFailed;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let stored = PasswordHash(SecretBytes(Utf8Encoded("correct horse").bytes()), Argon2Policy(),
+        SystemEntropy()).string();
+    out.writeln("stored as " + stored.slice(0, 10) + "...");
+    for ["correct horse", "wrong horse"] -> attempt {
+        let check = PasswordCheck(stored, SecretBytes(Utf8Encoded(attempt).bytes()));
+        out.writeln(attempt + ": " + check.matches().string());
+    }
+    let key = SecretBytes(Utf8Encoded("a key of thirty-two bytes, exact").bytes());
+    defer key.close();
+    let tag = Hmac(HmacHash.sha256, key, "pay 10 to ann").bytes();
+    out.writeln("signed: " + Hmac(HmacHash.sha256, key, "pay 10 to ann").matches(tag).string()
+        + ", altered: " + Hmac(HmacHash.sha256, key, "pay 99 to ann").matches(tag).string());
+    let cipher = AesGcm(key);
+    let nonce = RandomNonce(SystemEntropy(), cipher.nonce_size()).bytes();
+    let sealed = cipher.sealed(nonce, [], Utf8Encoded("meet at noon").bytes());
+    out.writeln("opened: " + Utf8Decoded(cipher.opened(nonce, [], sealed)).string());
+    let changed = sealed.replaced(0, (sealed[0].int() ^ 1).byte());
+    out.writeln(try { Utf8Decoded(cipher.opened(nonce, [], changed)).string(); }
+        catch e is AuthenticationFailed { "changed in transit: refused"; });
+    0;
+}
+```
+
+Вывод:
+
+```text
+stored as $argon2id$...
+correct horse: true
+wrong horse: false
+signed: true, altered: false
+opened: meet at noon
+changed in transit: refused
+```
+
+Пароль никогда не хранится, хранится только его хеш Argon2id: `PasswordHash`
+получает политику (цену в памяти и итерациях) и источник соли аргументами, а
+`PasswordCheck` сравнивает попытку с сохранённым текстом за постоянное время,
+так что длительность проверки ничего не говорит о том, насколько попытка
+была близка. Ключи и пароли передаются как `SecretBytes` — ресурс, который не
+показывает свои байты при печати и затирается при закрытии. `Hmac`
+подписывает сообщение ключом, а `matches` проверяет тег — тоже за
+постоянное время. `AesGcm` запечатывает данные под nonce, который программа
+берёт из названного ею источника энтропии; при открытии сначала проверяется
+тег, поэтому один изменённый байт — это `AuthenticationFailed`, а не тихо
+подменённый открытый текст. Библиотека даёт конструкции, которые трудно
+применить неправильно, и прямо называет те, которых в ней нет (режимов
+шифрования без аутентификации).
+
+### Упаковка: `compression`, `archive`
+
+```okkama
+module bible/packing v1.0.0;
+
+// Compression with a limit on what comes back out, and a ZIP archive written
+// into memory and read again; an entry's path cannot climb out of the archive.
+import "compression/gzip" take GzipCompressed, GzipDecompressed;
+import "compression/state" take CompressionLimitExceeded;
+import "archive/zip" take ZipWriting, ZipArchive;
+import "archive/path" take UnsafeArchivePath;
+import "io/buffer" take ByteBuffer;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let out = Stdout();
+    let text = Utf8Encoded("tea ".repeat(250)).bytes();
+    let packed = GzipCompressed(text).bytes();
+    out.writeln(text.size().string() + " bytes packed into " + packed.size().string());
+    out.writeln("back: " + (GzipDecompressed(origin: packed, limit: 4096).bytes() == text).string());
+    out.writeln(try { GzipDecompressed(origin: packed, limit: 100).bytes().size().string(); }
+        catch e is CompressionLimitExceeded { "over the limit: refused"; });
+    let buffer = ByteBuffer();
+    let zip = ZipWriting(destination: buffer.writing());
+    zip.add(name: "notes/a.txt", bytes: Utf8Encoded("first").bytes());
+    zip.add(name: "notes/b.txt", bytes: text);
+    out.writeln(try { zip.add(name: "../escape.txt", bytes: []); "added"; }
+        catch e is UnsafeArchivePath { "../escape.txt: refused"; });
+    zip.close();
+    for ZipArchive(buffer.content().bytes()).entries() -> entry {
+        out.writeln(entry.name() + ": " + (await entry.bytes(limit: 4096)).size().string() + " bytes");
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+1000 bytes packed into 42
+back: true
+over the limit: refused
+../escape.txt: refused
+notes/a.txt: 5 bytes
+notes/b.txt: 1000 bytes
+```
+
+Каждый распаковщик получает `limit` на то, что он может выдать, поэтому
+маленький вход не развернётся в гигабайты (decompression bomb): выход за
+предел — это `CompressionLimitExceeded`, и он случается раньше, чем память
+потрачена. Архив пишется в любой `Writing`, здесь в буфер в памяти, а его
+центральный каталог уходит при закрытии писателя. Чтение записи асинхронно
+и тоже получает предел. Имя записи — путь внутри архива, и он проверяется и
+при добавлении, и при чтении: `../escape.txt` — это `UnsafeArchivePath`,
+так что распаковка не может писать за пределами целевого каталога (ошибка
+«zip slip»).
+
 # Глава 23. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в

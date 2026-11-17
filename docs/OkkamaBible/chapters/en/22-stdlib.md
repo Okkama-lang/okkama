@@ -656,3 +656,33 @@ of a sample (mean, median, deviation, quantiles) and `Pairs` a least-squares
 line. A float has only `round()` to an integer, so the example rounds to
 hundredths by hand. `Numbers.accurate_sum()` keeps the terms a plain float
 sum loses: `1e16 + 1 - 1e16` is `0` in floating point and `1` exactly.
+
+### Secrets: `crypto`
+
+{{example:22-crypto}}
+
+A password is never stored, only its Argon2id hash: `PasswordHash` takes the
+policy (cost in memory and iterations) and the source of the salt as
+arguments, and `PasswordCheck` compares an attempt with the stored text in
+constant time, so how long the check takes says nothing about how close the
+attempt was. Keys and passwords travel as `SecretBytes`, a resource that
+never shows its bytes when printed and is wiped when it closes. `Hmac` signs a
+message with a key, and `matches` checks a tag, again in constant time.
+`AesGcm` seals data under a nonce that the program draws from an entropy
+source it names; opening checks the tag first, so a single changed byte is
+`AuthenticationFailed`, never a quietly different plaintext. The library
+offers the constructions that are hard to misuse and names the ones it
+does not (no unauthenticated encryption modes).
+
+### Packing: `compression`, `archive`
+
+{{example:22-packing}}
+
+Every decompressor takes a `limit` on what it may produce, so a small input
+cannot unfold into gigabytes (a decompression bomb): going over the limit is
+`CompressionLimitExceeded`, raised before the memory is spent. An archive
+is written to any `Writing`, here a buffer in memory, and its central
+directory goes out when the writer closes. Reading an entry is asynchronous
+and takes a limit too. An entry's name is a path inside the archive, checked
+when it is added and when it is read: `../escape.txt` is `UnsafeArchivePath`,
+so unpacking cannot write outside the target directory (the "zip slip" bug).

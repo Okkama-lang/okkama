@@ -1,0 +1,6 @@
+1000 bytes packed into 42
+back: true
+over the limit: refused
+../escape.txt: refused
+notes/a.txt: 5 bytes
+notes/b.txt: 1000 bytes

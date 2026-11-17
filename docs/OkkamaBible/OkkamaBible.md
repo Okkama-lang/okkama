@@ -19653,6 +19653,129 @@ line. A float has only `round()` to an integer, so the example rounds to
 hundredths by hand. `Numbers.accurate_sum()` keeps the terms a plain float
 sum loses: `1e16 + 1 - 1e16` is `0` in floating point and `1` exactly.
 
+### Secrets: `crypto`
+
+```okkama
+module bible/crypto v1.0.0;
+
+// Passwords are stored as Argon2id hashes and checked in constant time; a
+// message is signed with HMAC; data is sealed with AES-GCM, and a changed
+// byte is refused, not decrypted into something else. Keys are secrets.
+import "crypto/password" take PasswordHash, PasswordCheck, Argon2Policy;
+import "crypto/hmac" take Hmac, HmacHash;
+import "crypto/aes_gcm" take AesGcm;
+import "crypto/nonce" take SystemEntropy, RandomNonce;
+import "crypto/secret" take SecretBytes;
+import "crypto/error" take AuthenticationFailed;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let stored = PasswordHash(SecretBytes(Utf8Encoded("correct horse").bytes()), Argon2Policy(),
+        SystemEntropy()).string();
+    out.writeln("stored as " + stored.slice(0, 10) + "...");
+    for ["correct horse", "wrong horse"] -> attempt {
+        let check = PasswordCheck(stored, SecretBytes(Utf8Encoded(attempt).bytes()));
+        out.writeln(attempt + ": " + check.matches().string());
+    }
+    let key = SecretBytes(Utf8Encoded("a key of thirty-two bytes, exact").bytes());
+    defer key.close();
+    let tag = Hmac(HmacHash.sha256, key, "pay 10 to ann").bytes();
+    out.writeln("signed: " + Hmac(HmacHash.sha256, key, "pay 10 to ann").matches(tag).string()
+        + ", altered: " + Hmac(HmacHash.sha256, key, "pay 99 to ann").matches(tag).string());
+    let cipher = AesGcm(key);
+    let nonce = RandomNonce(SystemEntropy(), cipher.nonce_size()).bytes();
+    let sealed = cipher.sealed(nonce, [], Utf8Encoded("meet at noon").bytes());
+    out.writeln("opened: " + Utf8Decoded(cipher.opened(nonce, [], sealed)).string());
+    let changed = sealed.replaced(0, (sealed[0].int() ^ 1).byte());
+    out.writeln(try { Utf8Decoded(cipher.opened(nonce, [], changed)).string(); }
+        catch e is AuthenticationFailed { "changed in transit: refused"; });
+    0;
+}
+```
+
+Output:
+
+```text
+stored as $argon2id$...
+correct horse: true
+wrong horse: false
+signed: true, altered: false
+opened: meet at noon
+changed in transit: refused
+```
+
+A password is never stored, only its Argon2id hash: `PasswordHash` takes the
+policy (cost in memory and iterations) and the source of the salt as
+arguments, and `PasswordCheck` compares an attempt with the stored text in
+constant time, so how long the check takes says nothing about how close the
+attempt was. Keys and passwords travel as `SecretBytes`, a resource that
+never shows its bytes when printed and is wiped when it closes. `Hmac` signs a
+message with a key, and `matches` checks a tag, again in constant time.
+`AesGcm` seals data under a nonce that the program draws from an entropy
+source it names; opening checks the tag first, so a single changed byte is
+`AuthenticationFailed`, never a quietly different plaintext. The library
+offers the constructions that are hard to misuse and names the ones it
+does not (no unauthenticated encryption modes).
+
+### Packing: `compression`, `archive`
+
+```okkama
+module bible/packing v1.0.0;
+
+// Compression with a limit on what comes back out, and a ZIP archive written
+// into memory and read again; an entry's path cannot climb out of the archive.
+import "compression/gzip" take GzipCompressed, GzipDecompressed;
+import "compression/state" take CompressionLimitExceeded;
+import "archive/zip" take ZipWriting, ZipArchive;
+import "archive/path" take UnsafeArchivePath;
+import "io/buffer" take ByteBuffer;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+async main() is int {
+    let out = Stdout();
+    let text = Utf8Encoded("tea ".repeat(250)).bytes();
+    let packed = GzipCompressed(text).bytes();
+    out.writeln(text.size().string() + " bytes packed into " + packed.size().string());
+    out.writeln("back: " + (GzipDecompressed(origin: packed, limit: 4096).bytes() == text).string());
+    out.writeln(try { GzipDecompressed(origin: packed, limit: 100).bytes().size().string(); }
+        catch e is CompressionLimitExceeded { "over the limit: refused"; });
+    let buffer = ByteBuffer();
+    let zip = ZipWriting(destination: buffer.writing());
+    zip.add(name: "notes/a.txt", bytes: Utf8Encoded("first").bytes());
+    zip.add(name: "notes/b.txt", bytes: text);
+    out.writeln(try { zip.add(name: "../escape.txt", bytes: []); "added"; }
+        catch e is UnsafeArchivePath { "../escape.txt: refused"; });
+    zip.close();
+    for ZipArchive(buffer.content().bytes()).entries() -> entry {
+        out.writeln(entry.name() + ": " + (await entry.bytes(limit: 4096)).size().string() + " bytes");
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+1000 bytes packed into 42
+back: true
+over the limit: refused
+../escape.txt: refused
+notes/a.txt: 5 bytes
+notes/b.txt: 1000 bytes
+```
+
+Every decompressor takes a `limit` on what it may produce, so a small input
+cannot unfold into gigabytes (a decompression bomb): going over the limit is
+`CompressionLimitExceeded`, raised before the memory is spent. An archive
+is written to any `Writing`, here a buffer in memory, and its central
+directory goes out when the writer closes. Reading an entry is asynchronous
+and takes a limit too. An entry's name is a path inside the archive, checked
+when it is added and when it is read: `../escape.txt` is `UnsafeArchivePath`,
+so unpacking cannot write outside the target directory (the "zip slip" bug).
+
 # Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
