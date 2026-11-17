@@ -469,7 +469,8 @@ mod tests {
         let close = "    %11: int = const 0\n    %12: closed = scope.end %9,";
         assert!(source.contains(close));
         source.replace("duties [%8]", "duties [%14]").replace(close, &format!("    br ^b2({header_args})\n    \
-            ^b2(%13: scope<S1>, %14: cache-state) in S1:\n    %15: bool = const false\n    cond %15, ^b2(%13, %14), ^b3\n    \
+            ^b2(%13: scope<S1>, %14: cache-state) in S1:\n    %15: bool = const false\n    \
+            cond %15, ^b2(%13, %14), ^b3\n    \
             ^b3 in S1:\n    %11: int = const 0\n    %12: closed = scope.end %13,"))
     }
 
