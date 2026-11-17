@@ -823,12 +823,12 @@ impl Engine<'_, '_> {
         let mut effects = self.required_effects(&fact.inventory, flow);
         // D20 §2.6: in Low a close suspends or fails only through its steps. No cache settle waits or fails in
         // 0.6.0 (async ABI D24.2); the outcome identities a settle releases are in the inventory with their types.
-        // A spawned task's duty detaches or closes, without waiting or failing either (D24.2). Any other service
-        // duty keeps the unknown effects, as in `scope_effects`.
+        // A spawned task's duty detaches or closes, without waiting or failing either (D24.2), and an empty slot
+        // settles as nothing (D26). Any other service duty keeps the unknown effects, as in `scope_effects`.
         let cache_only = self.body.cleanup.schedules.iter().filter(|(_, schedule)| schedule.close == fact.close)
             .flat_map(|(_, schedule)| &schedule.holders)
             .all(|value| flow.tokens[value.as_u32() as usize].service.is_some_and(|origin| {
-                self.cache_state(origin) || self.spawn_task(origin)
+                self.cache_state(origin) || self.spawn_task(origin) || self.empty_slot(origin).is_some()
             }));
         let services = fact.had_services && !(self.module.profile == Profile::Low && cache_only);
         effects.suspends |= services;

@@ -8,6 +8,12 @@
 //! A duty is identified by the token that created it: a token resumed from a frame slot is the token that
 //! the matching `frame.save` stored, and a block parameter is the duty that every incoming edge passes. So
 //! the order does not depend on whether the schedule lists one version per close or one per owner.
+//!
+//! Duty slots (D26, #856): a `duty.empty` of the owner passes no duty. A slot version is identified by the creation
+//! that reaches it on some edges; a version that only empties reach is an empty slot of its scope. A close of a
+//! scope with slots settles every slot version there: the full ones at their creation's schedule position, the
+//! empty ones at the positions of their kind that no full version takes. A scope without `duty.empty` keeps the
+//! form before slots: its close lists the tokens available there, possibly fewer than its schedule.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -67,7 +73,8 @@ pub(super) fn assign(
         }
     }
     // C-1: every cache-state token is a version of the duty that one `fut.new` gave its owner scope; D24.1: a
-    // spawn forwards that duty and gives its owner the task duty, a task-state token.
+    // spawn forwards that duty and gives its owner the task duty, a task-state token. D26: a version that only
+    // empties reach is an empty slot of their scope; one that a creation reaches on some edges is that duty.
     let mut owners: BTreeMap<ValueId, ScopeId> = BTreeMap::new();
     for (value, data) in body.values.iter() {
         budget.step(1)?;
@@ -76,14 +83,25 @@ pub(super) fn assign(
             Type::Service(ServiceType::TaskState) => true,
             _ => continue,
         };
-        let created = creation(body, value, budget)?;
-        if task && !created.is_some_and(|token| spawned_task(body, token)) {
+        let reach = reaching(body, value, budget)?;
+        let created = reach.as_ref().and_then(Reaching::creation);
+        let empty = reach.as_ref().and_then(Reaching::empty_owner);
+        if task && empty.is_none() && !created.is_some_and(|token| spawned_task(body, token)) {
             // An await's task handle reaches only `await.unwind` (C-3); it is no duty. A spawned task's duty that
             // edges merge from several spawns has no one owner, and the verifier finds it unsettled.
             continue;
         }
-        let owner = created.and_then(|token| duty_owner(body, token, budget).ok().flatten())
-            .ok_or_else(|| invalid(function, "a duty token is a duty of one fut.new (C-1, D24.1)"))?;
+        let owner = match (created, empty) {
+            (Some(token), _) => duty_owner(body, token, budget).ok().flatten(),
+            (None, owner) => owner,
+        };
+        // D26: the empties a version merges are slots of one scope, its duty's owner when a creation reaches it.
+        let scopes: BTreeSet<ScopeId> = reach.iter().flat_map(|reach| reach.empty.iter().map(|&(scope, _)| scope))
+            .collect();
+        if scopes.len() > 1 || owner.is_some_and(|owner| scopes.iter().any(|&scope| scope != owner)) {
+            return Err(invalid(function, "a slot version joins slots of different scopes (D26)"));
+        }
+        let owner = owner.ok_or_else(|| invalid(function, "a duty token is a duty of one fut.new (C-1, D24.1)"))?;
         owners.insert(value, owner);
     }
     let mut available_at: BTreeMap<CloseKey, (ScopeId, BTreeSet<ValueId>)> = BTreeMap::new();
@@ -102,8 +120,15 @@ pub(super) fn assign(
             continue;
         }
         let mut tokens = BTreeMap::new();
+        // D26: the versions that only empties reach, by kind (a task slot or a cache slot), in value order.
+        let mut empties: BTreeMap<bool, Vec<ValueId>> = BTreeMap::new();
         for &duty in &duties {
-            let creation = creation(body, duty, budget)?
+            let reach = reaching(body, duty, budget)?;
+            if let Some((_, task)) = reach.as_ref().and_then(Reaching::empty_slot) {
+                empties.entry(task).or_default().push(duty);
+                continue;
+            }
+            let creation = reach.as_ref().and_then(Reaching::creation)
                 .ok_or_else(|| invalid(function, "a duty token reaches its close from more than one duty"))?;
             if tokens.insert(creation, duty).is_some() {
                 return Err(invalid(function, "two tokens of one duty reach a close"));
@@ -122,12 +147,52 @@ pub(super) fn assign(
         }
         let message = "no service schedule of the owner lists the duties that reach its close";
         let (schedule, order) = chosen.ok_or_else(|| invalid(function, message))?;
-        let ordered = order.into_iter().flatten().filter_map(|creation| tokens.get(&creation).copied()).collect();
+        let ordered = if slotted(body, scope) {
+            settle_every_slot(module, body, schedule, &order, &tokens, empties)
+                .ok_or_else(|| invalid(function, "a close does not settle every slot of its scope (D26)"))?
+        } else {
+            order.into_iter().flatten().filter_map(|creation| tokens.get(&creation).copied()).collect()
+        };
         assigned.insert(key, CloseDuties {
             duties: ordered, dictionary: schedule.dictionary, protocol: schedule.protocol, dynamic: admits.is_some(),
         });
     }
     Ok(assigned)
+}
+
+/// D26: whether the body has a `duty.empty` of `scope`, so that its closes settle every slot of the scope.
+fn slotted(body: &Body, scope: ScopeId) -> bool {
+    body.insts.iter().any(|(_, inst)| matches!(inst.op, Operation::Async(AsyncOp::DutyEmpty { owner, .. })
+        if owner == scope))
+}
+
+/// D26: the settle order of a close of a scope with slots. Each position of the schedule takes the full version of
+/// its creation, or an empty version of its kind when that creation does not reach the close. `None` unless every
+/// version at the close takes exactly one position and every position is taken (R-3).
+fn settle_every_slot(
+    module: &Module, body: &Body, schedule: &ServiceSchedule, order: &[Option<ValueId>],
+    tokens: &BTreeMap<ValueId, ValueId>, mut empties: BTreeMap<bool, Vec<ValueId>>,
+) -> Option<Vec<ValueId>> {
+    let entries: Vec<ValueId> = schedule.duties.iter().filter_map(|duty| duty.value()).collect();
+    let mut ordered = Vec::with_capacity(entries.len());
+    let mut placed = BTreeSet::new();
+    for (entry, creation) in entries.iter().zip(order) {
+        let duty = match creation.as_ref().and_then(|creation| tokens.get(creation)) {
+            Some(&duty) => duty,
+            None => {
+                let task = matches!(module.types.get(body.values.get(*entry).ok()?.ty).ok()?,
+                    Type::Service(ServiceType::TaskState));
+                let kind = empties.get_mut(&task).filter(|kind| !kind.is_empty())?;
+                kind.remove(0)
+            }
+        };
+        if !placed.insert(duty) {
+            return None;
+        }
+        ordered.push(duty);
+    }
+    let complete = tokens.values().all(|duty| placed.contains(duty)) && empties.values().all(Vec::is_empty);
+    complete.then_some(ordered)
 }
 
 /// Add every close of an owner in `owners` to `sites`, with no duties if no token reaches it.
@@ -155,11 +220,39 @@ fn closes_of(
     Ok(())
 }
 
-/// The token that created the duty `value` stands for, or `None` if edges pass different duties.
+/// What reaches a duty version `value` (D26): the tokens that created a duty, and the empty slots, by scope and
+/// kind. A resumed version is what its save stored; a block parameter is what every incoming edge passes.
+struct Reaching {
+    created: BTreeSet<ValueId>,
+    empty: BTreeSet<(ScopeId, bool)>,
+}
+impl Reaching {
+    /// The one creation that reaches the version; empties pass no duty.
+    fn creation(&self) -> Option<ValueId> {
+        let mut created = self.created.iter();
+        created.next().copied().filter(|_| created.next().is_none())
+    }
+    /// The empty slot, scope and kind, of a version that only empties of one slot reach.
+    fn empty_slot(&self) -> Option<(ScopeId, bool)> {
+        let mut empty = self.empty.iter();
+        empty.next().copied().filter(|_| self.created.is_empty() && empty.next().is_none())
+    }
+    fn empty_owner(&self) -> Option<ScopeId> {
+        self.empty_slot().map(|(scope, _)| scope)
+    }
+}
+
+/// The token that created the duty `value` stands for, or `None` if edges pass different duties or only empties.
 fn creation(body: &Body, value: ValueId, budget: &mut Budget<'_>) -> Result<Option<ValueId>, LowError> {
+    Ok(reaching(body, value, budget)?.as_ref().and_then(Reaching::creation))
+}
+
+/// The definitions that reach `value`, or `None` when one cannot be traced (an outcome slot, a block without
+/// edges, a resume without its save).
+fn reaching(body: &Body, value: ValueId, budget: &mut Budget<'_>) -> Result<Option<Reaching>, LowError> {
     let mut pending = vec![value];
     let mut seen = BTreeSet::new();
-    let mut found = None;
+    let mut found = Reaching { created: BTreeSet::new(), empty: BTreeSet::new() };
     while let Some(value) = pending.pop() {
         budget.step(1)?;
         if !seen.insert(value) {
@@ -168,10 +261,7 @@ fn creation(body: &Body, value: ValueId, budget: &mut Budget<'_>) -> Result<Opti
         match body.values.get(value)?.def {
             Definition::InstResult { inst, index } if index > 0 => {
                 let Operation::Async(AsyncOp::FrameResume { frame, slots, .. }) = &body.insts.get(inst)?.op else {
-                    found = merge(found, value);
-                    if found.is_none() {
-                        return Ok(None);
-                    }
+                    found.created.insert(value);
                     continue;
                 };
                 let slot = slots.get(usize::from(index) - 1).map(|slot| slot.slot);
@@ -201,15 +291,17 @@ fn creation(body: &Body, value: ValueId, budget: &mut Budget<'_>) -> Result<Opti
                     pending.push(source);
                 }
             }
-            Definition::InstResult { .. } => {
-                found = merge(found, value);
-                if found.is_none() {
-                    return Ok(None);
+            Definition::InstResult { inst, .. } => match body.insts.get(inst)?.op {
+                Operation::Async(AsyncOp::DutyEmpty { owner, task }) => {
+                    found.empty.insert((owner, task));
                 }
-            }
+                _ => {
+                    found.created.insert(value);
+                }
+            },
         }
     }
-    Ok(found)
+    Ok(Some(found))
 }
 
 /// Whether `token` is the task duty that a `fut.spawn` gave (D24.1).
@@ -233,13 +325,6 @@ fn duty_owner(body: &Body, token: ValueId, budget: &mut Budget<'_>) -> Result<Op
             }
         }
         _ => Ok(None),
-    }
-}
-
-fn merge(found: Option<ValueId>, value: ValueId) -> Option<ValueId> {
-    match found {
-        Some(previous) if previous != value => None,
-        _ => Some(value),
     }
 }
 
@@ -274,7 +359,10 @@ fn available(
                 if report {
                     continue;
                 }
-                for target in graph::successors(body, block)? {
+                for (target, moved) in edges(body, block)? {
+                    // A token passed as an edge argument moves into the target's parameter (D26: slot versions
+                    // merge this way), so its old name is not available there.
+                    let live: BTreeSet<ValueId> = live.difference(&moved).copied().collect();
                     let slot = &mut input[target.as_u32() as usize];
                     let merged = match slot {
                         None => live.clone(),
@@ -292,6 +380,35 @@ fn available(
         }
     }
     Ok(())
+}
+
+/// The edges out of `block`, each with the values it passes as arguments. An edge the terminator does not name
+/// with arguments (a block's unwind edge, the other terminators) passes none.
+fn edges(body: &Body, block: BlockId) -> Result<Vec<(BlockId, BTreeSet<ValueId>)>, LowError> {
+    let data = body.blocks.get(block)?;
+    let plain = |target: &Target| (target.block, target.args.iter().copied().collect());
+    let mut edges: Vec<(BlockId, BTreeSet<ValueId>)> = match &data.term.kind {
+        TermKind::Br(target) => vec![plain(target)],
+        TermKind::Cond { yes, no, .. } => vec![plain(yes), plain(no)],
+        TermKind::Switch { cases, default, .. } => cases.iter().map(|case| &case.target).chain([default])
+            .map(plain).collect(),
+        TermKind::InvokeOwn { normal, unwind, .. } => [normal, unwind].into_iter().map(|edge| {
+            (edge.block, edge.args.iter().filter_map(|arg| match arg {
+                EdgeArg::Value(value) => Some(*value),
+                _ => None,
+            }).collect())
+        }).collect(),
+        _ => vec![],
+    };
+    if let Some(unwind) = &data.unwind {
+        edges.push((unwind.target.block, BTreeSet::new()));
+    }
+    for target in graph::successors(body, block)? {
+        if !edges.iter().any(|(known, _)| *known == target) {
+            edges.push((target, BTreeSet::new()));
+        }
+    }
+    Ok(edges)
 }
 
 fn step(
