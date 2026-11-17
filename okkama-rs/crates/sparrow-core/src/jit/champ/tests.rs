@@ -1597,6 +1597,130 @@ fn result_is_bool(op: s::DataOp) -> bool {
     matches!(op, D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe)
 }
 
+/// A function of `params` (types) that returns `op` of them, a value of type `result`.
+fn data_function(op: s::DataOp, params: &[s::Type], result: s::Type) -> s::Program {
+    let reg = L::Register;
+    let locations: Vec<_> = (0..params.len() as u32).map(reg).collect();
+    let mut registers = params.to_vec();
+    registers.push(result);
+    let output = params.len() as u32;
+    let mut function = s::Function {
+        symbol: "data".into(), entry_abi: s::EntryAbi::Observation, registers,
+        services: vec![], params: locations.clone(), results: vec![result],
+        blocks: vec![s::Block { pc: 0, params: locations }],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op, inputs: (0..output).collect(), output: Some(output),
+                immediate: s::Immediate::None },
+            s::Instruction::Ret(vec![output]),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    s::Program { functions: vec![function], ..s::Program::default() }
+}
+
+/// #829: `length()` reads an ASCII string's length from its header, flat or a text chain (#255), and counts the
+/// characters of any other; `==` and `!=` decide the same string and strings of different byte lengths inline
+/// and compare the rest.
+#[test]
+fn champ_string_length_and_equality_fast_paths() {
+    let mut runtime = Runtime::new_champ(data_function(s::DataOp::StrLen, &[s::Type::Str], s::Type::Int), vec![])
+        .unwrap();
+    let mut ctx = context(&mut runtime);
+    let length = compile(&mut runtime, 0).unwrap();
+    let long = "a".repeat(300);
+    let wide = "ж".repeat(300);
+    let mut texts: Vec<(Word, String)> = ["", "hello", "живой", "naïve", "🦀 crab", "e\u{301}"].iter()
+        .map(|text| (runtime.heap.allocate_text(text), text.to_string())).collect();
+    for (part, more) in [(&long, "b"), (&wide, "ы")] {
+        let left = runtime.heap.allocate_text(part);
+        let right = runtime.heap.allocate_text(more);
+        let chain = runtime::rt_concat(&mut ctx, left, right);
+        texts.push((chain, format!("{part}{more}")));
+    }
+    for &(word, _) in &texts {
+        runtime.constants.push((word, Repr::Ref));
+    }
+    assert_ne!(runtime.heap.header_of(texts[1].0) & crate::heap::ASCII, 0, "an ASCII string is marked");
+    for (word, text) in &texts {
+        ctx.status = OK;
+        let counted = unsafe { invoke(length, &mut ctx, &[*word]) };
+        assert_eq!((ctx.status, runtime.small_or_big(counted)), (OK, Some(text.chars().count() as i64)), "{text:?}");
+    }
+    for op in [s::DataOp::StrEq, s::DataOp::StrNe] {
+        let mut runtime = Runtime::new_champ(data_function(op, &[s::Type::Str, s::Type::Str], s::Type::Bool),
+            vec![]).unwrap();
+        let mut ctx = context(&mut runtime);
+        let code = compile(&mut runtime, 0).unwrap();
+        let samples = ["", "abc", "abd", "abcd", "é", "ü", "e\u{301}", &long];
+        let words: Vec<Word> = samples.iter().map(|text| runtime.heap.allocate_text(text)).collect();
+        let copies: Vec<Word> = samples.iter().map(|text| runtime.heap.allocate_text(text)).collect();
+        for (i, left) in samples.iter().enumerate() {
+            for (j, right) in samples.iter().enumerate() {
+                for (l, r) in [(words[i], words[j]), (words[i], copies[j])] {
+                    ctx.status = OK;
+                    let flag = unsafe { invoke(code, &mut ctx, &[l, r]) };
+                    let equal = left == right;
+                    assert_eq!((ctx.status, flag), (OK, Word::from(equal == (op == s::DataOp::StrEq))),
+                        "{op:?} {left:?} {right:?}");
+                }
+            }
+        }
+    }
+}
+
+/// #829: `==` and `!=` of scalars compare by word: floats numerically (#314), so NaN differs from itself and 0.0
+/// equals -0.0; ints by value, also when an operand is a BigInt, which the structural helper compares.
+#[test]
+fn champ_scalar_equality_by_word() {
+    for op in [s::DataOp::ValEq, s::DataOp::ValNe] {
+        let eq = op == s::DataOp::ValEq;
+        let mut float = Runtime::new_champ(data_function(op, &[s::Type::Float, s::Type::Float], s::Type::Bool),
+            vec![]).unwrap();
+        let mut ctx = context(&mut float);
+        let code = compile(&mut float, 0).unwrap();
+        for (a, b, equal) in [(1.5, 1.5, true), (1.5, 2.0, false), (0.0, -0.0, true), (f64::NAN, f64::NAN, false),
+            (f64::INFINITY, f64::INFINITY, true)]
+        {
+            ctx.status = OK;
+            let flag = unsafe { invoke(code, &mut ctx, &[f64::to_bits(a), f64::to_bits(b)]) };
+            assert_eq!((ctx.status, flag), (OK, Word::from(equal == eq)), "{op:?} {a} {b}");
+        }
+        let mut int = Runtime::new_champ(data_function(op, &[s::Type::Int, s::Type::Int], s::Type::Bool), vec![])
+            .unwrap();
+        let mut ctx = context(&mut int);
+        let code = compile(&mut int, 0).unwrap();
+        let big = "123456789012345678901234567890";
+        for (a, b, equal) in [("7", "7", true), ("7", "8", false), (big, big, true), (big, "7", false),
+            ("-4611686018427387904", "-4611686018427387904", true)]
+        {
+            let (l, r) = (int.heap.big(a.parse().unwrap()), int.heap.big(b.parse().unwrap()));
+            for word in [l, r] {
+                if word & 1 == 0 {
+                    int.constants.push((word, Repr::Ref));
+                }
+            }
+            ctx.status = OK;
+            let flag = unsafe { invoke(code, &mut ctx, &[l, r]) };
+            assert_eq!((ctx.status, flag), (OK, Word::from(equal == eq)), "{op:?} {a} {b}");
+        }
+        let mut char_ = Runtime::new_champ(data_function(op, &[s::Type::Char, s::Type::Char], s::Type::Bool), vec![])
+            .unwrap();
+        let mut ctx = context(&mut char_);
+        let code = compile(&mut char_, 0).unwrap();
+        for (a, b) in [('a', 'a'), ('a', 'b'), ('ж', 'ж')] {
+            ctx.status = OK;
+            let flag = unsafe { invoke(code, &mut ctx, &[u64::from(a as u32), u64::from(b as u32)]) };
+            assert_eq!((ctx.status, flag), (OK, Word::from((a == b) == eq)), "{op:?} {a} {b}");
+        }
+    }
+}
+
 /// S1 data form: `left op right`, then a use of the result that would misread a failed helper's zero.
 fn s1_fallible(op: s::DataOp, result: s::Type, immediate: s::Immediate, use_op: s::DataOp) -> s::Function {
     let reg = L::Register;

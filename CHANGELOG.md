@@ -36,6 +36,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   inline, as Tomato's does. A BigInt operand, an overflow, `%` by 0 or -1, or a shift
   out of range takes the exact helper, whose failure or stop now always leaves the
   function. Before, `+`, `-` and negation did not check the helper's status.
+- **Champ: string and scalar fast paths (#829).** Champ's machine code now reads the length
+  of an ASCII string from its header. For `==` and `!=` on strings, the same string or a
+  different byte length decides without comparing bytes. Scalars compare by word: floats
+  numerically, so NaN differs from itself, and ints by value, with a BigInt operand going
+  through the structural helper. All three match Tomato.
 
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.

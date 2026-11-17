@@ -235,15 +235,102 @@ impl Emit<'_, '_> {
         self.builder.ins().store(MEMORY, value, pointer, offset as i32);
     }
 
+    /// `text.length()` (#829): an ASCII string's length in characters is its byte length, in the header; any
+    /// other string counts its characters in the helper.
+    fn text_length(&mut self, text: Value) -> Value {
+        let header = self.load(text, 0);
+        let ascii = self.builder.ins().band_imm_u(header, crate::heap::ASCII as i64);
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(ascii, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        let length = self.builder.ins().ushr_imm_u(header, 32);
+        let doubled = self.builder.ins().ishl_imm_u(length, 1);
+        let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+        self.builder.ins().jump(done, &[tagged.into()]);
+        self.builder.switch_to_block(slow);
+        let counted = self.call("champ_machine_text_len", &[self.ctx, text]).expect("a length");
+        self.builder.ins().jump(done, &[counted.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// `==` and `!=` of strings (#829): the same string, or strings of different byte lengths, decide inline;
+    /// the rest compares in `champ_machine_text_order`.
+    fn text_equality(&mut self, op: s::DataOp, words: &[Value]) -> Value {
+        let equal = i64::from(op == s::DataOp::StrEq);
+        let (l, r) = (words[0], words[1]);
+        let (compare, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        let same = self.builder.ins().icmp(IntCC::Equal, l, r);
+        let yes = self.builder.ins().iconst(types::I64, equal);
+        self.builder.ins().brif(same, done, &[yes.into()], compare, &[]);
+        self.builder.switch_to_block(compare);
+        let (hl, hr) = (self.load(l, 0), self.load(r, 0));
+        let (nl, nr) = (self.builder.ins().ushr_imm_u(hl, 32), self.builder.ins().ushr_imm_u(hr, 32));
+        let differ = self.builder.ins().icmp(IntCC::NotEqual, nl, nr);
+        let no = self.builder.ins().iconst(types::I64, 1 - equal);
+        self.builder.ins().brif(differ, done, &[no.into()], slow, &[]);
+        self.builder.switch_to_block(slow);
+        let order = self.call("champ_machine_text_order", &[self.ctx, l, r]).expect("an order");
+        let condition = if equal == 1 { IntCC::Equal } else { IntCC::NotEqual };
+        let flag = self.builder.ins().icmp_imm_s(condition, order, 0);
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// `==` and `!=` of a scalar type (#829), as Tomato's machine code: by word; a float numerically (#314), so
+    /// NaN is not equal to itself; two inline integers by word, any BigInt operand in the structural helper, whose
+    /// failure or stop leaves the function.
+    fn scalar_equality(&mut self, op: s::DataOp, ty: s::Type, words: &[Value]) -> Value {
+        let eq = op == s::DataOp::ValEq;
+        let (l, r) = (words[0], words[1]);
+        let flag = if ty == s::Type::Float {
+            let left = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), l);
+            let right = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), r);
+            self.builder.ins().fcmp(if eq { FloatCC::Equal } else { FloatCC::NotEqual }, left, right)
+        } else {
+            self.builder.ins().icmp(if eq { IntCC::Equal } else { IntCC::NotEqual }, l, r)
+        };
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        if ty != s::Type::Int {
+            return flag;
+        }
+        let both = self.builder.ins().band(l, r);
+        let (_, slow, done) = self.int_paths(both);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(slow);
+        let result = self.collection_exact(words);
+        self.builder.ins().jump(done, &[result.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
     /// The exact path of an inline int operation (#827): the helper, then leave the function on a failure or a
     /// stop, as a failing data form does.
     fn exact(&mut self, helper: &str, arguments: &[Value]) -> Value {
         let value = self.call(helper, arguments).expect("the exact helper returns a word");
+        self.leave_unless_ok();
+        value
+    }
+
+    /// The collection helper as the exact path of an inline operation (#829), checked like `exact`.
+    fn collection_exact(&mut self, words: &[Value]) -> Value {
+        let value = self.collection(words);
+        self.leave_unless_ok();
+        value
+    }
+
+    /// Leave the function when the last helper failed or stopped, with the failure (or the stop) still set.
+    fn leave_unless_ok(&mut self) {
         let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
         let ok = self.builder.create_block();
         self.builder.ins().brif(status, self.stop, &[], ok, &[]);
         self.builder.switch_to_block(ok);
-        value
     }
 
     /// Fast, slow and done blocks of an int operation on `tags`: the fast block when its low bit is set (every
@@ -754,7 +841,9 @@ impl Emit<'_, '_> {
             }
             s::Instruction::Data { op, inputs, output, immediate } => {
                 self.data(*op, inputs, *output, immediate)?;
-                if sets_status(*op) {
+                let scalar = matches!(op, s::DataOp::ValEq | s::DataOp::ValNe)
+                    && scalar_equality(self.source.registers[inputs[0] as usize]);
+                if sets_status(*op) && !scalar {
                     // A fallible data form loads only without services (S1). Leave exactly as a failing
                     // call without an unwind outcome does, with the failure (or the stop) still set.
                     let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
@@ -1536,9 +1625,10 @@ impl Emit<'_, '_> {
             }
             D::Undef => self.iconst(0),
             D::StrConcat => self.call("concat", &[self.ctx, words[0], words[1]]).unwrap(),
-            D::StrLen => self.call("champ_machine_text_len", &[self.ctx, words[0]]).unwrap(),
+            D::StrLen => self.text_length(words[0]),
+            D::StrEq | D::StrNe => self.text_equality(op, &words),
             D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe => self.int_compare(op, &words),
-            D::StrEq | D::StrNe | D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
+            D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
                 let order = self.call("champ_machine_text_order", &[self.ctx, words[0], words[1]]).unwrap();
                 let condition = match op {
                     D::IntEq | D::StrEq => IntCC::Equal,
@@ -1560,6 +1650,9 @@ impl Emit<'_, '_> {
                 self.call("champ_machine_range", &[self.ctx, kind, words[0], right, inclusive]).unwrap()
             }
             D::ArrayNew if ty == s::Type::Bytes => self.collection(&words),
+            D::ValEq | D::ValNe if scalar_equality(self.source.registers[inputs[0] as usize]) => {
+                self.scalar_equality(op, self.source.registers[inputs[0] as usize], &words)
+            }
             D::ValEq | D::ValNe if !matches!(self.source.registers[inputs[0] as usize], s::Type::Object(_)) => {
                 self.collection(&words)
             }
@@ -1786,6 +1879,12 @@ fn sets_status(op: s::DataOp) -> bool {
         | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
         || op.scalar_code().is_some() && !inline_scalar(op)
+}
+
+/// Value equality that machine code decides by word, as Tomato's does (#829): scalars, and ints whose exact path
+/// checks the status itself.
+fn scalar_equality(ty: s::Type) -> bool {
+    matches!(ty, s::Type::Int | s::Type::Float | s::Type::Byte | s::Type::Char | s::Type::Bool)
 }
 
 /// Int operations that machine code computes inline for two inline integers, as Tomato's does (#827); the
