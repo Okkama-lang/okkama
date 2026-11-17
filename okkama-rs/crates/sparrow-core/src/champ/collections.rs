@@ -292,7 +292,6 @@ fn lookup(runtime: &Runtime, program: &s::Program, map: Word, word: Word, key_ty
     found.map(|&(_, value)| value)
 }
 
-/// The verified operation at (function, pc): its data operation, operand types and result type.
 /// What a data helper needs of the verified instruction at a call site (#832), computed once at load: machine
 /// code passes `(function, pc)` and words, and the helper reads its site instead of decoding the instruction on
 /// every call.
