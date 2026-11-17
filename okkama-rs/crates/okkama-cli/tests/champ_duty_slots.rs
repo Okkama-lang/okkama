@@ -1,8 +1,9 @@
 #![cfg(feature = "champ-abi")]
 //! D26 duty slots (#856, S2 step 5; #857, S3): the coro bodies with `duty.empty` and slot operands, hand-written
 //! and produced by coro, from Coro to Champ in process. The Full verifier checks coro and low, codegen emits
-//! `duty.empty` and the slot operands, the load gate checks them, and Champ runs the program. A body whose slot is filled in one branch runs both ways, so a close settles a full slot and, on the
-//! other run, an empty one (a settle of nothing at run time).
+//! `duty.empty` and the slot operands, the load gate checks them, and Champ runs the program. A body whose slot is
+//! filled in one branch runs both ways, so a close settles a full slot and, on the other run, an empty one (a
+//! settle of nothing at run time).
 
 use okkama_compiler::lowering::oir2;
 use okkama_compiler::oir2::{VerifyMode, text};
