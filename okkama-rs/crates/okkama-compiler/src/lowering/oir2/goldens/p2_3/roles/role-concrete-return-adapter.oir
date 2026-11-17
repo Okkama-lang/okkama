@@ -94,7 +94,7 @@ func @main() -> int [entry] {
     raise %4
 }
 
-func @app.Source.witness.app.Factory.slot0(%0: app.Source) -> app.Label [method app.Source] {
+func @app.Source.witness.app.Factory.slot0(%0: app.Source) -> app.Label [method app.Source, adapter @app.Source.make#0] {
     boundary B0 lexical in S0
     ^b0 in S0 unwind ^b1:
     [i0] %1: app.Box = call @app.Source.make#0(%0)

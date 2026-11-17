@@ -90,7 +90,8 @@ func @main() -> int [entry] {
     raise %7
 }
 
-func @app.Counter.witness.app.Counting.slot1(%0: app.Counter) -> ^app.Counting [method app.Counter] {
+func @app.Counter.witness.app.Counting.slot1(%0: app.Counter) -> ^app.Counting [method app.Counter, adapter
+        @app.Counter.bumped#1] {
     boundary B0 lexical in S0
     ^b0 in S0 unwind ^b1:
     [i0] %1: ^app.Counter = call @app.Counter.bumped#1(%0)

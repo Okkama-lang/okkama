@@ -97,7 +97,7 @@ func @main() -> int [entry] {
     raise %5
 }
 
-func @app.Box.witness.app.Package.slot0(%0: app.Box) -> ^app.Package [method app.Box] {
+func @app.Box.witness.app.Package.slot0(%0: app.Box) -> ^app.Package [method app.Box, adapter @app.Box.open#0] {
     boundary B0 lexical in S0
     ^b0 in S0 unwind ^b1:
     [i0] %1: ^app.Box = call @app.Box.open#0(%0)

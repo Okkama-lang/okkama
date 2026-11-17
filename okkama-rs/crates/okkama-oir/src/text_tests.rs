@@ -364,7 +364,8 @@ fn every_typed_payload_enum_branch_roundtrips() {
         FunctionAttr::Async,
         FunctionAttr::Cleanup,
         FunctionAttr::DeferEntry { replacements: vec![] },
-        FunctionAttr::Lambda { captures: cs::<u32>(), owner: cs::<Option<DeclId>>() }
+        FunctionAttr::Lambda { captures: cs::<u32>(), owner: cs::<Option<DeclId>>() },
+        FunctionAttr::Adapter { target: cs::<FuncId>() }
     ];
     assert_eq!(cases.len(), FunctionAttr::TEXT_VARIANTS.len(), "FunctionAttr branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }

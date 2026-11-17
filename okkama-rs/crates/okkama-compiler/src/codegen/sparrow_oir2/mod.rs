@@ -776,10 +776,11 @@ fn translate_constant(literal: &o::Literal) -> Result<s::Constant, GenerateError
 
 /// Attributes that only say which declaration a function implements: an action, a successor, a field
 /// default or the body of an action value. They carry no ABI of their own; the signature and the
-/// ownership ABI do (an action value's captures are its leading parameters).
+/// ownership ABI do (an action value's captures are its leading parameters). An adapter (ruling PR-M) only told own
+/// how to take its entry packet; the body says the rest.
 pub(super) fn declaration_attr(attr: &o::FunctionAttr) -> bool {
     matches!(attr, o::FunctionAttr::Method(_) | o::FunctionAttr::Successor(_) | o::FunctionAttr::Default { .. }
-        | o::FunctionAttr::Lambda { .. })
+        | o::FunctionAttr::Lambda { .. } | o::FunctionAttr::Adapter { .. })
 }
 
 fn translate_function(module: &o::Module, id: o::FuncId, function: &o::Function, objects: &[s::Object])

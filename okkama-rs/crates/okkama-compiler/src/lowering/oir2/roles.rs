@@ -75,8 +75,11 @@ pub(super) fn adapter(declarations: &mut Declarations, declaration: ir::DeclId, 
     let intrinsic = function.attrs.iter().any(|attr| matches!(attr, ir::FunctionAttr::Intrinsic { .. }));
     let summary = function.summary;
     let result = signature.results.first().copied();
+    // Ruling PR-M (#818): the adapter attribute makes own admit the entry packet, so the call offers what the caller
+    // offered; the verifier checks that the body is this one call.
+    let attrs = vec![ir::FunctionAttr::Method(declaration), ir::FunctionAttr::Adapter { target }];
     let adapter = declarations.builder.declare_function(ir::Function {
-        symbol, signature, attrs: vec![ir::FunctionAttr::Method(declaration)], type_params: vec![],
+        symbol, signature, attrs, type_params: vec![],
         summary: None, async_creation_summary: None, async_body_summary: None, body: None, loc: None,
     })?;
     let root = declarations.builder.declare_scope(ir::ScopeDecl {

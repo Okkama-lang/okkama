@@ -162,6 +162,7 @@ impl Reader<'_> {
                     FunctionAttr::DeferEntry { replacements }
                 }
                 "cleanup" => FunctionAttr::Cleanup,
+                "adapter" => FunctionAttr::Adapter { target: FuncId::read(self)? },
                 "entry" => FunctionAttr::Entry,
                 "async" => FunctionAttr::Async,
                 "private" => FunctionAttr::Hidden,
@@ -532,6 +533,10 @@ impl Writer<'_> {
             match attr {
                 FunctionAttr::DeferEntry { .. } => attr.write(self)?,
                 FunctionAttr::Cleanup => self.push("cleanup"),
+                FunctionAttr::Adapter { target } => {
+                    self.push("adapter ");
+                    target.write(self)?;
+                }
                 FunctionAttr::Entry => self.push("entry"),
                 FunctionAttr::Async => self.push("async"),
                 FunctionAttr::Hidden => self.push("private"),

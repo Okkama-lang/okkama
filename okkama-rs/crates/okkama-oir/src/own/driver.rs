@@ -171,6 +171,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
             witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
             dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(), future_bindings: BTreeMap::new(),
+            forward_entry: false,
         };
         driver.temporaries = driver.temporary_futures();
         driver.future_bindings = driver.bound_futures();
@@ -327,7 +328,20 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             point.env.linear.insert(packet);
             point = driver.emit(point, Operation::Ownership(OwnershipOp::ScopeBegin { scope: root }))?;
             let state = point.env.state(root)?;
-            point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
+            // Ruling PR-M (#818, OIR-2-async-remaining §6.3a): an adapter whose one call owns its inputs passes its
+            // entry packet to that call as the call's packet, so the target gets what the caller offered, as from a
+            // direct call. Every other function accepts it: an observation is offered nothing, and an async target's
+            // creation thunk is a later ticket.
+            if forwards_entry(driver.module, function)? {
+                // The packet reaches the call's block through an SSA slot of its own, as a linear value of it.
+                driver.forward_entry = true;
+                let entry = driver.blocks[&high.entry];
+                let slot = driver.ssa.declare(driver.module, &mut driver.body, entry, SsaSlot::Packet(0), own, false)?;
+                driver.entries.get_mut(&high.entry).ok_or_else(|| flow_error("the High entry has no environment"))?
+                    .linear.insert(slot.value);
+            } else {
+                point = driver.emit(point, Operation::Ownership(OwnershipOp::Accept { state, packet }))?;
+            }
             // PR-B2 (#782), ABI D25.3: an entry packet whose inputs can bring service entries makes the root scope
             // one that may hold them, so its schedule ends with the dynamic step. `own.accept` puts the packet's
             // entries in the scope's bound journal, not its admission journal: the callee borrows them as it borrows
@@ -628,6 +642,25 @@ struct ReplacementReturn {
     result: Option<TypeId>,
 }
 
+/// Ruling PR-M (#818): whether `function` is an adapter whose target owns its inputs: neither an observation nor an
+/// async action.
+fn forwards_entry(module: &Module, function: FuncId) -> Result<bool, OwnError> {
+    let Some(target) = module.functions.get(function).map_err(arena)?.attrs.iter().find_map(|attr| match attr {
+        FunctionAttr::Adapter { target } => Some(*target),
+        _ => None,
+    }) else {
+        return Ok(false);
+    };
+    let target = module.functions.get(target).map_err(arena)?;
+    if target.attrs.contains(&FunctionAttr::Async) {
+        return Ok(false);
+    }
+    let Some(summary) = target.summary else {
+        return Err(flow_error("an adapter's target has no inferred summary"));
+    };
+    Ok(module.summaries.get(summary).map_err(arena)?.entry_kind != EntryKind::ObservationAdmissionStaysCaller)
+}
+
 struct Driver<'a, 'o> {
     module: &'a mut Module,
     high: &'a Body,
@@ -673,6 +706,9 @@ struct Driver<'a, 'o> {
     /// `rebind`s. An alias (`let g = f`) binds the same SSA value again, so one value can have several. A created
     /// Future's `fut.new` carries the one that lives in the Future's owner.
     future_bindings: BTreeMap<ValueId, Vec<BindingId>>,
+    /// Ruling PR-M (#818): an adapter whose one call owns its inputs. The call takes the entry packet as its packet,
+    /// so what the caller offered reaches the target whole; nothing accepts, admits or splits it.
+    forward_entry: bool,
 }
 impl Driver<'_, '_> {
     /// Whether values of `ty` carry full dependencies. Linear buffers never do:
@@ -1028,6 +1064,16 @@ impl Driver<'_, '_> {
         slots.extend(point.env.journals.iter().map(|(buffer, journal)| (SsaSlot::Journal(*buffer), LatestValue {
             value: *journal, deps: None,
         })));
+        // Ruling PR-M (#818): the prologue passes an adapter's entry packet, the one packet it holds, to its slot.
+        if prologue && self.forward_entry {
+            let own = self.module.types.intern(Type::Service(ServiceType::Own)).map_err(arena)?;
+            let packets: Vec<_> = point.env.linear.iter().copied()
+                .filter(|value| self.body.values.get(*value).is_ok_and(|data| data.ty == own)).collect();
+            let [packet] = packets[..] else {
+                return Err(flow_error("an adapter's prologue holds its one entry packet (PR-M)"));
+            };
+            slots.insert(SsaSlot::Packet(0), LatestValue { value: packet, deps: None });
+        }
         let arguments: Vec<_> = target.args.iter().map(|value| point.env.value(*value)).collect::<Result<_, _>>()?;
         for ((parameter, latest), argument) in original.params.iter().zip(arguments).zip(&target.args) {
             slots.insert(SsaSlot::Value(*parameter), latest);

@@ -132,7 +132,7 @@ func @main() -> int [entry] {
 }
 
 func "@app.Recorder$fake.witness.app.Recorder.slot0"(%0: "app.Recorder$fake", %1: int) -> ^app.Recorder [method
-        "app.Recorder$fake"] {
+        "app.Recorder$fake", adapter "@app.Recorder$fake.record#0"] {
     boundary B0 lexical in S0
     ^b0 in S0 unwind ^b1:
     [i0] %2: ^"app.Recorder$fake" = call "@app.Recorder$fake.record#0"(%0, %1)

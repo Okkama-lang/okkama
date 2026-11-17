@@ -118,7 +118,8 @@ func "@$test1"() -> void {
     raise %3
 }
 
-func "@app.Counter$fake.witness.app.Counter.slot0"(%0: "app.Counter$fake") -> ^app.Counter [method "app.Counter$fake"] {
+func "@app.Counter$fake.witness.app.Counter.slot0"(%0: "app.Counter$fake") -> ^app.Counter [method "app.Counter$fake",
+        adapter "@app.Counter$fake.next#0"] {
     boundary B0 lexical in S0
     ^b0 in S0 unwind ^b1:
     [i0] %1: ^"app.Counter$fake" = call "@app.Counter$fake.next#0"(%0)

@@ -553,3 +553,144 @@ async main() is int {
 }
 "#), "refusing, keeping kept\nbroken\ndestroy kept\n");
 }
+
+/// #818 (ruling PR-M): a fresh Future passed through the `Supervising` role reaches `start` as a direct call's would.
+/// The role's adapter admits its entry packet, so its call offers the Future and the group registers it: the member
+/// via the role is destroyed when the group's owner closes, after `main end`, as Tomato (tree build) prints.
+#[test]
+fn a_fresh_member_started_through_the_role_is_registered() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup, Supervising, FinishedFutureGroup;
+import "async/event" take Event;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Maker {
+    Maker();
+    async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); }
+}
+object Holding {
+    Holding();
+    async held(name is string, gate is Event) is Res {
+        let r = Res(name: name);
+        Stdout().writeln("holding " + name);
+        await gate.wait();
+        Stdout().writeln("released " + name);
+        r;
+    }
+}
+object Starter {
+    Starter();
+    go(sup is Supervising<Res>, name is string) is void { sup.start(Maker().make(name)); Stdout().writeln("go end"); }
+    look(sup is Supervising<Res>) is void { Stdout().writeln("look " + sup.active().string()); }
+}
+async main() is int {
+    let group is FutureGroup<Res> = FutureGroup();
+    group.start(Maker().make("before"));
+    Starter().look(group);
+    Stdout().writeln("looked");
+    Starter().go(group, "via role");
+    group.start(Maker().make("after"));
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make before\nlook 0\nlooked\nmake via role\ngo end\nmake after\nmain end\ndestroy after\n\
+        destroy via role\ndestroy before\n");
+}
+
+/// #818: the FutureScope pattern of G1 step 5, an async member that starts a child through `Supervising`. The child is
+/// registered with the group, so it is destroyed when the group's owner closes, before `main end` (Tomato's order).
+#[test]
+fn an_async_member_starts_a_child_through_the_role() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup, Supervising, FinishedFutureGroup;
+import "async/event" take Event;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Maker {
+    Maker();
+    async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); }
+}
+object Holding {
+    Holding();
+    async held(name is string, gate is Event) is Res {
+        let r = Res(name: name);
+        Stdout().writeln("holding " + name);
+        await gate.wait();
+        Stdout().writeln("released " + name);
+        r;
+    }
+}
+object Job {
+    Job();
+    async run(sup is Supervising<Res>, gate is Event) is Res {
+        sup.start(Holding().held("child", gate));
+        Stdout().writeln("job end");
+        Res(name: "job");
+    }
+}
+object Helper {
+    Helper();
+    async go(gate is Event) is void {
+        let group is FutureGroup<Res> = FutureGroup();
+        group.start(Job().run(group, gate));
+        Stdout().writeln("active " + group.active().string());
+        gate.set();
+        await group.wait();
+        Stdout().writeln("go end");
+    }
+}
+async main() is int {
+    let gate = Event();
+    await Helper().go(gate);
+    Stdout().writeln("main end");
+    0;
+}
+"#, "holding child\njob end\nactive 1\nreleased child\ngo end\ndestroy job\ndestroy child\n\
+        main end\n");
+}
+
+/// #818 (ruling PR-M): a bound Future passed on through a source function stays with its binding (the relay is no
+/// adapter: it accepts its entry, PR-B2), and a fresh Future started through the role in main is registered and
+/// destroyed at main's close. Tomato (tree build) prints the same.
+#[test]
+fn a_bound_future_through_a_relay_and_a_fresh_one_through_the_role() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup, Supervising, FinishedFutureGroup;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Maker {
+    Maker();
+    async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); }
+}
+object Starter {
+    Starter();
+    go(sup is Supervising<Res>, f is Future<Res>) is void { sup.start(f); Stdout().writeln("go end"); }
+}
+async main() is int {
+    let group is FutureGroup<Res> = FutureGroup();
+    let f = Maker().make("bound");
+    Starter().go(group, f);
+    let sup is Supervising<Res> = group;
+    sup.start(Maker().make("fresh"));
+    Stdout().writeln("label " + (await f).label());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make bound\ngo end\nmake fresh\nlabel bound\nmain end\ndestroy fresh\ndestroy bound\n");
+}
+

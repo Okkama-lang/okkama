@@ -791,3 +791,84 @@ fn oir2_explicit_entry_binds_the_closure_dictionary_of_an_accepted_holder() {
     assert!(body.insts.iter().any(|(_, inst)| matches!(&inst.op, ir::Operation::Core(ir::CoreOp::TypeOf { ty, .. })
         if matches!(module.types.get(*ty), Ok(ir::Type::Fn(_))))));
 }
+
+/// Ruling PR-M (#818): a fresh Future reaches `FutureGroup.start` through the `Supervising` role.
+const PR_M_ROLE_START: &str = r#"module app v1.0.0;
+import "async/scope" take FutureGroup, Supervising;
+object Job { has n is int; Job(:n); async run() is int { n; } }
+object Starter { Starter(); go(sup is Supervising<int>, n is int) is void { sup.start(Job(n: n).run()); } }
+async main() is int { let group is FutureGroup<int> = FutureGroup(); Starter().go(group, 1); 0; }
+"#;
+
+/// The adapters of `module` whose target is `start`, by function id.
+fn start_adapters(module: &ir::Module) -> Vec<ir::FuncId> {
+    module.functions.iter().filter(|(_, function)| function.attrs.iter().any(|attr| matches!(attr,
+        ir::FunctionAttr::Adapter { target } if module.functions.get(*target)
+            .is_ok_and(|target| target.symbol.contains("FutureGroup.start"))))).map(|(id, _)| id).collect()
+}
+
+fn verified(module: &ir::Module, verify: &ir::verify::VerifyOptions) -> Result<(), ir::verify::VerifyReport> {
+    let catalog = P1NativeSummaries::for_module(module).unwrap();
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_with(module, verify, context).map(|_| ())
+}
+
+/// Ruling PR-M (#818): the role slot's adapter passes its entry packet to `start` as the call's packet: it neither
+/// accepts nor admits it, and the Full verifier counts the call as the entry's acceptance. A source function that
+/// passes a Future on (`go`) still accepts its entry (PR-B2).
+#[test]
+fn a_role_adapter_passes_its_entry_packet_to_its_owning_call() {
+    let (own, verify) = own_stage(PR_M_ROLE_START, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let adapters = start_adapters(&own);
+    assert!(!adapters.is_empty(), "the Supervising witness of FutureGroup is an adapter");
+    for adapter in &adapters {
+        let function = own.functions.get(*adapter).unwrap();
+        let body = function.body.as_ref().unwrap();
+        let ir::OwnershipAbi::Explicit { input_packet, .. } = function.signature.ownership_abi else {
+            panic!("an adapter of an owning call has the explicit ABI");
+        };
+        let entry = body.blocks.get(body.entry).unwrap().params[usize::from(input_packet)];
+        assert!(body.insts.iter().all(|(_, inst)| !matches!(inst.op,
+            ir::Operation::Ownership(ir::OwnershipOp::Accept { .. }))), "the adapter accepts nothing");
+        assert!(body.insts.iter().all(|(_, inst)| !matches!(inst.op,
+            ir::Operation::Ownership(ir::OwnershipOp::Admit { packet, .. }) if packet == entry)),
+            "the adapter admits no entry packet");
+    }
+    let go = own.functions.iter().find(|(_, function)| function.symbol.starts_with("app.Starter.go")).unwrap().1;
+    let body = go.body.as_ref().unwrap();
+    assert!(body.insts.iter().any(|(_, inst)| {
+        matches!(inst.op, ir::Operation::Ownership(ir::OwnershipOp::Accept { .. }))
+    }), "a source function accepts its entry");
+    verified(&own, &verify).unwrap();
+}
+
+/// Ruling PR-M (#818) negatives: the attribute is what allows the forwarding, and it is checked against the body.
+#[test]
+fn a_forwarded_entry_needs_a_checked_adapter_attribute() {
+    let (own, verify) = own_stage(PR_M_ROLE_START, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let rule = |report: &ir::verify::VerifyReport, message: &str| report.diagnostics.iter()
+        .any(|diagnostic| diagnostic.message.contains(message));
+    // Without the attribute the same body forwards an entry it never accepted (the entry rule, B51).
+    let mut plain = own.clone();
+    for adapter in start_adapters(&plain) {
+        plain.functions.get_mut(adapter).unwrap().attrs
+            .retain(|attr| !matches!(attr, ir::FunctionAttr::Adapter { .. }));
+    }
+    let report = verified(&plain, &verify).unwrap_err();
+    assert!(rule(&report, "callee must accept fresh inputs before evaluating its body"), "{report:?}");
+    // A function with more in its body than one call of the target is no adapter (S1).
+    let mut claimed = own.clone();
+    let target = start_adapters(&claimed).into_iter().next().and_then(|adapter| {
+        claimed.functions.get(adapter).unwrap().attrs.iter().find_map(|attr| match attr {
+            ir::FunctionAttr::Adapter { target } => Some(*target),
+            _ => None,
+        })
+    }).unwrap();
+    let (go, _) = claimed.functions.iter()
+        .find(|(_, function)| function.symbol.starts_with("app.Starter.go")).unwrap();
+    claimed.functions.get_mut(go).unwrap().attrs.push(ir::FunctionAttr::Adapter { target });
+    let report = verified(&claimed, &verify).unwrap_err();
+    assert!(rule(&report, "an adapter's body uses its target once"), "{report:?}");
+}

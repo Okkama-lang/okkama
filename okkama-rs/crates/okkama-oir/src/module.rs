@@ -186,6 +186,10 @@ pub enum FunctionAttr {
     DeferEntry { replacements: Vec<DeferLabel> },
     Cleanup,
     Lambda { captures: u32, owner: Option<DeclId> },
+    /// Ruling PR-M (#818): a compiler-built adapter (a witness slot's adapter, an async action's creation thunk)
+    /// whose body is one call of `target` with its parameters. Its parameters are temporaries, not bindings: own
+    /// admits its entry packet, so the call offers the entries as a direct call would.
+    Adapter { target: FuncId },
 }
 
 /// Scope IDs are module-wide, even though each scope belongs to one function.
