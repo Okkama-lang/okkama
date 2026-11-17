@@ -50,6 +50,35 @@ pub(crate) struct Program {
     pub globals: Vec<Word>,
     /// Whether each object descriptor is a FutureGroup specialization (#810): a holder the selection walk selects.
     pub groups: Vec<bool>,
+    /// The P1 Atomic operation of each function (#830), resolved once from its external name.
+    pub atomic: Vec<Option<AtomicOp>>,
+}
+
+/// A P1 Atomic operation (#830). `p1::invoke` dispatches on it instead of matching the entry's name on every
+/// call, and machine code computes the observations (`value`, `closed`, `close`) inline over the cell
+/// `[header, value, closed]`, as Tomato's does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AtomicOp {
+    NewValue,
+    Value,
+    Replace,
+    CompareAndReplace,
+    Closed,
+    Close,
+}
+
+/// The Atomic operation of the P1 entry `name`, or None for any other entry.
+pub(crate) fn atomic_op(name: &str) -> Option<AtomicOp> {
+    let (operation, _) = name.strip_prefix("okkama.atomic.Atomic.")?.split_once('$')?;
+    Some(match operation {
+        "new_value" => AtomicOp::NewValue,
+        "value" => AtomicOp::Value,
+        "replace" => AtomicOp::Replace,
+        "compare_and_replace" => AtomicOp::CompareAndReplace,
+        "closed" => AtomicOp::Closed,
+        "close" => AtomicOp::Close,
+        _ => return None,
+    })
 }
 
 impl Program {
@@ -361,10 +390,18 @@ impl Runtime {
                 .is_some_and(|name| s::ExternalContracts::entry(catalog.1, name).is_some()
                     || (implementation.is_none() && catalog.1.adapter(function, &source.composites).is_some()))
         }).collect();
+        // As `p1::invoke` dispatches: natives, test intrinsics, Tomato intrinsics and `Error.text` come first.
+        let atomic = source.functions.iter().enumerate().map(|(index, function)| {
+            let name = function.proofs.entry.as_ref().and_then(|entry| entry.external.as_deref())?;
+            let earlier = native_symbol(name) || name.starts_with(s::TEST_INTRINSIC_PREFIX)
+                || runtime.intrinsics.get(index).is_some_and(Option::is_some);
+            if earlier { None } else { atomic_op(name) }
+        }).collect();
         runtime.champ.machine = Some(Program {
             source: verified.source.clone(), plans, selections, entries, shielded_entries,
             external: implementations, p1, native_failure, frames, schedules, globals: Vec::new(),
             groups: source.objects.iter().map(|object| s::drivers::group_specialization(&object.name)).collect(),
+            atomic,
         });
         let globals = super::collections::build_globals(&mut runtime, source).map_err(Error)?;
         runtime.champ.machine.as_mut().expect("Champ program").globals = globals;

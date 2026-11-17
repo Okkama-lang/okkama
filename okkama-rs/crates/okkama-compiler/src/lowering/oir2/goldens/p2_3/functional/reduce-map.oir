@@ -1,0 +1,73 @@
+oir 2 high
+module app
+requires core
+entry @main
+scope S0 action in @main
+scope S1 iteration in @main parent S0
+scope S2 block in @main parent S1
+
+func @main() -> int [entry] {
+    binding b0 "w": str in S1
+    binding b1 "index": map<str, int> in S0
+    boundary B0 lexical in S0
+    boundary B1 loop in S1
+    boundary B2 lexical in S2
+    selection s0: selection = union([])
+    ^b0 in S0 unwind ^b1:
+    %0: str = const "b"
+    %1: str = const "a"
+    %2: array<str> = array.new [%0, %1], ty array<str>
+    %3: int = const 0
+    %4: int = array.len %2
+    %5: range = range.new %3, %4
+    %6: mbuilder<str, int> = mbuilder.new key str, value int
+    br ^b3(%3, %6)
+    ^b1(%7: failure) in S0:
+    raise %7
+    ^b2(%8: mbuilder<str, int>) in S0 unwind ^b12(%8):
+    %9: map<str, int> = mbuilder.finish %8
+    bind %9, binding b1
+    %10: int = map.len %9
+    want %10
+    [i11] exit.prepare return %10 at B0
+    result.exit edge normal(0), value %10, demand want, prepare #11
+    ret %10
+    ^b3(%11: int, %12: mbuilder<str, int>) in S0 unwind ^b1:
+    %13: bool = int.lt %11, %4
+    cond %13, ^b4, ^b5
+    ^b4 in S1 unwind ^b1:
+    br ^b7(%12)
+    ^b5 in S0 unwind ^b1:
+    br ^b2(%12)
+    ^b6(%14: mbuilder<str, int>) in S0 unwind ^b1:
+    %15: int = const 1
+    %16: int = int.add %11, %15
+    br ^b3(%16, %14)
+    ^b7(%17: mbuilder<str, int>) in S1 unwind ^b8(%17):
+    %18: str = array.get %2, %11
+    bind %18, binding b0
+    br ^b10
+    ^b8(%19: mbuilder<str, int>, %20: failure) in S1 unwind ^b1:
+    mbuilder.abandon %19
+    raise %20
+    ^b9(%21: map<str, int>, %22: str, %23: mbuilder<str, int>) in S1 unwind ^b11(%23):
+    %24: mbuilder<str, int> = mbuilder.append %23, %21
+    exit.prepare fallthrough select s0 at B1
+    br ^b6(%24)
+    ^b10 in S2 unwind ^b1:
+    %25: int = str.len %18
+    %26: map<str, int> = map.new entries [(%18, %25)], ty map<str, int>
+    want %26
+    [i23] exit.prepare fallthrough %26 at B2
+    want %18
+    [i25] exit.prepare fallthrough %18 at B2
+    result.exit edge normal(0), value %26, demand want, prepare #23
+    result.exit edge normal(0), value %18, demand want, prepare #25
+    br ^b9(%26, %18, %17)
+    ^b11(%27: mbuilder<str, int>, %28: failure) in S1 unwind ^b1:
+    mbuilder.abandon %27
+    raise %28
+    ^b12(%29: mbuilder<str, int>, %30: failure) in S0 unwind ^b1:
+    mbuilder.abandon %29
+    raise %30
+}

@@ -20,6 +20,32 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: persistent arrays (#826).** On Champ, `+`, `slice`, `removed_at` and
+  `replaced` copied the whole array, so building an array by appends in a loop was
+  quadratic. They now take Tomato's persistent forms: a chain of appends or prepends
+  shares a buffer, a large slice is a view, and a chain of replacements becomes a trie.
+  Machine code reads every form. 10⁴ appends allocate linearly.
+- **Champ: a `reduce` accumulator grows in place (#831).** Tomato's rule #243 now
+  applies to Champ. When a `reduce` block names its accumulator only as `acc` or as the
+  left end of `acc + parts`, the accumulator lives in a builder, and each step appends
+  what the block adds. A map accumulator from `[:]` grows by literal entries. An
+  accumulator the block reads in any other way is copied, as before. OIR-1 and OIR-2
+  share the analysis (`thir::linear_accumulator`).
+- **Champ: inline small-int arithmetic (#827).** Champ's machine code now computes
+  `+ - * %`, negation, the comparisons, `& | ^ << >>` and `~` of two inline integers
+  inline, as Tomato's does. A BigInt operand, an overflow, `%` by 0 or -1, or a shift
+  out of range takes the exact helper, whose failure or stop now always leaves the
+  function. Before, `+`, `-` and negation did not check the helper's status.
+- **Champ: string and scalar fast paths (#829).** Champ's machine code now reads the length
+  of an ASCII string from its header. For `==` and `!=` on strings, the same string or a
+  different byte length decides without comparing bytes. Scalars compare by word: floats
+  numerically, so NaN differs from itself, and ints by value, with a BigInt operand going
+  through the structural helper. All three match Tomato.
+- **Champ: Atomic without per-call name matching (#830).** Champ now resolves each Atomic
+  entry's operation once, when the program loads, instead of matching the entry's name on
+  every call. Machine code computes `value`, `closed` and `close` inline over the cell, as
+  Tomato does. A closed cell's `value` still throws `AtomicClosed`.
+
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
   - A winning origin's outcome stays with its owner.

@@ -59,6 +59,9 @@ pub(super) struct BodyLowerer<'a, 't> {
     loops: Vec<LoopFrame>,
     pub buffers: Vec<usize>,
     pub buffer_unwinds: HashMap<ir::BlockId, (ir::BlockId, usize)>,
+    /// The accumulators of the `reduce` blocks being lowered whose accumulator lives in a builder (#831): in
+    /// such a block `acc` stands for nothing added and `acc + parts` for the parts.
+    pub(super) accumulators: Vec<thir::LocalId>,
 }
 
 #[derive(Clone)]
@@ -112,7 +115,7 @@ impl<'a, 't> BodyLowerer<'a, 't> {
             b, source, types, current: Some(entry), env: vec![None; count], bindings: vec![None; count],
             root, return_boundary, failures: HashMap::from([(vec![], failure)]),
             registrations: HashMap::new(), loops: vec![], context,
-            buffers: vec![], buffer_unwinds: HashMap::new(),
+            buffers: vec![], buffer_unwinds: HashMap::new(), accumulators: vec![],
             failure_frames: vec![], caught: vec![], rethrows: HashMap::new(), rethrow_inputs: HashMap::new(),
             receiver: None, early_self: None, field_base, field_end: count, field_flags: vec![None; fields],
         };
@@ -603,6 +606,10 @@ impl<'a, 't> BodyLowerer<'a, 't> {
                 if super::collections::is_builtin(op) => self.collection_expr(expr),
             E::Functional(functional) => {
                 self.functional_expr(functional, result_ty.expect("typed functional block"))
+            }
+            E::Local(local) if self.accumulators.contains(local) => {
+                let ty = self.ty(expr.ty.as_ref().expect("typed accumulator"), expr.span)?;
+                self.nothing_added(ty).map(Some)
             }
             E::Local(local) => Ok(self.env[local.0]),
             E::SelfValue => self.self_value().map(Some),

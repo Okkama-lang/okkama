@@ -1400,6 +1400,327 @@ fn champ_plain_array_traces_elements_and_checks_all_index_forms() {
     assert!(runtime.heap.stats().collections > 0);
 }
 
+/// #826: machine code's `array.get` reads every persistent form Tomato's operations make: a flat array in place,
+/// a view of a shared buffer (an append chain, #246) or of a flat array (a slice, #249) from its first element, and
+/// a trie (#250) through `trie_get`, also after reads flatten it. An index outside the version fails, though the
+/// buffer behind a view holds more.
+#[test]
+fn champ_array_get_reads_views_slices_and_tries() {
+    let ints = s::Type::Array(s::ArrayType { leaf: s::ArrayLeaf::Int, depth: 1 });
+    let reg = L::Register;
+    let mut function = s::Function {
+        symbol: "get".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![ints, s::Type::Int, s::Type::Int, s::Type::Failure],
+        services: vec![], params: vec![reg(0), reg(1)], results: vec![s::Type::Int],
+        blocks: vec![
+            s::Block { pc: 0, params: vec![reg(0), reg(1)] },
+            s::Block { pc: 1, params: vec![reg(2)] },
+            s::Block { pc: 2, params: vec![reg(3)] },
+        ],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Champ { op: O::ArrayGet,
+                arguments: vec![A::Location(reg(0)), A::Location(reg(1))],
+                flow: s::Flow::Outcomes(vec![
+                    s::Outcome { tag: s::Tag::Normal, edge: s::Edge {
+                        target_pc: 1, assignments: vec![s::Assignment {
+                            destination: reg(2), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                    s::Outcome { tag: s::Tag::Unwind, edge: s::Edge {
+                        target_pc: 2, assignments: vec![s::Assignment {
+                            destination: reg(3), source: s::Source::ProducedSlot(0),
+                        }],
+                    } },
+                ]) },
+            s::Instruction::Ret(vec![2]),
+            s::Instruction::Raise(3),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    let repr = machine::repr(s::Type::Int);
+    let words = |runtime: &mut Runtime, values: std::ops::Range<i64>| -> Vec<Word> {
+        values.map(|value| runtime.heap.int(value)).collect()
+    };
+    // A flat array, a view at the end of an append chain, a slice of the flat array and a trie.
+    let items = words(&mut runtime, 0..100);
+    let flat = runtime.heap.allocate_array(repr, &items);
+    let mut chain = runtime.heap.allocate_array(repr, &items[..crate::heap::CHAIN_MIN]);
+    for &item in &items[crate::heap::CHAIN_MIN..] {
+        let one = runtime.heap.allocate_array(repr, &[item]);
+        chain = crate::ops::concat_arrays(&mut runtime, repr, false, &[chain, one]);
+    }
+    let start = runtime.heap.int(20);
+    let end = runtime.heap.int(90);
+    let slice = crate::ops::slice_array(&mut runtime, flat, start, end).unwrap();
+    let trie = runtime.heap.trie_from(repr, &items);
+    for (array, values, header) in [(flat, 0..100, 0), (chain, 0..100, crate::heap::SHARED),
+        (slice, 20..90, crate::heap::SHARED), (trie, 0..100, crate::heap::TRIE)]
+    {
+        assert_eq!(runtime.heap.header_of(array) & (crate::heap::SHARED | crate::heap::TRIE), header);
+        let length = values.end - values.start;
+        // Two rounds, so that a trie read often enough flattens itself between them.
+        for _ in 0..2 {
+            for (index, expected) in values.clone().enumerate() {
+                ctx.status = OK;
+                ctx.failure = 0;
+                let index_word = runtime.heap.int(index as i64);
+                let value = unsafe { invoke(code, &mut ctx, &[array, index_word]) };
+                assert_eq!((ctx.status, runtime.small_or_big(value).unwrap()), (OK, expected));
+            }
+        }
+        ctx.status = OK;
+        ctx.failure = 0;
+        let outside = runtime.heap.int(length);
+        unsafe { invoke(code, &mut ctx, &[array, outside]) };
+        assert_eq!(ctx.status, FAILED);
+        let failure = runtime.failure(ctx.failure).unwrap();
+        assert!(matches!(&failure.kind, FailureKind::Program(message) if message == "Array index out of bounds"));
+    }
+}
+
+/// A function of `arity` ints that returns `op` of them, a value of type `result`.
+fn int_operation(op: s::DataOp, arity: usize, result: s::Type) -> s::Function {
+    let reg = L::Register;
+    let params: Vec<_> = (0..arity as u32).map(reg).collect();
+    let mut function = s::Function {
+        symbol: "int_op".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Int, result],
+        services: vec![], params: params.clone(), results: vec![result],
+        blocks: vec![s::Block { pc: 0, params }],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op, inputs: (0..arity as u32).collect(), output: Some(2),
+                immediate: s::Immediate::None },
+            s::Instruction::Ret(vec![2]),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    function
+}
+
+/// #827: machine code computes `+ - * %`, negation, comparisons, `& | ^ << >>` and `~` of two inline integers
+/// inline, as Tomato's does, and takes the exact helper for a BigInt operand, an overflow, `%` by 0 or -1, and
+/// a shift out of range. Every result equals the exact helper's on the same operands, at the edges of the inline
+/// range (±2⁶², where a word stops holding `2v + 1`) and beyond; a failure of the exact path (`%` by 0) fails
+/// the function.
+#[test]
+fn champ_int_operations_inline_match_the_exact_helper() {
+    use s::DataOp as D;
+    let edge = 1i128 << 62;
+    let values: Vec<i128> = vec![0, 1, -1, 2, 3, -7, 62, 63, 64, 100, (1 << 31) + 5, edge / 2 - 1, edge / 2,
+        -(edge / 2), edge - 1, -edge, edge, -edge - 1, 1_000_000_000_000_000_000_000_000, -(1 << 70)];
+    let arithmetic = [(D::IntAdd, runtime::INT_ADD), (D::IntSub, runtime::INT_SUB), (D::IntMul, runtime::INT_MUL),
+        (D::IntMod, runtime::INT_MOD)];
+    let comparisons = [D::IntEq, D::IntNe, D::IntLt, D::IntLe, D::IntGt, D::IntGe];
+    let bits = [D::IntAnd, D::IntOr, D::IntXor, D::IntShl, D::IntShr];
+    let mut cases: Vec<(D, usize, s::Type)> = arithmetic.iter().map(|&(op, _)| (op, 2, s::Type::Int)).collect();
+    cases.extend(comparisons.iter().map(|&op| (op, 2, s::Type::Bool)));
+    cases.extend(bits.iter().map(|&op| (op, 2, s::Type::Int)));
+    cases.extend([(D::IntNeg, 1, s::Type::Int), (D::IntNot, 1, s::Type::Int)]);
+    let mut checked = 0;
+    for (op, arity, result) in cases {
+        let source = s::Program { functions: vec![int_operation(op, arity, result)], ..s::Program::default() };
+        let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+        let mut ctx = context(&mut runtime);
+        let code = compile(&mut runtime, 0).unwrap();
+        let rights: Vec<i128> = match op {
+            D::IntShl | D::IntShr => vec![0, 1, 2, 30, 61, 62, 63, 64, 100],
+            _ if arity == 1 => vec![0],
+            _ => values.clone(),
+        };
+        for &left in &values {
+            for &right in &rights {
+                let (l, r) = (runtime.heap.big(left.into()), runtime.heap.big(right.into()));
+                // Operands and results stay rooted: the exact helpers may collect.
+                let root = |runtime: &mut Runtime, word: Word| if word != 0 && word & 1 == 0 && !result_is_bool(op) {
+                    runtime.constants.push((word, Repr::Ref));
+                };
+                root(&mut runtime, l);
+                root(&mut runtime, r);
+                ctx.status = OK;
+                ctx.failure = 0;
+                let machine = unsafe { invoke(code, &mut ctx, &[l, r][..arity]) };
+                let machine = (ctx.status, if ctx.status == OK { Some(machine) } else { None });
+                if let Some(word) = machine.1 {
+                    root(&mut runtime, word);
+                }
+                // The exact path on the same operands: Tomato's semantics.
+                let mut exact_ctx = context(&mut runtime);
+                let ctx_ptr: *mut Ctx = &mut exact_ctx;
+                let exact = match op {
+                    D::IntNeg => runtime::rt_int(ctx_ptr, runtime::INT_SUB, runtime.heap.int(0), l),
+                    _ if comparisons.contains(&op) => {
+                        let order = runtime::rt_int_order(ctx_ptr, l, r);
+                        let holds = match op {
+                            D::IntEq => order == 0, D::IntNe => order != 0, D::IntLt => order < 0,
+                            D::IntLe => order <= 0, D::IntGt => order > 0, _ => order >= 0,
+                        };
+                        Word::from(holds)
+                    }
+                    _ => match arithmetic.iter().find(|&&(candidate, _)| candidate == op) {
+                        Some(&(_, code)) => runtime::rt_int(ctx_ptr, code, l, r),
+                        None => crate::champ::machine::rt_machine_scalar(ctx_ptr, op.scalar_code().unwrap(), l,
+                            if arity == 1 { 0 } else { r }, 0),
+                    },
+                };
+                let exact = (exact_ctx.status, if exact_ctx.status == OK { Some(exact) } else { None });
+                let shown = |result: (u64, Option<Word>)| result.1.map(|word| if result_is_bool(op) {
+                    word.to_string()
+                } else {
+                    runtime.big_value(word).to_string()
+                });
+                assert_eq!((machine.0, shown(machine)), (exact.0, shown(exact)), "{op:?} {left} {right}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 2000, "{checked}");
+}
+
+fn result_is_bool(op: s::DataOp) -> bool {
+    use s::DataOp as D;
+    matches!(op, D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe)
+}
+
+/// A function of `params` (types) that returns `op` of them, a value of type `result`.
+fn data_function(op: s::DataOp, params: &[s::Type], result: s::Type) -> s::Program {
+    let reg = L::Register;
+    let locations: Vec<_> = (0..params.len() as u32).map(reg).collect();
+    let mut registers = params.to_vec();
+    registers.push(result);
+    let output = params.len() as u32;
+    let mut function = s::Function {
+        symbol: "data".into(), entry_abi: s::EntryAbi::Observation, registers,
+        services: vec![], params: locations.clone(), results: vec![result],
+        blocks: vec![s::Block { pc: 0, params: locations }],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op, inputs: (0..output).collect(), output: Some(output),
+                immediate: s::Immediate::None },
+            s::Instruction::Ret(vec![output]),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    s::Program { functions: vec![function], ..s::Program::default() }
+}
+
+/// #829: `length()` reads an ASCII string's length from its header, flat or a text chain (#255), and counts the
+/// characters of any other; `==` and `!=` decide the same string and strings of different byte lengths inline
+/// and compare the rest.
+#[test]
+fn champ_string_length_and_equality_fast_paths() {
+    let mut runtime = Runtime::new_champ(data_function(s::DataOp::StrLen, &[s::Type::Str], s::Type::Int), vec![])
+        .unwrap();
+    let mut ctx = context(&mut runtime);
+    let length = compile(&mut runtime, 0).unwrap();
+    let long = "a".repeat(300);
+    let wide = "ж".repeat(300);
+    let mut texts: Vec<(Word, String)> = ["", "hello", "живой", "naïve", "🦀 crab", "e\u{301}"].iter()
+        .map(|text| (runtime.heap.allocate_text(text), text.to_string())).collect();
+    for (part, more) in [(&long, "b"), (&wide, "ы")] {
+        let left = runtime.heap.allocate_text(part);
+        let right = runtime.heap.allocate_text(more);
+        let chain = runtime::rt_concat(&mut ctx, left, right);
+        texts.push((chain, format!("{part}{more}")));
+    }
+    for &(word, _) in &texts {
+        runtime.constants.push((word, Repr::Ref));
+    }
+    assert_ne!(runtime.heap.header_of(texts[1].0) & crate::heap::ASCII, 0, "an ASCII string is marked");
+    for (word, text) in &texts {
+        ctx.status = OK;
+        let counted = unsafe { invoke(length, &mut ctx, &[*word]) };
+        assert_eq!((ctx.status, runtime.small_or_big(counted)), (OK, Some(text.chars().count() as i64)), "{text:?}");
+    }
+    for op in [s::DataOp::StrEq, s::DataOp::StrNe] {
+        let mut runtime = Runtime::new_champ(data_function(op, &[s::Type::Str, s::Type::Str], s::Type::Bool),
+            vec![]).unwrap();
+        let mut ctx = context(&mut runtime);
+        let code = compile(&mut runtime, 0).unwrap();
+        let samples = ["", "abc", "abd", "abcd", "é", "ü", "e\u{301}", &long];
+        let words: Vec<Word> = samples.iter().map(|text| runtime.heap.allocate_text(text)).collect();
+        let copies: Vec<Word> = samples.iter().map(|text| runtime.heap.allocate_text(text)).collect();
+        for (i, left) in samples.iter().enumerate() {
+            for (j, right) in samples.iter().enumerate() {
+                for (l, r) in [(words[i], words[j]), (words[i], copies[j])] {
+                    ctx.status = OK;
+                    let flag = unsafe { invoke(code, &mut ctx, &[l, r]) };
+                    let equal = left == right;
+                    assert_eq!((ctx.status, flag), (OK, Word::from(equal == (op == s::DataOp::StrEq))),
+                        "{op:?} {left:?} {right:?}");
+                }
+            }
+        }
+    }
+}
+
+/// #829: `==` and `!=` of scalars compare by word: floats numerically (#314), so NaN differs from itself and 0.0
+/// equals -0.0; ints by value, also when an operand is a BigInt, which the structural helper compares.
+#[test]
+fn champ_scalar_equality_by_word() {
+    for op in [s::DataOp::ValEq, s::DataOp::ValNe] {
+        let eq = op == s::DataOp::ValEq;
+        let mut float = Runtime::new_champ(data_function(op, &[s::Type::Float, s::Type::Float], s::Type::Bool),
+            vec![]).unwrap();
+        let mut ctx = context(&mut float);
+        let code = compile(&mut float, 0).unwrap();
+        for (a, b, equal) in [(1.5, 1.5, true), (1.5, 2.0, false), (0.0, -0.0, true), (f64::NAN, f64::NAN, false),
+            (f64::INFINITY, f64::INFINITY, true)]
+        {
+            ctx.status = OK;
+            let flag = unsafe { invoke(code, &mut ctx, &[f64::to_bits(a), f64::to_bits(b)]) };
+            assert_eq!((ctx.status, flag), (OK, Word::from(equal == eq)), "{op:?} {a} {b}");
+        }
+        let mut int = Runtime::new_champ(data_function(op, &[s::Type::Int, s::Type::Int], s::Type::Bool), vec![])
+            .unwrap();
+        let mut ctx = context(&mut int);
+        let code = compile(&mut int, 0).unwrap();
+        let big = "123456789012345678901234567890";
+        for (a, b, equal) in [("7", "7", true), ("7", "8", false), (big, big, true), (big, "7", false),
+            ("-4611686018427387904", "-4611686018427387904", true)]
+        {
+            let (l, r) = (int.heap.big(a.parse().unwrap()), int.heap.big(b.parse().unwrap()));
+            for word in [l, r] {
+                if word & 1 == 0 {
+                    int.constants.push((word, Repr::Ref));
+                }
+            }
+            ctx.status = OK;
+            let flag = unsafe { invoke(code, &mut ctx, &[l, r]) };
+            assert_eq!((ctx.status, flag), (OK, Word::from(equal == eq)), "{op:?} {a} {b}");
+        }
+        let mut char_ = Runtime::new_champ(data_function(op, &[s::Type::Char, s::Type::Char], s::Type::Bool), vec![])
+            .unwrap();
+        let mut ctx = context(&mut char_);
+        let code = compile(&mut char_, 0).unwrap();
+        for (a, b) in [('a', 'a'), ('a', 'b'), ('ж', 'ж')] {
+            ctx.status = OK;
+            let flag = unsafe { invoke(code, &mut ctx, &[u64::from(a as u32), u64::from(b as u32)]) };
+            assert_eq!((ctx.status, flag), (OK, Word::from((a == b) == eq)), "{op:?} {a} {b}");
+        }
+    }
+}
+
 /// S1 data form: `left op right`, then a use of the result that would misread a failed helper's zero.
 fn s1_fallible(op: s::DataOp, result: s::Type, immediate: s::Immediate, use_op: s::DataOp) -> s::Function {
     let reg = L::Register;

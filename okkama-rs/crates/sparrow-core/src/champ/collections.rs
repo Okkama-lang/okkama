@@ -1,6 +1,9 @@
 //! SPB 17 maps, collection operations and unique builders on Tomato's heap payloads.
 //! Every helper reads its operation and operand types from the verified instruction at (function, pc),
-//! so machine code passes only words. Arrays stay flat: Champ's array.get reads elements in place.
+//! so machine code passes only words. Arrays take Tomato's persistent forms (#826, `ops::concat_arrays` and the
+//! rest): a chain of appends or prepends shares a buffer (#246, #247), a large slice is a view (#249), a chain of
+//! replacements a trie (#250). Machine code's array.get reads a flat array in place, a view one load further and
+//! a trie through a helper.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 use super::*;
 use super::helpers::{error, fail, stop};
@@ -229,29 +232,15 @@ fn collection(runtime: &mut Runtime, program: &s::Program, op: s::DataOp, types:
             runtime.heap.allocate_payload(Box::new(map))
         }
         D::ArrayConcat => {
-            let mut all = Vec::new();
-            for &part in words {
-                all.extend(items(runtime, part, result));
-            }
-            new_array(runtime, result, &all)
+            let bytes = result == s::Type::Bytes;
+            let element = if bytes { Repr::Raw } else { repr(s::element_type(result).expect("verified array.concat")) };
+            crate::ops::concat_arrays(runtime, element, bytes, words)
         }
         D::ArrayJoin => runtime.heap.allocate_join(words[0], words[1])
             .ok_or_else(|| "join: the result would pass the 4 GiB a string can hold".to_string())?,
-        D::ArraySlice => {
-            let all = items(runtime, words[0], types[0]);
-            let range = crate::ops::slice_bounds(runtime, all.len(), words[1], words[2])?;
-            new_array(runtime, result, &all[range])
-        }
-        D::ArrayRemove | D::ArrayReplace => {
-            let mut all = items(runtime, words[0], types[0]);
-            let at = position(words[1], all.len(), "Array index out of bounds")?;
-            if op == D::ArrayRemove {
-                all.remove(at);
-            } else {
-                all[at] = words[2];
-            }
-            new_array(runtime, result, &all)
-        }
+        D::ArraySlice => crate::ops::slice_array(runtime, words[0], words[1], words[2])?,
+        D::ArrayRemove => crate::ops::remove_at(runtime, words[0], words[1])?,
+        D::ArrayReplace => crate::ops::replace_at(runtime, words[0], words[1], words[2])?,
         D::ArrayDifference => {
             let element = s::element_type(result).expect("verified array.difference");
             let mut excluded = Vec::new();

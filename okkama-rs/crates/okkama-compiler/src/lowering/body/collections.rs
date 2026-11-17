@@ -1259,11 +1259,8 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             _ => return Ok(None),
         };
         let map = matches!(builder, Type::MapBuilder(..));
-        let mut allowed = 0;
-        let linear = linear_block(&functional.body, acc, map, &mut allowed)
-            && thir::local_mentions(&functional.body, acc) == allowed;
         let _ = span;
-        Ok(linear.then_some(builder))
+        Ok(thir::linear_accumulator(&functional.body, acc, map).then_some(builder))
     }
 
     /// `reduce` over a builder: the start is copied into it once, the block
@@ -1760,57 +1757,5 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
             Type::Array(Box::new(element_type)),
             span,
         )))
-    }
-}
-
-/// The block's value is the accumulator (see `linear_accumulator`); counts
-/// the mentions of `acc` it accounts for.
-fn linear_block(block: &thir::Block, acc: LocalId, map: bool, allowed: &mut usize) -> bool {
-    match block.stmts.last().map(|stmt| &stmt.kind) {
-        Some(thir::StmtKind::Expr(value)) => linear_value(value, acc, map, allowed),
-        // `throw`, `return`, `panic`: the block does not produce a value.
-        Some(thir::StmtKind::Throw(_) | thir::StmtKind::Return(_) | thir::StmtKind::Rethrow) => true,
-        _ => false,
-    }
-}
-
-fn linear_value(expr: &thir::Expr, acc: LocalId, map: bool, allowed: &mut usize) -> bool {
-    use thir::ExprKind;
-    match &expr.kind {
-        ExprKind::Local(local) if *local == acc => {
-            *allowed += 1;
-            true
-        }
-        ExprKind::Binary { op, .. } if *op == if map { thir::BinaryOp::MapMerge } else { thir::BinaryOp::ArrayConcat } => {
-            let mut parts = Vec::new();
-            flatten_concat(*op, expr, &mut parts);
-            let starts_with_acc = matches!(&parts[0].kind, ExprKind::Local(local) if *local == acc);
-            // A map grows by literal entries: a builder has no merge.
-            let literals = !map || parts[1..].iter().all(|part| matches!(part.kind, ExprKind::Map(_)));
-            if starts_with_acc && literals {
-                *allowed += 1;
-            }
-            starts_with_acc && literals
-        }
-        ExprKind::If { then_block, else_block: Some(else_block), .. } => {
-            linear_block(then_block, acc, map, allowed) && linear_block(else_block, acc, map, allowed)
-        }
-        ExprKind::Match(found) if found.else_block.is_some() || found.exhaustive => {
-            found.cases.iter().all(|(_, block)| linear_block(block, acc, map, allowed))
-                && found.else_block.as_ref().is_none_or(|block| linear_block(block, acc, map, allowed))
-        }
-        ExprKind::Block(block) => linear_block(block, acc, map, allowed),
-        ExprKind::Panic(_) | ExprKind::Unreachable => true,
-        _ => false,
-    }
-}
-
-fn flatten_concat<'e>(op: thir::BinaryOp, expr: &'e thir::Expr, parts: &mut Vec<&'e thir::Expr>) {
-    match &expr.kind {
-        thir::ExprKind::Binary { op: inner, left, right } if *inner == op => {
-            flatten_concat(op, left, parts);
-            flatten_concat(op, right, parts);
-        }
-        _ => parts.push(expr),
     }
 }

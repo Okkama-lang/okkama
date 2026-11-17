@@ -67,7 +67,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             ctx, io, owned, body, frame_map: machine.frames[index].as_ref(), schedules: &machine.schedules[index],
             storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
-            shielded_entries: &machine.shielded_entries,
+            shielded_entries: &machine.shielded_entries, atomic: &machine.atomic, failed: None,
             constants: &mut runtime.constants, heap: &mut runtime.heap, globals: machine.globals.clone(),
         };
         let args = emit.builder.block_params(entry).to_vec();
@@ -187,6 +187,11 @@ struct Emit<'a, 'b> {
     builder: &'a mut FunctionBuilder<'b>,
     jit: &'a mut Jit,
     program: &'a s::Program,
+    /// The P1 Atomic operation of each function (#830).
+    atomic: &'a [Option<machine::AtomicOp>],
+    /// Where the exact path of an inline data operation goes when its helper failed or stopped (#827): the
+    /// failure block of an `evaluate`, which takes its unwind outcome; None for a plain data form, which stops.
+    failed: Option<Block>,
     source: &'a s::Function,
     index: usize,
     /// The runtime's invocation table: a boxed slice, so its code words keep their addresses.
@@ -233,6 +238,327 @@ impl Emit<'_, '_> {
 
     fn store(&mut self, pointer: Value, offset: usize, value: Value) {
         self.builder.ins().store(MEMORY, value, pointer, offset as i32);
+    }
+
+    /// An Atomic observation (#830), inline over the cell `[header, value, closed]` as Tomato's machine code:
+    /// `closed` reads the flag; `close` sets it and unbinds the value, as `p1::invoke` does; `value` reads the
+    /// value of an open cell. A closed cell's `value` takes the call, which throws `AtomicClosed`.
+    fn atomic_observation(&mut self, op: machine::AtomicOp, target: usize, values: &[Value]) -> Value {
+        let cell = values[0];
+        match op {
+            machine::AtomicOp::Closed => {
+                let flag = self.load(cell, 16);
+                let set = self.builder.ins().icmp_imm_u(IntCC::NotEqual, flag, 0);
+                self.builder.ins().uextend(types::I64, set)
+            }
+            machine::AtomicOp::Close => {
+                let one = self.iconst(1);
+                self.store(cell, 16, one);
+                let unbound = self.iconst(crate::word::UNBOUND);
+                self.store(cell, 8, unbound);
+                self.iconst(0)
+            }
+            _ => {
+                let closed = self.load(cell, 16);
+                let (open, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+                    self.builder.create_block());
+                self.builder.append_block_param(done, types::I64);
+                self.builder.ins().brif(closed, slow, &[], open, &[]);
+                self.builder.switch_to_block(open);
+                let value = self.load(cell, 8);
+                self.builder.ins().jump(done, &[value.into()]);
+                self.builder.switch_to_block(slow);
+                let thrown = self.observe(target, values);
+                self.builder.ins().jump(done, &[thrown.into()]);
+                self.builder.switch_to_block(done);
+                self.builder.block_params(done)[0]
+            }
+        }
+    }
+
+    /// `text.length()` (#829): an ASCII string's length in characters is its byte length, in the header; any
+    /// other string counts its characters in the helper.
+    fn text_length(&mut self, text: Value) -> Value {
+        let header = self.load(text, 0);
+        let ascii = self.builder.ins().band_imm_u(header, crate::heap::ASCII as i64);
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(ascii, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        let length = self.builder.ins().ushr_imm_u(header, 32);
+        let doubled = self.builder.ins().ishl_imm_u(length, 1);
+        let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+        self.builder.ins().jump(done, &[tagged.into()]);
+        self.builder.switch_to_block(slow);
+        let counted = self.call("champ_machine_text_len", &[self.ctx, text]).expect("a length");
+        self.builder.ins().jump(done, &[counted.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// `==` and `!=` of strings (#829): the same string, or strings of different byte lengths, decide inline;
+    /// the rest compares in `champ_machine_text_order`.
+    fn text_equality(&mut self, op: s::DataOp, words: &[Value]) -> Value {
+        let equal = i64::from(op == s::DataOp::StrEq);
+        let (l, r) = (words[0], words[1]);
+        let (compare, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        let same = self.builder.ins().icmp(IntCC::Equal, l, r);
+        let yes = self.builder.ins().iconst(types::I64, equal);
+        self.builder.ins().brif(same, done, &[yes.into()], compare, &[]);
+        self.builder.switch_to_block(compare);
+        let (hl, hr) = (self.load(l, 0), self.load(r, 0));
+        let (nl, nr) = (self.builder.ins().ushr_imm_u(hl, 32), self.builder.ins().ushr_imm_u(hr, 32));
+        let differ = self.builder.ins().icmp(IntCC::NotEqual, nl, nr);
+        let no = self.builder.ins().iconst(types::I64, 1 - equal);
+        self.builder.ins().brif(differ, done, &[no.into()], slow, &[]);
+        self.builder.switch_to_block(slow);
+        let order = self.call("champ_machine_text_order", &[self.ctx, l, r]).expect("an order");
+        let condition = if equal == 1 { IntCC::Equal } else { IntCC::NotEqual };
+        let flag = self.builder.ins().icmp_imm_s(condition, order, 0);
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// `==` and `!=` of a scalar type (#829), as Tomato's machine code: by word; a float numerically (#314), so
+    /// NaN is not equal to itself; two inline integers by word, any BigInt operand in the structural helper, whose
+    /// failure or stop leaves the function.
+    fn scalar_equality(&mut self, op: s::DataOp, ty: s::Type, words: &[Value]) -> Value {
+        let eq = op == s::DataOp::ValEq;
+        let (l, r) = (words[0], words[1]);
+        let flag = if ty == s::Type::Float {
+            let left = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), l);
+            let right = self.builder.ins().bitcast(types::F64, MemFlagsData::new(), r);
+            self.builder.ins().fcmp(if eq { FloatCC::Equal } else { FloatCC::NotEqual }, left, right)
+        } else {
+            self.builder.ins().icmp(if eq { IntCC::Equal } else { IntCC::NotEqual }, l, r)
+        };
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        if ty != s::Type::Int {
+            return flag;
+        }
+        let both = self.builder.ins().band(l, r);
+        let (_, slow, done) = self.int_paths(both);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(slow);
+        let result = self.collection_exact(words);
+        self.builder.ins().jump(done, &[result.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// The exact path of an inline int operation (#827): the helper, then leave the function on a failure or a
+    /// stop, as a failing data form does.
+    fn exact(&mut self, helper: &str, arguments: &[Value]) -> Value {
+        let value = self.call(helper, arguments).expect("the exact helper returns a word");
+        self.leave_unless_ok();
+        value
+    }
+
+    /// The collection helper as the exact path of an inline operation (#829), checked like `exact`.
+    fn collection_exact(&mut self, words: &[Value]) -> Value {
+        let value = self.collection(words);
+        self.leave_unless_ok();
+        value
+    }
+
+    /// When the last helper failed or stopped, go where the instruction handles it (`failed`): an `evaluate`'s
+    /// failure block, or the stop of a plain data form, with the failure (or the stop) still set.
+    fn leave_unless_ok(&mut self) {
+        let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+        let ok = self.builder.create_block();
+        let failed = self.failed.unwrap_or(self.stop);
+        self.builder.ins().brif(status, failed, &[], ok, &[]);
+        self.builder.switch_to_block(ok);
+    }
+
+    /// Fast, slow and done blocks of an int operation on `tags`: the fast block when its low bit is set (every
+    /// operand an inline integer, `2v + 1`), the slow one otherwise. Done takes the result.
+    fn int_paths(&mut self, tags: Value) -> (Block, Block, Block) {
+        let small = self.builder.ins().band_imm_u(tags, 1);
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(small, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        (fast, slow, done)
+    }
+
+    /// `+ - * %` and negation of ints, as Tomato's machine code computes them (#827): two inline integers
+    /// compute inline with an overflow check; a BigInt operand, an overflow and `%` by 0 or -1 take the exact
+    /// helper.
+    fn int_arithmetic(&mut self, op: s::DataOp, words: &[Value]) -> Value {
+        use s::DataOp as D;
+        let code = match op {
+            D::IntAdd => runtime::INT_ADD,
+            D::IntSub | D::IntNeg => runtime::INT_SUB,
+            D::IntMul => runtime::INT_MUL,
+            _ => runtime::INT_MOD,
+        };
+        // `-x` is `0 - x`; the word 1 is the inline 0.
+        let (l, r) = if op == D::IntNeg { (self.iconst(1), words[0]) } else { (words[0], words[1]) };
+        let both = self.builder.ins().band(l, r);
+        let (_, slow, done) = self.int_paths(both);
+        if code == runtime::INT_MOD {
+            // Divisors 0 and -1 go to the exact path.
+            let divisor = self.builder.ins().sshr_imm_u(r, 1);
+            let shifted = self.builder.ins().iadd_imm_s(divisor, 1);
+            let special = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThanOrEqual, shifted, 1);
+            let commit = self.builder.create_block();
+            self.builder.ins().brif(special, slow, &[], commit, &[]);
+            self.builder.switch_to_block(commit);
+            let dividend = self.builder.ins().sshr_imm_u(l, 1);
+            let remainder = self.builder.ins().srem(dividend, divisor);
+            let doubled = self.builder.ins().ishl_imm_u(remainder, 1);
+            let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+            self.builder.ins().jump(done, &[tagged.into()]);
+        } else {
+            // With `r - 1 = 2b`: `(2a + 1) ± 2b` and `a · 2b + 1` are the tagged results.
+            let even = self.builder.ins().iadd_imm_s(r, -1);
+            let (value, overflow) = match code {
+                runtime::INT_ADD => self.builder.ins().sadd_overflow(l, even),
+                runtime::INT_SUB => self.builder.ins().ssub_overflow(l, even),
+                _ => {
+                    let half = self.builder.ins().sshr_imm_u(l, 1);
+                    let (product, overflow) = self.builder.ins().smul_overflow(half, even);
+                    (self.builder.ins().bor_imm_u(product, 1), overflow)
+                }
+            };
+            let commit = self.builder.create_block();
+            self.builder.ins().brif(overflow, slow, &[], commit, &[]);
+            self.builder.switch_to_block(commit);
+            self.builder.ins().jump(done, &[value.into()]);
+        }
+        self.builder.switch_to_block(slow);
+        let opcode = self.iconst(code);
+        let result = self.exact("int", &[self.ctx, opcode, l, r]);
+        self.builder.ins().jump(done, &[result.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// An int comparison (#827): two inline integers compare as words, since `2v + 1` keeps the order; a
+    /// BigInt operand takes `int_order`.
+    fn int_compare(&mut self, op: s::DataOp, words: &[Value]) -> Value {
+        use s::DataOp as D;
+        let condition = match op {
+            D::IntEq => IntCC::Equal,
+            D::IntNe => IntCC::NotEqual,
+            D::IntLt => IntCC::SignedLessThan,
+            D::IntLe => IntCC::SignedLessThanOrEqual,
+            D::IntGt => IntCC::SignedGreaterThan,
+            _ => IntCC::SignedGreaterThanOrEqual,
+        };
+        let (l, r) = (words[0], words[1]);
+        let both = self.builder.ins().band(l, r);
+        let (_, slow, done) = self.int_paths(both);
+        let flag = self.builder.ins().icmp(condition, l, r);
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(slow);
+        let order = self.call("int_order", &[self.ctx, l, r]).expect("int_order returns an order");
+        let flag = self.builder.ins().icmp_imm_s(condition, order, 0);
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// `& | ^ << >>` and `~` of ints, as Tomato's machine code computes them (#827): inline integers stay
+    /// inline; a BigInt operand, a shift by 62 or more, and a left shift that loses a bit or leaves the inline
+    /// range take the scalar helper.
+    fn int_bits(&mut self, op: s::DataOp, words: &[Value]) -> Result<Value, Error> {
+        use s::DataOp as D;
+        let tags = if op == D::IntNot { words[0] } else { self.builder.ins().band(words[0], words[1]) };
+        let (_, slow, done) = self.int_paths(tags);
+        let value = match op {
+            // `!(2v + 1) | 1 == 2(!v) + 1`.
+            D::IntNot => {
+                let inverted = self.builder.ins().bnot(words[0]);
+                Some(self.builder.ins().bor_imm_u(inverted, 1))
+            }
+            D::IntAnd => Some(self.builder.ins().band(words[0], words[1])),
+            D::IntOr => Some(self.builder.ins().bor(words[0], words[1])),
+            D::IntXor => {
+                let x = self.builder.ins().bxor(words[0], words[1]);
+                Some(self.builder.ins().bor_imm_u(x, 1))
+            }
+            _ => None,
+        };
+        if let Some(value) = value {
+            self.builder.ins().jump(done, &[value.into()]);
+        } else {
+            let v = self.builder.ins().sshr_imm_u(words[0], 1);
+            let n = self.builder.ins().sshr_imm_u(words[1], 1);
+            let in_range = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThan, n, 62);
+            let commit = self.builder.create_block();
+            self.builder.ins().brif(in_range, commit, &[], slow, &[]);
+            self.builder.switch_to_block(commit);
+            if op == D::IntShl {
+                // No bit may be lost: shifting back gives the value, and the result still fits an inline integer.
+                let shifted = self.builder.ins().ishl(v, n);
+                let tagged = self.builder.ins().ishl_imm_u(shifted, 1);
+                let tagged = self.builder.ins().bor_imm_u(tagged, 1);
+                let back = self.builder.ins().sshr(shifted, n);
+                let same = self.builder.ins().icmp(IntCC::Equal, back, v);
+                let untagged = self.builder.ins().sshr_imm_u(tagged, 1);
+                let fits = self.builder.ins().icmp(IntCC::Equal, untagged, shifted);
+                let ok = self.builder.ins().band(same, fits);
+                let exact = self.builder.create_block();
+                self.builder.ins().brif(ok, exact, &[], slow, &[]);
+                self.builder.switch_to_block(exact);
+                self.builder.ins().jump(done, &[tagged.into()]);
+            } else {
+                let shifted = self.builder.ins().sshr(v, n);
+                let tagged = self.builder.ins().ishl_imm_u(shifted, 1);
+                let tagged = self.builder.ins().bor_imm_u(tagged, 1);
+                self.builder.ins().jump(done, &[tagged.into()]);
+            }
+        }
+        self.builder.switch_to_block(slow);
+        let code = op.scalar_code().ok_or_else(|| Error("Champ int operation without a scalar code".into()))?;
+        let code = self.iconst(code);
+        let zero = self.iconst(0);
+        let right = words.get(1).copied().unwrap_or(zero);
+        let result = self.exact("champ_machine_scalar", &[self.ctx, code, words[0], right, zero]);
+        self.builder.ins().jump(done, &[result.into()]);
+        self.builder.switch_to_block(done);
+        Ok(self.builder.block_params(done)[0])
+    }
+
+    /// Element `position` (in bounds) of a word array whose header is `header`, as Tomato's machine code reads
+    /// it (#826): one branch on two header bits keeps a flat array on the plain load; a view (`heap::SHARED`,
+    /// #246, #249) reads from the address of its first element, one load more; a trie (`heap::TRIE`, #250)
+    /// calls `trie_get`.
+    fn element(&mut self, array: Value, header: Value, position: Value) -> Value {
+        let special = self.builder.ins().band_imm_u(header, (crate::heap::SHARED | crate::heap::TRIE) as i64);
+        let (flat, other, view, trie, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(special, other, &[], flat, &[]);
+        self.builder.switch_to_block(flat);
+        let offset = self.builder.ins().ishl_imm_u(position, 3);
+        let address = self.builder.ins().iadd(array, offset);
+        let value = self.load(address, 8);
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(other);
+        let shared = self.builder.ins().band_imm_u(header, crate::heap::SHARED as i64);
+        self.builder.ins().brif(shared, view, &[], trie, &[]);
+        self.builder.switch_to_block(view);
+        let first = self.load(array, 8);
+        let offset = self.builder.ins().ishl_imm_u(position, 3);
+        let address = self.builder.ins().iadd(first, offset);
+        let value = self.load(address, 0);
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(trie);
+        let value = self.call("trie_get", &[self.ctx, array, position]).expect("trie_get returns the element");
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
     }
 
     fn offset(&self, location: L) -> usize {
@@ -558,7 +884,9 @@ impl Emit<'_, '_> {
             }
             s::Instruction::Data { op, inputs, output, immediate } => {
                 self.data(*op, inputs, *output, immediate)?;
-                if sets_status(*op) {
+                let scalar = matches!(op, s::DataOp::ValEq | s::DataOp::ValNe)
+                    && scalar_equality(self.source.registers[inputs[0] as usize]);
+                if sets_status(*op) && !scalar {
                     // A fallible data form loads only without services (S1). Leave exactly as a failing
                     // call without an unwind outcome does, with the failure (or the stop) still set.
                     let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
@@ -616,15 +944,20 @@ impl Emit<'_, '_> {
                 let inputs = locations.iter().map(|location| match location {
                     L::Register(id) => *id, _ => unreachable!("verified scalar operands"),
                 }).collect::<Vec<_>>();
-                let value = self.data_value(evaluation.op, &inputs, evaluation.result, &evaluation.immediate)?;
+                // An inline operation's exact path (#827) leaves to `failure` too, so it reads the status itself.
+                let failure = self.builder.create_block();
+                let outer = self.failed.replace(failure);
+                let value = self.data_value(evaluation.op, &inputs, evaluation.result, &evaluation.immediate);
+                self.failed = outer;
+                let value = value?;
                 let s::Flow::Outcomes(outcomes) = flow else { unreachable!() };
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
-                let failure = self.builder.create_block();
                 self.builder.ins().brif(status, failure, &[], success, &[]);
                 self.builder.switch_to_block(success);
                 self.edge(&outcomes[0].edge, &[vec![value]]);
                 self.builder.switch_to_block(failure);
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
                 let unwind = self.builder.create_block();
                 self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
@@ -680,9 +1013,7 @@ impl Emit<'_, '_> {
                     let pointer = self.builder.ins().iadd(array, position);
                     self.builder.ins().uload8(types::I64, MEMORY, pointer, 8)
                 } else {
-                    let offset = self.builder.ins().ishl_imm_u(position, 3);
-                    let pointer = self.builder.ins().iadd(array, offset);
-                    self.load(pointer, 8)
+                    self.element(array, header, position)
                 };
                 self.edge(&outcomes[0].edge, &[vec![value]]);
                 self.builder.switch_to_block(outside);
@@ -816,7 +1147,13 @@ impl Emit<'_, '_> {
                         self.builder.ins().jump(self.blocks[0], &[]);
                         return Ok(());
                     }
-                    (self.observe(target, &values), has_result)
+                    let inline = self.atomic[target].filter(|op| {
+                        matches!(op, machine::AtomicOp::Value | machine::AtomicOp::Closed | machine::AtomicOp::Close)
+                    }).filter(|_| self.program.functions[target].entry_abi == s::EntryAbi::Observation);
+                    match inline {
+                        Some(op) => (self.atomic_observation(op, target, &values), has_result),
+                        None => (self.observe(target, &values), has_result),
+                    }
                 };
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
@@ -1342,13 +1679,11 @@ impl Emit<'_, '_> {
             }
             D::Undef => self.iconst(0),
             D::StrConcat => self.call("concat", &[self.ctx, words[0], words[1]]).unwrap(),
-            D::StrLen => self.call("champ_machine_text_len", &[self.ctx, words[0]]).unwrap(),
-            D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe
-                | D::StrEq | D::StrNe | D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
-                let helper = if matches!(op, D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe) {
-                    "int_order"
-                } else { "champ_machine_text_order" };
-                let order = self.call(helper, &[self.ctx, words[0], words[1]]).unwrap();
+            D::StrLen => self.text_length(words[0]),
+            D::StrEq | D::StrNe => self.text_equality(op, &words),
+            D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe => self.int_compare(op, &words),
+            D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
+                let order = self.call("champ_machine_text_order", &[self.ctx, words[0], words[1]]).unwrap();
                 let condition = match op {
                     D::IntEq | D::StrEq => IntCC::Equal,
                     D::IntNe | D::StrNe => IntCC::NotEqual,
@@ -1369,6 +1704,9 @@ impl Emit<'_, '_> {
                 self.call("champ_machine_range", &[self.ctx, kind, words[0], right, inclusive]).unwrap()
             }
             D::ArrayNew if ty == s::Type::Bytes => self.collection(&words),
+            D::ValEq | D::ValNe if scalar_equality(self.source.registers[inputs[0] as usize]) => {
+                self.scalar_equality(op, self.source.registers[inputs[0] as usize], &words)
+            }
             D::ValEq | D::ValNe if !matches!(self.source.registers[inputs[0] as usize], s::Type::Object(_)) => {
                 self.collection(&words)
             }
@@ -1435,23 +1773,8 @@ impl Emit<'_, '_> {
                 self.store(words[0], (*field as usize + 1) * 8, words[1]);
                 words[0]
             }
-            D::IntAdd | D::IntSub | D::IntMul | D::IntMod | D::IntNeg => {
-                let op = match op {
-                    D::IntAdd => runtime::INT_ADD,
-                    D::IntSub => runtime::INT_SUB,
-                    D::IntMul => runtime::INT_MUL,
-                    D::IntMod => runtime::INT_MOD,
-                    _ => runtime::INT_SUB,
-                };
-                let opcode = self.iconst(op);
-                let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
-                let (left, right) = if op == runtime::INT_SUB && words.len() == 1 {
-                    (self.iconst(1), words[0])
-                } else {
-                    (words[0], right)
-                };
-                self.call("int", &[self.ctx, opcode, left, right]).unwrap()
-            }
+            D::IntAdd | D::IntSub | D::IntMul | D::IntMod | D::IntNeg => self.int_arithmetic(op, &words),
+            D::IntAnd | D::IntOr | D::IntXor | D::IntShl | D::IntShr | D::IntNot => self.int_bits(op, &words)?,
             D::Convert => {
                 let from = self.source.registers[inputs[0] as usize];
                 let codes = machine::scalar_code(from).zip(machine::scalar_code(ty))
@@ -1598,10 +1921,11 @@ impl Emit<'_, '_> {
 }
 
 /// Data helpers that can return with a non-OK status: an application failure (`DataOp::fallible`)
-/// or a terminal stop such as an exhausted memory budget. Their result is then not a value.
+/// or a terminal stop such as an exhausted memory budget. Their result is then not a value. An inline int
+/// operation (`inline_int`) checks the status in its exact path only.
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
-    matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
+    !inline_int(op) && matches!(op, D::RangeNew | D::Convert | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
         | D::VariantGet | D::RoleNarrow | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues
         | D::MapKeyAt
         | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
@@ -1609,6 +1933,20 @@ fn sets_status(op: s::DataOp) -> bool {
         | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
         || op.scalar_code().is_some() && !inline_scalar(op)
+}
+
+/// Value equality that machine code decides by word, as Tomato's does (#829): scalars, and ints whose exact path
+/// checks the status itself.
+fn scalar_equality(ty: s::Type) -> bool {
+    matches!(ty, s::Type::Int | s::Type::Float | s::Type::Byte | s::Type::Char | s::Type::Bool)
+}
+
+/// Int operations that machine code computes inline for two inline integers, as Tomato's does (#827); the
+/// exact helper is their slow path, which checks the status itself.
+fn inline_int(op: s::DataOp) -> bool {
+    use s::DataOp as D;
+    matches!(op, D::IntAdd | D::IntSub | D::IntMul | D::IntMod | D::IntNeg | D::IntAnd | D::IntOr | D::IntXor
+        | D::IntShl | D::IntShr | D::IntNot)
 }
 
 /// Scalar family operations that machine code computes without a helper.
