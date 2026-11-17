@@ -730,3 +730,61 @@ async main() is int {
 }
 "#, "4: 7 200 0 255\n");
 }
+
+/// #848: an async helper that takes an array of Futures (its entry packet carries their entries, PR-B2) binds an
+/// element with `let` in a nested scope (a block, an `if`) and awaits it. The element is a borrow: the nested scope
+/// admits nothing it must settle dynamically. Full verification accepts both.
+#[test]
+fn a_helper_awaits_a_bound_element_in_a_nested_scope() {
+    let pre = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Now { Now(); async named(name is string) is string { name; } }
+"#;
+    for body in [
+        "{ let ready = inputs[0]; Stdout().writeln(await ready); }",
+        "if inputs.size() > 0 { let ready = inputs[0]; Stdout().writeln(await ready); }",
+    ] {
+        let source = format!("{pre}object Drain {{ Drain();
+    async run(inputs is @Future<string>) is int {{
+        {body}
+        0;
+    }} }}
+async main() is int {{
+    let inputs is @Future<string> = [Now().named(\"a\")];
+    Stdout().writeln(\"left \" + (await Drain().run(inputs)).string());
+    0;
+}}
+");
+        for mode in [VerifyMode::Structural, VerifyMode::Full] {
+            let run = run_source_with(&source, mode).unwrap_or_else(|error| panic!("{mode:?} {body}: {error}"));
+            assert_eq!((run.stdout.as_str(), run.result), ("a\nleft 0\n", Ok(0)), "{mode:?} {body}");
+        }
+    }
+}
+
+/// #848: a helper drains a completion stream it borrows in a loop, binding each completion with `let`.
+#[test]
+fn a_helper_drains_a_stream_binding_each_completion() {
+    expect_program(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/collect" take FutureCompletions;
+object Now { Now(); async named(name is string) is string { name; } }
+object Drain {
+    Drain();
+    async run(stream is FutureCompletions<string>) is int {
+        loop {
+            last if stream.remaining_count() == 0;
+            let ready = await stream.completion();
+            Stdout().writeln("got " + (await ready));
+        }
+        stream.remaining_count();
+    }
+}
+async main() is int {
+    let inputs is @Future<string> = [Now().named("a"), Now().named("b")];
+    let stream is FutureCompletions<string> = FutureCompletions(origins: inputs);
+    Stdout().writeln("left " + (await Drain().run(stream)).string());
+    0;
+}
+"#, "got a\ngot b\nleft 0\n");
+}

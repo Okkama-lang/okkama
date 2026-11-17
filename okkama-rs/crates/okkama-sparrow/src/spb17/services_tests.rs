@@ -584,3 +584,54 @@ fn an_inputs_packet_carries_entries_only_into_a_body_that_can_take_them() {
     reject_with(&returned(Make::Rehomed, Caller::Feed { feed: true }, Some(Dynamic::AfterStatic)),
         services::FUTURE_INPUT, "inputs packet that may carry service entries");
 }
+
+/// #848: an entry packet's entries accepted into a scope (`admitted` false: `own.accept`, the bound journal) or
+/// admitted into it (`own.admit`), then a split of that scope whose selection reaches a Future, admissible when
+/// `filtered`, and the selected packet admitted into a nested scope. Returns the program and the nested close's pc.
+fn split_into_block(admitted: bool, filtered: bool) -> (Program, u32) {
+    let mut b = Body::new("split", EntryAbi::Owned, vec![]);
+    let input = b.service(K::Packet);
+    let future = b.register(FUTURE_INT);
+    b.f.params = vec![input, future];
+    b.f.proofs.entry = Some(EntryContract::default());
+    b.block("entry", &[input, future]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(0), A::Boundary(0)], K::ScopeState);
+    let q1 = b.emit(if admitted { O::OwnAdmit } else { O::OwnAccept }, vec![l(q0), l(input)], K::ScopeState);
+    let selection = b.selection();
+    b.f.proofs.selections[selection as usize].locations = vec![future];
+    let mut arguments = vec![l(q1), A::Selection(selection)];
+    if filtered {
+        arguments.push(A::Flag(true));
+    }
+    b.outcomes(O::ScopeSplit, arguments, vec![(Tag::Normal, "split", vec![p(0), p(1), p(2)]),
+        (Tag::Unwind, "failed", vec![p(0), p(1)])]);
+    let [state, selected, deps] = [b.service(K::ScopeState), b.service(K::Packet), b.service(K::Deps)];
+    b.block("split", &[state, selected, deps]);
+    let n0 = b.emit(O::ScopeBegin, vec![A::Scope(1), A::Boundary(1)], K::ScopeState);
+    let n1 = b.emit(O::OwnAdmit, vec![l(n0), l(selected)], K::ScopeState);
+    let close = b.pc();
+    b.emit(O::CleanupBegin, vec![l(n1), A::Boundary(1), A::Envelope(0)], K::Cleanup);
+    b.f.code.push(Instruction::Unreachable);
+    let [unwound, failure] = [b.service(K::ScopeState), b.register(Type::Failure)];
+    b.block("failed", &[unwound, failure]);
+    b.f.code.push(Instruction::Unreachable);
+    let mut p = program(vec![b.finish_unchecked()], vec![], None);
+    p.tables.scopes = vec![Scope { function: 0, parent: None, boundary: 0 },
+        Scope { function: 0, parent: Some(0), boundary: 1 }];
+    p.tables.boundaries = vec![Boundary { scope: 0 }, Boundary { scope: 1 }];
+    (p, close)
+}
+
+/// #848 (Fable's ruling): an admissible split never selects a bound entry, so a selection from a scope whose entries
+/// were only accepted carries none, and the nested scope that admits it need not settle entries dynamically. A
+/// scope that admitted the entries, or a split without the admission filter, still passes them on.
+#[test]
+fn an_admissible_selection_of_accepted_entries_carries_none() {
+    let admits = |admitted, filtered| {
+        let (p, close) = split_into_block(admitted, filtered);
+        services::admitting_closes(&p, &p.functions[0]).unwrap().contains(&close)
+    };
+    assert!(!admits(false, true), "accepted entries, admissible selection");
+    assert!(admits(true, true), "admitted entries, admissible selection");
+    assert!(admits(false, false), "accepted entries, unfiltered selection");
+}

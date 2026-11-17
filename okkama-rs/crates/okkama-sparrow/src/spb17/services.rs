@@ -344,11 +344,16 @@ pub(crate) fn entry_carries(p: &Program, f: &Function) -> bool {
 pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32>, Error> {
     let resumes = resumes(f);
     let mut saved = BTreeMap::<u32, Vec<bool>>::new();
+    let mut saved_admitted = BTreeMap::<u32, Vec<bool>>::new();
     let mut closes = BTreeSet::new();
-    let join = |previous: &mut Carriers, next: &Carriers| {
-        let before = previous.len();
-        previous.extend(next.iter().copied());
-        previous.len() != before
+    // Two facts per location (#848): whether it may carry service entries, and whether those may include entries a
+    // scope admitted. `own.accept` puts the entry packet's entries in the bound journal (PR-B2), and an admissible
+    // `scope.split` never selects a bound entry, so its selection carries only what the state admitted.
+    let join = |previous: &mut (Carriers, Carriers), next: &(Carriers, Carriers)| {
+        let before = (previous.0.len(), previous.1.len());
+        previous.0.extend(next.0.iter().copied());
+        previous.1.extend(next.1.iter().copied());
+        (previous.0.len(), previous.1.len()) != before
     };
     let carries = entry_carries(p, f);
     let start: Carriers = if carries && p.frame_layout(f).is_none() {
@@ -356,21 +361,25 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
     } else {
         Carriers::new()
     };
-    forward(f, start, join, |pc, state| {
+    forward(f, (start.clone(), start), join, |pc, state| {
         let mut out = state.clone();
         let mut successors = Vec::new();
         let mut revisit = Vec::new();
+        let edge = |edge: &Edge, produced: &[bool], admitted: &[bool]| {
+            (assign(&state.0, edge, produced), assign(&state.1, edge, admitted))
+        };
         match &f.code[pc] {
             Instruction::Data { .. } => successors.push((pc + 1, out)),
-            Instruction::Br(edge) => successors.push((edge.target_pc as usize, assign(state, edge, &[]))),
+            Instruction::Br(target) => successors.push((target.target_pc as usize, edge(target, &[], &[]))),
             Instruction::Cond { yes, no, .. } => {
-                successors.push((yes.target_pc as usize, assign(state, yes, &[])));
-                successors.push((no.target_pc as usize, assign(state, no, &[])));
+                successors.push((yes.target_pc as usize, edge(yes, &[], &[])));
+                successors.push((no.target_pc as usize, edge(no, &[], &[])));
             }
             Instruction::Ret(_) | Instruction::Raise(_) | Instruction::Unreachable => {}
             Instruction::Champ { op, arguments, flow } => {
                 let operands = locations(arguments);
-                let ins = operands.iter().map(|location| state.contains(location)).collect::<Vec<_>>();
+                let ins = operands.iter().map(|location| state.0.contains(location)).collect::<Vec<_>>();
+                let admitted_ins = operands.iter().map(|location| state.1.contains(location)).collect::<Vec<_>>();
                 if *op == Opcode::CleanupBegin && ins.first() == Some(&true)
                     && kind(f, operands[0]) == Some(ServiceKind::ScopeState)
                 {
@@ -378,49 +387,80 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
                 }
                 match flow {
                     Flow::Next(outputs) => {
-                        let facts = match op {
+                        let mut save = |saved: &mut BTreeMap<u32, Vec<bool>>, facts: &[bool]| {
+                            let k = suspension::continuation_of(arguments).unwrap_or(0);
+                            let entry = saved.entry(k).or_insert_with(|| vec![false; facts.len() - 1]);
+                            let mut grew = false;
+                            for (slot, &carries) in entry.iter_mut().zip(&facts[1..]) {
+                                grew |= carries && !*slot;
+                                *slot |= carries;
+                            }
+                            if grew {
+                                revisit.extend(resumes.get(&k).into_iter().flatten().copied());
+                            }
+                        };
+                        let resume = |saved: &BTreeMap<u32, Vec<bool>>| {
+                            let k = suspension::continuation_of(arguments).unwrap_or(0);
+                            let mut facts = vec![false];
+                            let stored = saved.get(&k).cloned().unwrap_or_default();
+                            facts.extend((1..outputs.len()).map(|index| {
+                                stored.get(index - 1).copied().unwrap_or(false)
+                                    || (k == 0 && carries && kind(f, outputs[index]) == Some(ServiceKind::Packet))
+                            }));
+                            facts
+                        };
+                        let (facts, admitted) = match op {
                             Opcode::FrameSave => {
-                                let k = suspension::continuation_of(arguments).unwrap_or(0);
-                                let entry = saved.entry(k).or_insert_with(|| vec![false; ins.len() - 1]);
-                                let mut grew = false;
-                                for (slot, &carries) in entry.iter_mut().zip(&ins[1..]) {
-                                    grew |= carries && !*slot;
-                                    *slot |= carries;
-                                }
-                                if grew {
-                                    revisit.extend(resumes.get(&k).into_iter().flatten().copied());
-                                }
-                                vec![false]
+                                save(&mut saved, &ins);
+                                save(&mut saved_admitted, &admitted_ins);
+                                (vec![false], vec![false])
                             }
-                            Opcode::FrameResume => {
-                                let k = suspension::continuation_of(arguments).unwrap_or(0);
-                                let mut facts = vec![false];
-                                let stored = saved.get(&k).cloned().unwrap_or_default();
-                                facts.extend((1..outputs.len()).map(|index| {
-                                    stored.get(index - 1).copied().unwrap_or(false)
-                                        || (k == 0 && carries && kind(f, outputs[index]) == Some(ServiceKind::Packet))
-                                }));
-                                facts
-                            }
+                            Opcode::FrameResume => (resume(&saved), resume(&saved_admitted)),
                             Opcode::FutureNew => {
                                 future_input(p, arguments, &ins)?;
-                                next_carriers(f, *op, arguments, &ins, outputs)
+                                let facts = next_carriers(f, *op, arguments, &ins, outputs);
+                                (facts.clone(), facts)
                             }
-                            _ => next_carriers(f, *op, arguments, &ins, outputs),
+                            // The accepted packet's entries, and a bound value's, go to the bound journal, which an
+                            // admissible selection never takes (`TransferFilter::Admitted`).
+                            Opcode::OwnAccept | Opcode::OwnBind | Opcode::OwnRebind => {
+                                (next_carriers(f, *op, arguments, &ins, outputs), vec![admitted_ins[0]])
+                            }
+                            Opcode::OwnAdmit => {
+                                let last = ins.last().copied().unwrap_or(false);
+                                (next_carriers(f, *op, arguments, &ins, outputs), vec![admitted_ins[0] || last])
+                            }
+                            _ => {
+                                let facts = next_carriers(f, *op, arguments, &ins, outputs);
+                                (facts.clone(), facts)
+                            }
                         };
                         for (&location, carries) in outputs.iter().zip(facts) {
-                            set(&mut out, location, carries);
+                            set(&mut out.0, location, carries);
+                        }
+                        for (&location, admits) in outputs.iter().zip(admitted) {
+                            set(&mut out.1, location, admits);
                         }
                         if !matches!(op, Opcode::RetOwn | Opcode::RetDefer) {
                             successors.push((pc + 1, out));
                         }
                     }
                     Flow::Outcomes(outcomes) => {
+                        let first_admitted = admitted_ins.first().copied().unwrap_or(false);
+                        let admissible = *op == Opcode::ScopeSplit && arguments.contains(&Argument::Flag(true));
                         for outcome in outcomes {
                             let slots = schema(p, f, *op, arguments, outcome.tag)?;
-                            let produced = produced_carriers(p, f, *op, arguments, outcome.tag, &slots, &ins);
-                            successors.push((outcome.edge.target_pc as usize, assign(state, &outcome.edge,
-                                &produced)));
+                            let mut produced = produced_carriers(p, f, *op, arguments, outcome.tag, &slots, &ins);
+                            if admissible && outcome.tag == Tag::Normal
+                                && let Some(selected) = produced.get_mut(1) {
+                                *selected &= first_admitted;
+                            }
+                            let mut admitted = produced.clone();
+                            if *op == Opcode::ScopeSplit && let Some(state) = admitted.first_mut() {
+                                *state = first_admitted;
+                            }
+                            successors.push((outcome.edge.target_pc as usize, edge(&outcome.edge, &produced,
+                                &admitted)));
                         }
                     }
                 }
