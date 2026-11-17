@@ -732,8 +732,13 @@ impl Runtime {
                     set(duty, tasks::STATE, tasks::FAILURE_STATE);
                     set(duty, tasks::FLAGS, get(duty, tasks::FLAGS) | flags::OBSERVED);
                 }
-                // A body that never ran leaves its inputs in continuation 0; nothing stays after the settle.
+                // A body that never ran leaves its inputs in continuation 0; nothing stays after the settle, but
+                // the receiver of a stream's listening request (#444).
+                let listener = self.champ_stream_listener(duty);
                 clear(duty, AREA, tail);
+                if let Some((offset, receiver)) = listener {
+                    set(duty, offset, receiver);
+                }
                 self.champ_cache_mut(duty)?.flags |= RELEASED;
             }
         }

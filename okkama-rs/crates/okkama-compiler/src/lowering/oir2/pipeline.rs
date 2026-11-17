@@ -236,6 +236,11 @@ fn layouts(module: &o::Module) -> Result<BTreeMap<u32, sparrow_oir2::ObjectLayou
         } else if matches!(declaration.kind, o::DeclarationKind::Enum { .. }) {
             storage_fields = vec![s::Type::Int];
         }
+        // #810 G1 step 4 (ruling PR-C item 1): FutureCompletions keeps its source fields, and its stream's runtime word
+        // follows them. The constructor leaves it zero; the runtime makes the stream when it is first read.
+        if s::drivers::stream_holder(&declaration.name) {
+            storage_fields.push(s::Type::RuntimeCell);
+        }
         let trace_layout = storage_fields.iter().enumerate()
             .filter_map(|(index, ty)| ty.traced().then_some(index as u32)).collect::<Vec<_>>();
         // Plain layouts can contain resource fields; compute the transitive fact below.

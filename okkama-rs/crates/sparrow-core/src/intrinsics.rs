@@ -818,6 +818,10 @@ fn stream_init(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, receiver: 
     if runtime.stream_mut(receiver).is_some() {
         return Ok(());
     }
+    #[cfg(feature = "champ-abi")]
+    if runtime.champ.machine.is_some() {
+        return champ_stream_init(ctx, runtime, receiver);
+    }
     let program = &runtime.loaded.program;
     let source = &program.functions[function];
     let Some(Type::Object(owner)) = program.ty(source.registers[source.params[0].0 as usize]) else {
@@ -855,6 +859,43 @@ fn stream_init(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, receiver: 
             return failed(ctx, runtime);
         };
         runtime.stream_mut(receiver).expect("stream").entries.push(item);
+    }
+    let stream = runtime.stream_mut(receiver).expect("stream");
+    stream.emitted = vec![false; stream.entries.len()];
+    stream.cancelled = vec![false; stream.entries.len()];
+    Ok(())
+}
+
+/// `stream_init` on Champ (#810 G1 step 4): the stream lives in the receiver's runtime word, and the origins are read
+/// through the sequence's own `size` and `item`, refusing a callee that returns obligations (ruling Q2).
+#[cfg(feature = "champ-abi")]
+fn champ_stream_init(ctx: *mut Ctx, runtime: &mut Runtime, receiver: Word) -> Result<(), Outcome> {
+    let Some((sequence, size, item)) = runtime.champ_sequence(ctx, receiver) else {
+        return Err(Fatal(runtime.fatal.clone().unwrap_or_default()));
+    };
+    if !runtime.champ_stream_new(receiver) {
+        return Err(Fatal("FutureCompletions without its runtime word".into()));
+    }
+    let failed = |ctx: *mut Ctx, runtime: &mut Runtime| {
+        runtime.champ_stream_drop(receiver);
+        let ctx = unsafe { &mut *ctx };
+        if ctx.status == FAILED {
+            ctx.status = OK;
+            return Err(Raise(std::mem::replace(&mut ctx.failure, UNBOUND)));
+        }
+        Err(Fatal(runtime.fatal.clone().unwrap_or_default()))
+    };
+    let Some(count) = runtime.champ_plain_call(ctx, size, &[sequence]) else {
+        return failed(ctx, runtime);
+    };
+    let count = runtime.small_or_big(count).unwrap_or(0).max(0);
+    for index in 0..count {
+        let sequence = runtime.heap.field(receiver, 0);
+        let position = runtime.heap.int(index);
+        let Some(origin) = runtime.champ_plain_call(ctx, item, &[sequence, position]) else {
+            return failed(ctx, runtime);
+        };
+        runtime.stream_mut(receiver).expect("stream").entries.push(origin);
     }
     let stream = runtime.stream_mut(receiver).expect("stream");
     stream.emitted = vec![false; stream.entries.len()];

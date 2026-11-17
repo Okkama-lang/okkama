@@ -20,6 +20,7 @@ mod futures;
 pub use futures::*;
 mod groups;
 mod bridge;
+mod streams;
 pub use records::*;
 pub use helpers::*;
 pub use okkama_sparrow::spb17::layout::{LayoutFacts, ObjectRuntimeLayout, RuntimeLayoutRegistry};

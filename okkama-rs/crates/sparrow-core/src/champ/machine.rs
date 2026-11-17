@@ -54,6 +54,9 @@ pub(crate) struct Program {
     pub atomic: Vec<Option<AtomicOp>>,
     /// What the data helpers need of each instruction (#832), by function and pc.
     pub sites: Vec<Box<[Option<super::collections::Site>]>>,
+    /// Whether each object descriptor is a FutureCompletions specialization (#810 G1 step 4): its last storage field
+    /// is the runtime word of its stream.
+    pub streams: Vec<bool>,
 }
 
 /// A P1 Atomic operation (#830). `p1::invoke` dispatches on it instead of matching the entry's name on every
@@ -404,6 +407,7 @@ impl Runtime {
             external: implementations, p1, native_failure, frames, schedules, globals: Vec::new(),
             groups: source.objects.iter().map(|object| s::drivers::group_specialization(&object.name)).collect(),
             atomic, sites: super::collections::sites(source),
+            streams: source.objects.iter().map(|object| s::drivers::stream_holder(&object.name)).collect(),
         });
         let globals = super::collections::build_globals(&mut runtime, source).map_err(Error)?;
         runtime.champ.machine.as_mut().expect("Champ program").globals = globals;
