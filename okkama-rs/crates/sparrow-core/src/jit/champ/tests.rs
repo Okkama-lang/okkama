@@ -1488,6 +1488,115 @@ fn champ_array_get_reads_views_slices_and_tries() {
     }
 }
 
+/// A function of `arity` ints that returns `op` of them, a value of type `result`.
+fn int_operation(op: s::DataOp, arity: usize, result: s::Type) -> s::Function {
+    let reg = L::Register;
+    let params: Vec<_> = (0..arity as u32).map(reg).collect();
+    let mut function = s::Function {
+        symbol: "int_op".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Int, result],
+        services: vec![], params: params.clone(), results: vec![result],
+        blocks: vec![s::Block { pc: 0, params }],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op, inputs: (0..arity as u32).collect(), output: Some(2),
+                immediate: s::Immediate::None },
+            s::Instruction::Ret(vec![2]),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    function
+}
+
+/// #827: machine code computes `+ - * %`, negation, comparisons, `& | ^ << >>` and `~` of two inline integers
+/// inline, as Tomato's does, and takes the exact helper for a BigInt operand, an overflow, `%` by 0 or -1, and
+/// a shift out of range. Every result equals the exact helper's on the same operands, at the edges of the inline
+/// range (±2⁶², where a word stops holding `2v + 1`) and beyond; a failure of the exact path (`%` by 0) fails
+/// the function.
+#[test]
+fn champ_int_operations_inline_match_the_exact_helper() {
+    use s::DataOp as D;
+    let edge = 1i128 << 62;
+    let values: Vec<i128> = vec![0, 1, -1, 2, 3, -7, 62, 63, 64, 100, (1 << 31) + 5, edge / 2 - 1, edge / 2,
+        -(edge / 2), edge - 1, -edge, edge, -edge - 1, 1_000_000_000_000_000_000_000_000, -(1 << 70)];
+    let arithmetic = [(D::IntAdd, runtime::INT_ADD), (D::IntSub, runtime::INT_SUB), (D::IntMul, runtime::INT_MUL),
+        (D::IntMod, runtime::INT_MOD)];
+    let comparisons = [D::IntEq, D::IntNe, D::IntLt, D::IntLe, D::IntGt, D::IntGe];
+    let bits = [D::IntAnd, D::IntOr, D::IntXor, D::IntShl, D::IntShr];
+    let mut cases: Vec<(D, usize, s::Type)> = arithmetic.iter().map(|&(op, _)| (op, 2, s::Type::Int)).collect();
+    cases.extend(comparisons.iter().map(|&op| (op, 2, s::Type::Bool)));
+    cases.extend(bits.iter().map(|&op| (op, 2, s::Type::Int)));
+    cases.extend([(D::IntNeg, 1, s::Type::Int), (D::IntNot, 1, s::Type::Int)]);
+    let mut checked = 0;
+    for (op, arity, result) in cases {
+        let source = s::Program { functions: vec![int_operation(op, arity, result)], ..s::Program::default() };
+        let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+        let mut ctx = context(&mut runtime);
+        let code = compile(&mut runtime, 0).unwrap();
+        let rights: Vec<i128> = match op {
+            D::IntShl | D::IntShr => vec![0, 1, 2, 30, 61, 62, 63, 64, 100],
+            _ if arity == 1 => vec![0],
+            _ => values.clone(),
+        };
+        for &left in &values {
+            for &right in &rights {
+                let (l, r) = (runtime.heap.big(left.into()), runtime.heap.big(right.into()));
+                // Operands and results stay rooted: the exact helpers may collect.
+                let root = |runtime: &mut Runtime, word: Word| if word != 0 && word & 1 == 0 && !result_is_bool(op) {
+                    runtime.constants.push((word, Repr::Ref));
+                };
+                root(&mut runtime, l);
+                root(&mut runtime, r);
+                ctx.status = OK;
+                ctx.failure = 0;
+                let machine = unsafe { invoke(code, &mut ctx, &[l, r][..arity]) };
+                let machine = (ctx.status, if ctx.status == OK { Some(machine) } else { None });
+                if let Some(word) = machine.1 {
+                    root(&mut runtime, word);
+                }
+                // The exact path on the same operands: Tomato's semantics.
+                let mut exact_ctx = context(&mut runtime);
+                let ctx_ptr: *mut Ctx = &mut exact_ctx;
+                let exact = match op {
+                    D::IntNeg => runtime::rt_int(ctx_ptr, runtime::INT_SUB, runtime.heap.int(0), l),
+                    _ if comparisons.contains(&op) => {
+                        let order = runtime::rt_int_order(ctx_ptr, l, r);
+                        let holds = match op {
+                            D::IntEq => order == 0, D::IntNe => order != 0, D::IntLt => order < 0,
+                            D::IntLe => order <= 0, D::IntGt => order > 0, _ => order >= 0,
+                        };
+                        Word::from(holds)
+                    }
+                    _ => match arithmetic.iter().find(|&&(candidate, _)| candidate == op) {
+                        Some(&(_, code)) => runtime::rt_int(ctx_ptr, code, l, r),
+                        None => crate::champ::machine::rt_machine_scalar(ctx_ptr, op.scalar_code().unwrap(), l,
+                            if arity == 1 { 0 } else { r }, 0),
+                    },
+                };
+                let exact = (exact_ctx.status, if exact_ctx.status == OK { Some(exact) } else { None });
+                let shown = |result: (u64, Option<Word>)| result.1.map(|word| if result_is_bool(op) {
+                    word.to_string()
+                } else {
+                    runtime.big_value(word).to_string()
+                });
+                assert_eq!((machine.0, shown(machine)), (exact.0, shown(exact)), "{op:?} {left} {right}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 2000, "{checked}");
+}
+
+fn result_is_bool(op: s::DataOp) -> bool {
+    use s::DataOp as D;
+    matches!(op, D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe)
+}
+
 /// S1 data form: `left op right`, then a use of the result that would misread a failed helper's zero.
 fn s1_fallible(op: s::DataOp, result: s::Type, immediate: s::Immediate, use_op: s::DataOp) -> s::Function {
     let reg = L::Register;

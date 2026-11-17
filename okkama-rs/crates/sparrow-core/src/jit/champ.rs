@@ -235,6 +235,171 @@ impl Emit<'_, '_> {
         self.builder.ins().store(MEMORY, value, pointer, offset as i32);
     }
 
+    /// The exact path of an inline int operation (#827): the helper, then leave the function on a failure or a
+    /// stop, as a failing data form does.
+    fn exact(&mut self, helper: &str, arguments: &[Value]) -> Value {
+        let value = self.call(helper, arguments).expect("the exact helper returns a word");
+        let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
+        let ok = self.builder.create_block();
+        self.builder.ins().brif(status, self.stop, &[], ok, &[]);
+        self.builder.switch_to_block(ok);
+        value
+    }
+
+    /// Fast, slow and done blocks of an int operation on `tags`: the fast block when its low bit is set (every
+    /// operand an inline integer, `2v + 1`), the slow one otherwise. Done takes the result.
+    fn int_paths(&mut self, tags: Value) -> (Block, Block, Block) {
+        let small = self.builder.ins().band_imm_u(tags, 1);
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(small, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        (fast, slow, done)
+    }
+
+    /// `+ - * %` and negation of ints, as Tomato's machine code computes them (#827): two inline integers
+    /// compute inline with an overflow check; a BigInt operand, an overflow and `%` by 0 or -1 take the exact
+    /// helper.
+    fn int_arithmetic(&mut self, op: s::DataOp, words: &[Value]) -> Value {
+        use s::DataOp as D;
+        let code = match op {
+            D::IntAdd => runtime::INT_ADD,
+            D::IntSub | D::IntNeg => runtime::INT_SUB,
+            D::IntMul => runtime::INT_MUL,
+            _ => runtime::INT_MOD,
+        };
+        // `-x` is `0 - x`; the word 1 is the inline 0.
+        let (l, r) = if op == D::IntNeg { (self.iconst(1), words[0]) } else { (words[0], words[1]) };
+        let both = self.builder.ins().band(l, r);
+        let (_, slow, done) = self.int_paths(both);
+        if code == runtime::INT_MOD {
+            // Divisors 0 and -1 go to the exact path.
+            let divisor = self.builder.ins().sshr_imm_u(r, 1);
+            let shifted = self.builder.ins().iadd_imm_s(divisor, 1);
+            let special = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThanOrEqual, shifted, 1);
+            let commit = self.builder.create_block();
+            self.builder.ins().brif(special, slow, &[], commit, &[]);
+            self.builder.switch_to_block(commit);
+            let dividend = self.builder.ins().sshr_imm_u(l, 1);
+            let remainder = self.builder.ins().srem(dividend, divisor);
+            let doubled = self.builder.ins().ishl_imm_u(remainder, 1);
+            let tagged = self.builder.ins().bor_imm_u(doubled, 1);
+            self.builder.ins().jump(done, &[tagged.into()]);
+        } else {
+            // With `r - 1 = 2b`: `(2a + 1) ± 2b` and `a · 2b + 1` are the tagged results.
+            let even = self.builder.ins().iadd_imm_s(r, -1);
+            let (value, overflow) = match code {
+                runtime::INT_ADD => self.builder.ins().sadd_overflow(l, even),
+                runtime::INT_SUB => self.builder.ins().ssub_overflow(l, even),
+                _ => {
+                    let half = self.builder.ins().sshr_imm_u(l, 1);
+                    let (product, overflow) = self.builder.ins().smul_overflow(half, even);
+                    (self.builder.ins().bor_imm_u(product, 1), overflow)
+                }
+            };
+            let commit = self.builder.create_block();
+            self.builder.ins().brif(overflow, slow, &[], commit, &[]);
+            self.builder.switch_to_block(commit);
+            self.builder.ins().jump(done, &[value.into()]);
+        }
+        self.builder.switch_to_block(slow);
+        let opcode = self.iconst(code);
+        let result = self.exact("int", &[self.ctx, opcode, l, r]);
+        self.builder.ins().jump(done, &[result.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// An int comparison (#827): two inline integers compare as words, since `2v + 1` keeps the order; a
+    /// BigInt operand takes `int_order`.
+    fn int_compare(&mut self, op: s::DataOp, words: &[Value]) -> Value {
+        use s::DataOp as D;
+        let condition = match op {
+            D::IntEq => IntCC::Equal,
+            D::IntNe => IntCC::NotEqual,
+            D::IntLt => IntCC::SignedLessThan,
+            D::IntLe => IntCC::SignedLessThanOrEqual,
+            D::IntGt => IntCC::SignedGreaterThan,
+            _ => IntCC::SignedGreaterThanOrEqual,
+        };
+        let (l, r) = (words[0], words[1]);
+        let both = self.builder.ins().band(l, r);
+        let (_, slow, done) = self.int_paths(both);
+        let flag = self.builder.ins().icmp(condition, l, r);
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(slow);
+        let order = self.call("int_order", &[self.ctx, l, r]).expect("int_order returns an order");
+        let flag = self.builder.ins().icmp_imm_s(condition, order, 0);
+        let flag = self.builder.ins().uextend(types::I64, flag);
+        self.builder.ins().jump(done, &[flag.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// `& | ^ << >>` and `~` of ints, as Tomato's machine code computes them (#827): inline integers stay
+    /// inline; a BigInt operand, a shift by 62 or more, and a left shift that loses a bit or leaves the inline
+    /// range take the scalar helper.
+    fn int_bits(&mut self, op: s::DataOp, words: &[Value]) -> Result<Value, Error> {
+        use s::DataOp as D;
+        let tags = if op == D::IntNot { words[0] } else { self.builder.ins().band(words[0], words[1]) };
+        let (_, slow, done) = self.int_paths(tags);
+        let value = match op {
+            // `!(2v + 1) | 1 == 2(!v) + 1`.
+            D::IntNot => {
+                let inverted = self.builder.ins().bnot(words[0]);
+                Some(self.builder.ins().bor_imm_u(inverted, 1))
+            }
+            D::IntAnd => Some(self.builder.ins().band(words[0], words[1])),
+            D::IntOr => Some(self.builder.ins().bor(words[0], words[1])),
+            D::IntXor => {
+                let x = self.builder.ins().bxor(words[0], words[1]);
+                Some(self.builder.ins().bor_imm_u(x, 1))
+            }
+            _ => None,
+        };
+        if let Some(value) = value {
+            self.builder.ins().jump(done, &[value.into()]);
+        } else {
+            let v = self.builder.ins().sshr_imm_u(words[0], 1);
+            let n = self.builder.ins().sshr_imm_u(words[1], 1);
+            let in_range = self.builder.ins().icmp_imm_u(IntCC::UnsignedLessThan, n, 62);
+            let commit = self.builder.create_block();
+            self.builder.ins().brif(in_range, commit, &[], slow, &[]);
+            self.builder.switch_to_block(commit);
+            if op == D::IntShl {
+                // No bit may be lost: shifting back gives the value, and the result still fits an inline integer.
+                let shifted = self.builder.ins().ishl(v, n);
+                let tagged = self.builder.ins().ishl_imm_u(shifted, 1);
+                let tagged = self.builder.ins().bor_imm_u(tagged, 1);
+                let back = self.builder.ins().sshr(shifted, n);
+                let same = self.builder.ins().icmp(IntCC::Equal, back, v);
+                let untagged = self.builder.ins().sshr_imm_u(tagged, 1);
+                let fits = self.builder.ins().icmp(IntCC::Equal, untagged, shifted);
+                let ok = self.builder.ins().band(same, fits);
+                let exact = self.builder.create_block();
+                self.builder.ins().brif(ok, exact, &[], slow, &[]);
+                self.builder.switch_to_block(exact);
+                self.builder.ins().jump(done, &[tagged.into()]);
+            } else {
+                let shifted = self.builder.ins().sshr(v, n);
+                let tagged = self.builder.ins().ishl_imm_u(shifted, 1);
+                let tagged = self.builder.ins().bor_imm_u(tagged, 1);
+                self.builder.ins().jump(done, &[tagged.into()]);
+            }
+        }
+        self.builder.switch_to_block(slow);
+        let code = op.scalar_code().ok_or_else(|| Error("Champ int operation without a scalar code".into()))?;
+        let code = self.iconst(code);
+        let zero = self.iconst(0);
+        let right = words.get(1).copied().unwrap_or(zero);
+        let result = self.exact("champ_machine_scalar", &[self.ctx, code, words[0], right, zero]);
+        self.builder.ins().jump(done, &[result.into()]);
+        self.builder.switch_to_block(done);
+        Ok(self.builder.block_params(done)[0])
+    }
+
     /// Element `position` (in bounds) of a word array whose header is `header`, as Tomato's machine code reads
     /// it (#826): one branch on two header bits keeps a flat array on the plain load; a view (`heap::SHARED`,
     /// #246, #249) reads from the address of its first element, one load more; a trie (`heap::TRIE`, #250)
@@ -1372,12 +1537,9 @@ impl Emit<'_, '_> {
             D::Undef => self.iconst(0),
             D::StrConcat => self.call("concat", &[self.ctx, words[0], words[1]]).unwrap(),
             D::StrLen => self.call("champ_machine_text_len", &[self.ctx, words[0]]).unwrap(),
-            D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe
-                | D::StrEq | D::StrNe | D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
-                let helper = if matches!(op, D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe) {
-                    "int_order"
-                } else { "champ_machine_text_order" };
-                let order = self.call(helper, &[self.ctx, words[0], words[1]]).unwrap();
+            D::IntEq | D::IntNe | D::IntLt | D::IntLe | D::IntGt | D::IntGe => self.int_compare(op, &words),
+            D::StrEq | D::StrNe | D::StrLt | D::StrLe | D::StrGt | D::StrGe => {
+                let order = self.call("champ_machine_text_order", &[self.ctx, words[0], words[1]]).unwrap();
                 let condition = match op {
                     D::IntEq | D::StrEq => IntCC::Equal,
                     D::IntNe | D::StrNe => IntCC::NotEqual,
@@ -1464,23 +1626,8 @@ impl Emit<'_, '_> {
                 self.store(words[0], (*field as usize + 1) * 8, words[1]);
                 words[0]
             }
-            D::IntAdd | D::IntSub | D::IntMul | D::IntMod | D::IntNeg => {
-                let op = match op {
-                    D::IntAdd => runtime::INT_ADD,
-                    D::IntSub => runtime::INT_SUB,
-                    D::IntMul => runtime::INT_MUL,
-                    D::IntMod => runtime::INT_MOD,
-                    _ => runtime::INT_SUB,
-                };
-                let opcode = self.iconst(op);
-                let right = words.get(1).copied().unwrap_or_else(|| self.iconst(0));
-                let (left, right) = if op == runtime::INT_SUB && words.len() == 1 {
-                    (self.iconst(1), words[0])
-                } else {
-                    (words[0], right)
-                };
-                self.call("int", &[self.ctx, opcode, left, right]).unwrap()
-            }
+            D::IntAdd | D::IntSub | D::IntMul | D::IntMod | D::IntNeg => self.int_arithmetic(op, &words),
+            D::IntAnd | D::IntOr | D::IntXor | D::IntShl | D::IntShr | D::IntNot => self.int_bits(op, &words)?,
             D::Convert => {
                 let from = self.source.registers[inputs[0] as usize];
                 let codes = machine::scalar_code(from).zip(machine::scalar_code(ty))
@@ -1627,10 +1774,11 @@ impl Emit<'_, '_> {
 }
 
 /// Data helpers that can return with a non-OK status: an application failure (`DataOp::fallible`)
-/// or a terminal stop such as an exhausted memory budget. Their result is then not a value.
+/// or a terminal stop such as an exhausted memory budget. Their result is then not a value. An inline int
+/// operation (`inline_int`) checks the status in its exact path only.
 fn sets_status(op: s::DataOp) -> bool {
     use s::DataOp as D;
-    matches!(op, D::IntMod | D::RangeNew | D::Convert | D::IntMul | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
+    !inline_int(op) && matches!(op, D::RangeNew | D::Convert | D::StrConcat | D::RatNew | D::ValEq | D::ValNe
         | D::VariantGet | D::RoleNarrow | D::MapNew | D::MapLen | D::MapHas | D::MapGet | D::MapKeys | D::MapValues
         | D::MapKeyAt
         | D::MapValueAt | D::MapMerge | D::MapDifference | D::ArrayConcat | D::ArrayJoin | D::ArraySlice
@@ -1638,6 +1786,14 @@ fn sets_status(op: s::DataOp) -> bool {
         | D::TestOk
         | D::TestIs | D::TestIsnt | D::TestFail)
         || op.scalar_code().is_some() && !inline_scalar(op)
+}
+
+/// Int operations that machine code computes inline for two inline integers, as Tomato's does (#827); the
+/// exact helper is their slow path, which checks the status itself.
+fn inline_int(op: s::DataOp) -> bool {
+    use s::DataOp as D;
+    matches!(op, D::IntAdd | D::IntSub | D::IntMul | D::IntMod | D::IntNeg | D::IntAnd | D::IntOr | D::IntXor
+        | D::IntShl | D::IntShr | D::IntNot)
 }
 
 /// Scalar family operations that machine code computes without a helper.

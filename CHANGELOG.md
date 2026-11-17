@@ -31,6 +31,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   what the block adds. A map accumulator from `[:]` grows by literal entries. An
   accumulator the block reads in any other way is copied, as before. OIR-1 and OIR-2
   share the analysis (`thir::linear_accumulator`).
+- **Champ: inline small-int arithmetic (#827).** Champ's machine code now computes
+  `+ - * %`, negation, the comparisons, `& | ^ << >>` and `~` of two inline integers
+  inline, as Tomato's does. A BigInt operand, an overflow, `%` by 0 or -1, or a shift
+  out of range takes the exact helper, whose failure or stop now always leaves the
+  function. Before, `+`, `-` and negation did not check the helper's status.
 
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
