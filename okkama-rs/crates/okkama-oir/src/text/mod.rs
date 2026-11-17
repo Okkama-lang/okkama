@@ -531,7 +531,8 @@ variants!(FunctionAttr {
     Async => "async",
     DeferEntry { replacements } => "defer",
     Cleanup => "cleanup",
-    Lambda { captures, owner } => "lambda"
+    Lambda { captures, owner } => "lambda",
+    Adapter { target } => "adapter"
 });
 record!(ScopeDecl, "scope_decl", { function, parent, kind, loc });
 variants!(ScopeKind {

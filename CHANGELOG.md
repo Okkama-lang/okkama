@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A fresh Future started through a role is registered with the group (#818).** A Future
+  passed to `FutureGroup.start` through the `Supervising` role was retained by the role's
+  adapter and settled when the adapter returned, so a member's outcome was destroyed at the
+  call, or detached to the root, instead of at the group owner's close. A compiler-built
+  adapter now carries an `adapter` attribute, which the verifier checks against its body (one
+  call of its target), and an adapter whose call owns its inputs passes its entry packet to
+  that call as is (ruling PR-M). The destroy order matches Tomato under Structural and Full
+  verification. Source functions keep their rule: they accept their inputs.
 - **Coro makes a Future's duty a slot where it reaches a close on some paths only (#853, S3
   #857).** A Future created in one branch of its owner, or a failure handler shared by a call
   before and after a creation, no longer stops coro with "a cache duty that reaches its

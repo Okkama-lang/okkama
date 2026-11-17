@@ -10,6 +10,80 @@ fn unique<'a>(names: impl IntoIterator<Item = &'a str>, state: &mut State<'_>) {
         if name.is_empty() || !seen.insert(name) { state.error(R::S1, "empty or duplicate symbol/slot name"); }
     }
 }
+/// Ruling PR-M (#818): the adapter attribute is checked, not trusted. The body uses its target once: a call of it, or
+/// after own the `fut.new` that a call of an async target becomes, and calls nothing else. In High the call takes the
+/// function's parameters in order, and the body holds only that call, taking a successor, wrapping into a role, the
+/// result's want and its exit.
+fn adapter_body(module: &Module, data: &Function, target: FuncId, state: &mut State<'_>) {
+    let Some(body) = &data.body else {
+        state.error(R::S1, "an adapter has a body (PR-M)");
+        return;
+    };
+    let mut ops = Vec::new();
+    for (_, block) in body.blocks.iter() {
+        if !state.step(block.insts.len() + 1) { return; }
+        ops.extend(block.insts.iter().filter_map(|inst| body.insts.get(*inst).ok().map(|inst| &inst.op)));
+        if let TermKind::InvokeOwn { op, .. } = &block.term.kind {
+            ops.push(op);
+        }
+    }
+    let mut uses = Vec::new();
+    for op in ops {
+        let used = match op {
+            Operation::Call(CallOp::Direct { function, call } | CallOp::Native { function, call }
+                | CallOp::Intrinsic { function, call }) => Some((*function, Some(call))),
+            Operation::Call(_) => Some((FuncId::from_u32(u32::MAX), None)),
+            Operation::Async(AsyncOp::FutureNew { environment, .. }) => environment.function().map(|f| (f, None)),
+            Operation::Core(CoreOp::SuccTake { .. } | CoreOp::RoleWrap { .. })
+            | Operation::Lexical(LexicalOp::Want { .. }) | Operation::Exit(ExitOp::Prepare { .. }) => None,
+            _ if module.profile == Profile::High => {
+                state.error(R::S1, "an adapter's body holds only the call of its target and its return (PR-M)");
+                None
+            }
+            _ => None,
+        };
+        uses.extend(used);
+    }
+    let [(function, call)] = uses.as_slice() else {
+        state.error(R::S1, "an adapter's body uses its target once and calls nothing else (PR-M)");
+        return;
+    };
+    if *function != target {
+        state.error(R::S1, "an adapter calls its target (PR-M)");
+    }
+    let entry = body.blocks.get(body.entry).map(|block| block.params.as_slice()).unwrap_or(&[]);
+    if module.profile == Profile::High && call.is_some_and(|call| {
+        !call.args.iter().map(|argument| argument.value).eq(entry.iter().copied())
+    }) {
+        state.error(R::S1, "an adapter passes its parameters to its target in order (PR-M)");
+    }
+    // After own the entry packet is the call's packet (an owning target), or accepted (an observation, an async
+    // target); it may cross the edge into the call's block. Nothing admits, splits or otherwise reads it.
+    let OwnershipAbi::Explicit { input_packet, .. } = data.signature.ownership_abi else {
+        return;
+    };
+    let Some(&packet) = entry.get(usize::from(input_packet)) else {
+        return;
+    };
+    for (_, block) in body.blocks.iter() {
+        let terminator = match &block.term.kind {
+            TermKind::InvokeOwn { op, .. } => Some(&**op),
+            _ => None,
+        };
+        let ops = block.insts.iter().filter_map(|inst| body.insts.get(*inst).ok().map(|inst| &inst.op))
+            .chain(terminator);
+        for op in ops {
+            let allowed = match op {
+                Operation::Ownership(OwnershipOp::Accept { packet: accepted, .. }) => *accepted == packet,
+                _ => super::summaries::call(op).is_some_and(|(call, _, _)| call.packet == Some(packet)),
+            };
+            if !allowed && op.operand_refs().iter().any(|operand| operand.reference == OperandRef::Value(packet)) {
+                state.error(R::S1, "an adapter's entry packet is its call's packet or accepted (PR-M)");
+            }
+        }
+    }
+}
+
 fn refs<'a>(module: &'a Module, item: &impl Read, state: &mut State<'a>) {
     references(module, None, None, item, state);
 }
@@ -118,6 +192,10 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
                     }
                     unique(replacements.iter().map(|label| label.label.as_str()), state);
                     refs(module, replacements, state);
+                }
+                FunctionAttr::Adapter { target } => {
+                    refs(module, target, state);
+                    adapter_body(module, data, *target, state);
                 }
                 FunctionAttr::Cleanup | FunctionAttr::Entry | FunctionAttr::Hidden | FunctionAttr::Async => {}
             }

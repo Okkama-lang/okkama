@@ -186,6 +186,16 @@ impl Driver<'_, '_> {
         };
         let packet = if observation {
             None
+        } else if std::mem::take(&mut self.forward_entry) {
+            // Ruling PR-M (#818): an adapter's one owning call takes the adapter's entry packet whole: the one linear
+            // packet still live, under its current name.
+            let own = self.module.types.intern(Type::Service(ServiceType::Own)).map_err(arena)?;
+            let packets: Vec<_> = point.env.linear.iter().copied()
+                .filter(|value| self.body.values.get(*value).is_ok_and(|data| data.ty == own)).collect();
+            let [entry] = packets[..] else {
+                return Err(flow_error("an adapter's call takes its one entry packet (PR-M)"));
+            };
+            Some(entry)
         } else {
             let (next, packet) = self.offered(point, &originals)?;
             point = next;
