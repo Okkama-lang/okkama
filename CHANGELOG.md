@@ -41,6 +41,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   different byte length decides without comparing bytes. Scalars compare by word: floats
   numerically, so NaN differs from itself, and ints by value, with a BigInt operand going
   through the structural helper. All three match Tomato.
+- **Champ: Atomic without per-call name matching (#830).** Champ now resolves each Atomic
+  entry's operation once, when the program loads, instead of matching the entry's name on
+  every call. Machine code computes `value`, `closed` and `close` inline over the cell, as
+  Tomato does. A closed cell's `value` still throws `AtomicClosed`.
 
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.

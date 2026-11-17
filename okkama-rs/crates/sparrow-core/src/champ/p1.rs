@@ -39,19 +39,21 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
         let text = error_text(runtime, &source, args[0]);
         runtime.heap.allocate_text(&text)
     } else {
-        let (operation, _) = name.strip_prefix("okkama.atomic.Atomic.").unwrap().split_once('$').unwrap();
+        use super::machine::AtomicOp;
+        let operation = runtime.champ.machine.as_ref().and_then(|machine| machine.atomic[function])
+            .expect("trusted finite P1 catalog");
         match operation {
-            "new_value" => {
+            AtomicOp::NewValue => {
                 let s::Type::Object(descriptor) = source.functions[function].results[0] else { unreachable!() };
                 runtime.heap.object_new(descriptor, &[args[0], 0])
             }
-            "close" => {
+            AtomicOp::Close => {
                 runtime.heap.set_field(args[0], 1, 1);
                 runtime.heap.set_field(args[0], 0, crate::word::UNBOUND);
                 0
             }
-            "closed" => u64::from(runtime.heap.field(args[0], 1) != 0),
-            "value" | "replace" | "compare_and_replace" => {
+            AtomicOp::Closed => u64::from(runtime.heap.field(args[0], 1) != 0),
+            AtomicOp::Value | AtomicOp::Replace | AtomicOp::CompareAndReplace => {
                 if runtime.heap.field(args[0], 1) != 0 {
                     let descriptor = source.objects.iter().position(|object| {
                         object.name == "async.atomic.AtomicClosed"
@@ -64,9 +66,9 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
                         (*ctx).status = runtime::FAILED;
                     }
                     0
-                } else if operation == "value" {
+                } else if operation == AtomicOp::Value {
                     runtime.heap.field(args[0], 0)
-                } else if operation == "compare_and_replace" {
+                } else if operation == AtomicOp::CompareAndReplace {
                     // A failed comparison publishes nothing; plain values compare without failure.
                     let ty = source.functions[function].registers[1];
                     let current = runtime.heap.field(args[0], 0);
@@ -83,7 +85,6 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, io: *mut CallOwn, args: &[W
                     0
                 }
             }
-            _ => unreachable!("trusted finite P1 catalog"),
         }
     };
     if io.is_null() {

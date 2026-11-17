@@ -67,7 +67,7 @@ pub(super) fn compile(runtime: &mut Runtime, index: usize) -> Result<u64, Error>
             ctx, io, owned, body, frame_map: machine.frames[index].as_ref(), schedules: &machine.schedules[index],
             storage, frame: &frame, scope_base, post, blocks, stop, pc: None, polled, fuel,
             plans: &machine.plans[index], selections: &machine.selections[index], entries: &machine.entries,
-            shielded_entries: &machine.shielded_entries,
+            shielded_entries: &machine.shielded_entries, atomic: &machine.atomic, failed: None,
             constants: &mut runtime.constants, heap: &mut runtime.heap, globals: machine.globals.clone(),
         };
         let args = emit.builder.block_params(entry).to_vec();
@@ -187,6 +187,11 @@ struct Emit<'a, 'b> {
     builder: &'a mut FunctionBuilder<'b>,
     jit: &'a mut Jit,
     program: &'a s::Program,
+    /// The P1 Atomic operation of each function (#830).
+    atomic: &'a [Option<machine::AtomicOp>],
+    /// Where the exact path of an inline data operation goes when its helper failed or stopped (#827): the
+    /// failure block of an `evaluate`, which takes its unwind outcome; None for a plain data form, which stops.
+    failed: Option<Block>,
     source: &'a s::Function,
     index: usize,
     /// The runtime's invocation table: a boxed slice, so its code words keep their addresses.
@@ -233,6 +238,42 @@ impl Emit<'_, '_> {
 
     fn store(&mut self, pointer: Value, offset: usize, value: Value) {
         self.builder.ins().store(MEMORY, value, pointer, offset as i32);
+    }
+
+    /// An Atomic observation (#830), inline over the cell `[header, value, closed]` as Tomato's machine code:
+    /// `closed` reads the flag; `close` sets it and unbinds the value, as `p1::invoke` does; `value` reads the
+    /// value of an open cell. A closed cell's `value` takes the call, which throws `AtomicClosed`.
+    fn atomic_observation(&mut self, op: machine::AtomicOp, target: usize, values: &[Value]) -> Value {
+        let cell = values[0];
+        match op {
+            machine::AtomicOp::Closed => {
+                let flag = self.load(cell, 16);
+                let set = self.builder.ins().icmp_imm_u(IntCC::NotEqual, flag, 0);
+                self.builder.ins().uextend(types::I64, set)
+            }
+            machine::AtomicOp::Close => {
+                let one = self.iconst(1);
+                self.store(cell, 16, one);
+                let unbound = self.iconst(crate::word::UNBOUND);
+                self.store(cell, 8, unbound);
+                self.iconst(0)
+            }
+            _ => {
+                let closed = self.load(cell, 16);
+                let (open, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+                    self.builder.create_block());
+                self.builder.append_block_param(done, types::I64);
+                self.builder.ins().brif(closed, slow, &[], open, &[]);
+                self.builder.switch_to_block(open);
+                let value = self.load(cell, 8);
+                self.builder.ins().jump(done, &[value.into()]);
+                self.builder.switch_to_block(slow);
+                let thrown = self.observe(target, values);
+                self.builder.ins().jump(done, &[thrown.into()]);
+                self.builder.switch_to_block(done);
+                self.builder.block_params(done)[0]
+            }
+        }
     }
 
     /// `text.length()` (#829): an ASCII string's length in characters is its byte length, in the header; any
@@ -325,11 +366,13 @@ impl Emit<'_, '_> {
         value
     }
 
-    /// Leave the function when the last helper failed or stopped, with the failure (or the stop) still set.
+    /// When the last helper failed or stopped, go where the instruction handles it (`failed`): an `evaluate`'s
+    /// failure block, or the stop of a plain data form, with the failure (or the stop) still set.
     fn leave_unless_ok(&mut self) {
         let status = self.load(self.ctx, std::mem::offset_of!(Ctx, status));
         let ok = self.builder.create_block();
-        self.builder.ins().brif(status, self.stop, &[], ok, &[]);
+        let failed = self.failed.unwrap_or(self.stop);
+        self.builder.ins().brif(status, failed, &[], ok, &[]);
         self.builder.switch_to_block(ok);
     }
 
@@ -901,15 +944,20 @@ impl Emit<'_, '_> {
                 let inputs = locations.iter().map(|location| match location {
                     L::Register(id) => *id, _ => unreachable!("verified scalar operands"),
                 }).collect::<Vec<_>>();
-                let value = self.data_value(evaluation.op, &inputs, evaluation.result, &evaluation.immediate)?;
+                // An inline operation's exact path (#827) leaves to `failure` too, so it reads the status itself.
+                let failure = self.builder.create_block();
+                let outer = self.failed.replace(failure);
+                let value = self.data_value(evaluation.op, &inputs, evaluation.result, &evaluation.immediate);
+                self.failed = outer;
+                let value = value?;
                 let s::Flow::Outcomes(outcomes) = flow else { unreachable!() };
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
-                let failure = self.builder.create_block();
                 self.builder.ins().brif(status, failure, &[], success, &[]);
                 self.builder.switch_to_block(success);
                 self.edge(&outcomes[0].edge, &[vec![value]]);
                 self.builder.switch_to_block(failure);
+                let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let failed = self.builder.ins().icmp_imm_s(IntCC::Equal, status, FAILED as i64);
                 let unwind = self.builder.create_block();
                 self.builder.ins().brif(failed, unwind, &[], self.stop, &[]);
@@ -1099,7 +1147,13 @@ impl Emit<'_, '_> {
                         self.builder.ins().jump(self.blocks[0], &[]);
                         return Ok(());
                     }
-                    (self.observe(target, &values), has_result)
+                    let inline = self.atomic[target].filter(|op| {
+                        matches!(op, machine::AtomicOp::Value | machine::AtomicOp::Closed | machine::AtomicOp::Close)
+                    }).filter(|_| self.program.functions[target].entry_abi == s::EntryAbi::Observation);
+                    match inline {
+                        Some(op) => (self.atomic_observation(op, target, &values), has_result),
+                        None => (self.observe(target, &values), has_result),
+                    }
                 };
                 let status = self.load(ctx, std::mem::offset_of!(Ctx, status));
                 let success = self.builder.create_block();
