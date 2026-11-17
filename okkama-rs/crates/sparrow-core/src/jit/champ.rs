@@ -1266,7 +1266,7 @@ impl Emit<'_, '_> {
                 }
                 return Ok(());
             }
-            O::DepsOf | O::DepsEmpty => {
+            O::DepsOf | O::DepsEmpty | O::DepsJoin => {
                 // The result has a definition and proof dependencies, but no machine storage.
                 self.next();
                 return Ok(());

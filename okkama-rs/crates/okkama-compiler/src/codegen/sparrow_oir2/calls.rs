@@ -1330,6 +1330,17 @@ pub(super) fn translate(module: &o::Module, id: o::FuncId, function: &o::Functio
                             });
                             (O::DepsOf, vec![A::Location(anchor)])
                         }
+                        // #863: the union retains the deps values it joins (a liveness closure, like deps.of).
+                        o::OwnershipOp::DepsJoin { deps } => {
+                            let joined = deps.iter().map(|&value| emitter.loc(value)).collect::<Result<Vec<_>, _>>()?;
+                            let [result] = inst.results.as_slice() else {
+                                return Err(error("deps.join requires one result"));
+                            };
+                            emitter.result.proofs.dependencies.push(s::Dependency {
+                                value: emitter.loc(*result)?, obligations: joined.clone(),
+                            });
+                            (O::DepsJoin, joined.into_iter().map(A::Location).collect())
+                        }
                         o::OwnershipOp::Empty {} => (O::OwnEmpty, vec![]),
                         o::OwnershipOp::Move { packet } => (O::OwnMove, vec![A::Location(emitter.loc(*packet)?)]),
                         o::OwnershipOp::Join { packets } => (O::OwnJoin, packets.iter()

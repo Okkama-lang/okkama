@@ -64,9 +64,14 @@ impl Driver<'_, '_> {
                 }
                 [input] => point.env.value(*input)?.deps
                     .ok_or_else(|| flow_error("a managed thunk input has its deps"))?,
-                // Several managed inputs: a split of the unaccepted entry packet for the deps of their union is
-                // refused by Full (B5.1, "callee must accept"); that waits for a ruling, and end to end for #735.
-                _ => return Err(unsupported_async("a creation thunk with several managed inputs (#735, #860)")),
+                // #863 (PR-N2, third amendment): several managed inputs give the union of their deps; a thunk never
+                // restructures its unaccepted entry packet.
+                inputs => {
+                    let deps = inputs.iter().map(|input| point.env.value(*input)?.deps
+                        .ok_or_else(|| flow_error("a managed thunk input has its deps"))).collect::<Result<_, _>>()?;
+                    point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps }))?;
+                    point.result(SlotName::Value)?
+                }
             };
         } else if !managed.is_empty() {
             // Only the managed inputs are offered: a Future input's cache is borrowed and no selection names it.

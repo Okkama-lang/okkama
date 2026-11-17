@@ -1124,6 +1124,11 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             enforce(ctx.value.is_some(), "LOOKUP_OPERANDS", "lookup needs an array and int or a map and its key")?;
         }
         DepsOf => value(0)?,
+        DepsJoin => {
+            for index in 0..locations.len() {
+                input(index, Deps)?;
+            }
+        }
         OwnMove | OwnJoin => {
             for index in 0..locations.len() {
                 input(index, Packet)?;
@@ -1572,7 +1577,7 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         // The scope that owns the slot (#855).
         DutyEmpty => shape == "s" || shape == "s?",
         OwnMove | DepsOf => shape == "l",
-        OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
+        OwnJoin | DepsJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
         OwnDynamic => shape == "qll",
         OwnBind | OwnRebind => shape == "lisll",
@@ -1972,6 +1977,15 @@ pub(crate) fn checked_edges<'a>(p: &Program, f: &Function, inst: &'a Instruction
                     require(destinations.len() == 1 && f.proofs.dependencies.iter().any(|dependency| {
                         dependency.value == destinations[0] && dependency.obligations.contains(anchor)
                     }), "deps.of must retain its full-deps anchor")?;
+                }
+                // #863: the union retains every deps value it joins.
+                if *op == Opcode::DepsJoin {
+                    require(destinations.len() == 1 && arguments.iter().all(|argument| {
+                        let Argument::Location(joined) = argument else { return false };
+                        f.proofs.dependencies.iter().any(|dependency| {
+                            dependency.value == destinations[0] && dependency.obligations.contains(joined)
+                        })
+                    }), "deps.join must retain every deps value it joins")?;
                 }
                 let results = op.results(Tag::Normal, &ctx)?;
                 require(destinations.len() == results.len(), "bad multi-result arity")?;

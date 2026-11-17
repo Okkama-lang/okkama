@@ -765,7 +765,7 @@ async main() is int {
 
 /// #860 (ruling PR-N2): a fresh Future argument through an async role slot is borrowed, as on a direct call
 /// (PR-B2, OIR-2 §10.2): its cache stays with main's root and its outcome is destroyed at main's close, through the
-/// role and directly alike. Tomato destroys each right after its call; that difference is #861, the owner's call.
+/// role and directly alike. Tomato destroys each right after its call; the owner kept PR-B2's order (#861).
 #[test]
 fn a_fresh_future_through_an_async_role_slot_is_borrowed_as_on_a_direct_call() {
     both_modes(r#"module app v1.0.0;
@@ -794,6 +794,36 @@ async main() is int {
 }
 "#, "make via role\ntook via role\nmake direct\ntook direct\nmain end\n\
         destroy direct\ndestroy via role\n");
+}
+
+/// #863 (ruling PR-N2, third amendment): two fresh resources through an async role slot. The creation thunk depends
+/// on the union of their deps (`deps.join`) and passes its entry packet whole to `fut.new`; the callee's body
+/// destroys both. Tomato's output.
+#[test]
+fn two_fresh_resources_through_an_async_role_slot() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Pairing { async pair(a is Res, b is Res, n is int) is string; }
+object T does Pairing {
+    T();
+    async pair(a is Res, b is Res, n is int) is string {
+        Stdout().writeln("pair " + a.label() + " " + b.label());
+        a.label() + n.string();
+    }
+}
+async main() is int {
+    let p is Pairing = T();
+    Stdout().writeln("got " + (await p.pair(Res(name: "one"), Res(name: "two"), 3)));
+    Stdout().writeln("main end");
+    0;
+}
+"#, "pair one two\ndestroy two\ndestroy one\ngot one3\nmain end\n");
 }
 
 /// #851 with #849: a `map` over an array whose body awaits a resource.

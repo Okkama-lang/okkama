@@ -1,6 +1,6 @@
 pub(super) const TYPE_RULES: &[&str] = &[
     "const",
-    "deps.of",
+    "deps.of", "deps.join",
     "int.add",
     "int.sub",
     "int.mul",

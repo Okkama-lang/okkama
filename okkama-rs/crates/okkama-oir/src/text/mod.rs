@@ -1321,6 +1321,7 @@ opcodes!(LexicalOp {
 });
 opcodes!(OwnershipOp {
     Dependencies { value } => "deps.of",
+    DepsJoin { deps } => "deps.join",
     Empty {  } => "own.empty",
     Move { packet } => "own.move",
     Join { packets } => "own.join",

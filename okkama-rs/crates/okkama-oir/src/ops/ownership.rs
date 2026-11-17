@@ -32,6 +32,10 @@ operation_group! { OwnershipOp {
     Dependencies { value: ValueId }
         => ("deps.of", [value: Borrow], Rule::Data { ty: ResultType::Service(ServiceType::Deps), trap: false }
             .retains(Retention::FullDeps(*value)));
+    // #863 (ruling PR-N2, third amendment): the union of deps values; it reads them and takes nothing.
+    DepsJoin { deps: Vec<ValueId> }
+        => ("deps.join", [deps: Borrow], Rule::Data { ty: ResultType::Service(ServiceType::Deps), trap: false }
+            .retains(Retention::Union(deps.clone())));
     Empty {  }
         => ("own.empty", [], Rule::Empty);
     Move { packet: ValueId }

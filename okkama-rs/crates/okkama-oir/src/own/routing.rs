@@ -254,6 +254,7 @@ pub(super) fn handling(operation: &Operation) -> Handling {
         },
         Operation::Ownership(op) => match op {
             OwnershipOp::Dependencies { .. }
+            | OwnershipOp::DepsJoin { .. }
             | OwnershipOp::Empty { .. }
             | OwnershipOp::Move { .. }
             | OwnershipOp::Join { .. }

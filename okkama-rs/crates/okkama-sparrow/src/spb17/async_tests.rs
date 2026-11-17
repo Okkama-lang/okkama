@@ -946,14 +946,14 @@ fn async_block_ids_follow_draft3() {
         (68, O::UniqueCacheProof, "unique_cache.proof"), (69, O::CacheRehome, "cache.rehome"),
         (84, O::CleanupSettleDynamic, "cleanup.settle.dynamic"), (85, O::ServiceMaterialize, "service.materialize"),
         (86, O::ServiceAbsorb, "service.absorb"), (65, O::FutureSpawn, "fut.spawn"),
-        (87, O::FutureSpawnBound, "fut.spawn.bound"), (88, O::DutyEmpty, "duty.empty")];
+        (87, O::FutureSpawnBound, "fut.spawn.bound"), (88, O::DutyEmpty, "duty.empty"), (89, O::DepsJoin, "deps.join")];
     for (id, op, name) in assigned {
         assert_eq!((op.id(), op.name()), (id, name));
         assert_eq!(Opcode::from_id(id).unwrap(), op);
     }
     // Pins, workers and the unassigned tail stay reserved until their slices (spawn is assigned by #601 P1, the
-    // bound spawn by #601 F1, ruling PR-E, the empty duty slot by #855).
-    for id in (78..=83).chain(89..=95) {
+    // bound spawn by #601 F1, ruling PR-E, the empty duty slot by #855, the deps union by #863).
+    for id in (78..=83).chain(90..=95) {
         assert!(Opcode::from_id(id).unwrap_err().message.contains("reserved"), "{id}");
     }
     assert_eq!(Opcode::CleanupSettle.id(), 21);
@@ -1003,6 +1003,9 @@ fn async_classes_and_suspension_sites_follow_draft3() {
     // #855: the empty duty slot is a zero word written inline.
     assert_eq!(O::DutyEmpty.helper_class(), None);
     assert!(!O::DutyEmpty.suspends());
+    // #863: the deps union, like deps.of, has no machine storage.
+    assert_eq!(O::DepsJoin.helper_class(), None);
+    assert!(!O::DepsJoin.suspends() && !O::DepsJoin.is_terminator());
     let frame_bound = [O::Await, O::AwaitTake, O::AwaitUnwind, O::FuturePublish, O::FrameSave, O::FrameResume,
         O::CleanupDeliverCancel];
     for op in Opcode::ALL {

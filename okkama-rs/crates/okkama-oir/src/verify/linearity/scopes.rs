@@ -66,9 +66,10 @@ impl Engine<'_, '_> {
                 } else { flow.entry_accepted = true; }
             } else if !matches!(op, Operation::Ownership(OwnershipOp::ScopeBegin { .. }))
                 // Ruling PR-N2 (#860): a creation thunk names its Future's deps before its `fut.new` takes the entry
-                // packet; `deps.of` reads a value and takes nothing.
+                // packet; `deps.of` and `deps.join` (#863) read values and take nothing.
                 && !(self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Adapter { .. }))
-                    && matches!(op, Operation::Ownership(OwnershipOp::Dependencies { .. })))
+                    && matches!(op, Operation::Ownership(OwnershipOp::Dependencies { .. }
+                        | OwnershipOp::DepsJoin { .. })))
                 // C-2: the start resume of a D21 body restores the entry values that the acceptance admits.
                 && !(self.frame_body()
                     && matches!(op, Operation::Async(AsyncOp::FrameResume { continuation: 0, .. }))) {

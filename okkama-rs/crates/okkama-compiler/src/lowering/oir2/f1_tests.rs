@@ -476,3 +476,106 @@ fn f1_an_async_slot_call_packet_holds_no_duty_of_its_bare_future() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B91
         && diagnostic.message.contains("in its packet")), "{report:?}");
 }
+
+/// An async slot with two fresh resource inputs.
+const PAIRING: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "role Pairing { async pair(a is Res, b is Res) is int; } ",
+    "object P does Pairing { P(); async pair(a is Res, b is Res) is int { a.n() + b.n(); } } ",
+    "async main() is int { let p is Pairing = P(); await p.pair(Res(l: \"one\"), Res(l: \"two\")); }",
+);
+
+/// The `deps.join` of a creation thunk and the `fut.new` that names it.
+fn thunk_join(own: &ir::Module, thunk: ir::FuncId) -> (ir::InstId, ir::InstId) {
+    let body = own.functions.get(thunk).unwrap().body.as_ref().unwrap();
+    let find = |wanted: fn(&ir::Operation) -> bool| body.insts.iter().find(|(_, inst)| wanted(&inst.op))
+        .map(|(id, _)| id);
+    let join = find(|op| matches!(op, ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { .. }))).expect("deps.join");
+    let creation = find(|op| matches!(op, ir::Operation::Async(ir::AsyncOp::FutureNew { .. }))).expect("fut.new");
+    (join, creation)
+}
+
+/// #863 (ruling PR-N2, third amendment): a creation thunk with two managed inputs depends on the union of their deps,
+/// a `deps.join` of the two the prologue gives, and passes its entry packet to `fut.new` unchanged.
+#[test]
+fn f1_a_creation_thunk_with_two_inputs_depends_on_their_joined_deps() {
+    let (own, _) = super::own_case_tests::own_stage(PAIRING, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let thunk = witness(&own, "P", 0);
+    let body = own.functions.get(thunk).unwrap().body.as_ref().unwrap();
+    let (join, creation) = thunk_join(&own, thunk);
+    let ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { deps }) = &body.insts.get(join).unwrap().op else {
+        unreachable!()
+    };
+    assert_eq!(deps.len(), 2, "the deps of both inputs");
+    let joined = body.insts.get(join).unwrap().results[0];
+    let ir::Operation::Async(ir::AsyncOp::FutureNew { deps: named, .. }) = &body.insts.get(creation).unwrap().op else {
+        unreachable!()
+    };
+    assert_eq!(*named, joined, "the Future depends on the union");
+    assert!(!body.insts.iter().any(|(_, inst)| matches!(inst.op, ir::Operation::Ownership(
+        ir::OwnershipOp::Split { .. } | ir::OwnershipOp::Join { .. }))), "the entry packet is not restructured");
+    let text = ir::text::print(&own).unwrap();
+    assert!(text.contains(" = deps.join [%"), "deps.join prints by name");
+    assert!(ir::text::normalized_eq(&own, &ir::text::parse(&text).unwrap()).unwrap(), "and parses back");
+    full_low(PAIRING);
+}
+
+/// #863: `deps.join` takes deps values only (operand typing).
+#[test]
+fn f1_a_deps_join_joins_deps_values_only() {
+    let (own, _) = super::own_case_tests::own_stage(PAIRING, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let thunk = witness(&own, "P", 0);
+    let (join, _) = thunk_join(&own, thunk);
+    let mut typed = own.clone();
+    let body = typed.functions.get_mut(thunk).unwrap().body.as_mut().unwrap();
+    let receiver = body.blocks.get(body.entry).unwrap().params[0];
+    let ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { deps }) = &mut body.insts.get_mut(join).unwrap().op else {
+        unreachable!()
+    };
+    deps[1] = receiver;
+    let report = full_report(&typed);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::T1), "{report:?}");
+}
+
+/// #863 (ruling PR-N2, third amendment): a creation thunk never restructures its unaccepted entry packet. A split of
+/// it before `fut.new`, joined straight back, is evaluation before acceptance (B5.1); only `deps.of` and `deps.join`
+/// may come first.
+#[test]
+fn f1_a_creation_thunk_does_not_split_its_entry() {
+    let (own, _) = super::own_case_tests::own_stage(PAIRING, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let thunk = witness(&own, "P", 0);
+    let (join, creation) = thunk_join(&own, thunk);
+    let mut split = own.clone();
+    let body = split.functions.get_mut(thunk).unwrap().body.as_mut().unwrap();
+    let ir::Operation::Async(ir::AsyncOp::FutureNew { packet: entry, .. }) = body.insts.get(creation).unwrap().op
+    else { unreachable!() };
+    let template = body.insts.get(join).unwrap().clone();
+    let packet = body.values.get(entry).unwrap().clone();
+    let deps = body.values.get(template.results[0]).unwrap().clone();
+    let selection = body.selections.alloc(ir::SelectionExpr::Union(vec![])).unwrap();
+    let parts = body.insts.alloc(template.clone()).unwrap();
+    let joined = body.insts.alloc(template).unwrap();
+    let mut value = |data: &ir::ValueData, inst, index| body.values.alloc(ir::ValueData {
+        ty: data.ty, def: ir::Definition::InstResult { inst, index }, facts: data.facts.clone() }).unwrap();
+    let results = vec![value(&packet, parts, 0), value(&packet, parts, 1), value(&deps, parts, 2)];
+    let whole = value(&packet, joined, 0);
+    let instruction = body.insts.get_mut(parts).unwrap();
+    instruction.op = ir::Operation::Ownership(ir::OwnershipOp::Split { packet: entry, selection });
+    instruction.results = results.clone();
+    let instruction = body.insts.get_mut(joined).unwrap();
+    instruction.op = ir::Operation::Ownership(ir::OwnershipOp::Join { packets: results[..2].to_vec() });
+    instruction.results = vec![whole];
+    let ir::Operation::Async(ir::AsyncOp::FutureNew { packet, .. }) = &mut body.insts.get_mut(creation).unwrap().op
+    else { unreachable!() };
+    *packet = whole;
+    let (_, block) = body.blocks.iter_mut().find(|(_, block)| block.insts.contains(&creation)).unwrap();
+    let at = block.insts.iter().position(|inst| *inst == creation).unwrap();
+    block.insts.splice(at..at, [parts, joined]);
+    let report = full_report(&split);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "callee must accept fresh inputs before evaluating its body"), "{report:?}");
+}

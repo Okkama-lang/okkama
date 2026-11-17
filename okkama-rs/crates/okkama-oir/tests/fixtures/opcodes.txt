@@ -81,6 +81,7 @@ const
 cvt
 defer.register
 deps.of
+deps.join
 destroy.direct
 discard
 duty.empty
