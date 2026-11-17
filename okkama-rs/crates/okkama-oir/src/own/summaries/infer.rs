@@ -441,6 +441,18 @@ impl Universe {
                 effect.retention = effect.retention.take().map(whole_parameters);
             }
         }
+        // Ruling PR-N2 (#860, OIR-2-async-remaining §6.3b): a creation thunk borrows a bare Future argument, since
+        // no caller offers it to an async callee (B9.1); its other inputs leave with the Future it returns.
+        let thunk = declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Adapter { target }
+            if module.functions.get(*target).is_ok_and(|target| target.attrs.contains(&FunctionAttr::Async))));
+        if thunk {
+            for (effect, ty) in summary.parameters.iter_mut().zip(language_parameters(module, body)) {
+                if futures::is_future(module, ty) {
+                    *effect = ParameterEffect { convention: FreshConvention::Borrow, retention: None,
+                        deps: effect.deps.clone(), destination: TransferDestination::None };
+                }
+            }
+        }
         normal::normalize(&mut summary, budget)?;
         Ok(BodyInference { summary, replacements })
     }

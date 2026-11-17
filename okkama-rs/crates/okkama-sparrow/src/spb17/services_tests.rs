@@ -25,6 +25,9 @@ enum Make {
     Rehomed,
     /// The close settles the duty: the returned packet holds no entry.
     Settled,
+    /// Ruling PR-N2 (#860): a creation thunk of @work, whose `fut.new` takes its entry packet whole; the duty is
+    /// rehomed as in `Rehomed`.
+    Forwarded,
 }
 
 /// What @caller does with the returned Future, and how its close settles.
@@ -47,6 +50,9 @@ enum Caller {
     /// @work, whose only start value is an int (#782, `SPB_FUTURE_INPUT`); `feed: false` gives that Future an empty
     /// packet and admits the absorbed one instead.
     Feed { feed: bool },
+    /// `let f = make();` where @make is a creation thunk (#860, `SPB_CALL_INPUT`): `carried` gives it a packet into
+    /// which a Future of @caller is absorbed, an empty packet otherwise.
+    Thunk { carried: bool },
 }
 
 /// The int argument of @work and its external deps.
@@ -59,8 +65,13 @@ fn seven(b: &mut Body) -> (Location, Location) {
 
 /// A cold Future of @work owned by `scope`: the Future and its cache duty.
 fn create(b: &mut Body, state: &mut Location, scope: u32) -> (Location, Location) {
+    create_from(b, state, scope, None)
+}
+
+/// The same, with `inputs` as its inputs packet, or an empty one.
+fn create_from(b: &mut Body, state: &mut Location, scope: u32, inputs: Option<Location>) -> (Location, Location) {
     let (seven, external) = seven(b);
-    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let offered = inputs.unwrap_or_else(|| b.emit(O::OwnEmpty, vec![], K::Packet));
     let [future, cache, next] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
     b.next(O::FutureNew, vec![A::Entry(0), A::Scope(scope), A::Result(Some(FUTURE_INT)), l(seven), l(offered),
         l(external), l(*state)], vec![future, cache, next]);
@@ -76,14 +87,17 @@ fn maker(variant: Make) -> Function {
     b.f.proofs.entry = Some(EntryContract::default());
     b.block("entry", &[input]);
     let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAKER), A::Boundary(MAKER)], K::ScopeState);
-    let mut state = b.emit(O::OwnAccept, vec![l(q0), l(input)], K::ScopeState);
-    let (future, cache) = create(&mut b, &mut state, MAKER);
+    let (mut state, forwarded) = match variant {
+        Make::Forwarded => (q0, Some(input)),
+        _ => (b.emit(O::OwnAccept, vec![l(q0), l(input)], K::ScopeState), None),
+    };
+    let (future, cache) = create_from(&mut b, &mut state, MAKER, forwarded);
     let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
     let selection = b.selection();
     let mut pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(MAKER), l(future),
         l(empty), A::Selection(selection)], K::Pending);
     let duties = match variant {
-        Make::Rehomed => {
+        Make::Rehomed | Make::Forwarded => {
             pending = b.emit(O::CacheRehome, vec![A::Destination(ExitDestination::Caller), l(pending), l(cache)],
                 K::Pending);
             vec![]
@@ -131,7 +145,13 @@ fn caller(variant: Caller, dynamic: Option<Dynamic>) -> Function {
         let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
         b.emit(O::ServiceAbsorb, vec![l(empty), l(cache)], K::Packet)
     } else {
-        let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+        let offered = if variant == (Caller::Thunk { carried: true }) {
+            let (_, cache) = create(&mut b, &mut state, MAIN);
+            let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+            b.emit(O::ServiceAbsorb, vec![l(empty), l(cache)], K::Packet)
+        } else {
+            b.emit(O::OwnEmpty, vec![], K::Packet)
+        };
         b.outcomes(O::InvokeCallOwn, vec![A::Entry(MAKE), A::Summary(0), l(offered), A::Flag(false)],
             vec![(Tag::Normal, "made", vec![p(0), p(1), p(2)])]);
         let [future, packet, deps] = [b.register(FUTURE_INT), b.service(K::Packet), b.service(K::Deps)];
@@ -583,6 +603,33 @@ fn an_inputs_packet_carries_entries_only_into_a_body_that_can_take_them() {
     loads(&returned(Make::Rehomed, Caller::Feed { feed: false }, Some(Dynamic::AfterStatic)));
     reject_with(&returned(Make::Rehomed, Caller::Feed { feed: true }, Some(Dynamic::AfterStatic)),
         services::FUTURE_INPUT, "inputs packet that may carry service entries");
+}
+
+/// Ruling PR-N2 (#860), `SPB_CALL_INPUT`: @make is a creation thunk whose `fut.new` takes its entry packet whole,
+/// so a call gives it a packet that may carry entries only when @work's entry may (`entry_carries` follows the
+/// forwarded creation). The call with an empty packet loads; @make's inputs are plain, so a packet with an absorbed
+/// entry is refused as for any plain callee. The rule itself is read at the call with its packet marked as one that
+/// may carry.
+#[test]
+fn a_creation_thunk_takes_entries_only_when_its_created_body_can() {
+    let p = returned(Make::Forwarded, Caller::Thunk { carried: false }, Some(Dynamic::AfterStatic));
+    assert_eq!(services::forwarded_creation(&p, &p.functions[MAKE as usize]).map(|f| f.symbol.as_str()), Some("work"));
+    loads(&p);
+    reject_with(&returned(Make::Forwarded, Caller::Thunk { carried: true }, Some(Dynamic::AfterStatic)),
+        "CALL_PLAIN_PACKET", "plain arguments");
+    let caller = &p.functions[CALLER as usize];
+    let (op, arguments) = caller.code.iter().find_map(|instruction| match instruction {
+        Instruction::Champ { op: op @ O::InvokeCallOwn, arguments, .. } => Some((*op, arguments.as_slice())),
+        _ => None,
+    }).expect("the call of @make");
+    let carried = vec![true; arguments.len()];
+    let failure = services::call_input(&p, caller, op, arguments, &carried).unwrap_err();
+    assert_eq!(failure.rule, services::CALL_INPUT, "{failure}");
+    services::call_input(&p, caller, op, arguments, &vec![false; arguments.len()]).unwrap();
+    // A callee that accepts its entry packet is no thunk, and its entry may carry what it accepts.
+    let accepting = returned(Make::Rehomed, Caller::Admit, Some(Dynamic::AfterStatic));
+    assert!(services::forwarded_creation(&accepting, &accepting.functions[MAKE as usize]).is_none());
+    services::call_input(&accepting, &accepting.functions[CALLER as usize], op, arguments, &carried).unwrap();
 }
 
 /// #848: an entry packet's entries accepted into a scope (`admitted` false: `own.accept`, the bound journal) or

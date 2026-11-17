@@ -493,7 +493,7 @@ fn t5_layouts_witnesses_defaults_and_destroy_signatures() {
     let role = module.declarations.alloc(Declaration {
         name: "Value".into(), type_params: vec![], loc: None,
         kind: DeclarationKind::Role { methods: vec![RoleMethod {
-            name: "get".into(), signature: module.functions.get(fid()).unwrap().signature.clone(),
+            name: "get".into(), signature: module.functions.get(fid()).unwrap().signature.clone(), is_async: false,
         }], builtin: false },
     }).unwrap();
     let role_ty = module.types.intern(Type::Role { decl: role, args: vec![] }).unwrap();

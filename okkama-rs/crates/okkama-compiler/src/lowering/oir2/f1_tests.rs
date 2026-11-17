@@ -335,3 +335,78 @@ fn f1_two_implementations_of_an_async_slot_share_its_thunk_signature() {
         assert!(!result.fresh.is_empty(), "{}: the created Future is fresh, with its cache duty", thunk.symbol);
     }
 }
+
+/// The Full verifier's report on an own module that a test has changed.
+fn full_report(own: &ir::Module) -> ir::verify::VerifyReport {
+    let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
+    let catalog = super::P1NativeSummaries::for_module(own).unwrap();
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    ir::verify::verify_own_with(own, &verify, context).expect_err("the changed module is refused")
+}
+
+fn reports(report: &ir::verify::VerifyReport, rule: ir::verify::RuleId) -> bool {
+    report.diagnostics.iter().any(|diagnostic| diagnostic.rule == rule)
+}
+
+/// The export rule of a callee body (B5.1), which the creation-thunk allowance relaxes.
+fn exports(report: &ir::verify::VerifyReport, function: ir::FuncId) -> bool {
+    report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "body exports accepted inputs beyond its declared take retention"
+        && matches!(diagnostic.primary.entity, ir::verify::EntityLocation::Terminator { function: f, .. }
+            | ir::verify::EntityLocation::Instruction { function: f, .. } if f == function))
+}
+
+/// Ruling PR-N2 (#860): the creation thunk of `Loader.load` forwards its entry packet into `fut.new`, so the fresh
+/// `Res` leaves with the Future. Full admits that export only for an adapter of an async target whose owning
+/// parameter is taken into the result.
+#[test]
+fn f1_a_creation_thunk_exports_its_entry_only_as_a_taken_input_of_its_future() {
+    let (own, _) = super::own_case_tests::own_stage(LOADER, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let thunk = witness(&own, "Net", 0);
+    let summary = own.functions.get(thunk).unwrap().summary.unwrap();
+    let taken = own.summaries.get(summary).unwrap().parameters.iter()
+        .position(|effect| effect.convention == ir::FreshConvention::Take)
+        .expect("the thunk takes the fresh Res");
+    assert_eq!(own.summaries.get(summary).unwrap().parameters[taken].destination, ir::TransferDestination::Result);
+
+    let mut borrowed = own.clone();
+    let effect = &mut borrowed.summaries.get_mut(summary).unwrap().parameters[taken];
+    effect.convention = ir::FreshConvention::Borrow;
+    effect.retention = None;
+    effect.destination = ir::TransferDestination::None;
+    let report = full_report(&borrowed);
+    assert!(exports(&report, thunk), "a borrowed Res leaves with the Future: {report:?}");
+
+    let mut plain = own.clone();
+    plain.functions.get_mut(thunk).unwrap().attrs.retain(|attr| !matches!(attr, ir::FunctionAttr::Adapter { .. }));
+    let report = full_report(&plain);
+    assert!(exports(&report, thunk), "only an adapter exports its entry: {report:?}");
+}
+
+/// A synchronous slot that takes a Future and returns it: the caller offers the Future with its cache duty.
+const KEEPER: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "object Maker { Maker(); async make(l is string) is Res { Res(l: l); } } ",
+    "role Keeping { keep(f is Future<Res>) is Future<Res>; } ",
+    "object K does Keeping { K(); keep(f is Future<Res>) is Future<Res> { f; } } ",
+    "async main() is int { let k is Keeping = K(); (await k.keep(Maker().make(\"x\"))).n(); }",
+);
+
+/// Ruling PR-N2 (#860): a call of an async callee is a creation, which borrows a bare Future argument. The same role
+/// call that consumes a Future into a synchronous slot is refused once the slot is async (B9.1).
+#[test]
+fn f1_a_call_of_an_async_slot_offers_no_futures_duty() {
+    let (own, _) = super::own_case_tests::own_stage(KEEPER, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut changed = own.clone();
+    let role = changed.declarations.iter().find(|(_, declaration)| declaration.name.ends_with("Keeping"))
+        .map(|(id, _)| id).expect("the role");
+    let ir::DeclarationKind::Role { methods, .. } = &mut changed.declarations.get_mut(role).unwrap().kind else {
+        panic!("a role")
+    };
+    methods[0].is_async = true;
+    let report = full_report(&changed);
+    assert!(reports(&report, ir::verify::RuleId::B91), "{report:?}");
+}

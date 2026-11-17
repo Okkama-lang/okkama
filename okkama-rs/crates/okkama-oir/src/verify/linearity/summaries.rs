@@ -9,6 +9,29 @@ impl Engine<'_, '_> {
         let possible = self.possible(flow, &keys);
         Filter { keys, possible, labels, fresh, state: 0, stale: false, whole_future: false, futures: false }
     }
+    /// Ruling PR-N2 (#860): whether a role, closure or capability call reaches an async callee: an async role slot,
+    /// a callee of an async function type, or a capability field implemented by an async function.
+    fn async_callee(&self, op: &Operation, target: Option<FuncId>) -> bool {
+        match op {
+            Operation::Call(CallOp::Role { role, slot, .. }) => self.module.declarations.get(*role).is_ok_and(|role| {
+                matches!(&role.kind, DeclarationKind::Role { methods, .. }
+                    if methods.get(*slot as usize).is_some_and(|method| method.is_async))
+            }),
+            Operation::Call(CallOp::Closure { callee, .. }) => self.body.values.get(callee.value).is_ok_and(|value| {
+                matches!(self.module.types.get(value.ty), Ok(Type::Fn(FnType { is_async: true, .. })))
+            }),
+            Operation::Call(CallOp::Cap { .. }) => target.and_then(|id| self.module.functions.get(id).ok())
+                .is_some_and(|function| function.attrs.contains(&FunctionAttr::Async)),
+            _ => false,
+        }
+    }
+
+    /// Ruling PR-N2 (#860): whether this function is the creation thunk of an async target (an adapter).
+    pub(super) fn creation_thunk(&self) -> bool {
+        self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Adapter { target }
+            if self.module.functions.get(*target).is_ok_and(|target| target.attrs.contains(&FunctionAttr::Async))))
+    }
+
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("summaries::call_entry");
@@ -22,6 +45,15 @@ impl Engine<'_, '_> {
             return;
         };
         let target = target.or_else(|| super::super::summaries::cap_target(self.module, op));
+        // Ruling PR-N2 (#860): a call of an async callee is a creation, which borrows a bare Future argument (OIR-2
+        // §10.2), as `fut.new` does: the Future and its cache duty stay with their owner.
+        if self.async_callee(op, target) && call.args.iter().any(|argument| {
+            argument.convention == OperandConvention::Consume
+                && matches!(super::super::later::value_type(self.module, self.body, argument.value),
+                    Some(Type::Future(_)))
+        }) {
+            self.error(R::B91, "a call of an async callee consumes no bare Future: it borrows it (PR-N2)");
+        }
         self.call_deps(call, receiver, target, before);
         self.descriptor_arguments(call, target, before);
         if let Some(function) = target.and_then(|id| self.module.functions.get(id).ok()) {
@@ -614,6 +646,19 @@ impl Engine<'_, '_> {
                     permitted.insert(view);
                 }
             }
+            // Ruling PR-N2 (#860, OIR-2-async-remaining §6.3b): a creation thunk exports its entry packet whole inside
+            // the Future it returns. The packet holds only the fresh part of the arguments that may own, and no bare
+            // Future, which its callers borrow (B9.1 at `call_entry`), so it is permitted whole when each of those
+            // arguments is declared taken into the result.
+            let thunk = self.creation_thunk() && arguments.iter().enumerate().all(|(index, value)| {
+                let ty = self.body.values.get(*value).map(|value| value.ty);
+                ty.is_ok_and(|ty| !self.obligations[ty.as_u32() as usize]
+                    || matches!(self.module.types.get(ty), Ok(Type::Future(_))))
+                    || summary.parameters.get(index).is_some_and(|effect| {
+                    effect.convention == FreshConvention::Take && effect.destination == TransferDestination::Result
+                        && effect.retention.is_some()
+                })
+            });
             for &value in values {
                 for piece in &flow.tokens[value.as_u32() as usize].pieces {
                     let accepted = match piece.origin {
@@ -622,7 +667,7 @@ impl Engine<'_, '_> {
                             == Some(&Type::Service(ServiceType::Own)),
                         _ => false,
                     };
-                    if accepted && !self.subset(piece, &permitted, &labels) {
+                    if accepted && !thunk && !self.subset(piece, &permitted, &labels) {
                         self.error(R::B51, "body exports accepted inputs beyond its declared take retention");
                     }
                 }

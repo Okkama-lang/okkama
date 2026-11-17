@@ -20,6 +20,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An async role slot takes a fresh argument as a direct async call does (#860).** A call
+  through an async role slot (or a bound async action, or an async capability field) reaches
+  a creation thunk, which own and the verifier treated as an ordinary call. A fresh resource
+  argument failed Full verification, and a fresh Future argument was offered to the thunk. Now
+  such a call is a creation (ruling PR-N2): the thunk passes its entry packet whole to
+  `fut.new`, so the fresh resource leaves with the Future and is destroyed in the callee's
+  body, and a bare Future argument is borrowed and stays with the scope that created it, as on
+  a direct call. The verifier lets a creation thunk export its entry only when every owning
+  argument is taken into its result (B5.1), and refuses a call of an async callee that
+  consumes a bare Future (B9.1). The loader reads a thunk's entry as its created body's
+  (`entry_carries`) and checks what its callers give it (`SPB_CALL_INPUT`). Role methods in
+  OIR text carry `async`. A fresh Future argument keeps PR-B2's order on both paths: its
+  outcome is destroyed at the close of the scope that created it, where Tomato destroys it
+  when the callee ends (owner's decision on #861).
 - **A fresh Future started through a role is registered with the group (#818).** A Future
   passed to `FutureGroup.start` through the `Supervising` role was retained by the role's
   adapter and settled when the adapter returned, so a member's outcome was destroyed at the

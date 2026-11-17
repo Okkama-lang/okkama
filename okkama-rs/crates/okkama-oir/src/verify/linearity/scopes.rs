@@ -2,8 +2,8 @@ use super::*;
 
 impl Engine<'_, '_> {
     /// Ruling PR-M (#818, OIR-2-async-remaining §6.3a): an adapter whose one call owns its inputs passes its entry
-    /// packet to that call as the call's packet, so the callee takes what the caller offered. The packet may reach the
-    /// call under a block parameter's name.
+    /// packet to that call as the call's packet, so the callee takes what the caller offered; a creation thunk passes
+    /// it to its `fut.new` (PR-N2, #860). The packet may reach the call under a block parameter's name.
     fn forwards_entry(&self, op: &Operation, before: &Flow) -> bool {
         let adapter = self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Adapter { .. }));
         let OwnershipAbi::Explicit { input_packet, .. } = self.declaration.signature.ownership_abi else {
@@ -11,7 +11,12 @@ impl Engine<'_, '_> {
         };
         let input = self.body.blocks.get(self.body.entry).ok()
             .and_then(|block| block.params.get(usize::from(input_packet))).copied();
-        adapter && super::super::summaries::call(op).and_then(|(call, _, _)| call.packet).is_some_and(|packet| {
+        // Ruling PR-N2 (#860): a creation thunk's `fut.new` takes the entry packet as its inputs packet.
+        let packet = match op {
+            Operation::Async(AsyncOp::FutureNew { packet, .. }) => Some(*packet),
+            _ => super::super::summaries::call(op).and_then(|(call, _, _)| call.packet),
+        };
+        adapter && packet.is_some_and(|packet| {
             input.is_some_and(|input| {
                 packet == input || before.tokens[packet.as_u32() as usize].sources.contains(&input)
             })
@@ -60,6 +65,10 @@ impl Engine<'_, '_> {
                     self.error(R::B51, "call inputs must be accepted into the callee action root");
                 } else { flow.entry_accepted = true; }
             } else if !matches!(op, Operation::Ownership(OwnershipOp::ScopeBegin { .. }))
+                // Ruling PR-N2 (#860): a creation thunk names its Future's deps before its `fut.new` takes the entry
+                // packet; `deps.of` reads a value and takes nothing.
+                && !(self.declaration.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Adapter { .. }))
+                    && matches!(op, Operation::Ownership(OwnershipOp::Dependencies { .. })))
                 // C-2: the start resume of a D21 body restores the entry values that the acceptance admits.
                 && !(self.frame_body()
                     && matches!(op, Operation::Async(AsyncOp::FrameResume { continuation: 0, .. }))) {

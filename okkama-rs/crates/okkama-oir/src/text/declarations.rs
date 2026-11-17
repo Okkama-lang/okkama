@@ -399,9 +399,10 @@ impl Reader<'_> {
                 self.line()?;
                 let mut methods = vec![];
                 while !self.eat("}") {
+                    let is_async = self.eat("async");
                     let name = self.word()?;
                     let signature = Signature::read(self)?;
-                    methods.push(RoleMethod { name, signature });
+                    methods.push(RoleMethod { name, signature, is_async });
                     self.line()?;
                 }
                 DeclarationKind::Role { methods, builtin }
@@ -692,7 +693,7 @@ impl Writer<'_> {
                 }
                 self.push(" {\n");
                 for method in methods {
-                    self.push("    ");
+                    self.push(if method.is_async { "    async " } else { "    " });
                     self.word(&method.name)?;
                     method.signature.write(self)?;
                     self.push("\n");

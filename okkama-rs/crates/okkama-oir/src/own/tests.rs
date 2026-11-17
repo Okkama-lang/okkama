@@ -559,6 +559,7 @@ fn role_publication_conflicts_name_each_call_and_both_contracts() {
         kind: DeclarationKind::Role { builtin: false, methods: vec![RoleMethod {
             name: "run".into(),
             signature: Signature { params: vec![], results: vec![], ownership_abi: OwnershipAbi::Unelaborated },
+            is_async: false,
         }] },
     }).unwrap();
     let role_ty = module.intern_type(Type::Role { decl: role, args: vec![] }).unwrap();
