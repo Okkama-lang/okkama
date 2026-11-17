@@ -699,6 +699,45 @@ impl Emit<'_, '_> {
         result
     }
 
+    /// An observation call of the function `function` selects at run time (a role dispatch, #838): a compiled
+    /// target is called directly through its invocation record, as `observe` calls a static one; otherwise the
+    /// machine helper compiles it or reaches its provider.
+    fn observe_selected(&mut self, function: Value, values: &[Value]) -> Value {
+        let ctx = self.ctx;
+        let zero = self.iconst(0);
+        let argc = self.iconst(values.len() as u64);
+        if values.len() > 8 {
+            let argv = self.record(values);
+            return self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+        }
+        let stride = std::mem::size_of::<runtime::Invocation>() as i64;
+        let offset = self.builder.ins().imul_imm_s(function, stride);
+        let base = self.iconst(self.invocations as u64 + std::mem::offset_of!(runtime::Invocation, code) as u64);
+        let word = self.builder.ins().iadd(base, offset);
+        let code = self.load(word, 0);
+        let direct = self.builder.create_block();
+        let helper = self.builder.create_block();
+        let done = self.builder.create_block();
+        let result = self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(code, direct, &[], helper, &[]);
+        self.builder.switch_to_block(direct);
+        #[cfg(test)]
+        self.call("test_champ_safepoint", &[ctx]);
+        let signature = self.jit.signature(values.len());
+        let signature = self.builder.import_signature(signature);
+        let arguments = std::iter::once(ctx).chain(values.iter().copied()).collect::<Vec<_>>();
+        let call = self.builder.ins().call_indirect(signature, code, &arguments);
+        self.report_roots(call);
+        let value = self.builder.inst_results(call)[0];
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(helper);
+        let argv = self.record(values);
+        let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
+        self.builder.ins().jump(done, &[value.into()]);
+        self.builder.switch_to_block(done);
+        result
+    }
+
     /// A self observation call in tail position (its result returned at once, directly or through
     /// one branch) in a function without service state: no scope, packet or cleanup outlives it.
     fn self_tail_call(&self, target: usize, flow: &s::Flow) -> bool {
@@ -1164,10 +1203,7 @@ impl Emit<'_, '_> {
                         function as u64
                     });
                     let values = locations[..count].iter().map(|&loc| self.word(loc)).collect::<Vec<_>>();
-                    let argv = self.record(&values);
-                    let argc = self.iconst(count as u64);
-                    let value = self.call("champ_machine_external", &[ctx, function, zero, argv, argc]).unwrap();
-                    (value, has_result)
+                    (self.observe_selected(function, &values), has_result)
                 } else {
                     let target = arguments.iter().find_map(entry).unwrap() as usize;
                     let callee = &self.program.functions[target];
