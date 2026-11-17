@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An async helper can bind and await a borrowed Future in a nested scope (#848).** A
+  helper whose parameter holds Futures (an array of them, a completion stream) was refused
+  at load (SPB_SCHEDULE) when it bound an element with `let` inside a block, an `if` or a
+  loop and awaited it. The load gate's carrier analysis now tells entries a scope admitted
+  from those it only accepted or bound: an admissible split never selects a bound entry
+  (Fable's ruling), so the nested scope that admits its selection need not settle entries
+  dynamically. Loader unit test with the three cases, mutation-checked; end-to-end tests
+  with Tomato's output (block and `if` under Full too; the stream drain Structural, #796).
 - **A Future whose outcome has a `destroy` runs on Champ in a loop body (#851).** The load
   gate stopped such programs at D18_EXECUTOR ("merge envelope omits destroy failures"):
   every close of a function that creates such a Future was taken to release its outcome,
