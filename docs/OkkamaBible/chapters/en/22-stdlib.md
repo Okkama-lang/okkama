@@ -592,3 +592,49 @@ mutable hasher. Text is hashed as UTF-8. The encodings come in pairs, one
 object per direction (Section 22.15): `Base64Encoded` turns bytes into text
 and `Base64Decoded` turns the text back into bytes. Text to bytes is itself
 an explicit step (`Utf8Encoded`); no encoding guesses a character set.
+
+### Configuration: `toml`
+
+{{example:22-toml}}
+
+`ParsedToml(text).root()` is a table read like a json object: `text`, `int`
+and `get` name a key and the type the program wants there, and a key that
+may be missing goes through `maybe`, whose answer is a `Maybe` the program
+settles with `else`. An array of tables (`[[mirror]]`) is `tables(name)`, an
+array of plain tables the loop takes one by one. Nothing is parsed when the
+object is made; the text is read at the first question, and a mistake in it
+(here a key given twice) is `InvalidToml` with the offset, line and column
+of the failed read. TOML's `inf` and `nan` are values of their own
+(`TomlInfinity`, `TomlNaN`), never a float, because Okkama's floats are
+finite. The module only reads: the library has no TOML writer.
+
+### Documents: `xml`
+
+{{example:22-xml}}
+
+An element answers by name in the same way: `attribute("version")`,
+`children("item")` for the elements with that name, `text("title")` for the
+text of the first such child, with the entities already decoded (`&amp;`
+reads as `&`). Writing goes the other way, from values: an element is a name,
+its attributes and its children, and `xml()` is its text with the escaping
+done. Every element's `xml()` stands on its own, so it declares its
+namespace even when it has none: that is the `xmlns=""` in the output, and a
+fragment cut out of a larger document keeps its meaning. Limits on depth and
+on the number of parse events are constructor arguments, as for json.
+
+### Identifiers and media types: `uuid`, `mime`
+
+{{example:22-ids}}
+
+A UUID read from text answers in canonical form, lower case, and tells its
+version and variant. A name-based UUID (`Uuid5`) is a pure function of its
+namespace and name, so the same name gives the same identifier on every
+machine; that is the one to use for keys derived from data. A random UUID is
+a distribution over a source of randomness that the program passes in
+(`Uuid4s(random: SecureRandom())`): nothing in the library draws random bits
+behind the program's back (Section 22.6). A media type is read into its type,
+subtype and parameters; parameter values keep their case as given. Mapping a
+file name to a media type is a table the program chooses:
+`StandardMediaTypes` is the library's built-in table, `SystemMediaTypes`
+reads the host's files and falls back to another table, and the program says
+which one it trusts.

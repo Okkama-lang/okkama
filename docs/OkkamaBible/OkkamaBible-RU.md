@@ -19634,6 +19634,154 @@ back: Okkama!
 тоже явный шаг (`Utf8Encoded`); ни одна кодировка не угадывает набор
 символов.
 
+### Конфигурация: `toml`
+
+```okkama
+module bible/toml v1.0.0;
+
+// A configuration file read the way json is read: by name, with the type
+// asked for at the point of use, and absence decided where it is allowed.
+import "toml/parse" take ParsedToml, InvalidToml;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let config = ParsedToml("title = \"shop\"\n" +
+        "[server]\nhost = \"0.0.0.0\"\nport = 8080\n" +
+        "[[mirror]]\nurl = \"https://a.example\"\nweight = 3\n" +
+        "[[mirror]]\nurl = \"https://b.example\"\n").root();
+    let server = config.get("server");
+    out.writeln(config.text("title") + " on " + server.text("host") + ":" + server.int("port").string());
+    out.writeln("debug: " + (config.maybe("debug").boolean() else false).string());
+    for config.tables("mirror") -> mirror {
+        out.writeln(mirror.text("url") + " weight " + (mirror.maybe("weight").int() else 1).string());
+    }
+    out.writeln(try { ParsedToml("port = 80\nport = 81\n").root().int("port").string(); }
+        catch e is InvalidToml { "refused: " + e.text(); });
+    0;
+}
+```
+
+Вывод:
+
+```text
+shop on 0.0.0.0:8080
+debug: false
+https://a.example weight 3
+https://b.example weight 1
+refused: InvalidToml.located(10, 2, 1, "duplicate TOML key")
+```
+
+`ParsedToml(text).root()` — таблица, которую читают как объект json: `text`,
+`int` и `get` называют ключ и тип, который программа там ждёт, а ключ,
+которого может не быть, идёт через `maybe`; его ответ — `Maybe`, и программа
+решает его через `else`. Массив таблиц (`[[mirror]]`) — это `tables(name)`,
+обычный массив таблиц, который цикл берёт по одной. При создании объекта
+ничего не разбирается: текст читается при первом вопросе, и ошибка в нём
+(здесь ключ, заданный дважды) — это `InvalidToml` со смещением, строкой и
+столбцом неудачного чтения. `inf` и `nan` из TOML — отдельные значения
+(`TomlInfinity`, `TomlNaN`), а не float, потому что float в Okkama конечны.
+Модуль только читает: писателя TOML в библиотеке нет.
+
+### Документы: `xml`
+
+```okkama
+module bible/xml v1.0.0;
+
+// Reading a feed by element and attribute name, then writing a document
+// from nodes: the tree is a value, and xml() is its text.
+import "xml/parse" take ParsedXml;
+import "xml/node" take XmlDocument, XmlElement, XmlText, XmlAttribute;
+import "xml/name" take XmlName;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let feed = ParsedXml("<feed version=\"2\"><item><title>Tea &amp; milk</title></item>" +
+        "<item><title>Bread</title></item></feed>").document().root();
+    out.writeln("version " + feed.attribute("version"));
+    for feed.children("item") -> item {
+        out.writeln("- " + item.text("title"));
+    }
+    let note = XmlElement(XmlName("note"), [XmlAttribute(XmlName("lang"), "en")], [XmlText("1 < 2")]);
+    out.writeln(XmlDocument(note).xml());
+    0;
+}
+```
+
+Вывод:
+
+```text
+version 2
+- Tea & milk
+- Bread
+<?xml version="1.0" encoding="UTF-8"?><note xmlns="" lang="en">1 &lt; 2</note>
+```
+
+Элемент так же отвечает по имени: `attribute("version")`, `children("item")`
+для элементов с этим именем, `text("title")` для текста первого такого
+потомка, где сущности уже раскрыты (`&amp;` читается как `&`). Запись идёт в
+обратную сторону, от значений: элемент — это имя, его атрибуты и потомки, а
+`xml()` — его текст с уже сделанным экранированием. `xml()` каждого элемента
+самодостаточен, поэтому элемент объявляет своё пространство имён, даже когда
+его нет: отсюда `xmlns=""` в выводе, и фрагмент, вырезанный из большего
+документа, сохраняет смысл. Пределы глубины и числа событий разбора — это
+аргументы конструктора, как у json.
+
+### Идентификаторы и типы данных: `uuid`, `mime`
+
+```okkama
+module bible/ids v1.0.0;
+
+// Identifiers and media types: a UUID is read, made from a name, or drawn
+// from an explicit source of randomness; a media type is read into parts,
+// and a file name is mapped to one by a table the program chooses.
+import "uuid/value" take UuidText;
+import "uuid/generation" take Uuid5, Uuid4s;
+import "random/source" take SecureRandom;
+import "mime/media_type" take MediaType;
+import "mime/types" take StandardMediaTypes;
+import "fs/path" take Path;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let given = UuidText(origin: "550E8400-E29B-41D4-A716-446655440000");
+    out.writeln(given.string() + ", version " + given.version().string());
+    let dns = UuidText(origin: "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+    out.writeln("stable: " + Uuid5(namespace: dns, name: "example.com").string());
+    out.writeln("drawn: version " + Uuid4s(random: SecureRandom()).sample().version().string());
+    let page = MediaType("text/html; charset=UTF-8");
+    out.writeln(page::Type::type + " / " + page::Type::subtype + ", charset " + page.parameters().first("charset"));
+    let types = StandardMediaTypes();
+    out.writeln("report.pdf is " + types.type(Path("report.pdf")).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+550e8400-e29b-41d4-a716-446655440000, version 4
+stable: cfbff0d1-9375-5685-968c-48ce8b15ae17
+drawn: version 4
+text / html, charset UTF-8
+report.pdf is application/pdf
+```
+
+UUID, прочитанный из текста, отвечает в каноническом виде, строчными
+буквами, и сообщает свою версию и вариант. UUID от имени (`Uuid5`) — чистая
+функция пространства имён и имени, поэтому одно и то же имя даёт один и тот
+же идентификатор на любой машине; его и берут для ключей, выведенных из
+данных. Случайный UUID — распределение над источником случайности, который
+программа передаёт сама (`Uuid4s(random: SecureRandom())`): ничто в
+библиотеке не берёт случайные биты за спиной программы (раздел 22.6). Тип
+данных (media type) разбирается на тип, подтип и параметры; значения
+параметров сохраняют регистр, в котором даны. Сопоставление имени файла с
+типом — таблица, которую выбирает программа: `StandardMediaTypes` — таблица,
+встроенная в библиотеку, `SystemMediaTypes` читает файлы хоста, а чего там нет,
+ищет в запасной таблице, и программа сама говорит, какой из них доверяет.
+
 # Глава 23. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в

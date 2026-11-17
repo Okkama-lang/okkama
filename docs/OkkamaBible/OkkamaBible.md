@@ -19434,6 +19434,154 @@ object per direction (Section 22.15): `Base64Encoded` turns bytes into text
 and `Base64Decoded` turns the text back into bytes. Text to bytes is itself
 an explicit step (`Utf8Encoded`); no encoding guesses a character set.
 
+### Configuration: `toml`
+
+```okkama
+module bible/toml v1.0.0;
+
+// A configuration file read the way json is read: by name, with the type
+// asked for at the point of use, and absence decided where it is allowed.
+import "toml/parse" take ParsedToml, InvalidToml;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let config = ParsedToml("title = \"shop\"\n" +
+        "[server]\nhost = \"0.0.0.0\"\nport = 8080\n" +
+        "[[mirror]]\nurl = \"https://a.example\"\nweight = 3\n" +
+        "[[mirror]]\nurl = \"https://b.example\"\n").root();
+    let server = config.get("server");
+    out.writeln(config.text("title") + " on " + server.text("host") + ":" + server.int("port").string());
+    out.writeln("debug: " + (config.maybe("debug").boolean() else false).string());
+    for config.tables("mirror") -> mirror {
+        out.writeln(mirror.text("url") + " weight " + (mirror.maybe("weight").int() else 1).string());
+    }
+    out.writeln(try { ParsedToml("port = 80\nport = 81\n").root().int("port").string(); }
+        catch e is InvalidToml { "refused: " + e.text(); });
+    0;
+}
+```
+
+Output:
+
+```text
+shop on 0.0.0.0:8080
+debug: false
+https://a.example weight 3
+https://b.example weight 1
+refused: InvalidToml.located(10, 2, 1, "duplicate TOML key")
+```
+
+`ParsedToml(text).root()` is a table read like a json object: `text`, `int`
+and `get` name a key and the type the program wants there, and a key that
+may be missing goes through `maybe`, whose answer is a `Maybe` the program
+settles with `else`. An array of tables (`[[mirror]]`) is `tables(name)`, an
+array of plain tables the loop takes one by one. Nothing is parsed when the
+object is made; the text is read at the first question, and a mistake in it
+(here a key given twice) is `InvalidToml` with the offset, line and column
+of the failed read. TOML's `inf` and `nan` are values of their own
+(`TomlInfinity`, `TomlNaN`), never a float, because Okkama's floats are
+finite. The module only reads: the library has no TOML writer.
+
+### Documents: `xml`
+
+```okkama
+module bible/xml v1.0.0;
+
+// Reading a feed by element and attribute name, then writing a document
+// from nodes: the tree is a value, and xml() is its text.
+import "xml/parse" take ParsedXml;
+import "xml/node" take XmlDocument, XmlElement, XmlText, XmlAttribute;
+import "xml/name" take XmlName;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let feed = ParsedXml("<feed version=\"2\"><item><title>Tea &amp; milk</title></item>" +
+        "<item><title>Bread</title></item></feed>").document().root();
+    out.writeln("version " + feed.attribute("version"));
+    for feed.children("item") -> item {
+        out.writeln("- " + item.text("title"));
+    }
+    let note = XmlElement(XmlName("note"), [XmlAttribute(XmlName("lang"), "en")], [XmlText("1 < 2")]);
+    out.writeln(XmlDocument(note).xml());
+    0;
+}
+```
+
+Output:
+
+```text
+version 2
+- Tea & milk
+- Bread
+<?xml version="1.0" encoding="UTF-8"?><note xmlns="" lang="en">1 &lt; 2</note>
+```
+
+An element answers by name in the same way: `attribute("version")`,
+`children("item")` for the elements with that name, `text("title")` for the
+text of the first such child, with the entities already decoded (`&amp;`
+reads as `&`). Writing goes the other way, from values: an element is a name,
+its attributes and its children, and `xml()` is its text with the escaping
+done. Every element's `xml()` stands on its own, so it declares its
+namespace even when it has none: that is the `xmlns=""` in the output, and a
+fragment cut out of a larger document keeps its meaning. Limits on depth and
+on the number of parse events are constructor arguments, as for json.
+
+### Identifiers and media types: `uuid`, `mime`
+
+```okkama
+module bible/ids v1.0.0;
+
+// Identifiers and media types: a UUID is read, made from a name, or drawn
+// from an explicit source of randomness; a media type is read into parts,
+// and a file name is mapped to one by a table the program chooses.
+import "uuid/value" take UuidText;
+import "uuid/generation" take Uuid5, Uuid4s;
+import "random/source" take SecureRandom;
+import "mime/media_type" take MediaType;
+import "mime/types" take StandardMediaTypes;
+import "fs/path" take Path;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let given = UuidText(origin: "550E8400-E29B-41D4-A716-446655440000");
+    out.writeln(given.string() + ", version " + given.version().string());
+    let dns = UuidText(origin: "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+    out.writeln("stable: " + Uuid5(namespace: dns, name: "example.com").string());
+    out.writeln("drawn: version " + Uuid4s(random: SecureRandom()).sample().version().string());
+    let page = MediaType("text/html; charset=UTF-8");
+    out.writeln(page::Type::type + " / " + page::Type::subtype + ", charset " + page.parameters().first("charset"));
+    let types = StandardMediaTypes();
+    out.writeln("report.pdf is " + types.type(Path("report.pdf")).string());
+    0;
+}
+```
+
+Output:
+
+```text
+550e8400-e29b-41d4-a716-446655440000, version 4
+stable: cfbff0d1-9375-5685-968c-48ce8b15ae17
+drawn: version 4
+text / html, charset UTF-8
+report.pdf is application/pdf
+```
+
+A UUID read from text answers in canonical form, lower case, and tells its
+version and variant. A name-based UUID (`Uuid5`) is a pure function of its
+namespace and name, so the same name gives the same identifier on every
+machine; that is the one to use for keys derived from data. A random UUID is
+a distribution over a source of randomness that the program passes in
+(`Uuid4s(random: SecureRandom())`): nothing in the library draws random bits
+behind the program's back (Section 22.6). A media type is read into its type,
+subtype and parameters; parameter values keep their case as given. Mapping a
+file name to a media type is a table the program chooses:
+`StandardMediaTypes` is the library's built-in table, `SystemMediaTypes`
+reads the host's files and falls back to another table, and the program says
+which one it trusts.
+
 # Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
