@@ -20,6 +20,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Coro makes a Future's duty a slot where it reaches a close on some paths only (#853, S3
+  #857).** A Future created in one branch of its owner, or a failure handler shared by a call
+  before and after a creation, no longer stops coro with "a cache duty that reaches its
+  owner's close on some paths only": the owner's duties become slots (`duty.empty` after each
+  `scope.begin` and each consumer, the slot operand at the creation), and each close settles
+  the version that reaches it, full or empty. Other scopes keep their output exactly. Three
+  new coro goldens run end to end on Champ with both branch outcomes.
+- **A loop that awaits a Future created outside it runs on Champ (#805).** The coro verifier
+  and Low kept the old name of a duty token that an edge passed into a loop header's
+  parameter, so Low saw "two tokens of one duty reach a close" and the Full verifier asked
+  the await to save the old name. Both now move an edge argument into the parameter. The
+  program of the issue prints Tomato's output under Structural and Full verification and
+  under collector stress.
 - **Duty slots in OIR-2, the verifier and Low (#853, S2 #856).** OIR-2 gains `duty.empty`
   and the slot operands of `fut.new` and `fut.spawn` (coro and low only). The verifier
   checks single occupancy (`d26-slot-occupied`), that no consumer moves an empty slot
