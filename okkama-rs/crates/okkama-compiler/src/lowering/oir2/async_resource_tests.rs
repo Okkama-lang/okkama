@@ -424,7 +424,7 @@ fn oir2_p1_spawn_inside_defer_await_is_spawned_in_the_defer_entry() {
     let entry = function(&module, "main.defer#0");
     assert!(entry.attrs.contains(&ir::FunctionAttr::Async));
     let ops = async_ops(entry);
-    assert!(matches!(ops.as_slice(), [ir::AsyncOp::FutureSpawn { state: None, future: spawned },
+    assert!(matches!(ops.as_slice(), [ir::AsyncOp::FutureSpawn { state: None, future: spawned, task_slot: None },
         ir::AsyncOp::Await { future: awaited, result: None }] if spawned == awaited), "{ops:?}");
     let own = high_to_own(module);
     let spawns = own.functions.iter().flat_map(|(_, function)| function.body.iter())

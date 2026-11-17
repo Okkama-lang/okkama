@@ -229,7 +229,7 @@ impl Engine<'_, '_> {
         match op {
             // D24.1: the cache duty of the Future its `fut.new` gave comes back unchanged, and the spawned task's
             // duty is new, owned by the same scope; own forwards the owner state, whose duty the task joins.
-            AsyncOp::FutureSpawn { future, state: Some(cache) }
+            AsyncOp::FutureSpawn { future, state: Some(cache), .. }
                 if matches!(self.module.profile, Profile::Coro | Profile::Low) => {
                 let key = self.identity(before, *future);
                 let duty = before.tokens[cache.as_u32() as usize].clone();

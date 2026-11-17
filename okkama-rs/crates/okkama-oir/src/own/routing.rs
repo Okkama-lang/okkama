@@ -286,6 +286,7 @@ pub(super) fn handling(operation: &Operation) -> Handling {
             | AsyncOp::FutureDone { .. }
             | AsyncOp::FutureCancelled { .. }
             | AsyncOp::FutureNew { .. }
+            | AsyncOp::DutyEmpty { .. }
             | AsyncOp::FuturePublish { .. }
             | AsyncOp::AwaitUnwind { .. }
             | AsyncOp::ServiceMaterialize { .. }

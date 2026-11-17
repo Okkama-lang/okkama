@@ -82,8 +82,8 @@ fn every_opcode_builder_roundtrips_and_every_invoke_slot_is_preserved() {
         roundtrip(&module);
     }
     assert_eq!(seen, Operation::opcode_inventory().into_iter().collect(), "opcode missing a builder round-trip case");
-    // #678 adds array.order and call.order; #601 F1 (ruling PR-E) adds fut.spawn.bound.
-    assert_eq!(seen.len(), 277);
+    // #678 adds array.order and call.order; #601 F1 (ruling PR-E) adds fut.spawn.bound; #856 adds duty.empty.
+    assert_eq!(seen.len(), 278);
 }
 
 #[test]
@@ -1473,7 +1473,10 @@ fn coverage_modules() -> Vec<Module> {
     modules.push(build_op(Operation::Ownership(OwnershipOp::ScopeTransfer { states: TransferStates::Between { from: v, to: v }, selection: cs() }), Profile::Own));
     modules.push(build_op(Operation::Carrier(CarrierOp::Transfer { state: v, target: CarrierDestination::FailureContext(cs()), protocol: cs() }), Profile::Own));
     // Coro/low token forms of the async ABI (D24.1, C-4).
-    modules.push(build_op(Operation::Async(AsyncOp::FutureSpawn { future: v, state: Some(v) }), Profile::Coro));
+    let spawn = AsyncOp::FutureSpawn { future: v, state: Some(v), task_slot: None };
+    modules.push(build_op(Operation::Async(spawn), Profile::Coro));
+    // Duty slots (D26, #856): both kinds of empty slot.
+    modules.push(build_op(Operation::Async(AsyncOp::DutyEmpty { owner: cs(), task: false }), Profile::Coro));
     for (task, target) in [(None, cs()), (Some(v), cs()), (None, RehomeTarget::Caller)] {
         let form = RehomeForm::Token { pending: v, cache: v, task };
         modules.push(build_op(Operation::Async(AsyncOp::CacheRehome { form, target, protocol: cs() }),
@@ -1781,6 +1784,55 @@ fn fut_spawn_bound_round_trips_and_is_not_high() {
     for profile in [Profile::Own, Profile::Coro, Profile::Low] {
         roundtrip(&build_op(op.clone(), profile));
     }
+}
+
+/// D26 (#856): `duty.empty owner S[, task true]`, the `slot` operand of `fut.new` and the `task_slot` operand of
+/// `fut.spawn` print and parse in coro and low. `duty.empty` has one token result and moves nothing; a slot ends in a
+/// `Settle` and is never a `Move` input, which would merge the empty token's fields into the new duty. Own refuses the
+/// forms (B9.1): there a duty lives in the owner state, never as a token.
+#[test]
+fn duty_slots_round_trip_and_belong_to_coro_and_low() {
+    let (zero, slot, scope) = (ValueId::from_u32(0), ValueId::from_u32(7), ScopeId::from_u32(0));
+    for task in [false, true] {
+        let op = Operation::Async(AsyncOp::DutyEmpty { owner: scope, task });
+        for profile in [Profile::Coro, Profile::Low] {
+            let module = build_op(op.clone(), profile);
+            assert_eq!(roundtrip(&module).contains("duty.empty owner S0, task true"), task);
+            let contract = ContractRegistry::new(&module).lookup(&op).unwrap();
+            let ty = if task { ServiceType::TaskState } else { ServiceType::CacheState };
+            assert_eq!(contract.normal.results, [ResultSlot::service(SlotName::State, ty)]);
+            assert!(contract.normal.transfers.is_empty() && contract.unwind.is_none());
+            assert!(!contract.effects.suspends && !contract.effects.allocates);
+            assert_eq!(contract.roots.roots, [RootKind::Operands], "no root beyond the default of an operation");
+        }
+    }
+    let created = |slot| Operation::Async(AsyncOp::FutureNew { packet: zero, deps: zero, owner_state: zero,
+        environment: FutureEnvironment::Deferred { function: FuncId::from_u32(0), arguments: vec![],
+        descriptors: vec![] }, result: None, owner: scope, binding: None, slot });
+    let spawned = |task_slot| Operation::Async(AsyncOp::FutureSpawn { future: zero, state: Some(zero), task_slot });
+    for profile in [Profile::Coro, Profile::Low] {
+        for op in [created(Some(zero)), spawned(Some(zero))] {
+            let printed = roundtrip(&build_op(op, profile));
+            assert!(printed.contains(", slot %") || printed.contains(", task_slot %"), "{printed}");
+        }
+        let module = build_op(created(None), profile);
+        assert!(!roundtrip(&module).contains("slot %"));
+        let registry = ContractRegistry::new(&module);
+        for (op, unslotted) in [(created(Some(slot)), created(None)), (spawned(Some(slot)), spawned(None))] {
+            let transfers = registry.lookup(&op).unwrap().normal.transfers;
+            let mut expected = registry.lookup(&unslotted).unwrap().normal.transfers;
+            expected.push(TransferRule::Settle { inputs: vec![slot] });
+            assert_eq!(transfers, expected, "{op:?}");
+        }
+    }
+    let own = include_str!("own/tests/async-goldens/async-plain-await.oir");
+    let opening = "    %0: scope<S1> = scope.begin S1\n";
+    assert!(own.contains(opening));
+    let slotted = text::parse(&own.replace(opening,
+        &format!("{opening}    %24: task-state = duty.empty owner S1, task true\n"))).unwrap();
+    let report = crate::verify(&slotted).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == crate::verify::RuleId::B91
+        && diagnostic.message.contains("duty slots are tokens of coro and low")), "{report:?}");
 }
 
 /// PR-B1 (#784): `fut.new … binding b` is an optional attribute printed last. The text round trip keeps it, and a

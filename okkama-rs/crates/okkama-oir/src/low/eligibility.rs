@@ -188,6 +188,8 @@ impl Context<'_> {
             AsyncOp::FutureNew { .. } | AsyncOp::Await { .. } | AsyncOp::AwaitUnwind { .. }
             | AsyncOp::FrameSave { .. } | AsyncOp::FrameResume { .. } | AsyncOp::FuturePublish { .. }
             | AsyncOp::FutureCancel { .. } | AsyncOp::FutureDone { .. } | AsyncOp::FutureCancelled { .. } => Ok(()),
+            // D26 (#856): an empty slot passes through to codegen (`duty.empty`).
+            AsyncOp::DutyEmpty { .. } => Ok(()),
             // R2: a temporary take keeps its invoke and its proof; the cache duty settles as for a shared await.
             AsyncOp::AwaitTake { .. } | AsyncOp::UniqueCacheProof { .. } => Ok(()),
             // C-4: the token form of a duty created here (a spawned Future's task duty travels with its cache

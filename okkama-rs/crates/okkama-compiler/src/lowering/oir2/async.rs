@@ -257,7 +257,7 @@ impl BodyLowerer<'_, '_> {
         let Some(future) = self.value(target)? else {
             return Ok(None);
         };
-        self.b.emit_schema(ir::Operation::Async(ir::AsyncOp::FutureSpawn { future, state: None }))?;
+        self.b.emit_schema(ir::Operation::Async(ir::AsyncOp::FutureSpawn { future, state: None, task_slot: None }))?;
         Ok(Some(future))
     }
 
