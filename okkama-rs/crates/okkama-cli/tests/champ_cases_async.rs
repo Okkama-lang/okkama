@@ -563,3 +563,88 @@ async main() is int {
     assert_eq!(run.result, Ok(0), "{}", run.stdout);
     assert_eq!(run.stdout, "job 1\ngot 1\njob 3\ngot 3\nmain\n");
 }
+
+/// #849: Futures in the body of a `map`, `reduce` or `filter`, whose builder lives across the body's awaits. The
+/// outputs are Tomato's, built from the rebuild tree. Bodies whose Future has a destroyable outcome wait for #851.
+const MAP_BODY: &str = r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+
+object Now {
+    Now();
+    async named(name is string) is string { name; }
+    async res(name is string) is Res {
+        Stdout().writeln("make " + name);
+        Res(name: name);
+    }
+}
+
+enum Broken is Error = (broken);
+"#;
+
+/// Under Structural verification and, when `full`, under Full too.
+fn map_body(main: &str, stdout: &str, full: bool) {
+    let source = format!("{MAP_BODY}\n{main}");
+    let modes: &[okkama_compiler::oir2::VerifyMode] = if full {
+        &[okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full]
+    } else {
+        &[okkama_compiler::oir2::VerifyMode::Structural]
+    };
+    for &mode in modes {
+        let run = champ_support::run_source_with(&source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), (stdout, Ok(0)), "{mode:?}");
+    }
+}
+
+/// A Future created and awaited in a `map` body (#849): each round's duty is settled by its own close.
+#[test]
+fn a_map_body_awaits_a_fresh_future_each_round() {
+    map_body(r#"async main() is int {
+    let names = (0..3).map() -> index { await Now().named("x" + index.string()); };
+    Stdout().writeln(names.size().string() + ": " + names[0] + " " + names[1] + " " + names[2]);
+    0;
+}
+"#, "3: x0 x1 x2\n", true);
+}
+
+/// A `reduce` whose accumulator lives in a builder (#831) and whose block awaits.
+#[test]
+fn a_builder_reduce_awaits_in_its_block() {
+    map_body(r#"async main() is int {
+    let all is @string = (0..3).reduce([]) -> acc, index { acc + [await Now().named("p" + index.string())]; };
+    Stdout().writeln(all.size().string() + ": " + all[0] + all[1] + all[2]);
+    0;
+}
+"#, "3: p0p1p2\n", true);
+}
+
+/// A `filter` whose predicate awaits.
+/// Structural only: Full verification runs out of its budget on this body (Incomplete, #634).
+#[test]
+fn a_filter_awaits_in_its_predicate() {
+    map_body(r#"async main() is int {
+    let kept = (0..4).filter() -> index { (await Now().named(index.string())) != "2"; };
+    Stdout().writeln("kept " + kept.size().string());
+    0;
+}
+"#, "kept 3\n", false);
+}
+
+/// Nested `map`s, the inner body awaiting: two builders live across the await.
+/// Structural only: Full verification runs out of its budget on this body (Incomplete, #634).
+#[test]
+fn nested_maps_await_in_the_inner_body() {
+    map_body(r#"async main() is int {
+    let grid = (0..2).map() -> row { (0..2).map() -> column { await Now().named(row.string() + column.string()); }; };
+    Stdout().writeln(grid[0][0] + " " + grid[0][1] + " " + grid[1][0] + " " + grid[1][1]);
+    0;
+}
+"#, "00 01 10 11\n", false);
+}

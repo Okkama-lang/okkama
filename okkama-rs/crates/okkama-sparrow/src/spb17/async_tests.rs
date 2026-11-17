@@ -431,6 +431,10 @@ enum Main {
     /// The Future's inputs packet is no `own.empty` but the join of the parts of an `own.split` of one with another
     /// `own.empty`: still an empty inventory (#601 N1, ruling PR-N).
     JoinedEmpty,
+    /// #849: an array builder made before the await lives across it in frame slot 10 (`frame.save` consumes it,
+    /// `frame.resume` gives it back), and each path abandons the builder it got back. With `true`, the normal path
+    /// abandons the builder it saved instead, which the save already consumed.
+    BuilderAcross(bool),
 }
 
 /// @main's slots: 0 inputs, 1 owner state, 2 cache duty, 3 the Future, 4–6 the unwind operands, 7–9 a second
@@ -513,6 +517,16 @@ fn main(variant: Main) -> (Function, FrameLayout) {
         first_saved.push(10);
         first_values.push(future);
     }
+    let builder = matches!(variant, Main::BuilderAcross(_)).then(|| {
+        let builder = b.register(Type::Builder(0));
+        let Location::Register(id) = builder else { unreachable!() };
+        b.f.code.push(Instruction::Data { op: DataOp::BuilderNew, inputs: vec![], output: Some(id),
+            immediate: Immediate::None });
+        slots.push(value(Type::Builder(0)));
+        first_saved.push(10);
+        first_values.push(builder);
+        builder
+    });
     let early = (variant == Main::PendingAcross).then(|| {
         slots.push(service(K::Pending));
         first_saved.push(10);
@@ -533,7 +547,11 @@ fn main(variant: Main) -> (Function, FrameLayout) {
     let pending = match early {
         Some(_) => resumed[2],
         None => {
-            let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+            let mut empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+            if let (Some(saved), Main::BuilderAcross(stale)) = (builder, variant) {
+                let abandoned = if stale { saved } else { resumed[2] };
+                empty = b.emit(O::BuilderAbandon, vec![l(abandoned), l(empty)], K::Packet);
+            }
             let selection = b.selection();
             b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(MAIN), l(empty),
                 A::Selection(selection)], K::Pending)
@@ -568,7 +586,13 @@ fn main(variant: Main) -> (Function, FrameLayout) {
     let unwind = [b.register(Type::Failure), b.service(K::TaskState), b.service(K::Receipt)];
     b.block("bad", &unwind);
     let (body, resumed) = b.resume(first, 1, &slot_types(&slots, &first_saved));
-    let (q4, c2) = (resumed[0], if cache_saved { resumed[1] } else { cache });
+    let (mut q4, c2) = (resumed[0], if cache_saved { resumed[1] } else { cache });
+    if builder.is_some() {
+        // The unwind path abandons the builder it got back into the scope's inventory.
+        let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+        let abandoned = b.emit(O::BuilderAbandon, vec![l(resumed[2]), l(empty)], K::Packet);
+        q4 = b.emit(O::OwnAdmit, vec![l(q4), l(abandoned)], K::ScopeState);
+    }
     let mut continuations = vec![
         Continuation { site: None, saved: vec![0], operands: vec![] },
         Continuation { site: None, saved: first_saved, operands: vec![3] },
@@ -614,7 +638,11 @@ fn main(variant: Main) -> (Function, FrameLayout) {
 fn plain_with(variant: Main) -> Program {
     let (work, work_layout) = work();
     let (main, main_layout) = main(variant);
-    program(vec![work, main], vec![work_layout, main_layout], None)
+    let mut p = program(vec![work, main], vec![work_layout, main_layout], None);
+    if matches!(variant, Main::BuilderAcross(_)) {
+        p.composites = vec![Composite::Builder { array: Type::Array(ArrayType { leaf: ArrayLeaf::Int, depth: 1 }) }];
+    }
+    p
 }
 
 pub(super) fn plain() -> Program {
@@ -643,6 +671,16 @@ pub(super) fn find(f: &Function, op: Opcode) -> usize {
 pub(super) fn arguments(f: &mut Function, pc: usize) -> &mut Vec<Argument> {
     let Instruction::Champ { arguments, .. } = &mut f.code[pc] else { panic!("not a champ instruction") };
     arguments
+}
+
+/// #849: a builder lives across an await by moving through the frame, as a map body's builder does when the body
+/// awaits; reading the builder the save consumed is refused (`BUILDER_LINEAR`).
+#[test]
+fn a_builder_moves_through_the_frame_across_an_await() {
+    verify_load(&plain_with(Main::BuilderAcross(false)), &NoExternalContracts).unwrap();
+    let refused = verify_load(&plain_with(Main::BuilderAcross(true)), &NoExternalContracts).unwrap_err();
+    assert_eq!(refused.rule, "BUILDER_LINEAR", "{refused}");
+    assert!(refused.message.contains("a builder is used after its transition"), "{refused}");
 }
 
 #[test]

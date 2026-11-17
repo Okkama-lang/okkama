@@ -34,7 +34,8 @@ impl BodyLowerer<'_, '_> {
             // its entry arguments still agree, rather than orphaning the old
             // abandonment block on every observation in a functional body.
             && (unwind.target.block == frame.target
-                || self.buffer_unwinds.get(&unwind.target.block) == Some(&(frame.target, frame.locals.len())))
+                || self.buffer_unwinds.get(&unwind.target.block)
+                    .is_some_and(|&(target, count, _)| (target, count) == (frame.target, frame.locals.len())))
             && unwind.target.args[..frame.locals.len()] == args
             && unwind.target.args.iter().all(|arg| data.params.contains(arg)) {
             return Ok(());

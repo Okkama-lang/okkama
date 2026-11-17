@@ -2355,12 +2355,16 @@ fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Chec
                 }).collect(),
                 _ => vec![],
             };
+            // #849: a builder live across a suspension moves through the frame: `frame.save` consumes it after the
+            // frame token, and `frame.resume` gives it back as one of its outputs.
+            let save = matches!(inst, Instruction::Champ { op: Opcode::FrameSave, .. });
             for (position, location) in reads.into_iter().enumerate() {
                 if !builder(location) {
                     continue;
                 }
                 let transition = matches!(inst, Instruction::Champ { op, .. } if builder_transition(*op));
-                linear(transition && position == 0, "a builder is read outside its own transition")?;
+                linear(transition && position == 0 || save && position > 0,
+                    "a builder is read outside its own transition")?;
                 linear(active.remove(&location), "a builder is used after its transition")?;
             }
             if let Instruction::Data { op, output: Some(output), .. } = inst
@@ -2369,8 +2373,14 @@ fn check_builders(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Chec
                 linear(*op == DataOp::BuilderNew, "only builder.new or a transition creates a builder")?;
                 linear(active.insert(Location::Register(*output)), "builder overwritten")?;
             }
-            if let Instruction::Champ { flow: Flow::Next(outputs), .. } = inst {
-                linear(!outputs.iter().any(|&output| builder(output)), "a builder needs transition outcomes")?;
+            if let Instruction::Champ { op, flow: Flow::Next(outputs), .. } = inst {
+                for (position, &output) in outputs.iter().enumerate() {
+                    if !builder(output) {
+                        continue;
+                    }
+                    linear(*op == Opcode::FrameResume && position > 0, "a builder needs transition outcomes")?;
+                    linear(active.insert(output), "builder overwritten")?;
+                }
             }
             let terminal = matches!(inst, Instruction::Ret(_) | Instruction::Raise(_) | Instruction::Unreachable)
                 || matches!(inst, Instruction::Champ { op: Opcode::RetOwn | Opcode::RetDefer, .. });

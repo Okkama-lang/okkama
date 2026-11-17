@@ -20,6 +20,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future in the body of a `map`, `reduce` or `filter` runs on Champ (#849).** OIR-2
+  coro refused such a body ("a cache duty that reaches its owner's close on some paths
+  only"): the builder's unwind cleanup was shared by every failing site of the body, so the
+  failure of a call before the Future and the failure of its await reached the body's close
+  through one block, with the duty on one path only. A cleanup made before a Future is no
+  longer reused after it. Two layers below needed the same shape: a builder that lives
+  across an await moves through the frame, which coro marks linear and SPB 17 stores as a
+  value slot, and the loader's builder rule now lets `frame.save` consume a builder and
+  `frame.resume` give it back. Coro goldens for an awaited and an abandoned Future in a
+  `map` body; lowering, codegen and loader unit tests, mutation-checked; end-to-end tests
+  with Tomato's output. Found on the way: #851 (a Future whose outcome has a `destroy`, in
+  any loop body, stops at D18_EXECUTOR).
 - **Champ: `AllFutures` (#810, G1 step 3).** `AllFutures.results` now runs on Champ. Its
   `Sequencing<T>` result is made by a helper that the compiler generates, `Wrap`. `Wrap`
   turns the array of the members' outcomes into the role through the program's own array

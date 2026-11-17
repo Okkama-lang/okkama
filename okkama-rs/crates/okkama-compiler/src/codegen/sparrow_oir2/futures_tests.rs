@@ -929,3 +929,22 @@ fn spb_rehome_refuses_the_task_duty_of_another_future() {
     assert_eq!((error.rule, error.message.as_str()),
         ("SPB_REHOME", "a rehome's task duty belongs to the Future of its cache duty"), "{error:?}");
 }
+
+/// #849: a `map` body that awaits keeps its builder across the await. Coro gives the builder a linear slot (it moves
+/// through the frame); SPB 17 stores it in a value slot, which the loader's builder rule accepts at `frame.save` and
+/// `frame.resume`. The program passes the load gate.
+#[test]
+fn d849_a_builder_crosses_an_await_in_a_value_slot() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../okkama-oir/tests/fixtures/async/own/d849-map-body-await.oir");
+    let module = o::text::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let coro = okkama_oir::coro::lower_coro(module, &Default::default()).unwrap();
+    let low = okkama_oir::low::lower_cleanup(coro, &Default::default()).unwrap();
+    compile(&low).unwrap_or_else(|error| panic!("{error}"));
+    let program = translated(&low);
+    let s::EntryAbi::AsyncBody { layout } = function(&program, "main").entry_abi else { panic!("an async body") };
+    let builders: Vec<_> = program.tables.frames[layout as usize].slots.iter()
+        .filter(|slot| matches!(slot.ty, P::Value(s::Type::Builder(_)))).collect();
+    assert!(!builders.is_empty(), "the builder is saved across the await");
+    assert!(builders.iter().all(|slot| !slot.linear), "a value slot");
+}
