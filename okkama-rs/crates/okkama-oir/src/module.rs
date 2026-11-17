@@ -93,6 +93,9 @@ pub struct Witness {
 pub struct RoleMethod {
     pub name: String,
     pub signature: Signature,
+    /// Ruling PR-N2 (#860): an async slot. Its signature returns the Future of its outcome, as a synchronous slot
+    /// that returns a Future does; a call of it is a creation, which borrows a bare Future argument (OIR-2 §10.2).
+    pub is_async: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

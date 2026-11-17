@@ -652,8 +652,9 @@ fn forwards_entry(module: &Module, function: FuncId) -> Result<bool, OwnError> {
         return Ok(false);
     };
     let target = module.functions.get(target).map_err(arena)?;
+    // Ruling PR-N2 (#860): an async target's adapter is its creation thunk; its `fut.new` takes the entry packet.
     if target.attrs.contains(&FunctionAttr::Async) {
-        return Ok(false);
+        return Ok(true);
     }
     let Some(summary) = target.summary else {
         return Err(flow_error("an adapter's target has no inferred summary"));

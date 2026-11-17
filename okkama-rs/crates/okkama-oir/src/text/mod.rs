@@ -509,7 +509,7 @@ variants!(DeclarationKind {
 });
 record!(Field, "field", { name, ty, default, once });
 record!(Witness, "witness", { role, slots });
-record!(RoleMethod, "role_method", { name, signature });
+record!(RoleMethod, "role_method", { name, signature, is_async });
 record!(VariantCase, "variant_case", { name, layout });
 record!(ComputedField, "computed_field", { name, function });
 

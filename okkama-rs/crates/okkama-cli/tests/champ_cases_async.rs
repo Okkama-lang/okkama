@@ -727,6 +727,75 @@ async main() is int {
     }
 }
 
+fn both_modes(source: &str, stdout: &str) {
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!(run.result, Ok(0), "{mode:?}: stdout={:?}", run.stdout);
+        assert_eq!(run.stdout, stdout, "{mode:?}");
+    }
+}
+
+/// #860 (ruling PR-N2): a call through an async role slot is a creation. The slot's creation thunk passes its entry
+/// packet to `fut.new` as the inputs packet, so the fresh resource argument reaches the body, which destroys it when
+/// it ends, as Tomato (tree build) prints.
+#[test]
+fn a_fresh_resource_through_an_async_role_slot() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Feeding { async feed(r is Res) is int; }
+object Feeder does Feeding {
+    Feeder();
+    async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; }
+}
+async main() is int {
+    let f is Feeding = Feeder();
+    let n = await f.feed(Res(name: "fresh"));
+    Stdout().writeln("fed " + n.string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed fresh\ndestroy fresh\nfed 1\nmain end\n");
+}
+
+/// #860 (ruling PR-N2): a fresh Future argument through an async role slot is borrowed, as on a direct call
+/// (PR-B2, OIR-2 §10.2): its cache stays with main's root and its outcome is destroyed at main's close, through the
+/// role and directly alike. Tomato destroys each right after its call; that difference is #861, the owner's call.
+#[test]
+fn a_fresh_future_through_an_async_role_slot_is_borrowed_as_on_a_direct_call() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Maker {
+    Maker();
+    async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); }
+}
+role Taking { async take(f is Future<Res>) is string; }
+object Taker does Taking {
+    Taker();
+    async take(f is Future<Res>) is string { (await f).label(); }
+}
+async main() is int {
+    let t is Taking = Taker();
+    Stdout().writeln("took " + (await t.take(Maker().make("via role"))));
+    Stdout().writeln("took " + (await Taker().take(Maker().make("direct"))));
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make via role\ntook via role\nmake direct\ntook direct\nmain end\n\
+        destroy direct\ndestroy via role\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

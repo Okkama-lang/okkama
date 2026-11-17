@@ -319,6 +319,7 @@ fn produced_carriers(p: &Program, f: &Function, op: Opcode, arguments: &[Argumen
 /// `fut.new` gives the callee an inputs packet that carries service entries only when some start value of the callee
 /// can bring one (`entry_carries`; PR-B2, #782): a bare Future input is borrowed and arrives without its entry.
 pub(crate) const FUTURE_INPUT: &str = "SPB_FUTURE_INPUT";
+pub(crate) const CALL_INPUT: &str = "SPB_CALL_INPUT";
 
 /// The language inputs of an entry: the start values of an async body (its continuation 0, D21), or the
 /// parameters of a synchronous function; `None` for an async body without a start continuation.
@@ -336,12 +337,93 @@ fn language_inputs(p: &Program, f: &Function) -> Option<Vec<ProducedType>> {
 /// A bare Future start value does not: own never offers a Future input to `fut.new` (OIR-2 §10.2), so the body
 /// borrows it.
 pub(crate) fn entry_carries(p: &Program, f: &Function) -> bool {
+    // Ruling PR-N2 (#860): a creation thunk passes its entry packet whole as its `fut.new`'s inputs packet, so its
+    // entry carries what the created body's entry carries; `SPB_CALL_INPUT` holds its callers to that.
+    if let Some(target) = forwarded_creation(p, f) {
+        return entry_carries(p, target);
+    }
     let asynchronous = p.frame_layout(f).is_some();
     language_inputs(p, f).is_none_or(|inputs| inputs.into_iter().any(|ty| match ty {
         ProducedType::Value(Type::Future(_)) if asynchronous => false,
         ProducedType::Value(ty) => reaches_holder(p, ty),
         _ => false,
     }))
+}
+
+/// The locations that hold a synchronous function's entry packet: its packet parameter and the locations it moves to
+/// along edges. Empty when `f` has no entry packet.
+pub(crate) fn entry_packet_names(f: &Function) -> BTreeSet<Location> {
+    let Some(entry) = f.params.iter().copied().find(|&location| kind(f, location) == Some(ServiceKind::Packet)) else {
+        return BTreeSet::new();
+    };
+    let mut names = BTreeSet::from([entry]);
+    loop {
+        let before = names.len();
+        for instruction in &f.code {
+            for edge in allocation::outgoing(instruction) {
+                for assignment in &edge.assignments {
+                    if let Source::Location(source) = assignment.source && names.contains(&source) {
+                        names.insert(assignment.destination);
+                    }
+                }
+            }
+        }
+        if names.len() == before {
+            return names;
+        }
+    }
+}
+
+/// Ruling PR-N2 (#860): the async body whose `fut.new` takes `f`'s entry packet, when that is the packet's one use.
+/// `f` is a synchronous function with an entry packet; the packet may move along edges on the way. Otherwise `None`.
+pub(crate) fn forwarded_creation<'p>(p: &'p Program, f: &Function) -> Option<&'p Function> {
+    if p.frame_layout(f).is_some() {
+        return None;
+    }
+    let names = entry_packet_names(f);
+    if names.is_empty() {
+        return None;
+    }
+    let mut creation = None;
+    for instruction in &f.code {
+        let Instruction::Champ { op, arguments, .. } = instruction else { continue };
+        let uses = locations(arguments).into_iter().filter(|location| names.contains(location)).count();
+        if uses == 0 {
+            continue;
+        }
+        if *op != Opcode::FutureNew || uses != 1 || creation.is_some() {
+            return None;
+        }
+        creation = arguments.iter().find_map(|argument| match argument {
+            Argument::Entry(id) => p.functions.get(*id as usize),
+            _ => None,
+        });
+    }
+    creation
+}
+
+/// `SPB_CALL_INPUT` (ruling PR-N2, #860): a call or dispatch into a creation thunk whose entry does not carry gives it
+/// a packet that carries no service entry, as `SPB_FUTURE_INPUT` holds `fut.new` itself.
+pub(crate) fn call_input(p: &Program, f: &Function, op: Opcode, arguments: &[Argument], ins: &[bool]) -> Check {
+    let callees: Vec<&Function> = match op {
+        Opcode::InvokeCallOwn => arguments.iter().find_map(|argument| match *argument {
+            Argument::Summary(id) => {
+                p.tables.summaries.get(id as usize).and_then(|summary| p.functions.get(summary.entry as usize))
+            }
+            _ => None,
+        }).into_iter().collect(),
+        Opcode::InvokeDispatchOwn => super::load::dispatch_callees(p, arguments),
+        _ => return Ok(()),
+    };
+    let thunks = callees.iter().any(|callee| forwarded_creation(p, callee).is_some());
+    let Some(index) = locations(arguments).iter().position(|&location| kind(f, location) == Some(ServiceKind::Packet))
+    else {
+        return Ok(());
+    };
+    let carried = ins.get(index).copied().unwrap_or(false);
+    let carries = callees.iter().any(|callee| entry_carries(p, callee));
+    enforce(!thunks || !carried || carries, CALL_INPUT, &format!("{}: a call gives a packet that may carry service \
+        entries to a creation thunk whose body's inputs cannot bring them", f.symbol))
 }
 
 /// The begin pcs of closes whose scope state may have admitted a service entry on some path (D25.3). An entry
@@ -452,6 +534,7 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
                         }
                     }
                     Flow::Outcomes(outcomes) => {
+                        call_input(p, f, *op, arguments, &ins)?;
                         let first_admitted = admitted_ins.first().copied().unwrap_or(false);
                         // The filter stays at run time: `redundant_admission_filters` keeps it whenever the selection
                         // reaches a holder (`selects_holder`), the only case in which the selection carries entries.

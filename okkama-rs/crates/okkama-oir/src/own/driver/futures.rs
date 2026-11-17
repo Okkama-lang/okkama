@@ -44,7 +44,31 @@ impl Driver<'_, '_> {
         // empty selection when there is no argument. A Future input alone gives its own deps.
         let deps;
         let mut packet;
-        if !managed.is_empty() {
+        if std::mem::take(&mut self.forward_entry) {
+            // Ruling PR-N2 (#860): a creation thunk's `fut.new` takes the thunk's entry packet whole, and depends on
+            // the deps of its managed inputs, which the prologue gave its parameters.
+            let own = self.module.types.intern(Type::Service(ServiceType::Own)).map_err(arena)?;
+            let packets: Vec<_> = point.env.linear.iter().copied()
+                .filter(|value| self.body.values.get(*value).is_ok_and(|data| data.ty == own)).collect();
+            let [entry] = packets[..] else {
+                return Err(flow_error("a creation thunk's fut.new takes its one entry packet (PR-N2)"));
+            };
+            packet = entry;
+            deps = match managed.as_slice() {
+                [] => {
+                    let argument = future_input.or_else(|| originals.first().copied())
+                        .ok_or_else(|| flow_error("a creation thunk has a parameter"))?;
+                    let value = point.env.value(argument)?.value;
+                    point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
+                    point.result(SlotName::Value)?
+                }
+                [input] => point.env.value(*input)?.deps
+                    .ok_or_else(|| flow_error("a managed thunk input has its deps"))?,
+                // Several managed inputs: a split of the unaccepted entry packet for the deps of their union is
+                // refused by Full (B5.1, "callee must accept"); that waits for a ruling, and end to end for #735.
+                _ => return Err(unsupported_async("a creation thunk with several managed inputs (#735, #860)")),
+            };
+        } else if !managed.is_empty() {
             // Only the managed inputs are offered: a Future input's cache is borrowed and no selection names it.
             let (next, offered) = self.offered(point, &managed)?;
             point = next;

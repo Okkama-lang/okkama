@@ -1,6 +1,6 @@
 use super::*;
 use crate::own::emit::{AdmissionComponent, ScopeExtraction};
-use crate::own::futures::CACHE_DUTY;
+use crate::own::futures::{is_future, CACHE_DUTY};
 
 impl Driver<'_, '_> {
     /// Extract one selection from each accessible admission component. Aliases
@@ -161,6 +161,33 @@ impl Driver<'_, '_> {
         self.emit_call(point, instruction, op)
     }
 
+    /// Ruling PR-N2 (#860): whether a role, closure or capability call reaches an async callee, whose call creates a
+    /// Future: an async role slot, or a callee of an async function type.
+    fn async_callee(&self, op: &Operation) -> bool {
+        let async_fn = |ty: TypeId| matches!(self.module.types.get(ty), Ok(Type::Fn(FnType { is_async: true, .. })));
+        match op {
+            Operation::Call(CallOp::Role { role, slot, .. }) => self.module.declarations.get(*role).is_ok_and(|role| {
+                matches!(&role.kind, DeclarationKind::Role { methods, .. }
+                    if methods.get(*slot as usize).is_some_and(|method| method.is_async))
+            }),
+            Operation::Call(CallOp::Closure { callee, .. }) => {
+                self.high.values.get(callee.value).is_ok_and(|value| async_fn(value.ty))
+            }
+            Operation::Call(CallOp::Cap { field, .. }) => self.module.declarations.get(field.declaration)
+                .is_ok_and(|declaration| match &declaration.kind {
+                    DeclarationKind::Object { fields, .. } => {
+                        fields.get(field.index as usize).is_some_and(|field| async_fn(field.ty))
+                    }
+                    DeclarationKind::Cap { fields, .. } => fields.get(field.index as usize).is_some_and(|field| {
+                        self.module.functions.get(field.function)
+                            .is_ok_and(|function| function.attrs.contains(&FunctionAttr::Async))
+                    }),
+                    _ => false,
+                }),
+            _ => false,
+        }
+    }
+
     pub(super) fn emit_call(
         &mut self,
         mut point: Landing,
@@ -197,7 +224,12 @@ impl Driver<'_, '_> {
             };
             Some(entry)
         } else {
-            let (next, packet) = self.offered(point, &originals)?;
+            // Ruling PR-N2 (#860): a call of an async callee is a creation; like `fut.new`, it borrows a bare Future
+            // argument, which stays with its owner, and offers the rest.
+            let creation = self.async_callee(&op);
+            let offered: Vec<_> = originals.iter().copied().filter(|original| !creation
+                || !self.high.values.get(*original).is_ok_and(|value| is_future(self.module, value.ty))).collect();
+            let (next, packet) = self.offered(point, &offered)?;
             point = next;
             Some(packet)
         };

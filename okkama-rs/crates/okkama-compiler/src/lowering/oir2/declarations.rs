@@ -269,6 +269,7 @@ impl Declarations {
                         results,
                         ownership_abi: ir::OwnershipAbi::Unelaborated,
                     },
+                    is_async: method.is_async,
                 })
             }).collect::<Result<_>>()?;
             this.builder.raw_mut().declarations.get_mut(decl)?.kind = ir::DeclarationKind::Role {
@@ -294,6 +295,7 @@ impl Declarations {
                             params: vec![], results: vec![this.types[&ty::Ty::Str]],
                             ownership_abi: ir::OwnershipAbi::Unelaborated,
                         },
+                        is_async: false,
                     }],
                     builtin: true,
                 },
