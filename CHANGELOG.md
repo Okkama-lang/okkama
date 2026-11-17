@@ -49,6 +49,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   object's cell from the free list of its size class inline, as Tomato's does. An empty
   list, a large object, a collection or a refusal takes the `allocate` helper. Array
   literals still go through the `array` helper on both engines.
+- **Champ: data helpers stop decoding per call (#832).** Champ's collection, lookup and
+  builder helpers read a site computed once when the program loads, instead of decoding the
+  verified instruction at `(function, pc)` and collecting its operand types on every call.
+  They also read their argument words in place, without copying them. This matches
+  Tomato's #449.
 
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.

@@ -381,3 +381,48 @@ fn a_large_slice_is_a_view_and_a_short_one_a_copy() {
     assert_eq!(runtime.heap.header_of(short) & SHARED, 0);
     assert_eq!(ints(&runtime, short), vec![1, 2, 3]);
 }
+
+/// #832: the site of each instruction, computed once at load, is what its helper used to decode on every call:
+/// a data operation's and an `evaluate`'s operation, first operand type and result; a lookup's receiver type;
+/// a builder transition's opcode, inclusive flag and buffer type. Other instructions have none.
+#[test]
+fn sites_hold_what_the_helpers_decoded() {
+    use s::{Argument as A, Location as L};
+    let map = s::Type::Map(0);
+    let builder = s::Type::Builder(1);
+    let function = s::Function {
+        symbol: "sites".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![INTS, INTS, INTS, s::Type::Int, s::Type::Int, map, builder, s::Type::Int],
+        services: vec![], params: vec![], results: vec![], blocks: vec![],
+        proofs: s::FunctionProofs::default(),
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::ArrayConcat, inputs: vec![0, 1], output: Some(2),
+                immediate: s::Immediate::None },
+            s::Instruction::Champ { op: s::Opcode::Evaluate, arguments: vec![
+                A::Evaluation(s::Evaluation { op: s::DataOp::IntMod, result: s::Type::Int,
+                    immediate: s::Immediate::None }),
+                A::Location(L::Register(3)), A::Location(L::Register(4)),
+            ], flow: s::Flow::Next(vec![]) },
+            s::Instruction::Champ { op: s::Opcode::Lookup, arguments: vec![
+                A::Location(L::Register(5)), A::Location(L::Register(3)),
+            ], flow: s::Flow::Next(vec![]) },
+            s::Instruction::Champ { op: s::Opcode::BuilderRange, arguments: vec![
+                A::Flag(true), A::Location(L::Register(6)), A::Location(L::Register(3)), A::Location(L::Register(4)),
+            ], flow: s::Flow::Next(vec![]) },
+            s::Instruction::Data { op: s::DataOp::ArrayLen, inputs: vec![0], output: Some(7),
+                immediate: s::Immediate::None },
+            s::Instruction::Ret(vec![]),
+        ],
+    };
+    let (_, mut program) = runtime();
+    program.functions = vec![function];
+    let sites = sites(&program);
+    assert_eq!(sites[0].to_vec(), vec![
+        Some(Site::Collection { op: s::DataOp::ArrayConcat, operand: INTS, result: INTS }),
+        Some(Site::Collection { op: s::DataOp::IntMod, operand: s::Type::Int, result: s::Type::Int }),
+        Some(Site::Lookup { receiver: map }),
+        Some(Site::Builder { op: s::Opcode::BuilderRange, inclusive: true, buffer: builder }),
+        Some(Site::Collection { op: s::DataOp::ArrayLen, operand: INTS, result: s::Type::Int }),
+        None,
+    ]);
+}
