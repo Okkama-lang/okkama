@@ -7,6 +7,14 @@ use super::{Budget, CoroError};
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// D26 R-2 (#857): a consumer (a store's absorb, a rehome) moves a duty only out of a slot that is full on every path.
+const R2_MAYBE: &str = "a duty leaves a slot that is full on some paths only (D26 R-2)";
+
+/// The duties each close settles, and the duty token of each slot version they list (D26).
+type Closes = (BTreeMap<Site, Vec<ValueId>>, BTreeMap<ValueId, ValueId>);
+/// Whether a duty is held at each close of its owner: on every path, on some path.
+type HeldAtCloses = Vec<(Site, (bool, bool))>;
+
 /// The owner's cache duty of one Future (C-1) and, for a spawned Future, its task duty (D24.1). `token` is the
 /// cache duty as the spawn forwards it; the task duty settles first (D24.2, §6.3).
 struct Duty {
@@ -99,6 +107,7 @@ impl Lowering<'_, '_> {
         let dynamic: BTreeSet<ScopeId> = schedules.iter().filter(|schedule| schedule.dynamic)
             .map(|schedule| schedule.owner).collect();
         self.absorbs(&duties, &dynamic, &mut rehomed)?;
+        self.occupancy(&duties, &rehomed)?;
         let mut slots = Slots::default();
         let mut continuations = Vec::new();
         let mut frame = None;
@@ -110,7 +119,7 @@ impl Lowering<'_, '_> {
             self.exits(start)?;
             frame = Some(start);
         }
-        let closes = self.closes(&duties, &rehomed)?;
+        let (closes, slotted) = self.closes(&duties, &rehomed)?;
         if let Some(start) = frame {
             let suspensions = self.suspensions(&closes)?;
             let mut versions: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
@@ -130,10 +139,10 @@ impl Lowering<'_, '_> {
                 repaired.insert(value, found);
             }
             self.recheck_proofs()?;
-            self.schedules(&schedules, &duties, &closes, &repaired, &rehomed)?;
+            self.schedules(&schedules, &duties, &closes, &repaired, &rehomed, &slotted)?;
             self.body.frame_layout = Some(FrameLayout { slots: slots.decls, continuations });
         } else {
-            self.schedules(&schedules, &duties, &closes, &BTreeMap::new(), &rehomed)?;
+            self.schedules(&schedules, &duties, &closes, &BTreeMap::new(), &rehomed, &slotted)?;
         }
         let spawned = duties.iter().any(|duty| duty.task.is_some());
         if !rehomed.is_empty() || spawned {
@@ -432,9 +441,7 @@ impl Lowering<'_, '_> {
                     }
                     match held {
                         (true, _) if !tokens.contains(&token) => tokens.push(token),
-                        (false, true) => {
-                            return Err(self.unsupported("a Future stored where its duty is held on some paths only"));
-                        }
+                        (false, true) => return Err(self.unsupported(R2_MAYBE)),
                         _ => {}
                     }
                 }
@@ -482,8 +489,11 @@ impl Lowering<'_, '_> {
                     continue;
                 }
                 let others: Vec<_> = insts.iter().copied().filter(|other| *other != inst).collect();
-                if !self.held_at(token, &others, scope, inst, &predecessors)?.0 {
-                    return Err(self.invalid("a Future rehomed after its duty was stored (D25.2)"));
+                match self.held_at(token, &others, scope, inst, &predecessors)? {
+                    (true, _) => {}
+                    // D26 R-2: a duty leaves only a full slot.
+                    (false, true) => return Err(self.unsupported(R2_MAYBE)),
+                    (false, false) => return Err(self.invalid("a Future rehomed after its duty was stored (D25.2)")),
                 }
             }
         }
@@ -1035,9 +1045,53 @@ impl Lowering<'_, '_> {
     }
 
     /// Close sites of every scope that owns a duty, with the duties that reach them on every path.
+    ///
+    /// D26 (#857, duty-slot memo §13.9): a scope with a duty that reaches one of its closes on some paths only is
+    /// slotted. Each of its duties becomes a slot (`slot_scope`), and each of its closes lists the reaching version
+    /// of every slot: full, empty, or a merge of both. Other scopes keep the form before slots. Returns the closes
+    /// and the duty token of each slot version they list.
     fn closes(&mut self, duties: &[Duty], rehomed: &BTreeMap<ValueId, Vec<InstId>>)
-        -> Result<BTreeMap<Site, Vec<ValueId>>, CoroError> {
-        let mut sites: Vec<(Site, BlockId, usize, ScopeId)> = Vec::new();
+        -> Result<Closes, CoroError> {
+        let tokens: Vec<(ValueId, ScopeId)> = duties.iter()
+            .flat_map(|duty| duty.tokens().map(|token| (token, duty.scope))).collect();
+        let mut slotted = BTreeSet::new();
+        for &(token, scope) in &tokens {
+            if self.held_at_closes(token, scope, rehomed)?.iter().any(|(_, here)| *here == (false, true)) {
+                slotted.insert(scope);
+            }
+        }
+        let mut versions: BTreeMap<ValueId, BTreeMap<Site, ValueId>> = BTreeMap::new();
+        let mut token_of = BTreeMap::new();
+        for &scope in &slotted {
+            for (token, sites) in self.slot_scope(scope, duties, rehomed)? {
+                token_of.extend(sites.values().map(|version| (*version, token)));
+                versions.insert(token, sites);
+            }
+        }
+        let mut closes: BTreeMap<Site, Vec<ValueId>> = BTreeMap::new();
+        for &(token, scope) in &tokens {
+            if let Some(sites) = versions.get(&token) {
+                for (site, ..) in self.close_sites()?.into_iter().filter(|(.., closed)| *closed == scope) {
+                    let version = sites.get(&site).copied()
+                        .ok_or_else(|| self.invalid("a slot has no version at a close of its scope (D26)"))?;
+                    closes.entry(site).or_default().push(version);
+                }
+                continue;
+            }
+            for (site, here) in self.held_at_closes(token, scope, rehomed)? {
+                match here {
+                    (true, _) => closes.entry(site).or_default().push(token),
+                    (false, true) => return Err(self.invalid("an unslotted duty reaches a close on some paths only")),
+                    (false, false) => {}
+                }
+            }
+        }
+        Ok((closes, token_of))
+    }
+
+    /// Every close of a scope: the site, its block, its position in the block, the scope it closes.
+    fn close_sites(&self) -> Result<Vec<(Site, BlockId, usize, ScopeId)>, CoroError> {
+        let mut sites = Vec::new();
         for (block, data) in self.body.blocks.iter() {
             for (position, &inst) in data.insts.iter().enumerate() {
                 if let Some(scope) = self.closed_scope(&self.body.insts.get(inst)?.op)? {
@@ -1049,35 +1103,113 @@ impl Lowering<'_, '_> {
                 sites.push((Site::Terminator(block), block, data.insts.len(), scope));
             }
         }
+        Ok(sites)
+    }
+
+    /// Whether `token`, a duty of `scope`, is held at each close of `scope` (on every path, on some path).
+    fn held_at_closes(&mut self, token: ValueId, scope: ScopeId, consumed: &BTreeMap<ValueId, Vec<InstId>>)
+        -> Result<HeldAtCloses, CoroError> {
         let predecessors = graph::predecessors(&self.body);
-        let mut closes: BTreeMap<Site, Vec<ValueId>> = BTreeMap::new();
-        for (token, scope) in duties.iter().flat_map(|duty| duty.tokens().map(|token| (token, duty.scope))) {
-            let kills = rehomed.get(&token).cloned().unwrap_or_default();
-            let (must, may) = self.available(token, &kills, scope, &predecessors)?;
-            for &(site, block, position, closed) in &sites {
-                if closed != scope {
-                    continue;
+        let kills = consumed.get(&token).cloned().unwrap_or_default();
+        let (must, may) = self.available(token, &kills, scope, &predecessors)?;
+        let mut held = Vec::new();
+        for (site, block, position, closed) in self.close_sites()? {
+            if closed != scope {
+                continue;
+            }
+            let index = block.as_u32() as usize;
+            // The duty's last event in the block before the close, else its state at the block entry.
+            let mut here = (must[index], may[index]);
+            for &inst in &self.body.blocks.get(block)?.insts[..position] {
+                if self.body.insts.get(inst)?.results.contains(&token) {
+                    here = (true, true);
+                } else if self.consumes(inst, &kills, scope)? {
+                    here = (false, false);
                 }
-                let index = block.as_u32() as usize;
-                // The duty's last event in the block before the close, else its state at the block entry.
-                let mut here = (must[index], may[index]);
-                for &inst in &self.body.blocks.get(block)?.insts[..position] {
-                    if self.body.insts.get(inst)?.results.contains(&token) {
-                        here = (true, true);
-                    } else if self.consumes(inst, &kills, scope)? {
-                        here = (false, false);
-                    }
+            }
+            held.push((site, here));
+        }
+        Ok(held)
+    }
+
+    /// D26 (#857, memo §13.9): every duty of the slotted `scope` becomes a slot. An empty version follows each
+    /// `scope.begin` of the scope and each consumer of the duty; the SSA repair merges the versions where paths meet,
+    /// and the creation takes the version that reaches it as its slot: `fut.new … slot` for the cache duty, the
+    /// spawn's `task_slot` for a spawned Future's task duty. Returns each duty token's version at each close.
+    fn slot_scope(&mut self, scope: ScopeId, duties: &[Duty], consumed: &BTreeMap<ValueId, Vec<InstId>>)
+        -> Result<BTreeMap<ValueId, BTreeMap<Site, ValueId>>, CoroError> {
+        // The begins in the blocks: an arena entry that no block holds is not an instruction of the body.
+        let begins: Vec<InstId> = self.body.blocks.iter().flat_map(|(_, block)| block.insts.iter().copied())
+            .filter(|inst| self.body.insts.get(*inst).is_ok_and(|inst| {
+                matches!(inst.op, Operation::Ownership(OwnershipOp::ScopeBegin { scope: begun }) if begun == scope)
+            })).collect();
+        let mut slots = Vec::new();
+        for duty in duties.iter().filter(|duty| duty.scope == scope) {
+            let created = self.definer(duty.future)?;
+            for (token, task) in duty.task.map(|task| (task, true)).into_iter().chain([(duty.token, false)]) {
+                let mut versions = Vec::new();
+                for &after in begins.iter().chain(consumed.get(&token).into_iter().flatten()) {
+                    versions.push(self.empty_after(after, scope, task)?);
                 }
-                match here {
-                    (true, _) => closes.entry(site).or_default().push(token),
-                    (false, true) => {
-                        return Err(self.unsupported("a cache duty that reaches its owner's close on some paths only"));
-                    }
-                    (false, false) => {}
+                // The cache slot fills at `fut.new`; a spawn then forwards the duty under a new name.
+                let site = if task { self.definer(token)? } else { created };
+                if !task && duty.task.is_some() {
+                    versions.push(self.body.insts.get(created)?.results[1]);
+                }
+                slots.push((token, task, site, versions));
+            }
+        }
+        let closes: Vec<Site> = self.close_sites()?.into_iter().filter(|(.., closed)| *closed == scope)
+            .map(|(site, ..)| site).collect();
+        let mut found = BTreeMap::new();
+        for (token, task, site, versions) in slots {
+            let mut implicit = closes.clone();
+            implicit.push(Site::Instruction(site));
+            let variable = Variable { original: token, versions, implicit };
+            let mut reached = repair::repair(self.module, self.function, &mut self.body, &variable, self.budget)?;
+            let slot = reached.remove(&Site::Instruction(site))
+                .ok_or_else(|| self.invalid("a duty's creation has no slot version (D26)"))?;
+            match &mut self.body.insts.get_mut(site)?.op {
+                Operation::Async(AsyncOp::FutureSpawn { task_slot, .. }) if task => *task_slot = Some(slot),
+                Operation::Async(AsyncOp::FutureNew { slot: operand, .. }) if !task => *operand = Some(slot),
+                _ => return Err(self.invalid("a slot is filled only by its duty's creation (D26)")),
+            }
+            found.insert(token, reached);
+        }
+        Ok(found)
+    }
+
+    /// The instruction that defines `value`.
+    fn definer(&self, value: ValueId) -> Result<InstId, CoroError> {
+        match self.body.values.get(value)?.def {
+            Definition::InstResult { inst, .. } => Ok(inst),
+            Definition::BlockParam { .. } => Err(self.invalid("a duty is defined by an instruction")),
+        }
+    }
+
+    /// D26: `duty.empty owner scope [task]` right after the instruction `after`, in its block.
+    fn empty_after(&mut self, after: InstId, scope: ScopeId, task: bool) -> Result<ValueId, CoroError> {
+        let (block, position) = self.body.blocks.iter().find_map(|(block, data)| {
+            data.insts.iter().position(|inst| *inst == after).map(|position| (block, position))
+        }).ok_or_else(|| self.invalid("an instruction outside every block"))?;
+        let ty = self.intern(Type::Service(if task { ServiceType::TaskState } else { ServiceType::CacheState }))?;
+        self.emit(block, position + 1, ty, Operation::Async(AsyncOp::DutyEmpty { owner: scope, task }))
+    }
+
+    /// D26 R-1, early: a duty's creation fills an empty slot, so its token is held on no path that reaches its own
+    /// definition (a loop that creates the duty again before its owner settled the earlier one).
+    fn occupancy(&mut self, duties: &[Duty], consumed: &BTreeMap<ValueId, Vec<InstId>>) -> Result<(), CoroError> {
+        let predecessors = graph::predecessors(&self.body);
+        for duty in duties {
+            for token in duty.tokens() {
+                let kills = consumed.get(&token).cloned().unwrap_or_default();
+                let at = self.definer(token)?;
+                if self.held_at(token, &kills, duty.scope, at, &predecessors)?.1 {
+                    return Err(self.invalid("fut.new may fill a slot that still holds its earlier duty (D26 R-1)"));
                 }
             }
         }
-        Ok(closes)
+        Ok(())
     }
 
     /// Whether the instruction `inst` consumes a duty token of `scope`: one of `kills`, or a close of `scope`.
@@ -1349,10 +1481,12 @@ impl Lowering<'_, '_> {
     /// D16 (ruling 1), review B4: own's Services schedules with each Future renamed to its cache-state token.
     /// Every close of an owner names the versions of the tokens that reach it, in own's order. Closes that see
     /// the same versions share one schedule; the first keeps own's name and each further one is `name#k`. An
-    /// owner that never closes after its Futures keeps own's schedule over the tokens of `fut.new`.
+    /// owner that never closes after its Futures keeps own's schedule over the tokens of `fut.new`. A close of a
+    /// slotted scope (D26) names slot versions, each of which `slotted` maps to its duty token.
     fn schedules(
         &mut self, own: &[OwnSchedule], duties: &[Duty], closes: &BTreeMap<Site, Vec<ValueId>>,
         repaired: &BTreeMap<ValueId, BTreeMap<Site, ValueId>>, rehomed: &BTreeMap<ValueId, Vec<InstId>>,
+        slotted: &BTreeMap<ValueId, ValueId>,
     ) -> Result<(), CoroError> {
         for schedule in own {
             let tokens: Vec<ValueId> = duties.iter().filter(|duty| duty.scope == schedule.owner)
@@ -1360,7 +1494,7 @@ impl Lowering<'_, '_> {
             let mut versions: Vec<Vec<ScheduleDuty>> = Vec::new();
             for (site, settled) in closes {
                 self.budget.step(settled.len() + 1)?;
-                if !settled.iter().any(|token| tokens.contains(token)) {
+                if !settled.iter().any(|token| tokens.contains(slotted.get(token).unwrap_or(token))) {
                     continue;
                 }
                 let reaching: Vec<ScheduleDuty> = settled.iter().map(|token| {

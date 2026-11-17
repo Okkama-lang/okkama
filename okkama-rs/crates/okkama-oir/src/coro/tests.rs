@@ -58,6 +58,16 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // #601 P1 (D24.1): spawn forwards the cache duty and adds the task duty, which settles first (§6.3).
     golden!("p1-spawn-awaited"),
     golden!("p1-spawn-detached"),
+    // D26 (#857): duty slots. A temporary created in one branch of its owner, a handler shared by a call before and
+    // after a creation, a Future created and spawned in one branch.
+    variant!("d857-branch-temporary"),
+    variant!("d857-shared-handler"),
+    variant!("d857-branch-spawn"),
+    // A suspension between the begin and the creation, a rehome in a slotted scope, a slotted owner that admits
+    // entries at run time (absorbs on both outcomes of a store).
+    variant!("d857-slot-across-await"),
+    variant!("d857-rehome-slotted"),
+    variant!("d857-stored-dynamic-slotted"),
     golden!("p1-sync-owner-spawn"),
     // C-4: a returned spawned Future's rehome takes its task duty with its cache duty (token form, `task`).
     golden!("p1-spawn-returned"),
@@ -776,8 +786,10 @@ const BUILDER_FUTURES: &str = include_str!("../../tests/fixtures/async/own/d802-
 /// #802 (Fable's ruling and its follow-up, OIR-2-async-abi.md): a fresh Future pushed into a builder is stored. Its
 /// token is absorbed into the split's selected packet on the normal edge, and on the split's unwind edge it moves
 /// into the owner's dynamic inventory (`own.empty`, `service.absorb`, `own.admit`), so the builder's shared handler
-/// sees it on no path. Without `dynamic` in the owner's schedule the token stays static and the shared close is
-/// refused.
+/// sees it on no path. Without `dynamic` in the owner's schedule the token stays static on the unwind edge, and the
+/// shared handler's close is reached with the duty on some paths only: under duty slots (D26, #857, which changed
+/// this test's intended behaviour from a refusal) the owner's duties become slots and the close settles the merged
+/// slot, full or empty.
 #[test]
 fn a_future_stored_in_a_builder_leaves_its_token_on_both_outcomes() {
     let output = lowered("d802-builder-futures", BUILDER_FUTURES);
@@ -794,16 +806,30 @@ fn a_future_stored_in_a_builder_leaves_its_token_on_both_outcomes() {
     assert!(admitted_on_failure >= 8, "{admitted_on_failure}");
     let schedule = "%331, %367, dynamic]";
     assert!(BUILDER_FUTURES.contains(schedule));
-    let error = lower(&edited(BUILDER_FUTURES, schedule, "%331, %367]")).unwrap_err();
-    assert!(matches!(&error, CoroError::Unsupported { message, .. }
-        if message == "a cache duty that reaches its owner's close on some paths only"), "{error:?}");
+    let output = lower(&edited(BUILDER_FUTURES, schedule, "%331, %367]")).unwrap_or_else(|error| panic!("{error:?}"));
+    let main = body(&output, "main");
+    let (empties, filled) = slots(main);
+    assert!(empties > 0 && filled, "the owner's duties are slots: {empties} empties");
+}
+
+/// D26 (#857): the `duty.empty` instructions of a body, and whether every `fut.new` fills a slot.
+fn slots(body: &Body) -> (usize, bool) {
+    let empties = body.insts.iter().filter(|(_, inst)| matches!(inst.op, Operation::Async(AsyncOp::DutyEmpty { .. })))
+        .count();
+    let filled = body.insts.iter().all(|(_, inst)| match &inst.op {
+        Operation::Async(AsyncOp::FutureNew { slot, .. }) => slot.is_some(),
+        _ => true,
+    });
+    (empties, filled)
 }
 
 const LOOP_BODY: &str = include_str!("../../tests/fixtures/async/own/d759-loop-body-future.oir");
 
 /// #759: the close of a duty's owner settles it, so a loop body's duty does not flow along the back edge into the
-/// next iteration (the golden `d759-loop-body-future`). A close that the token reaches on some paths only is still
-/// refused: here the body's close is shared by the path that created the Future and the unwind of `Job(n: i)`.
+/// next iteration (the golden `d759-loop-body-future`). Here the body's close is shared by the path that created the
+/// Future and the unwind of `Job(n: i)` before it. Under duty slots (D26, #857, which changed this test's intended
+/// behaviour from a refusal) the body scope's duty is a slot: empty after the body's `scope.begin`, filled by
+/// `fut.new`, and the shared close settles the version that the two paths merge.
 #[test]
 fn a_loop_body_duty_ends_at_each_close_of_its_owner() {
     let output = lowered("d759-loop-body-future", LOOP_BODY);
@@ -816,13 +842,19 @@ fn a_loop_body_duty_ends_at_each_close_of_its_owner() {
         ^bx(%60: scope<S2>, %61: int, %62: int, %63: scope<S1>) in S2:\n    \
         %42: closed = scope.end %60, {effects}\n    br ^b6(%61, %62, %63)\n");
     let source = edited(LOOP_BODY, &close, &shared);
+    // The unwind of `Job(n: i)` joins the shared close with the loop's counters of ^b5; its failure is dropped, as
+    // a catch would. ^b16, left without a predecessor, goes.
     let unwind = format!("    %46: failure = scope.unwind %45, %43, {effects}\n    br ^b16\n");
-    let source = edited(&source, &unwind, "    br ^bx(%45, %33, %33, %44)\n");
-    // ^b16 is left without a predecessor; it keeps naming defined values.
-    let source = edited(&source, "scope.unwind %44, %46,", "scope.unwind %44, %43,");
-    let error = lower(&source).unwrap_err();
-    assert!(matches!(&error, CoroError::Unsupported { message, .. }
-        if message == "a cache duty that reaches its owner's close on some paths only"), "{error:?}");
+    let source = edited(&source, &unwind, "    br ^bx(%45, %11, %12, %44)\n");
+    let dead = format!("    ^b16 in S1:\n    %47: failure = scope.unwind %44, %46, {effects}\n    raise %47\n");
+    let source = edited(&source, &dead, "");
+    let output = lower(&source).unwrap_or_else(|error| panic!("{error:?}"));
+    let main = body(&output, "main");
+    assert_eq!(slots(main), (1, true), "one empty after the body's begin; fut.new fills it");
+    let [schedule] = main.service_schedules.as_slice() else { panic!("one schedule: {:?}", main.service_schedules) };
+    let [ScheduleDuty::Value(merged)] = schedule.duties.as_slice() else { panic!("one duty") };
+    assert!(matches!(main.values.get(*merged).unwrap().def, Definition::BlockParam { .. }),
+        "the shared close settles the merged slot");
 }
 
 /// Duty slots, S0 check 1 (#854): in every own input of the coro goldens, each close of a scope is dominated by a
@@ -837,4 +869,15 @@ fn every_close_is_dominated_by_its_scope_begin() {
             assert!(undominated.is_empty(), "{name}: {}: {undominated:?}", function.symbol);
         }
     }
+}
+
+/// D26 R-1 (#857): a `fut.new` in a loop of its owner, with no close of the owner in the loop, would fill the slot
+/// while it still holds the duty of the iteration before. Coro refuses it before it emits slots.
+#[test]
+fn a_creation_in_a_loop_of_its_owner_is_refused_by_occupancy() {
+    let source = include_str!("../../tests/fixtures/async/own/d857-branch-temporary.oir");
+    let looped = edited(source, "    br ^b4(%8)\n", "    br ^b1(%8)\n");
+    let error = lower(&looped).unwrap_err();
+    assert!(matches!(&error, CoroError::InvalidInput { message, .. }
+        if message == "fut.new may fill a slot that still holds its earlier duty (D26 R-1)"), "{error:?}");
 }
