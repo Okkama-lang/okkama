@@ -373,7 +373,7 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
     // close that settles a duty (or the entries admitted at run time) can (#851): a close whose schedule is empty,
     // like the close of a loop body's parent scope, releases nothing.
     // A step whose duty only empty slot versions reach (#855) settles nothing, so it releases nothing either. The
-    // slot analyses run only for a close that has a step with a duty.
+    // slot analyses run only for a close that has a step with a duty, in a function that has empty slots.
     let mut slots = None;
     let settles = f.code.iter().skip(contract.begin_pc as usize + 1).map_while(|instruction| match instruction {
         Instruction::Champ { op: Opcode::CleanupSettle, arguments, .. } => {
@@ -381,10 +381,9 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
                 Argument::Location(location) => Some(*location), _ => None,
             }).nth(1);
             Some(duty.is_some_and(|duty| {
-                let (origins, empty) = slots.get_or_insert_with(|| {
-                    (super::suspension::cache_origins(p, f), super::suspension::empty_slots(p, f))
-                });
-                origins.contains_key(&duty) || !empty.contains_key(&duty)
+                let slots = slots.get_or_insert_with(|| super::suspension::has_duty_slots(f)
+                    .then(|| (super::suspension::cache_origins(p, f), super::suspension::empty_slots(p, f))));
+                slots.as_ref().is_none_or(|(origins, empty)| origins.contains_key(&duty) || !empty.contains_key(&duty))
             }))
         }
         Instruction::Champ { op: Opcode::CleanupSettleDynamic | Opcode::CleanupDeliverCancel, .. } => {
