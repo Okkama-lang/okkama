@@ -462,6 +462,36 @@ mod tests {
         }).collect()).collect())
     }
 
+    /// async-never-awaited with a loop after the creation whose header carries the cache duty as a parameter: the
+    /// edge into the loop passes the token, the back edge passes the parameter (#805's shape, without the await).
+    fn loop_carried(header_args: &str) -> String {
+        let source = include_str!("../../tests/fixtures/async/coro/async-never-awaited.oir");
+        let close = "    %11: int = const 0\n    %12: closed = scope.end %9,";
+        assert!(source.contains(close));
+        source.replace("duties [%8]", "duties [%14]").replace(close, &format!("    br ^b2({header_args})\n    \
+            ^b2(%13: scope<S1>, %14: cache-state) in S1:\n    %15: bool = const false\n    cond %15, ^b2(%13, %14), ^b3\n    \
+            ^b3 in S1:\n    %11: int = const 0\n    %12: closed = scope.end %13,"))
+    }
+
+    /// #805: a duty carried round a loop as a block parameter reaches the owner's close once. The token an edge
+    /// passes moves into the parameter, so the token's old name does not also reach the close.
+    #[test]
+    fn a_duty_carried_round_a_loop_reaches_its_close_once() {
+        let (module, function) = narrowed(&loop_carried("%9, %8"));
+        assert_eq!(duties(&module, function).unwrap(), vec![vec!["Service(CacheState)".to_string()]]);
+    }
+
+    /// Two versions of one duty that both reach a close are refused: one token passed into two parameters.
+    #[test]
+    fn two_versions_of_one_duty_at_a_close_are_refused() {
+        let source = loop_carried("%9, %8").replace("^b2(%13: scope<S1>, %14: cache-state)",
+            "^b2(%13: scope<S1>, %14: cache-state, %16: cache-state)").replace("br ^b2(%9, %8)", "br ^b2(%9, %8, %8)")
+            .replace("cond %15, ^b2(%13, %14)", "cond %15, ^b2(%13, %14, %16)");
+        let (module, function) = narrowed(&source);
+        let error = duties(&module, function).unwrap_err();
+        assert!(error.to_string().contains("two tokens of one duty reach a close"), "{error}");
+    }
+
     /// Each close of main settles the duty version that reaches it: two closes, one cache duty each.
     #[test]
     fn each_close_gets_the_schedule_of_its_reaching_duties() {

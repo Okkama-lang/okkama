@@ -227,7 +227,10 @@ impl<'s, 'a> Frames<'s, 'a> {
                     if report {
                         continue;
                     }
-                    for target in super::structure::targets(data) {
+                    for (target, moved) in edges(data) {
+                        // #805: a duty an edge passes moves into the target's parameter; its old name is not
+                        // available there, so no close behind the edge uses it implicitly.
+                        let available: BTreeSet<ValueId> = available.difference(&moved).copied().collect();
                         let slot = &mut input[target.as_u32() as usize];
                         let merged = match slot {
                             None => available.clone(),
@@ -621,6 +624,34 @@ fn creation(body: &Body, edges: &[super::graph::Edge], value: ValueId, state: &m
         }
     }
     found
+}
+
+/// The edges out of a block, each with the values it passes as arguments. An edge the terminator does not name with
+/// arguments (a block's unwind edge, the other terminators) passes none.
+fn edges(data: &Block) -> Vec<(BlockId, BTreeSet<ValueId>)> {
+    let plain = |target: &Target| (target.block, target.args.iter().copied().collect());
+    let mut edges: Vec<(BlockId, BTreeSet<ValueId>)> = match &data.term.kind {
+        TermKind::Br(target) => vec![plain(target)],
+        TermKind::Cond { yes, no, .. } => vec![plain(yes), plain(no)],
+        TermKind::Switch { cases, default, .. } => cases.iter().map(|case| &case.target).chain([default])
+            .map(plain).collect(),
+        TermKind::InvokeOwn { normal, unwind, .. } => [normal, unwind].into_iter().map(|edge| {
+            (edge.block, edge.args.iter().filter_map(|arg| match arg {
+                EdgeArg::Value(value) => Some(*value),
+                _ => None,
+            }).collect())
+        }).collect(),
+        _ => vec![],
+    };
+    if let Some(unwind) = &data.unwind {
+        edges.push((unwind.target.block, BTreeSet::new()));
+    }
+    for target in super::structure::targets(data) {
+        if !edges.iter().any(|(known, _)| *known == target) {
+            edges.push((target, BTreeSet::new()));
+        }
+    }
+    edges
 }
 
 /// Backward liveness of SSA values with the implicit uses of schedule duties.
