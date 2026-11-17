@@ -168,6 +168,16 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
 
 ## Progress
 
+- 2026-11-17, later: chapter 20's std coordination tools get examples
+  (coverage: every std family shown on a task). 20.7 adds `Raced` and
+  `FirstSuccessful` (`20-race`), `FutureCompletions` (`20-completions`),
+  `FutureGroup` (`20-group`) and `FutureScope` (`20-scope`, the body holds
+  `Supervising`: start, count, cancel, never wait). 20.8 adds `Lock`
+  (`20-lock`), `Semaphore` (`20-semaphore`), `Barrier` (`20-barrier`) and
+  `Cancellation` (`20-cancellation`). Checked on 0.5.8 and tree Tomato. Found
+  while writing: an unclosed `LockGuard` or `Permit` is never released (#846);
+  the book states the idiom `defer guard.close()`.
+
 - 2026-11-17: caps, after the owner's reading («ты не упоминаешь cap нигде»).
   12.8 grew from a page to a full section (EN and RU): declaring a cap inside
   or beside its object, generic owners (`12-cap-outside`); what a field may

@@ -1,0 +1,5 @@
+a runs, free 1
+b runs, free 0
+waiting, free 0
+c runs, free 1
+done, free 2

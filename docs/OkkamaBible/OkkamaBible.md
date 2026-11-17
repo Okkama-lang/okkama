@@ -16739,10 +16739,287 @@ eta: -1
   When time wins, the courier's request is cancelled and its cleanup runs
   (`courier: request withdrawn`) before `TimedOut` is thrown. `Before` is the
   same with a deadline computed once and shared by several operations.
-- `Raced` returns the first outcome to settle, success or failure, and cancels
-  the rest. `FirstSuccessful` ignores failures while a success is still
-  possible. `FutureCompletions` hands back the futures in the order they
-  settle. `FutureGroup` and `FutureScope` own a changing set of children.
+
+The other collectors and the two owners of a changing set of children
+follow.
+
+### The first to finish: `Raced` and `FirstSuccessful`
+
+```okkama
+module bible/race v1.0.0;
+
+// Raced takes the first outcome to settle and cancels the rest;
+// FirstSuccessful passes over failures to the first success, and throws the
+// first failure when every origin fails.
+import "async/collect" take Raced, FirstSuccessful, NoFutures;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+enum Broken is Error = (broken, again);
+
+object Waiter {
+    has event is Event;
+    Waiter(:event);
+    async value(v is int) is int {
+        defer Stdout().writeln("waiter " + v.string() + " ends");
+        await event.wait();
+        v;
+    }
+}
+
+object Source {
+    Source();
+    async value(label is string, v is int) is int {
+        Stdout().writeln(label);
+        v;
+    }
+    async broken(which is int) is int {
+        Stdout().writeln("broken " + which.string());
+        if which == 1 { throw Broken.broken; } else { throw Broken.again; }
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let never = Event();
+    let race is @Future<int> = [Waiter(event: never).value(1), Source().value("fast", 2)];
+    out.writeln("winner " + (await Raced(origins: race).winner()).string());
+    let mixed is @Future<int> = [Source().broken(1), Source().value("ok", 3)];
+    out.writeln("first success " + (await FirstSuccessful(origins: mixed).outcome()).string());
+    let failing is @Future<int> = [Source().broken(1), Source().broken(2)];
+    out.writeln(try { (await FirstSuccessful(origins: failing).outcome()).string(); }
+        catch Broken.broken { "first failure: broken"; } catch Broken.again { "first failure: again"; });
+    let nothing is @Future<int> = [];
+    out.writeln(try { (await Raced(origins: nothing).winner()).string(); } catch e is NoFutures { "no futures"; });
+    0;
+}
+```
+
+Output:
+
+```text
+fast
+waiter 1 ends
+winner 2
+broken 1
+ok
+first success 3
+broken 1
+broken 2
+first failure: broken
+no futures
+```
+
+- `Raced(origins:).winner()` starts every origin and returns the first
+  outcome to settle, a success or a failure. The waiter that never wakes is
+  cancelled, and its `defer` runs (`waiter 1 ends`) before `winner 2` is
+  printed: the race is over only when no origin is still running.
+- `FirstSuccessful(origins:).outcome()` passes over failures while a success
+  is still possible. When every origin fails, the first failure is thrown,
+  and the later ones travel with it as secondary failures (Section 20.13).
+- With no origins at all, both throw `NoFutures`. `AllFutures` of nothing is
+  an empty result instead, since all of nothing has succeeded.
+
+### In the order they finish: `FutureCompletions`
+
+```okkama
+module bible/completions v1.0.0;
+
+// FutureCompletions hands the futures back in the order they finish, not
+// the order they were given.
+import "async/collect" take FutureCompletions, NoFutures;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object Gate {
+    has event is Event;
+    Gate(:event);
+    async named(name is string) is string {
+        await event.wait();
+        name;
+    }
+}
+
+object Now {
+    Now();
+    async named(name is string) is string { name; }
+}
+
+async main() is int {
+    let out = Stdout();
+    let first = Event();
+    let second = Event();
+    let futures is @Future<string> = [Gate(event: second).named("slow"), Now().named("quick"),
+        Gate(event: first).named("middle")];
+    let completions is FutureCompletions<string> = FutureCompletions(origins: futures);
+    out.writeln("remaining " + completions.remaining_count().string());
+    first.set();
+    out.writeln(await (await completions.completion()));
+    out.writeln(await (await completions.completion()));
+    second.set();
+    out.writeln(await (await completions.completion()));
+    out.writeln("remaining " + completions.remaining_count().string());
+    out.writeln(try { await (await completions.completion()); } catch e is NoFutures { "none left"; });
+    0;
+}
+```
+
+Output:
+
+```text
+remaining 3
+quick
+middle
+slow
+remaining 0
+none left
+```
+
+`FutureCompletions(origins:)` hands back the futures in the order they
+settle, not the order they were given. Each `completion()` gives the next
+one, already settled, so awaiting it costs nothing. `remaining_count()` says
+how many have not been handed out. After the last one, `completion()`
+throws `NoFutures`. This is the shape of a crawler that handles each page as
+it arrives, or a server that answers whichever backend replies first and
+keeps the rest.
+
+### A changing set of children: `FutureGroup`
+
+The collectors take their origins at once. A task that discovers its work
+while it runs (a connection per client, a request per link found) needs an
+owner it can add to:
+
+```okkama
+module bible/group v1.0.0;
+
+// A FutureGroup owns a changing set of children: `start` registers and starts
+// one (the same future twice is one child), `wait` seals the group and waits
+// for every child, and a child started after that is refused.
+import "async/scope" take FutureGroup, FinishedFutureGroup;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object Worker {
+    has id is int;
+    has gate is Event;
+    Worker(:id, :gate);
+    async run() is int {
+        await gate.wait();
+        Stdout().writeln("worker " + id.string());
+        id;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let gate = Event();
+    let group is FutureGroup<int> = FutureGroup();
+    let first = Worker(id: 1, gate: gate).run();
+    group.start(first);
+    group.start(Worker(id: 2, gate: gate).run());
+    group.start(first);
+    out.writeln("active " + group.active().string());
+    gate.set();
+    await group.wait();
+    out.writeln("active " + group.active().string() + ", first gave " + (await first).string());
+    let late = try { group.start(Worker(id: 3, gate: gate).run()); "started"; } catch e is FinishedFutureGroup { "refused"; };
+    out.writeln("late start " + late);
+    0;
+}
+```
+
+Output:
+
+```text
+active 2
+worker 1
+worker 2
+active 0, first gave 1
+late start refused
+```
+
+- `start(f)` registers a future and starts it. The same future registered
+  twice is one child, so `active()` counts two.
+- `wait()` seals the group and waits for every child. A child's failure is
+  observed there: the first in registration order is thrown, and the others
+  travel with it.
+- After `wait()` or `cancel()`, the group is finished, and `start` throws
+  `FinishedFutureGroup`. A group cannot quietly grow after its owner stopped
+  waiting for it.
+
+### A body with its children: `FutureScope`
+
+A `FutureGroup` passed around can be waited for by anyone, or by no one.
+`FutureScope` ties the group to one body:
+
+```okkama
+module bible/scope v1.0.0;
+
+// A FutureScope runs one body with a group it may start children in; the
+// scope's outcome is the body's result once every child has finished. A
+// body that fails cancels the children it started and waits for them.
+import "async/scope" take FutureScope, Supervising;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (refused);
+
+object Child {
+    has name is string;
+    has gate is Event;
+    Child(:name, :gate);
+    async run() is int {
+        defer Stdout().writeln(name + " done");
+        await gate.wait();
+        1;
+    }
+}
+
+object Batch {
+    has gate is Event;
+    Batch(:gate);
+    async run(children is Supervising<int>) is string {
+        children.start(Child(name: "a", gate: gate).run());
+        children.start(Child(name: "b", gate: gate).run());
+        gate.set();
+        "batch";
+    }
+    async fail(children is Supervising<int>) is string {
+        children.start(Child(name: "c", gate: gate).run());
+        throw Refused.refused;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let scope is FutureScope<int, string> = FutureScope(action: Batch(gate: Event()).run);
+    out.writeln("outcome " + await scope.outcome());
+    let failing is FutureScope<int, string> = FutureScope(action: Batch(gate: Event()).fail);
+    out.writeln(try { await failing.outcome(); } catch e is Refused { "refused"; });
+    0;
+}
+```
+
+Output:
+
+```text
+a done
+b done
+outcome batch
+c done
+refused
+```
+
+The body receives a `Supervising<int>`, a role that can start children,
+count them and cancel them, but cannot wait for the group. Waiting is what
+ends a group, and the scope keeps that for itself. The scope's `outcome()` is the body's
+result once every child has finished (`a done`, `b done`, then `outcome
+batch`). When the body fails, the scope cancels the children it started,
+waits for their cleanup (`c done`), and then throws the body's failure. A
+scope owns children of one result type; children of another type get a
+nested scope. The Trio and Kotlin nurseries of Section 20.5 have the same
+shape. Okkama's version names the capability the body gets (`Supervising`),
+so the body cannot finish the scope it runs in.
 
 Each of these objects follows the rule of Section 20.5: a child it cancels is
 waited for, so when its `result()` returns or throws, no child it started is
@@ -16773,6 +17050,228 @@ carrying anything:
 - `Cancellation` (`async/cancellation`) is a token that long synchronous
   loops check between steps, because cancellation reaches a task only at a
   suspension point and a loop that never suspends would never see it.
+
+A lock holds across a suspension:
+
+```okkama
+module bible/lock v1.0.0;
+
+// A Lock gives one task at a time a guard; a second task asking for it waits
+// until the first closes its guard, even across a suspension.
+import "async/lock" take Lock;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object User {
+    has name is string;
+    has device is Lock;
+    has gate is Event;
+    User(:name, :device, :gate);
+    async run() is void {
+        let guard = await device.guard();
+        defer guard.close();
+        Stdout().writeln(name + " enters");
+        await gate.wait();
+        Stdout().writeln(name + " leaves");
+    }
+}
+
+async main() is int {
+    let device = Lock();
+    let gate = Event();
+    let a = spawn User(name: "a", device: device, gate: gate).run();
+    let b = spawn User(name: "b", device: device, gate: gate).run();
+    Stdout().writeln("locked " + device.locked().string());
+    gate.set();
+    await a;
+    await b;
+    Stdout().writeln("locked " + device.locked().string());
+    0;
+}
+```
+
+Output:
+
+```text
+a enters
+locked true
+a leaves
+b enters
+b leaves
+locked false
+```
+
+`b` asks for the guard while `a` holds it, and waits. `a`'s `defer` closes
+the guard when `a` leaves, and only then does `b` enter. The guard must be
+closed explicitly: it is not a resource with a `destroy`, and a guard left
+open keeps the lock held after its task has ended. `defer guard.close()`
+right after taking it is the idiom, and the same holds for a semaphore's
+permit.
+
+A semaphore admits up to *n* at once:
+
+```okkama
+module bible/semaphore v1.0.0;
+
+// A Semaphore hands out at most n permits: the third task waits until one
+// of the first two closes its permit.
+import "async/semaphore" take Semaphore;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object Job {
+    has name is string;
+    has slots is Semaphore;
+    has gate is Event;
+    Job(:name, :slots, :gate);
+    async run() is void {
+        let permit = await slots.permit();
+        defer permit.close();
+        Stdout().writeln(name + " runs, free " + slots.permits().string());
+        await gate.wait();
+    }
+}
+
+async main() is int {
+    let slots = Semaphore(permits: 2);
+    let gate = Event();
+    let a = spawn Job(name: "a", slots: slots, gate: gate).run();
+    let b = spawn Job(name: "b", slots: slots, gate: gate).run();
+    let c = spawn Job(name: "c", slots: slots, gate: gate).run();
+    Stdout().writeln("waiting, free " + slots.permits().string());
+    gate.set();
+    await a;
+    await b;
+    await c;
+    Stdout().writeln("done, free " + slots.permits().string());
+    0;
+}
+```
+
+Output:
+
+```text
+a runs, free 1
+b runs, free 0
+waiting, free 0
+c runs, free 1
+done, free 2
+```
+
+The third job waits for a permit until the gate opens and the first job's
+`defer` closes its own. `permits()` counts what is free.
+
+A barrier releases its parties together:
+
+```okkama
+module bible/barrier v1.0.0;
+
+// A Barrier releases its parties together once the last has arrived; each
+// arrival gets its index, and the last one is parties - 1.
+import "async/barrier" take Barrier;
+import "io/stdout" take Stdout;
+
+object Party {
+    has name is string;
+    has phase is Barrier;
+    Party(:name, :phase);
+    async step() is void {
+        Stdout().writeln(name + " arrives");
+        let arrival = await phase.wait();
+        Stdout().writeln(name + " goes" + (if arrival == 2 { " last"; } else { ""; }));
+    }
+}
+
+async main() is int {
+    let phase = Barrier(parties: 3);
+    let a = spawn Party(name: "a", phase: phase).step();
+    let b = spawn Party(name: "b", phase: phase).step();
+    let c = spawn Party(name: "c", phase: phase).step();
+    await a;
+    await b;
+    await c;
+    0;
+}
+```
+
+Output:
+
+```text
+a arrives
+b arrives
+c arrives
+c goes last
+a goes
+b goes
+```
+
+Each `wait()` returns the arrival's index, and the last arrival gets
+`parties - 1`. The last one does not suspend, so it goes first, and the
+others follow in the order they arrived. After a release the barrier starts
+a new generation, ready for the next phase.
+
+A cancellation request reaches code that checks it:
+
+```okkama
+module bible/cancellation v1.0.0;
+
+// A Cancellation is a request that cooperating code checks: a synchronous
+// loop between its steps (check throws Cancelled once it is requested), a
+// task by awaiting it. Holders of the Cancelling role can observe the
+// request but not issue it.
+import "async/cancellation" take Cancellation, Cancelling;
+import "io/stdout" take Stdout;
+
+object Monitor {
+    has cancelling is Cancelling;
+    Monitor(:cancelling);
+    async run() is void {
+        await cancelling.wait();
+        Stdout().writeln("monitor: cancellation requested");
+    }
+}
+
+object Worker {
+    has cancelling is Cancelling;
+    Worker(:cancelling);
+    process(records is @string, stop is Cancellation) is int {
+        let done = (0..records.size()).reduce(0) -> count, index {
+            cancelling.check();
+            Stdout().writeln("processed " + records.item(index));
+            if records.item(index) == "stop" { stop.cancel(); }
+            count + 1;
+        };
+        done;
+    }
+}
+
+async main() is int {
+    let cancellation = Cancellation();
+    let monitor = spawn Monitor(cancelling: cancellation.cancelling()).run();
+    let worker = Worker(cancelling: cancellation.cancelling());
+    let outcome = try { worker.process(["a", "b", "stop", "c"], cancellation).string(); }
+        catch e is Cancelled { "cancelled"; };
+    Stdout().writeln("worker: " + outcome);
+    await monitor;
+    0;
+}
+```
+
+Output:
+
+```text
+processed a
+processed b
+processed stop
+worker: cancelled
+monitor: cancellation requested
+```
+
+`check()` throws the builtin `Cancelled` once the request is made. Here the
+record `stop` makes it, so the next step's check throws and `c` is never
+processed. The monitor waits with `wait()` and wakes when the request is
+made. Both hold the restricted `Cancelling` role, which can observe a
+request but not make one. Only the holder of the `Cancellation` decides.
 
 All of them are cooperative: a task waiting on any of them is suspended, and
 the scheduler runs others. Waking a waiter follows the rule of Section 20.3:

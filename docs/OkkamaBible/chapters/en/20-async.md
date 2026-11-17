@@ -379,10 +379,70 @@ owns them all. `async/collect` and `async/timeout` provide them:
   When time wins, the courier's request is cancelled and its cleanup runs
   (`courier: request withdrawn`) before `TimedOut` is thrown. `Before` is the
   same with a deadline computed once and shared by several operations.
-- `Raced` returns the first outcome to settle, success or failure, and cancels
-  the rest. `FirstSuccessful` ignores failures while a success is still
-  possible. `FutureCompletions` hands back the futures in the order they
-  settle. `FutureGroup` and `FutureScope` own a changing set of children.
+
+The other collectors and the two owners of a changing set of children
+follow.
+
+### The first to finish: `Raced` and `FirstSuccessful`
+
+{{example:20-race}}
+
+- `Raced(origins:).winner()` starts every origin and returns the first
+  outcome to settle, a success or a failure. The waiter that never wakes is
+  cancelled, and its `defer` runs (`waiter 1 ends`) before `winner 2` is
+  printed: the race is over only when no origin is still running.
+- `FirstSuccessful(origins:).outcome()` passes over failures while a success
+  is still possible. When every origin fails, the first failure is thrown,
+  and the later ones travel with it as secondary failures (Section 20.13).
+- With no origins at all, both throw `NoFutures`. `AllFutures` of nothing is
+  an empty result instead, since all of nothing has succeeded.
+
+### In the order they finish: `FutureCompletions`
+
+{{example:20-completions}}
+
+`FutureCompletions(origins:)` hands back the futures in the order they
+settle, not the order they were given. Each `completion()` gives the next
+one, already settled, so awaiting it costs nothing. `remaining_count()` says
+how many have not been handed out. After the last one, `completion()`
+throws `NoFutures`. This is the shape of a crawler that handles each page as
+it arrives, or a server that answers whichever backend replies first and
+keeps the rest.
+
+### A changing set of children: `FutureGroup`
+
+The collectors take their origins at once. A task that discovers its work
+while it runs (a connection per client, a request per link found) needs an
+owner it can add to:
+
+{{example:20-group}}
+
+- `start(f)` registers a future and starts it. The same future registered
+  twice is one child, so `active()` counts two.
+- `wait()` seals the group and waits for every child. A child's failure is
+  observed there: the first in registration order is thrown, and the others
+  travel with it.
+- After `wait()` or `cancel()`, the group is finished, and `start` throws
+  `FinishedFutureGroup`. A group cannot quietly grow after its owner stopped
+  waiting for it.
+
+### A body with its children: `FutureScope`
+
+A `FutureGroup` passed around can be waited for by anyone, or by no one.
+`FutureScope` ties the group to one body:
+
+{{example:20-scope}}
+
+The body receives a `Supervising<int>`, a role that can start children,
+count them and cancel them, but cannot wait for the group. Waiting is what
+ends a group, and the scope keeps that for itself. The scope's `outcome()` is the body's
+result once every child has finished (`a done`, `b done`, then `outcome
+batch`). When the body fails, the scope cancels the children it started,
+waits for their cleanup (`c done`), and then throws the body's failure. A
+scope owns children of one result type; children of another type get a
+nested scope. The Trio and Kotlin nurseries of Section 20.5 have the same
+shape. Okkama's version names the capability the body gets (`Supervising`),
+so the body cannot finish the scope it runs in.
 
 Each of these objects follows the rule of Section 20.5: a child it cancels is
 waited for, so when its `result()` returns or throws, no child it started is
@@ -413,6 +473,43 @@ carrying anything:
 - `Cancellation` (`async/cancellation`) is a token that long synchronous
   loops check between steps, because cancellation reaches a task only at a
   suspension point and a loop that never suspends would never see it.
+
+A lock holds across a suspension:
+
+{{example:20-lock}}
+
+`b` asks for the guard while `a` holds it, and waits. `a`'s `defer` closes
+the guard when `a` leaves, and only then does `b` enter. The guard must be
+closed explicitly: it is not a resource with a `destroy`, and a guard left
+open keeps the lock held after its task has ended. `defer guard.close()`
+right after taking it is the idiom, and the same holds for a semaphore's
+permit.
+
+A semaphore admits up to *n* at once:
+
+{{example:20-semaphore}}
+
+The third job waits for a permit until the gate opens and the first job's
+`defer` closes its own. `permits()` counts what is free.
+
+A barrier releases its parties together:
+
+{{example:20-barrier}}
+
+Each `wait()` returns the arrival's index, and the last arrival gets
+`parties - 1`. The last one does not suspend, so it goes first, and the
+others follow in the order they arrived. After a release the barrier starts
+a new generation, ready for the next phase.
+
+A cancellation request reaches code that checks it:
+
+{{example:20-cancellation}}
+
+`check()` throws the builtin `Cancelled` once the request is made. Here the
+record `stop` makes it, so the next step's check throws and `c` is never
+processed. The monitor waits with `wait()` and wakes when the request is
+made. Both hold the restricted `Cancelling` role, which can observe a
+request but not make one. Only the holder of the `Cancellation` decides.
 
 All of them are cooperative: a task waiting on any of them is suspended, and
 the scheduler runs others. Waking a waiter follows the rule of Section 20.3:
