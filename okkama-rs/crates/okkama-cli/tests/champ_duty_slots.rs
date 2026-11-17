@@ -32,7 +32,9 @@ fn duty_slot_bodies_run_in_champ_with_full_and_empty_slots() {
         ("d26-outer-slot-across-inner-close", 0), ("d26-two-futures-order", 0), ("d26-slot-across-await", 14),
         // Coro's own output from the S3 variants (#857): the slots coro emits.
         ("d857-branch-temporary", 0), ("d857-shared-handler", 0), ("d857-branch-spawn", 0),
-        ("d857-slot-across-await", 14), ("d857-rehome-slotted", 4), ("d857-stored-dynamic-slotted", 7)];
+        ("d857-slot-across-await", 14), ("d857-rehome-slotted", 4), ("d857-stored-dynamic-slotted", 7),
+        // #859: a stored temporary without slots, the base of the last one.
+        ("d25-stored-cold", 7)];
     for (name, status) in cases {
         let source = fixture(name);
         assert_eq!(run(name, &source), status, "{name}");
