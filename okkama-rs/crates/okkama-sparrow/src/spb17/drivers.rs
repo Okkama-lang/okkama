@@ -380,6 +380,9 @@ pub enum Helper {
     Now,
     /// `(MonotonicInstant, MonotonicInstant) -> Duration`: `deadline.minus(now)`.
     Minus,
+    /// `array of T -> Sequencing<T>`: the program's own array-to-role conversion, AllFutures' result (#810 G1 step 3,
+    /// ruling Q1 of the steps 3–4 review).
+    Wrap,
 }
 
 /// `Within.outcome`'s helpers, as Tomato's timeout driver indexes them.
@@ -405,22 +408,25 @@ pub(super) fn check_helpers(p: &Program, f: &Function, name: &str) -> Result<(),
     let Some(row) = ready_holder(name).filter(|row| !row.helpers.is_empty()) else { return Ok(()) };
     let named = |ty: Type, wanted: &str| matches!(ty, Type::Object(id) | Type::Role(id)
         if p.objects.get(id as usize).is_some_and(|object| object.name == wanted));
-    let limit = if row.name.starts_with("okkama.timeout.Within.") { DURATION } else { MONOTONIC_INSTANT };
-    let layout = match f.registers.first() {
-        Some(&Type::Object(id)) => p.objects.get(id as usize).map(|object| object.layout.storage_fields.as_slice()),
-        _ => None,
-    };
-    enforce(matches!(layout, Some([Type::Future(_), limit_field, clock]) if named(*limit_field, limit)
-        && named(*clock, TIMING)), HOLDER_HELPER,
-        &format!("{name}: the receiver is not origin, {limit} and Timing"))?;
-    // The driver returns the origin's result word as the outcome: the origin's outcome type is the entry's result
-    // (#810 review T2).
-    let origin = match layout {
-        Some([Type::Future(id), ..]) => p.tables.future_results.get(*id as usize).copied(),
-        _ => None,
-    };
-    enforce(origin == Some(f.results.first().copied()), HOLDER_HELPER,
-        &format!("{name}: the origin's outcome is not the entry's result"))?;
+    // A timeout's driver reads its receiver by storage index; AllFutures' reads its origins (`HOLDER_ORIGINS`).
+    if row.name.starts_with("okkama.timeout.") {
+        let limit = if row.name.starts_with("okkama.timeout.Within.") { DURATION } else { MONOTONIC_INSTANT };
+        let layout = match f.registers.first() {
+            Some(&Type::Object(id)) => p.objects.get(id as usize).map(|object| object.layout.storage_fields.as_slice()),
+            _ => None,
+        };
+        enforce(matches!(layout, Some([Type::Future(_), limit_field, clock]) if named(*limit_field, limit)
+            && named(*clock, TIMING)), HOLDER_HELPER,
+            &format!("{name}: the receiver is not origin, {limit} and Timing"))?;
+        // The driver returns the origin's result word as the outcome: the origin's outcome type is the entry's
+        // result (#810 review T2).
+        let origin = match layout {
+            Some([Type::Future(id), ..]) => p.tables.future_results.get(*id as usize).copied(),
+            _ => None,
+        };
+        enforce(origin == Some(f.results.first().copied()), HOLDER_HELPER,
+            &format!("{name}: the origin's outcome is not the entry's result"))?;
+    }
     for (index, kind) in row.helpers.iter().enumerate() {
         let symbol = helper_symbol(name, index);
         let helper = p.functions.iter().find(|helper| helper.symbol == symbol)
@@ -438,6 +444,8 @@ pub(super) fn check_helpers(p: &Program, f: &Function, name: &str) -> Result<(),
                 && matches!(results, [i] if named(*i, MONOTONIC_INSTANT)),
             Helper::Minus => matches!(params.as_slice(), [a, b] if named(*a, MONOTONIC_INSTANT)
                 && named(*b, MONOTONIC_INSTANT)) && matches!(results, [d] if named(*d, DURATION)),
+            // One array, and exactly the entry's result: the driver returns what the helper returns.
+            Helper::Wrap => matches!(params.as_slice(), [Type::Array(_) | Type::Bytes]) && results == f.results,
         };
         let compiled = !helper.code.is_empty() && helper.proofs.entry.as_ref().is_none_or(|entry| entry.external.is_none())
             && matches!(helper.entry_abi, EntryAbi::Observation | EntryAbi::Owned);
@@ -454,7 +462,22 @@ pub const HOLDER_ORIGINS: &str = "HOLDER_ORIGINS";
 
 /// The collector rows whose driver reads origins (`collect_start`), by name.
 fn reads_origins(row: &str) -> bool {
-    matches!(row, "okkama.collect.Raced.winner" | "okkama.collect.FirstSuccessful.outcome")
+    matches!(row, "okkama.collect.Raced.winner" | "okkama.collect.FirstSuccessful.outcome"
+        | "okkama.collect.AllFutures.results")
+}
+
+/// The element type of a ready AllFutures entry: the array its `Wrap` helper takes.
+fn wrapped_element(p: &Program, name: &str) -> Option<Type> {
+    let symbol = helper_symbol(name, 0);
+    let helper = p.functions.iter().find(|helper| helper.symbol == symbol)?;
+    let param = helper.params.first().and_then(|&location| match verify::loc_type(helper, location) {
+        Ok(ProducedType::Value(ty)) => Some(ty),
+        _ => None,
+    })?;
+    match param {
+        Type::Bytes => Some(Type::Byte),
+        array => super::element_type(array),
+    }
 }
 
 pub(super) fn check_origins(p: &Program, f: &Function, name: &str) -> Result<(), Error> {
@@ -476,7 +499,13 @@ pub(super) fn check_origins(p: &Program, f: &Function, name: &str) -> Result<(),
     enforce(size && item.is_some(), HOLDER_ORIGINS,
         &format!("{}: the receiver's origins are not a sequence of Futures", row.name))?;
     let outcome = item.and_then(|id| p.tables.future_results.get(id as usize).copied());
-    enforce(outcome == Some(f.results.first().copied()), HOLDER_ORIGINS,
+    // The winner of a race is a member's outcome; AllFutures' results are the elements its `Wrap` helper takes.
+    let expected = if row.name == "okkama.collect.AllFutures.results" {
+        Some(wrapped_element(p, name))
+    } else {
+        Some(f.results.first().copied())
+    };
+    enforce(outcome == expected, HOLDER_ORIGINS,
         &format!("{name}: the origins' outcome is not the entry's result"))
 }
 
@@ -545,8 +574,8 @@ pub const HOLDERS: &[Template] = &[
         Effect::AliasesReceiver, &[], Slice::G1)),
     holder("okkama.scope.FutureScope.outcome", &[H(FUTURE_SCOPE)], &[OUT], Abi::Driver, THROWN | PROGRAM,
         Effect::Delivered, &[FUTURE_GROUP], Slice::G1),
-    holder("okkama.collect.AllFutures.results", &[H(ALL_FUTURES)], &[SEQ], Abi::Driver, THROWN | PROGRAM,
-        Effect::DependsOnReceiver, &[], Slice::G1),
+    ready(Template { helpers: &[Helper::Wrap], ..holder("okkama.collect.AllFutures.results", &[H(ALL_FUTURES)], &[SEQ],
+        Abi::Driver, THROWN | PROGRAM, Effect::DependsOnReceiver, &[], Slice::G1) }),
     ready(holder("okkama.collect.Raced.winner", &[H(RACED)], &[VAL], Abi::Driver, THROWN | PROGRAM, Effect::View,
         &[NO_FUTURES], Slice::G1)),
     ready(holder("okkama.collect.FirstSuccessful.outcome", &[H(FIRST_SUCCESSFUL)], &[VAL], Abi::Driver,
@@ -718,9 +747,10 @@ pub fn instantiate(template: &Template, objects: &[Object], suffixes: &[&str], b
         Abi::Owned => entry(&name, registers, deps, results, true, template.failures),
         Abi::Driver => driver(&name, registers, results, template.failures),
     };
-    // A result that aliases the receiver retains it (#774 A6, as the producer's summary says).
+    // A result that aliases the receiver, or depends on it (AllFutures' elements are views into its members'
+    // caches), retains it (#774 A6, as the producer's summary says).
     let mut function = function;
-    if matches!(template.effect, Effect::AliasesReceiver | Effect::View)
+    if matches!(template.effect, Effect::AliasesReceiver | Effect::View | Effect::DependsOnReceiver)
         && let Some(entry) = function.proofs.entry.as_mut() {
         entry.retained_params = vec![0];
     }

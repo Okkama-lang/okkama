@@ -10,6 +10,10 @@
 //! - `Now` (`Timing -> MonotonicInstant`) calls the role slot `monotonic_instant`;
 //! - `Minus` (`(MonotonicInstant, MonotonicInstant) -> Duration`) calls `MonotonicInstant.minus`.
 //!
+//! - `Wrap` (`array of T -> Sequencing<T>`, AllFutures' result, G1 step 3) calls the constructor of the array
+//!   adapter that witnesses the entry's result role and wraps the adapter as that role, as a program's own
+//!   conversion of an array to `Sequencing<T>` does (ruling Q1 of the steps 3–4 review).
+//!
 //! The functions are listed in the intrinsic's `FunctionAttr::Intrinsic.helpers`; the SPB 17 loader checks their
 //! shape by symbol (`HOLDER_HELPER`).
 use super::declarations::Declarations;
@@ -22,9 +26,11 @@ use okkama_sparrow::spb17::drivers::{self as catalogue, Helper};
 enum Target {
     Direct(ir::FuncId),
     Role { role: ir::DeclId, slot: u32 },
+    /// An adapter's constructor, whose object the helper returns as the role `ty`.
+    Wrap { constructor: ir::FuncId, ty: ir::TypeId },
 }
 
-pub(super) fn declare_helpers(declarations: &mut Declarations) -> Result<()> {
+pub(super) fn declare_helpers(declarations: &mut Declarations, analysis: &crate::analysis::Analysis<'_>) -> Result<()> {
     let span = crate::source::Span::default();
     let entries: Vec<_> = declarations.builder.module().functions.iter().filter_map(|(id, function)| {
         function.attrs.iter().find_map(|attr| match attr {
@@ -35,6 +41,7 @@ pub(super) fn declare_helpers(declarations: &mut Declarations) -> Result<()> {
     }).collect();
     for (entry, name, kinds) in entries {
         let module = declarations.builder.module();
+        let result = module.functions.get(entry)?.signature.results.first().copied();
         let receiver = *module.functions.get(entry)?.signature.params.first()
             .ok_or_else(|| LowerError::invalid(span, format!("{name} has no receiver")))?;
         let ir::Type::Object { decl, .. } = *module.types.get(receiver)? else {
@@ -43,33 +50,47 @@ pub(super) fn declare_helpers(declarations: &mut Declarations) -> Result<()> {
         let ir::DeclarationKind::Object { fields, .. } = &module.declarations.get(decl)?.kind else {
             return Err(LowerError::invalid(span, format!("{name}'s receiver is not an object")));
         };
-        // Within: origin, limit, clock. Before: origin, deadline, clock.
-        let [_, limit, clock] = fields.as_slice() else {
-            return Err(LowerError::invalid(span, format!("{name}'s receiver has not three fields")));
+        // Within: origin, limit, clock. Before: origin, deadline, clock. AllFutures: origins.
+        let timeout = match fields.as_slice() {
+            [_, limit, clock] => Some((limit.ty, clock.ty)),
+            _ => None,
         };
-        let (limit, clock) = (limit.ty, clock.ty);
+        let timed = || timeout.ok_or_else(|| LowerError::invalid(span, format!("{name}'s receiver has not three fields")));
         let mut helpers = Vec::new();
         for (index, kind) in kinds.iter().enumerate() {
             let symbol = catalogue::helper_symbol(&name, index);
             let helper = match kind {
                 Helper::Seconds => {
+                    let (limit, _) = timed()?;
                     let duration = duration_type(declarations, &name, limit)?;
                     let target = seconds(declarations, duration, &name)?;
                     let rat = declarations.builder.intern_type(ir::Type::Rat)?;
                     helper(declarations, symbol, vec![duration], rat, Target::Direct(target))?
                 }
                 Helper::Wait => {
+                    let (limit, clock) = timed()?;
                     let duration = duration_type(declarations, &name, limit)?;
                     let (role, slot, result) = role_slot(declarations, clock, "wait", &name)?;
                     helper(declarations, symbol, vec![clock, duration], result, Target::Role { role, slot })?
                 }
                 Helper::Now => {
+                    let (_, clock) = timed()?;
                     let (role, slot, result) = role_slot(declarations, clock, "monotonic_instant", &name)?;
                     helper(declarations, symbol, vec![clock], result, Target::Role { role, slot })?
                 }
                 Helper::Minus => {
+                    let (limit, _) = timed()?;
                     let (target, result) = minus(declarations, limit, &name)?;
                     helper(declarations, symbol, vec![limit, limit], result, Target::Direct(target))?
+                }
+                Helper::Wrap => {
+                    // The result role `Sequencing<T>`; T is its `item`'s result.
+                    let role = result.ok_or_else(|| LowerError::invalid(span, format!("{name} has no result")))?;
+                    let (_, _, element) = role_slot(declarations, role, "item", &name)?;
+                    let array = declarations.builder.intern_type(ir::Type::Array(element))?;
+                    let constructor = super::builtin_roles::array_adapter(declarations, analysis, array, role)?
+                        .ok_or_else(|| LowerError::invalid(span, format!("{name} has no array adapter")))?;
+                    helper(declarations, symbol, vec![array], role, Target::Wrap { constructor, ty: role })?
                 }
             };
             helpers.push(helper);
@@ -168,16 +189,25 @@ fn helper(declarations: &mut Declarations, symbol: String, params: Vec<ir::TypeI
     let mut args: Vec<_> = builder.block_params(entry)?.iter().map(|&value| ir::CallArgument {
         value, convention: ir::OperandConvention::Borrow,
     }).collect();
+    let mut wrap = None;
     let call = match target {
         Target::Direct(function) => ir::CallOp::Direct { function, call: call_site(args) },
         Target::Role { role, slot } => {
             let receiver = args.remove(0);
             ir::CallOp::Role { receiver, role, slot, call: call_site(args) }
         }
+        Target::Wrap { constructor, ty } => {
+            wrap = Some(ty);
+            ir::CallOp::Direct { function: constructor, call: call_site(args) }
+        }
     };
     let values = builder.emit_schema(ir::Operation::Call(call))?;
     record_call_effect(&mut builder, entry)?;
-    finish_adapter(&mut builder, root, entry, values.first().copied())?;
+    let mut value = values.first().copied();
+    if let (Some(ty), Some(adapter)) = (wrap, value) {
+        value = builder.emit_schema(ir::Operation::Core(ir::CoreOp::RoleWrap { value: adapter, ty }))?.first().copied();
+    }
+    finish_adapter(&mut builder, root, entry, value)?;
     let body = builder.finish()?;
     declarations.builder.define_function(function, body)?;
     Ok(function)

@@ -3,6 +3,25 @@ use super::{LowerError, Result, declarations::Declarations};
 use crate::analysis::{Analysis, thir, ty};
 use crate::oir2 as ir;
 
+/// The constructor of the array adapter that witnesses `role` for arrays of type `input`, declared now when no
+/// conversion of the program needed it (#810 G1 step 3: AllFutures' `Wrap` helper, ruling Q1). None when `role` is
+/// not an array role or `input` is not an array.
+pub(super) fn array_adapter(declarations: &mut Declarations, analysis: &Analysis<'_>, input: ir::TypeId,
+    role: ir::TypeId) -> Result<Option<ir::FuncId>> {
+    if let Some(&ctor) = declarations.builtin_adapters.get(&(input, role)) {
+        return Ok(Some(ctor));
+    }
+    let ir::Type::Array(own) = *declarations.builder.module().types.get(input)? else {
+        return Ok(None);
+    };
+    let roles = ArrayRoles::new(declarations, analysis)?;
+    let Some(entry) = roles.find(role) else {
+        return Ok(None);
+    };
+    sequence(declarations, &roles, input, entry.element.unwrap_or(own))?;
+    Ok(declarations.builtin_adapters.get(&(input, role)).copied())
+}
+
 pub(super) fn declare(declarations: &mut Declarations, analysis: &Analysis<'_>) -> Result<()> {
     let mut pairs = vec![];
     let mut cursors = vec![];

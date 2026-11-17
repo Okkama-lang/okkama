@@ -148,7 +148,7 @@ fn lower(analysis: &Analysis<'_>) -> Result<ir::Module> {
     let analysis = &prepared.analysis;
     let mut declarations = declarations::Declarations::new(analysis)?;
     // #810: the timeout drivers' helpers, once the witnesses of the clock roles exist.
-    timeouts::declare_helpers(&mut declarations)?;
+    timeouts::declare_helpers(&mut declarations, analysis)?;
     declarations.declare_lambdas(&prepared.callables)?;
     let walked: Vec<_> = analysis.bodies.iter()
         .chain(prepared.callables.bodies.iter().map(|discovered| &discovered.body)).collect();

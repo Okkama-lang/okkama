@@ -452,10 +452,11 @@ fn oir2_std_async_intrinsics_outside_q1_name_their_slice() {
         (concat!("module app; import \"async/channel\" take Channel; ",
             "async main() is int { let c is Channel<int> = Channel(1); await c.sending().send(1); 0; }"),
             "(P2.5 slice Q2, D23)"),
-        (concat!("module app; import \"async/collect\" take AllFutures; ",
-            "object Job { Job(); async run() is int { 1; } } ",
-            "async main() is int { let all is AllFutures<int> = AllFutures(origins: [Job().run()]); ",
-            "let r = await all.results(); 0; }"),
+        // FutureScope is the last G1 row to get its runtime (#810 step 5); AllFutures is ready since step 3.
+        (concat!("module app; import \"async/scope\" take FutureScope, Supervising; ",
+            "object Body { Body(); async run(children is Supervising<int>) is int { 1; } } ",
+            "async main() is int { let scope is FutureScope<int, int> = FutureScope(action: Body().run); ",
+            "let r = await scope.outcome(); 0; }"),
             "(P2.5 slice G1, D23)"),
     ] {
         let (message, _) = diagnostic(source);

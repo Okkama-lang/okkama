@@ -407,13 +407,13 @@ fn suffixes(template: &Template) -> Vec<&'static str> {
 
 /// The rows follow memo §§5.2 and 6.2: one per member Tomato runs as an intrinsic, a driver for each async member
 /// (thrown, program and cancelled), none of them in the Q1 catalogue, and only those with a runtime ready (#810:
-/// FutureGroup's five members, the two timeouts, then the race and first-success collectors).
+/// FutureGroup's five members, the two timeouts, then the collectors).
 #[test]
 fn holder_rows_are_the_q2_and_g1_members() {
     let ready: Vec<_> = d::HOLDERS.iter().filter(|template| template.ready).map(|template| template.name).collect();
     assert_eq!(ready, ["okkama.scope.FutureGroup.new", "okkama.scope.FutureGroup.start",
         "okkama.scope.FutureGroup.active", "okkama.scope.FutureGroup.cancel", "okkama.scope.FutureGroup.wait",
-        "okkama.collect.Raced.winner", "okkama.collect.FirstSuccessful.outcome",
+        "okkama.collect.AllFutures.results", "okkama.collect.Raced.winner", "okkama.collect.FirstSuccessful.outcome",
         "okkama.timeout.Within.outcome", "okkama.timeout.Before.outcome"]);
     let q2 = d::HOLDERS.iter().filter(|template| template.slice == Slice::Q2).count();
     assert_eq!((q2, d::HOLDERS.len() - q2), (9, 13));
@@ -427,7 +427,9 @@ fn holder_rows_are_the_q2_and_g1_members() {
         if template.abi == d::Abi::Driver {
             assert_eq!(template.failures, d::THROWN | d::PROGRAM, "{}", template.name);
         }
-        assert_eq!(!template.helpers.is_empty(), template.name.starts_with("okkama.timeout."), "{}", template.name);
+        // The timeouts read the clock through helpers; AllFutures makes its result with one (`Wrap`, ruling Q1).
+        let helped = template.name.starts_with("okkama.timeout.") || template.name == "okkama.collect.AllFutures.results";
+        assert_eq!(!template.helpers.is_empty(), helped, "{}", template.name);
     }
     for family in [d::CHANNEL, d::SENDING, d::RECEIVING, d::FUTURE_GROUP, d::FUTURE_COMPLETIONS] {
         assert!(!d::has_members(family), "{family}: the producer keeps its refusal until the runtime");
@@ -602,4 +604,36 @@ fn a_collectors_origins_match_the_entry() {
     // A row whose driver reads no origins is not checked.
     let (p, entry) = raced(Some(Type::Str), Type::Int, &["size", "item"]);
     d::check_origins(&p, &entry, "okkama.timeout.Within.outcome$int").unwrap();
+}
+
+/// `AllFutures_int`'s results entry with its `Wrap` helper: the origins' Futures have the outcome `outcome`, the
+/// helper takes `param` and returns `wrapped`, the entry returns the role `Sequencing<int>` (object 2).
+fn all_futures(outcome: Option<Type>, param: Type, wrapped: Type) -> (Program, Function) {
+    let (mut p, _) = raced(outcome, Type::Int, &["size", "item"]);
+    p.objects[1] = object("async.collect.AllFutures_int", vec![Type::Role(0)], &["origins"]);
+    let mut result = object("collections.sequence.Sequencing_int", vec![], &[]);
+    result.role = Some(RoleDecl::default());
+    p.objects.push(result);
+    let name = "okkama.collect.AllFutures.results$int";
+    p.functions = vec![shaped(&d::helper_symbol(name, 0), EntryAbi::Observation, vec![param], vec![wrapped], None)];
+    let entry = shaped(name, EntryAbi::AsyncExternal, vec![Type::Object(1)], vec![Type::Role(2)], Some(name));
+    (p, entry)
+}
+
+/// #810 G1 step 3 (ruling Q1): AllFutures' `Wrap` helper takes an array and returns exactly the entry's result
+/// (`HOLDER_HELPER`), and its array's element is the origins' outcome (`HOLDER_ORIGINS`).
+#[test]
+fn all_futures_wraps_an_array_of_the_origins_outcomes() {
+    let name = "okkama.collect.AllFutures.results$int";
+    let ints = Type::Array(ArrayType { leaf: ArrayLeaf::Int, depth: 1 });
+    let strings = Type::Array(ArrayType { leaf: ArrayLeaf::Str, depth: 1 });
+    let (p, entry) = all_futures(Some(Type::Int), ints, Type::Role(2));
+    d::check_helpers(&p, &entry, name).unwrap();
+    d::check_origins(&p, &entry, name).unwrap();
+    let (p, entry) = all_futures(Some(Type::Int), strings, Type::Role(2));
+    assert_eq!(d::check_origins(&p, &entry, name).unwrap_err().rule, d::HOLDER_ORIGINS);
+    let (p, entry) = all_futures(Some(Type::Int), Type::Int, Type::Role(2));
+    assert_eq!(d::check_helpers(&p, &entry, name).unwrap_err().rule, d::HOLDER_HELPER);
+    let (p, entry) = all_futures(Some(Type::Int), ints, Type::Role(0));
+    assert_eq!(d::check_helpers(&p, &entry, name).unwrap_err().rule, d::HOLDER_HELPER);
 }

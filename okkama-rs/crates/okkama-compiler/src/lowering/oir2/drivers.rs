@@ -221,7 +221,9 @@ fn holder_contract(module: &ir::Module, name: &str, row: &catalogue::Template, s
         } else {
             vec![]
         },
-        external_deps: vec![], opaque: row.effect == catalogue::Effect::View,
+        // A result whose parts are views into the receiver's graph (AllFutures' elements) depends on it.
+        external_deps: if row.effect == catalogue::Effect::DependsOnReceiver { vec![0] } else { vec![] },
+        opaque: row.effect == catalogue::Effect::View,
         provenance: ir::AdmissionProvenance::UnboundResult,
     }).collect();
     let mut failures = mask_failures(row.failures);

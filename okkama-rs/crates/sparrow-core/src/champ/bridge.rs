@@ -82,6 +82,39 @@ impl Runtime {
         found
     }
 
+    /// AllFutures' result on Champ (#810 G1 step 3, ruling Q1): the members' outcomes in input order, as an array of
+    /// the `Wrap` helper's parameter type, which the helper wraps as the entry's `Sequencing<T>`. The array stays a
+    /// root across the call. None when the helper failed or stopped (the context says which).
+    pub(crate) fn champ_all_results(&mut self, ctx: *mut Ctx, frame: Word, function: usize, values: &[Word])
+        -> Option<Word>
+    {
+        let wrap = self.loaded.program.functions[function].intrinsic.as_ref()
+            .and_then(|intrinsic| intrinsic.helpers.first()).map(|helper| helper.0 as usize);
+        let parameter = wrap.and_then(|wrap| {
+            let source = &self.champ.machine.as_ref()?.source.functions[wrap];
+            match source.params.first()? {
+                s::Location::Register(id) => Some(source.registers[*id as usize]),
+                _ => None,
+            }
+        });
+        let (Some(wrap), Some(parameter)) = (wrap, parameter) else {
+            stop(ctx, error("AllFutures without its Wrap helper"));
+            return None;
+        };
+        let array = if parameter == s::Type::Bytes {
+            let bytes: Vec<u8> = values.iter().map(|&word| word as u8).collect();
+            self.heap.allocate_bytes(&bytes)
+        } else {
+            let element = s::element_type(parameter).expect("HOLDER_HELPER: Wrap takes an array");
+            self.heap.allocate_array(super::machine::repr(element), values)
+        };
+        self.roots.push((array, crate::word::Repr::Ref));
+        let result = self.champ_driver_call(ctx, frame, wrap, &[array]);
+        let runtime = unsafe { &mut *(*ctx).runtime };
+        runtime.roots.pop();
+        result
+    }
+
     /// I-G5: the packet `record` a driver got back joins its INPUTS, checked before the first store, with the owner
     /// of the driver's cache.
     fn champ_merge_inputs(&mut self, frame: Word, record: Word) -> Result<(), Error> {

@@ -1,5 +1,6 @@
-//! #810 G1 step 3 on Champ, in process: `Raced.winner` and `FirstSuccessful.outcome` run Tomato's collector driver,
-//! which reads the origins through their `Sequencing` role with the driver call bridge. The outputs are those of
+//! #810 G1 step 3 on Champ, in process: `AllFutures.results`, `Raced.winner` and `FirstSuccessful.outcome` run
+//! Tomato's collector driver, which reads the origins through their `Sequencing` role with the driver call bridge;
+//! AllFutures' result is made by the program's `Wrap` helper (ruling Q1). The outputs are those of
 //! Tomato built from the rebuild tree. The programs run under Structural verification: an array of Futures behind
 //! `Sequencing` goes through the builtin array-role adapter, which Full verification refuses until #796 (B51).
 #![cfg(feature = "champ-abi")]
@@ -63,10 +64,11 @@ fn expect_program(source: &str, stdout: &str) {
     assert_eq!((run.stdout.as_str(), run.result), (stdout, Ok(0)));
 }
 
-/// An empty race throws `NoFutures` (conformance).
+/// An empty race throws `NoFutures`; AllFutures keeps input order and wakes what waits on it (conformance).
 #[test]
-fn an_empty_race_throws_no_futures() {
-    check(&["L08.collect.race-empty"]);
+fn collector_conformance_cases() {
+    check(&["L08.collect.race-empty", "L08.collect.all-futures-order", "L08.wake.transitive",
+        "L12.concurrent-cas-and-dedup"]);
 }
 
 /// The first origin to finish wins; the one still waiting on an event is cancelled, and the event stays unset.
@@ -247,4 +249,75 @@ async main() is int {
     0;
 }
 "#, "go end\nmake x\nmake y\nmain end\ndestroy y\ndestroy x\n");
+}
+
+/// AllFutures: results in input order, not finishing order; the first failure is thrown once every origin has
+/// settled; no origins give an empty result; resource outcomes are the awaiting scope's and are destroyed once,
+/// when it ends. `AllFutures<string>` needs an array adapter for `Sequencing<string>` the program never converts
+/// to itself: the producer declares it for the `Wrap` helper.
+#[test]
+fn all_futures_keeps_input_order_failures_and_resources() {
+    expect_program(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+import "async/collect" take AllFutures;
+
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+
+object Gate {
+    has event is Event;
+    Gate(:event);
+    async word(text is string) is string {
+        await event.wait();
+        text;
+    }
+}
+
+object Values {
+    Values();
+    async word(text is string) is string { text; }
+    async res(name is string) is Res {
+        Stdout().writeln("make " + name);
+        Res(name: name);
+    }
+}
+
+enum Broken is Error = (broken, again);
+
+object Failing {
+    Failing();
+    async run(which is int) is string {
+        Stdout().writeln("failing " + which.string());
+        if which == 1 { throw Broken.broken; } else { throw Broken.again; }
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let late = Event();
+    let words is @Future<string> = [Gate(event: late).word("second"), Values().word("first")];
+    let all is AllFutures<string> = AllFutures(origins: words);
+    late.set();
+    let results = await all.results();
+    out.writeln(results.size().string() + ": " + results.item(0) + ", " + results.item(1));
+    let failing is @Future<string> = [Values().word("ok"), Failing().run(1), Failing().run(2)];
+    out.writeln(try { (await AllFutures(origins: failing).results()).size().string(); }
+        catch Broken.broken { "broken"; } catch Broken.again { "again"; });
+    let nothing is @Future<string> = [];
+    out.writeln("empty " + (await AllFutures(origins: nothing).results()).size().string());
+    {
+        let made = await AllFutures(origins: [Values().res("a"), Values().res("b")]).results();
+        out.writeln("made " + made.item(0).label() + made.item(1).label());
+    }
+    out.writeln("after");
+    0;
+}
+"#,
+        "2: second, first\nfailing 1\nfailing 2\nbroken\nempty 0\nmake a\nmake b\nmade ab\ndestroy b\ndestroy a\nafter\n");
 }
