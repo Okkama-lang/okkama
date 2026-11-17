@@ -648,3 +648,58 @@ fn nested_maps_await_in_the_inner_body() {
 }
 "#, "00 01 10 11\n", false);
 }
+
+/// #851: a Future whose outcome has a destroy, awaited in a `for` body: each outcome is destroyed once, right after
+/// the body uses it, and main's close, which settles nothing, releases nothing.
+#[test]
+fn a_for_body_awaits_a_destroyable_outcome() {
+    map_body(r#"async main() is int {
+    for ["a", "b"] -> name { Stdout().writeln((await Now().res(name)).label() + "!"); }
+    0;
+}
+"#, "make a\ndestroy a\na!\nmake b\ndestroy b\nb!\n", true);
+}
+
+/// #851: the same Future never awaited in a `for` body: it never runs, so nothing is made or destroyed.
+#[test]
+fn a_for_body_leaves_a_destroyable_future_unawaited() {
+    map_body(r#"async main() is int {
+    for 0..2 -> index {
+        let pending = Now().res("r" + index.string());
+        Stdout().writeln("round " + index.string());
+    }
+    0;
+}
+"#, "round 0\nround 1\n", true);
+}
+
+/// #851 with #849: a `map` over an array whose body awaits a resource.
+#[test]
+fn a_map_body_awaits_a_destroyable_outcome() {
+    map_body(r#"async main() is int {
+    let labels = ["a", "b"].map() -> name { (await Now().res(name)).label() + "!"; };
+    Stdout().writeln(labels[0] + " " + labels[1]);
+    0;
+}
+"#, "make a\ndestroy a\nmake b\ndestroy b\na! b!\n", true);
+}
+
+/// #851 with #849: a throw after an await in a `map` body abandons the builder, and every outcome made so far is
+/// destroyed once. Structural only: Full verification runs out of its budget here (Incomplete, #634).
+#[test]
+fn a_throw_after_an_await_in_a_map_body_destroys_what_was_made() {
+    map_body(r#"async main() is int {
+    let out = Stdout();
+    let result = try {
+        let names = (0..3).map() -> index {
+            let made = await Now().res("m" + index.string());
+            if index == 1 { throw Broken.broken; }
+            made.label();
+        };
+        names.size().string();
+    } catch e is Broken { "broken"; };
+    out.writeln(result);
+    0;
+}
+"#, "make m0\ndestroy m0\nmake m1\ndestroy m1\nbroken\n", false);
+}

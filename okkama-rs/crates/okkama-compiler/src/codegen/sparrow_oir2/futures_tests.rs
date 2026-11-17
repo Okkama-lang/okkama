@@ -948,3 +948,21 @@ fn d849_a_builder_crosses_an_await_in_a_value_slot() {
     assert!(!builders.is_empty(), "the builder is saved across the await");
     assert!(builders.iter().all(|slot| !slot.linear), "a value slot");
 }
+
+/// The own fixture of #851, lowered through coro and low.
+fn d851() -> o::Module {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../okkama-oir/tests/fixtures/async/own/d851-loop-destroyable-outcome.oir");
+    let module = o::text::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let coro = okkama_oir::coro::lower_coro(module, &Default::default()).unwrap();
+    okkama_oir::low::lower_cleanup(coro, &Default::default()).unwrap()
+}
+
+/// #851: a Future whose outcome has a destroy, in a loop body. The body's closes settle its duty and declare the
+/// destroy's failures; main's close settles nothing, so the load gate no longer asks its merge envelope for them
+/// (D18_EXECUTOR). That a close which does settle the duty still must declare them is `owner_failing` in the
+/// loader's async tests.
+#[test]
+fn d851_only_a_close_that_settles_a_duty_releases_its_outcome() {
+    compile(&d851()).unwrap_or_else(|error| panic!("{error}"));
+}

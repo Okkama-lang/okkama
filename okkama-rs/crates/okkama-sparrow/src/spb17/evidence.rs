@@ -374,8 +374,12 @@ impl<'a> Evidence<'a> {
                 }
             }
             Definition::Instruction(pc, slot) => {
-                if self.resumed(pc, slot).is_some() {
-                    return None;
+                // #851: a resumed value holds what its continuation's `frame.save` stored at that position, so a
+                // scope state that crosses an await in a loop stays provably empty; a start value is unknown.
+                match self.resumed(pc, slot) {
+                    Some(Resumed::Saved(source)) => return Some(vec![source]),
+                    Some(Resumed::Start) => return None,
+                    None => {}
                 }
                 let Instruction::Champ { op, arguments: args, .. } = &code[pc] else {
                     return None;
