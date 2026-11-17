@@ -136,7 +136,8 @@ impl Runtime {
     }
 }
 
-/// The synchronous members of a ready FutureGroup row (`name` is Tomato's). `wait` is a driver (`drivers.rs`).
+/// The synchronous members of a ready holder row (`name` is Tomato's): FutureGroup's and FutureCompletions'
+/// count. `wait` and `completion` are drivers (`drivers.rs`).
 pub(super) fn invoke(ctx: *mut Ctx, function: usize, name: &str, io: *mut CallOwn, args: &[Word]) -> Word {
     match name {
         "okkama.scope.FutureGroup.new" => new(ctx, function, io),
@@ -159,6 +160,8 @@ pub(super) fn invoke(ctx: *mut Ctx, function: usize, name: &str, io: *mut CallOw
             runtime.group_cancel(ctx, args[0]);
             0
         }
+        // A stream's count (#810 G1 step 4): Tomato's intrinsic, over the stream in the receiver's runtime word.
+        "okkama.collect.FutureCompletions.remaining_count" => crate::intrinsics::champ_call(ctx, function, args),
         _ => stop(ctx, error(&format!("{name} has no synchronous entry"))),
     }
 }

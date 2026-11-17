@@ -732,8 +732,16 @@ impl Runtime {
                     set(duty, tasks::STATE, tasks::FAILURE_STATE);
                     set(duty, tasks::FLAGS, get(duty, tasks::FLAGS) | flags::OBSERVED);
                 }
-                // A body that never ran leaves its inputs in continuation 0; nothing stays after the settle.
+                // A body that never ran leaves its inputs in continuation 0; nothing stays after the settle, with
+                // one exception: a `completion` request that listens to its stream's unsettled origins (#444) keeps
+                // its receiver register, because an origin that settles later reaches the stream only through this
+                // frame. The word is a reference to the stream's object and carries no duty: INPUTS and the outcome
+                // are released as for any other Future.
+                let listener = self.champ_stream_listener(duty);
                 clear(duty, AREA, tail);
+                if let Some((offset, receiver)) = listener {
+                    set(duty, offset, receiver);
+                }
                 self.champ_cache_mut(duty)?.flags |= RELEASED;
             }
         }

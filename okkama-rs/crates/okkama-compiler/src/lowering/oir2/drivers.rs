@@ -216,14 +216,16 @@ fn holder_contract(module: &ir::Module, name: &str, row: &catalogue::Template, s
         fresh: vec![],
         // A result that aliases the receiver (`wait`), or a view of its graph (a timeout's origin outcome, opaque:
         // which member it is, is unknown).
-        aliases: if matches!(row.effect, catalogue::Effect::AliasesReceiver | catalogue::Effect::View) {
+        // A borrowed origin Future (a completion) is likewise a view of the receiver's origins.
+        aliases: if matches!(row.effect, catalogue::Effect::AliasesReceiver | catalogue::Effect::View
+            | catalogue::Effect::BorrowedFuture) {
             vec![ir::SummarySelection::Parameter(0)]
         } else {
             vec![]
         },
         // A result whose parts are views into the receiver's graph (AllFutures' elements) depends on it.
         external_deps: if row.effect == catalogue::Effect::DependsOnReceiver { vec![0] } else { vec![] },
-        opaque: row.effect == catalogue::Effect::View,
+        opaque: matches!(row.effect, catalogue::Effect::View | catalogue::Effect::BorrowedFuture),
         provenance: ir::AdmissionProvenance::UnboundResult,
     }).collect();
     let mut failures = mask_failures(row.failures);

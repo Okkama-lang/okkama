@@ -66,6 +66,10 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     // #759: a Future created in a `for` body, also spawned; the body's close settles each iteration's duties.
     variant!("d759-loop-body-future"),
     variant!("d759-loop-body-spawn"),
+    // #849: a Future created in a `map` body (the #831 accumulator loop), awaited or abandoned; the builder's
+    // cleanup is not shared across the creation.
+    variant!("d849-map-body-await"),
+    variant!("d849-map-body-abandon"),
 ];
 
 /// Own → verify(own) → coro → verify(coro) (OIR-2 §12).

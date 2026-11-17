@@ -20,6 +20,34 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future in the body of a `map`, `reduce` or `filter` runs on Champ (#849).** OIR-2
+  coro refused such a body ("a cache duty that reaches its owner's close on some paths
+  only"): the builder's unwind cleanup was shared by every failing site of the body, so the
+  failure of a call before the Future and the failure of its await reached the body's close
+  through one block, with the duty on one path only. A cleanup made before a Future is no
+  longer reused after it. Two layers below needed the same shape: a builder that lives
+  across an await moves through the frame, which coro marks linear and SPB 17 stores as a
+  value slot, and the loader's builder rule now lets `frame.save` consume a builder and
+  `frame.resume` give it back. Coro goldens for an awaited and an abandoned Future in a
+  `map` body; lowering, codegen and loader unit tests, mutation-checked; end-to-end tests
+  with Tomato's output. Found on the way: #851 (a Future whose outcome has a `destroy`, in
+  any loop body, stops at D18_EXECUTOR).
+- **Champ: `FutureCompletions` (#810, G1 step 4).** `remaining_count` and `completion` now
+  run on Champ through Tomato's stream driver. The stream lives in the object's runtime
+  cell, after its source fields, and holds references only: the origins' duties stay with
+  their owners. It is made at the first `remaining_count` or at the first step of the
+  first request, and the origins are read through the sequence's own `size` and `item`. A
+  sequence whose `item` returns a Future with a duty of its own (a user sequence that makes
+  a fresh Future) is refused with a named program failure, after that Future is closed;
+  Tomato streams such Futures and never destroys them (#845). The loader ties a
+  completion's result to the origins' own Future type. A request that started the stream
+  keeps its receiver after its release: it is what hears the waiting origins settle, so a
+  stream first read inside a helper still hands its later origins to the next request. The
+  refusal closes the returned packet under its own failure, so a failing destroy is linked to
+  it and a stop during the close stays a stop (review of steps 3–4). `AllFutures` over byte
+  outcomes is covered by a test. The conformance cases that consume the stream in a `map`
+  body wait for #849; a helper that binds a completion with `let` inside a loop or a branch
+  waits for #848, and the same loop over a local stream in `main` for #805.
 - **Champ: `AllFutures` (#810, G1 step 3).** `AllFutures.results` now runs on Champ. Its
   `Sequencing<T>` result is made by a helper that the compiler generates, `Wrap`. `Wrap`
   turns the array of the members' outcomes into the role through the program's own array

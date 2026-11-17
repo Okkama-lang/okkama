@@ -43,17 +43,20 @@ impl BodyLowerer<'_, '_> {
         };
         let had_cleanup = self.buffer_unwinds.contains_key(&unwind.target.block);
         let mut target = unwind.target;
-        let base_count = self.buffer_unwinds.get(&target.block).map(|&(_, count)| count)
+        let base_count = self.buffer_unwinds.get(&target.block).map(|&(_, count, _)| count)
             .unwrap_or(target.args.len());
         // A catch inside the building expression carries its outer buffers on.
         // Only buffers whose construction is being exited need abandonment.
         let slots: Vec<_> = live.into_iter().filter(|&slot| {
             !target.args[..base_count].contains(&self.env[slot].expect("live buffer"))
         }).collect();
-        if let Some(&(base, count)) = self.buffer_unwinds.get(&target.block) {
+        if let Some(&(base, count, made)) = self.buffer_unwinds.get(&target.block) {
             let buffers = self.args(&slots);
+            // #849: a Future made since the cleanup was made gives its owner a duty that the earlier failing sites
+            // did not have; one cleanup for both would reach the owner's close with the duty on some paths only.
             if target.args[count..] == buffers
-                && target.args.iter().all(|arg| self.b.block_params(block).is_ok_and(|p| p.contains(arg))) {
+                && target.args.iter().all(|arg| self.b.block_params(block).is_ok_and(|p| p.contains(arg)))
+                && !self.future_since(made)? {
                 return Ok(());
             }
             target.block = base;
@@ -104,10 +107,21 @@ impl BodyLowerer<'_, '_> {
             self.b.emit_schema(ir::Operation::Collection(self.abandon_op(buffer)?))?;
         }
         self.b.terminate(ir::TermKind::Raise(*params.last().expect("failure")))?;
-        self.buffer_unwinds.insert(cleanup, (target.block, count));
+        self.buffer_unwinds.insert(cleanup, (target.block, count, self.b.body().values.len()));
         self.b.switch_to(source)?;
         self.b.set_unwind(Some(ir::BlockUnwind { target: ir::Target { block: cleanup, args } }))?;
         Ok(())
+    }
+
+    /// Whether a value of a Future type was made after the first `made` values of the body.
+    fn future_since(&self, made: usize) -> Result<bool> {
+        let values = &self.b.body().values;
+        for (_, value) in values.iter().skip(made) {
+            if matches!(self.b.module().types.get(value.ty)?, ir::Type::Future(_)) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(super) fn start_buffer(&mut self, ty: ir::TypeId) -> Result<usize> {

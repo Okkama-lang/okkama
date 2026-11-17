@@ -460,10 +460,17 @@ pub(super) fn check_helpers(p: &Program, f: &Function, name: &str) -> Result<(),
 /// `Future(id)` is the row's `T`: the result of `Raced.winner` and `FirstSuccessful.outcome`.
 pub const HOLDER_ORIGINS: &str = "HOLDER_ORIGINS";
 
-/// The collector rows whose driver reads origins (`collect_start`), by name.
+/// The collector rows whose driver reads origins (`collect_start`, `stream_init`), by name.
 fn reads_origins(row: &str) -> bool {
     matches!(row, "okkama.collect.Raced.winner" | "okkama.collect.FirstSuccessful.outcome"
-        | "okkama.collect.AllFutures.results")
+        | "okkama.collect.AllFutures.results" | "okkama.collect.FutureCompletions.completion"
+        | "okkama.collect.FutureCompletions.remaining_count")
+}
+
+/// #810 G1 step 4: whether `name` is a FutureCompletions specialization, whose last storage field is the runtime
+/// word of its stream (ruling PR-C item 1).
+pub fn stream_holder(name: &str) -> bool {
+    name.strip_prefix(FUTURE_COMPLETIONS).is_some_and(|rest| rest.starts_with('_'))
 }
 
 /// The element type of a ready AllFutures entry: the array its `Wrap` helper takes.
@@ -499,6 +506,14 @@ pub(super) fn check_origins(p: &Program, f: &Function, name: &str) -> Result<(),
     enforce(size && item.is_some(), HOLDER_ORIGINS,
         &format!("{}: the receiver's origins are not a sequence of Futures", row.name))?;
     let outcome = item.and_then(|id| p.tables.future_results.get(id as usize).copied());
+    // A completion hands out an origin Future itself: the same Future type as the entry's result (ruling Q2).
+    if row.name == "okkama.collect.FutureCompletions.completion" {
+        return enforce(item.map(Type::Future) == f.results.first().copied(), HOLDER_ORIGINS,
+            &format!("{name}: the origins are not the entry's Futures"));
+    }
+    if row.name == "okkama.collect.FutureCompletions.remaining_count" {
+        return Ok(());
+    }
     // The winner of a race is a member's outcome; AllFutures' results are the elements its `Wrap` helper takes.
     let expected = if row.name == "okkama.collect.AllFutures.results" {
         Some(wrapped_element(p, name))
@@ -580,10 +595,10 @@ pub const HOLDERS: &[Template] = &[
         &[NO_FUTURES], Slice::G1)),
     ready(holder("okkama.collect.FirstSuccessful.outcome", &[H(FIRST_SUCCESSFUL)], &[VAL], Abi::Driver,
         THROWN | PROGRAM, Effect::View, &[NO_FUTURES], Slice::G1)),
-    holder("okkama.collect.FutureCompletions.remaining_count", &[H(FUTURE_COMPLETIONS)], &[INT], Abi::Observation,
-        PROGRAM, Effect::Plain, &[], Slice::G1),
-    holder("okkama.collect.FutureCompletions.completion", &[H(FUTURE_COMPLETIONS)], &[FUT], Abi::Driver,
-        THROWN | PROGRAM, Effect::BorrowedFuture, &[NO_FUTURES], Slice::G1),
+    ready(holder("okkama.collect.FutureCompletions.remaining_count", &[H(FUTURE_COMPLETIONS)], &[INT], Abi::Observation,
+        PROGRAM, Effect::Plain, &[], Slice::G1)),
+    ready(holder("okkama.collect.FutureCompletions.completion", &[H(FUTURE_COMPLETIONS)], &[FUT], Abi::Driver,
+        THROWN | PROGRAM, Effect::BorrowedFuture, &[NO_FUTURES], Slice::G1)),
     ready(Template { helpers: WITHIN_HELPERS, ..holder("okkama.timeout.Within.outcome", &[H(WITHIN)], &[VAL], Abi::Driver,
         THROWN | PROGRAM, Effect::View, &[TIMED_OUT], Slice::G1) }),
     ready(Template { helpers: BEFORE_HELPERS, ..holder("okkama.timeout.Before.outcome", &[H(BEFORE)], &[VAL], Abi::Driver,
@@ -750,7 +765,8 @@ pub fn instantiate(template: &Template, objects: &[Object], suffixes: &[&str], b
     // A result that aliases the receiver, or depends on it (AllFutures' elements are views into its members'
     // caches), retains it (#774 A6, as the producer's summary says).
     let mut function = function;
-    if matches!(template.effect, Effect::AliasesReceiver | Effect::View | Effect::DependsOnReceiver)
+    if matches!(template.effect, Effect::AliasesReceiver | Effect::View | Effect::DependsOnReceiver
+        | Effect::BorrowedFuture)
         && let Some(entry) = function.proofs.entry.as_mut() {
         entry.retained_params = vec![0];
     }
