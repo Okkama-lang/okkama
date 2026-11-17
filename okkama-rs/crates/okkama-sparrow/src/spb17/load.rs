@@ -233,6 +233,7 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
                 && f.proofs.entry == trusted.proofs.entry,
                 "EXTERNAL_SIGNATURE", "external signature/summary mismatch")?;
             drivers::check_helpers(p, f, name)?;
+            drivers::check_origins(p, f, name)?;
             continue;
         }
         drivers::check_native_inputs(p, f)?;

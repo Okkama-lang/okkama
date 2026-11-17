@@ -446,6 +446,40 @@ pub(super) fn check_helpers(p: &Program, f: &Function, name: &str) -> Result<(),
     Ok(())
 }
 
+/// #810 G1 step 3 (review of steps 3–4, the T2 lesson): a ready collector row's driver reads its origins through the
+/// receiver's first storage field, a `Sequencing<Future<T>>` role, and hands their outcome words on as the entry's
+/// result. So that field is a role with `size() -> int` and `item(int) -> Future(id)`, and the outcome type of
+/// `Future(id)` is the row's `T`: the result of `Raced.winner` and `FirstSuccessful.outcome`.
+pub const HOLDER_ORIGINS: &str = "HOLDER_ORIGINS";
+
+/// The collector rows whose driver reads origins (`collect_start`), by name.
+fn reads_origins(row: &str) -> bool {
+    matches!(row, "okkama.collect.Raced.winner" | "okkama.collect.FirstSuccessful.outcome")
+}
+
+pub(super) fn check_origins(p: &Program, f: &Function, name: &str) -> Result<(), Error> {
+    let Some(row) = ready_holder(name).filter(|row| reads_origins(row.name)) else { return Ok(()) };
+    let receiver = match f.registers.first() {
+        Some(&Type::Object(id)) => p.objects.get(id as usize),
+        _ => None,
+    };
+    let role = match receiver.and_then(|object| object.layout.storage_fields.first()) {
+        Some(&Type::Role(id)) => p.objects.get(id as usize).and_then(|object| object.role.as_ref()),
+        _ => None,
+    };
+    let slot = |slot: &str| role.and_then(|role| role.slots.iter().find(|candidate| candidate.name == slot));
+    let size = slot("size").is_some_and(|size| size.params.is_empty() && size.results == [Type::Int]);
+    let item = slot("item").and_then(|item| match (item.params.as_slice(), item.results.as_slice()) {
+        ([Type::Int], [Type::Future(id)]) => Some(*id),
+        _ => None,
+    });
+    enforce(size && item.is_some(), HOLDER_ORIGINS,
+        &format!("{}: the receiver's origins are not a sequence of Futures", row.name))?;
+    let outcome = item.and_then(|id| p.tables.future_results.get(id as usize).copied());
+    enforce(outcome == Some(f.results.first().copied()), HOLDER_ORIGINS,
+        &format!("{name}: the origins' outcome is not the entry's result"))
+}
+
 /// One row of a holder family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Template {
@@ -513,10 +547,10 @@ pub const HOLDERS: &[Template] = &[
         Effect::Delivered, &[FUTURE_GROUP], Slice::G1),
     holder("okkama.collect.AllFutures.results", &[H(ALL_FUTURES)], &[SEQ], Abi::Driver, THROWN | PROGRAM,
         Effect::DependsOnReceiver, &[], Slice::G1),
-    holder("okkama.collect.Raced.winner", &[H(RACED)], &[VAL], Abi::Driver, THROWN | PROGRAM, Effect::View,
-        &[NO_FUTURES], Slice::G1),
-    holder("okkama.collect.FirstSuccessful.outcome", &[H(FIRST_SUCCESSFUL)], &[VAL], Abi::Driver, THROWN | PROGRAM,
-        Effect::View, &[NO_FUTURES], Slice::G1),
+    ready(holder("okkama.collect.Raced.winner", &[H(RACED)], &[VAL], Abi::Driver, THROWN | PROGRAM, Effect::View,
+        &[NO_FUTURES], Slice::G1)),
+    ready(holder("okkama.collect.FirstSuccessful.outcome", &[H(FIRST_SUCCESSFUL)], &[VAL], Abi::Driver,
+        THROWN | PROGRAM, Effect::View, &[NO_FUTURES], Slice::G1)),
     holder("okkama.collect.FutureCompletions.remaining_count", &[H(FUTURE_COMPLETIONS)], &[INT], Abi::Observation,
         PROGRAM, Effect::Plain, &[], Slice::G1),
     holder("okkama.collect.FutureCompletions.completion", &[H(FUTURE_COMPLETIONS)], &[FUT], Abi::Driver,
