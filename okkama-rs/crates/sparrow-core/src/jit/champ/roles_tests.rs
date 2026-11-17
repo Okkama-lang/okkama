@@ -320,3 +320,24 @@ fn champ_plain_dispatch_returns_the_implementation_value_under_forced_gc() {
     }
     assert!(runtime.heap.stats().collections > 0);
 }
+
+/// #838: a role dispatch whose selected target is compiled calls it directly through its invocation record, as a
+/// static observation call does; only the first call, which compiles the target, goes through
+/// `rt_machine_external`. Both return the target's answer.
+#[test]
+fn champ_dispatch_calls_a_compiled_target_directly() {
+    let mut runtime = runtime();
+    let mut ctx = context(&mut runtime);
+    let source = runtime.champ.machine.as_ref().unwrap().source.clone();
+    let show = source.functions.iter().position(|function| function.symbol == "show").unwrap();
+    let code = compile(&mut runtime, show).unwrap();
+    let receiver = object_of(&mut runtime, 1, "first");
+    let calls = || crate::champ::machine::EXTERNAL_CALLS.with(|calls| calls.get());
+    let before = calls();
+    let first = unsafe { invoke(code, &mut ctx, &[receiver]) };
+    assert_eq!((ctx.status, runtime.heap.text(first)), (OK, "first text"));
+    assert_eq!(calls(), before + 1, "the first call compiles the target through the helper");
+    let second = unsafe { invoke(code, &mut ctx, &[receiver]) };
+    assert_eq!((ctx.status, runtime.heap.text(second)), (OK, "first text"));
+    assert_eq!(calls(), before + 1, "the compiled target is called directly");
+}

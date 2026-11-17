@@ -458,6 +458,8 @@ extern "C" fn owned_adapter(ctx: *mut Ctx, io: *mut CallOwn, args: *const Word, 
 pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut CallOwn,
     args: *const Word, count: u64) -> Word
 {
+    #[cfg(test)]
+    EXTERNAL_CALLS.with(|calls| calls.set(calls.get() + 1));
     // The direct call of a compiled function is on every level of a recursion: its frame stays
     // small, and the provider paths with their large temporaries live in their own frame.
     let runtime = unsafe { &mut *(*ctx).runtime };
@@ -473,6 +475,12 @@ pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut Cal
         unsafe { std::slice::from_raw_parts(args, count as usize) }
     };
     unsafe { crate::jit::invoke(code, ctx, arguments) }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Calls of `rt_machine_external` (#838): a compiled target reached directly does not count.
+    pub(crate) static EXTERNAL_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[inline(never)]

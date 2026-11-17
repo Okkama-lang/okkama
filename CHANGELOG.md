@@ -54,6 +54,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   verified instruction at `(function, pc)` and collecting its operand types on every call.
   They also read their argument words in place, without copying them. This matches
   Tomato's #449.
+- **Champ: role dispatch calls a compiled target directly (#838).** Calls through a role
+  slot and calls of anonymous actions, which Champ runs as role dispatch, now jump straight
+  to the selected implementation once it is compiled. They read its invocation record, as
+  a static call does. Before, every such call went through `rt_machine_external`. This is
+  the direct entry that #536's phase B left to Champ.
 
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
