@@ -1,0 +1,5 @@
+module app;
+main() is int {
+    let index is %string:int = ["b", "a"].reduce([:]) -> acc, w { acc + [w: w.length()]; };
+    index.size();
+}

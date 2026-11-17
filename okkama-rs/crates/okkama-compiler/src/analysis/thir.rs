@@ -753,6 +753,69 @@ fn expr_uses_receiver(expr: &Expr) -> bool {
     }
 }
 
+/// Is `acc`, a `reduce` accumulator, used in `body` only as the value the
+/// block returns — alone, or as the left end of `acc + ...` (#243)? Then
+/// lowering keeps it in a builder (OIR-1) or appends what the block adds to
+/// one (OIR-2, #831): growing it by one element is amortized O(1), and
+/// nothing else can hold an intermediate accumulator. A map accumulator
+/// grows by literal entries only.
+pub fn linear_accumulator(body: &Block, acc: LocalId, map: bool) -> bool {
+    let mut allowed = 0;
+    linear_block(body, acc, map, &mut allowed) && local_mentions(body, acc) == allowed
+}
+
+/// The parts of `left op right op ...` for an associative `op`, left to right.
+pub fn flatten_concat<'e>(op: BinaryOp, expr: &'e Expr, parts: &mut Vec<&'e Expr>) {
+    match &expr.kind {
+        ExprKind::Binary { op: inner, left, right } if *inner == op => {
+            flatten_concat(op, left, parts);
+            flatten_concat(op, right, parts);
+        }
+        _ => parts.push(expr),
+    }
+}
+
+/// The block's value is the accumulator (see `linear_accumulator`); counts
+/// the mentions of `acc` it accounts for.
+fn linear_block(block: &Block, acc: LocalId, map: bool, allowed: &mut usize) -> bool {
+    match block.stmts.last().map(|stmt| &stmt.kind) {
+        Some(StmtKind::Expr(value)) => linear_value(value, acc, map, allowed),
+        // `throw`, `return`, `panic`: the block does not produce a value.
+        Some(StmtKind::Throw(_) | StmtKind::Return(_) | StmtKind::Rethrow) => true,
+        _ => false,
+    }
+}
+
+fn linear_value(expr: &Expr, acc: LocalId, map: bool, allowed: &mut usize) -> bool {
+    match &expr.kind {
+        ExprKind::Local(local) if *local == acc => {
+            *allowed += 1;
+            true
+        }
+        ExprKind::Binary { op, .. } if *op == if map { BinaryOp::MapMerge } else { BinaryOp::ArrayConcat } => {
+            let mut parts = Vec::new();
+            flatten_concat(*op, expr, &mut parts);
+            let starts_with_acc = matches!(&parts[0].kind, ExprKind::Local(local) if *local == acc);
+            // A map grows by literal entries: a builder has no merge.
+            let literals = !map || parts[1..].iter().all(|part| matches!(part.kind, ExprKind::Map(_)));
+            if starts_with_acc && literals {
+                *allowed += 1;
+            }
+            starts_with_acc && literals
+        }
+        ExprKind::If { then_block, else_block: Some(else_block), .. } => {
+            linear_block(then_block, acc, map, allowed) && linear_block(else_block, acc, map, allowed)
+        }
+        ExprKind::Match(found) if found.else_block.is_some() || found.exhaustive => {
+            found.cases.iter().all(|(_, block)| linear_block(block, acc, map, allowed))
+                && found.else_block.as_ref().is_none_or(|block| linear_block(block, acc, map, allowed))
+        }
+        ExprKind::Block(block) => linear_block(block, acc, map, allowed),
+        ExprKind::Panic(_) | ExprKind::Unreachable => true,
+        _ => false,
+    }
+}
+
 /// How many times `body` names `local`: reads, rebinds and captures by an
 /// anonymous action. Lowering keeps a `reduce` accumulator in a builder only
 /// when every mention is one it can rewrite (#243). The walk names every

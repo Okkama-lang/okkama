@@ -20,6 +20,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: persistent arrays (#826).** On Champ, `+`, `slice`, `removed_at` and
+  `replaced` copied the whole array, so building an array by appends in a loop was
+  quadratic. They now take Tomato's persistent forms: a chain of appends or prepends
+  shares a buffer, a large slice is a view, and a chain of replacements becomes a trie.
+  Machine code reads every form. 10⁴ appends allocate linearly.
+- **Champ: a `reduce` accumulator grows in place (#831).** Tomato's rule #243 now
+  applies to Champ. When a `reduce` block names its accumulator only as `acc` or as the
+  left end of `acc + parts`, the accumulator lives in a builder, and each step appends
+  what the block adds. A map accumulator from `[:]` grows by literal entries. An
+  accumulator the block reads in any other way is copied, as before. OIR-1 and OIR-2
+  share the analysis (`thir::linear_accumulator`).
+
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
   - A winning origin's outcome stays with its owner.

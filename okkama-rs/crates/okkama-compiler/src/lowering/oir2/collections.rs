@@ -39,6 +39,30 @@ impl BodyLowerer<'_, '_> {
         self.collection(ir::CollectionOp::ArrayConcat { arrays: vec![left, right], ty, packet: None })
     }
 
+    /// What a `reduce` block adds when it gives its accumulator back unchanged (#831): an empty array or map of
+    /// the accumulator's type.
+    pub(super) fn nothing_added(&mut self, ty: ir::TypeId) -> Result<ir::ValueId> {
+        let op = match self.b.module().types.get(ty)? {
+            ir::Type::Map(..) => ir::CollectionOp::MapNew { entries: vec![], ty, packet: None },
+            _ => ir::CollectionOp::ArrayNew { values: vec![], ty, packet: None },
+        };
+        self.collection(op)
+    }
+
+    /// `value` with the collection type `ty`: the frontend permits untagged empties where the OIR primitive
+    /// contract requires one exact type.
+    pub(super) fn retagged(&mut self, value: ir::ValueId, ty: ir::TypeId) -> Result<ir::ValueId> {
+        if self.b.body().values.get(value)?.ty == ty {
+            return Ok(value);
+        }
+        let op = match self.b.module().types.get(ty)? {
+            ir::Type::Array(_) => ir::CollectionOp::ArrayRetag { array: value, ty },
+            ir::Type::Map(..) => ir::CollectionOp::MapRetag { map: value, ty },
+            _ => unreachable!("collection operator type"),
+        };
+        self.collection(op)
+    }
+
     pub(super) fn collection_expr(&mut self, expr: &thir::Expr) -> Result<Option<ir::ValueId>> {
         use thir::ExprKind as E;
         let ty = self.ty(expr.ty.as_ref().expect("typed collection expression"), expr.span)?;
@@ -102,6 +126,16 @@ impl BodyLowerer<'_, '_> {
                     removed.reverse();
                     parts.push(base);
                     parts.extend(removed);
+                }
+                // `acc + parts` in a `reduce` block whose accumulator lives in a builder (#831): the block
+                // gives the parts, which the builder appends once the block has finished.
+                if matches!(op, thir::BinaryOp::ArrayConcat | thir::BinaryOp::MapMerge)
+                    && matches!(&parts[0].kind, E::Local(local) if self.accumulators.contains(local)) {
+                    parts.remove(0);
+                    if let [part] = parts[..] {
+                        let value = value!(self, part);
+                        return self.retagged(value, ty).map(Some);
+                    }
                 }
                 if parts.len() >= super::builders::STREAM_LIMIT
                     && matches!(op, thir::BinaryOp::ArrayConcat | thir::BinaryOp::MapMerge) {

@@ -185,13 +185,26 @@ fn check_cfg(module: &ir::Module, name: &str) {
         }
         assert!(checked);
     }
+    // #831 (#243's rule): an accumulator named only as `acc` or the left end of `acc + parts` lives in a builder,
+    // which appends what each block adds; one the block reads otherwise stays a value that `+` copies.
     if name.starts_with("reduce-") {
-        assert!(body.insts.iter().any(|(_, inst)| {
-            matches!(inst.op, ir::Operation::Collection(ir::CollectionOp::ArrayConcat { .. }))
-        }));
-        assert!(!body.insts.iter().any(|(_, inst)| {
-            matches!(inst.op, ir::Operation::Collection(ir::CollectionOp::BuilderPush { .. }))
-        }));
+        let has = |wanted: fn(&ir::CollectionOp) -> bool| body.insts.iter().any(|(_, inst)| {
+            matches!(&inst.op, ir::Operation::Collection(op) if wanted(op))
+        });
+        let concat = has(|op| matches!(op, ir::CollectionOp::ArrayConcat { .. }));
+        let append = has(|op| matches!(op, ir::CollectionOp::BuilderAppend { .. }));
+        let builder = has(|op| matches!(op, ir::CollectionOp::BuilderNew { .. } | ir::CollectionOp::BuilderFinish { .. }));
+        let merge = has(|op| matches!(op, ir::CollectionOp::MapMerge { .. }));
+        let map_append = has(|op| matches!(op, ir::CollectionOp::MapBuilderAppend { .. }));
+        let map_builder = has(|op| matches!(op, ir::CollectionOp::MapBuilderNew { .. } | ir::CollectionOp::MapBuilderFinish { .. }));
+        match name {
+            "reduce-append" | "reduce-branches" => {
+                assert!(append && builder && !concat, "{name}: the accumulator lives in a builder");
+            }
+            "reduce-map" => assert!(map_append && map_builder && !merge, "{name}: the map lives in a builder"),
+            "reduce-observable" => assert!(concat && !builder, "{name}: a read accumulator is copied"),
+            _ => unreachable!("{name}: a reduce fixture without an expectation"),
+        }
     }
 }
 
@@ -344,6 +357,8 @@ const GOLDENS: &[&str] = &[
     "range-value-reduce-empty",
     "range-value-reduce",
     "reduce-append",
+    "reduce-branches",
+    "reduce-map",
     "reduce-observable",
     "return",
 ];
