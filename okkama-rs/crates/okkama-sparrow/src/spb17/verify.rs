@@ -1577,7 +1577,9 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         // The scope that owns the slot (#855).
         DutyEmpty => shape == "s" || shape == "s?",
         OwnMove | DepsOf => shape == "l",
-        OwnJoin | DepsJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
+        OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
+        // #864: `deps.join` of nothing is the empty deps value.
+        DepsJoin => shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
         OwnDynamic => shape == "qll",
         OwnBind | OwnRebind => shape == "lisll",

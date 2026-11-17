@@ -649,6 +649,14 @@ fn a_deps_join_retains_every_value_it_joins() {
     };
     loads(&joined(2));
     reject_with(&joined(1), "SPB_STRUCTURE", "deps.join must retain every deps value it joins");
+    // #864: the union of nothing is the empty deps value of a creation thunk without managed inputs.
+    let mut b = Body::new("none", EntryAbi::Observation, vec![]);
+    b.f.proofs.entry = Some(EntryContract::default());
+    b.block("entry", &[]);
+    let union = b.emit(O::DepsJoin, vec![], K::Deps);
+    b.f.proofs.dependencies.push(Dependency { value: union, obligations: vec![] });
+    b.ret();
+    loads(&program(vec![b.finish()], vec![], None));
 }
 
 /// #848: an entry packet's entries accepted into a scope (`admitted` false: `own.accept`, the bound journal) or

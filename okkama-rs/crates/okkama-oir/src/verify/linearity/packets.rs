@@ -370,9 +370,7 @@ impl Engine<'_, '_> {
                     }
                     if let Some(i) = slot_index(SlotName::ExternalDeps) {
                         let (keys, _) = self.selection(&before, *selection);
-                        let owned: BTreeSet<_> = slots.iter().flat_map(|s| s.token.pieces.iter().map(|p| p.origin))
-                            .collect();
-                        slots[i].refs = keys.difference(&owned).copied().collect();
+                        slots[i].refs = external_keys(keys, slots.iter().map(|slot| &slot.token));
                     }
                 }
                 TransferRule::Admit { state, packet, output, provenance } => {
@@ -1215,4 +1213,14 @@ pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
         }
     }
     false
+}
+
+/// The keys of `keys` that the packets `tokens` do not own: a split's ExternalDeps, and what `fut.new`'s deps must
+/// cover of its managed arguments beside the inputs its packet owns (#864).
+pub(super) fn external_keys<'t>(keys: BTreeSet<Origin>, tokens: impl IntoIterator<Item = &'t Token>)
+    -> BTreeSet<Origin>
+{
+    let owned: BTreeSet<_> = tokens.into_iter().flat_map(|token| token.pieces.iter().map(|piece| piece.origin))
+        .collect();
+    keys.difference(&owned).copied().collect()
 }

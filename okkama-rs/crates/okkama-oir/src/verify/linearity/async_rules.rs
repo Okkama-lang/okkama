@@ -641,7 +641,27 @@ impl Engine<'_, '_> {
                     slot.token = Token { private: true, scope: Some(*owner), ..Token::default() };
                 }
             }
-            AsyncOp::FutureNew { packet, owner_state, environment, slot: empty, .. } => {
+            AsyncOp::FutureNew { packet, deps, owner_state, environment, slot: empty, .. } => {
+                // #864, the counterpart of B32 at a call (`call_deps`): `fut.new`'s deps cover the full deps of each
+                // environment argument its target's creation summary takes, and of a bare Future argument, beside what
+                // its inputs packet owns (the split's ExternalDeps difference, `external_keys`).
+                if let FutureEnvironment::Deferred { function, arguments, .. }
+                    | FutureEnvironment::External { function, arguments, .. } = environment
+                    && let Some(creation) = self.module.functions.get(*function).ok()
+                        .and_then(|target| target.async_creation_summary)
+                        .and_then(|id| self.module.summaries.get(id).ok()) {
+                    let supplied = &before.refs[deps.as_u32() as usize];
+                    let required: BTreeSet<_> = arguments.iter().enumerate().filter(|(index, value)| {
+                        creation.parameters.get(*index).is_some_and(|effect| effect.convention == FreshConvention::Take)
+                            || matches!(super::super::later::value_type(self.module, self.body, **value),
+                                Some(Type::Future(_)))
+                    }).flat_map(|(_, value)| before.full_deps[value.as_u32() as usize].iter().copied()).collect();
+                    let required = super::packets::external_keys(required, [&before.tokens[packet.as_u32() as usize]]);
+                    let omitted = !required.is_subset(supplied);
+                    if omitted {
+                        self.error(R::B32, "fut.new deps omit part of a managed argument's full dependencies");
+                    }
+                }
                 if let Some(empty) = empty {
                     let scope = before.tokens[owner_state.as_u32() as usize].scope;
                     self.fills_empty_slot(before, *empty, scope, false);
