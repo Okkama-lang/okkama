@@ -94,6 +94,7 @@ func @app.Child.run#0(%0: frame<@app.Child.run#0>) -> void [method app.Child, as
 }
 
 func @app.Holder.new#0(%0: future<int> facts(managed(deps=d1)); %1: deps, %2: own) -> (app.Holder, own) [ctor app.Holder] abi explicit(input_packet=2, output_packet=1) summary(M8) {
+    service.schedule Schedule0 owner S5, protocol P0, duties [dynamic]
     binding b0 "f": future<int> in S5
     boundary B0 lexical in S5
     boundary B1 lexical in S5
@@ -174,6 +175,7 @@ func @app.Holder.get#0(%0: frame<@app.Holder.get#0>) -> void [method app.Holder,
     continuation 0 start saves [0, 1, 2]
     continuation 1 at ^b1 saves [3, 1] operands [4]
     continuation 2 at #10 saves [] operands [3, 5, 6, 7]
+    service.schedule Schedule0 owner S1, protocol P0, duties [dynamic]
     boundary B0 lexical in S1
     boundary B1 lexical in S1
     dependency d0: dependency = from_ssa(%8)
