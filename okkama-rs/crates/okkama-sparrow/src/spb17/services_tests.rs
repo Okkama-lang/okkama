@@ -589,6 +589,12 @@ fn an_inputs_packet_carries_entries_only_into_a_body_that_can_take_them() {
 /// admitted into it (`own.admit`), then a split of that scope whose selection reaches a Future, admissible when
 /// `filtered`, and the selected packet admitted into a nested scope. Returns the program and the nested close's pc.
 fn split_into_block(admitted: bool, filtered: bool) -> (Program, u32) {
+    split_into_block_with(admitted, false, filtered)
+}
+
+/// The same, with a value bound into the outer scope (`own.bind`, the bound journal) between the accept or admit
+/// and the split when `bound`.
+fn split_into_block_with(admitted: bool, bound: bool, filtered: bool) -> (Program, u32) {
     let mut b = Body::new("split", EntryAbi::Owned, vec![]);
     let input = b.service(K::Packet);
     let future = b.register(FUTURE_INT);
@@ -596,7 +602,11 @@ fn split_into_block(admitted: bool, filtered: bool) -> (Program, u32) {
     b.f.proofs.entry = Some(EntryContract::default());
     b.block("entry", &[input, future]);
     let q0 = b.emit(O::ScopeBegin, vec![A::Scope(0), A::Boundary(0)], K::ScopeState);
-    let q1 = b.emit(if admitted { O::OwnAdmit } else { O::OwnAccept }, vec![l(q0), l(input)], K::ScopeState);
+    let mut q1 = b.emit(if admitted { O::OwnAdmit } else { O::OwnAccept }, vec![l(q0), l(input)], K::ScopeState);
+    if bound {
+        let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+        q1 = b.emit(O::OwnBind, vec![l(q1), A::Binding(0), A::Scope(0), l(future), l(empty)], K::ScopeState);
+    }
     let selection = b.selection();
     b.f.proofs.selections[selection as usize].locations = vec![future];
     let mut arguments = vec![l(q1), A::Selection(selection)];
@@ -634,4 +644,21 @@ fn an_admissible_selection_of_accepted_entries_carries_none() {
     assert!(!admits(false, true), "accepted entries, admissible selection");
     assert!(admits(true, true), "admitted entries, admissible selection");
     assert!(admits(false, false), "accepted entries, unfiltered selection");
+    // A bind only moves entries into the bound journal, never into the admission journal (review of #848).
+    let (p, close) = split_into_block_with(false, true, true);
+    assert!(!services::admitting_closes(&p, &p.functions[0]).unwrap().contains(&close), "accept, bind, admissible");
+    let (p, close) = split_into_block_with(true, true, true);
+    assert!(services::admitting_closes(&p, &p.functions[0]).unwrap().contains(&close), "admit, bind, admissible");
+}
+
+/// The analysis above relies on the admission filter staying at run time: `redundant_admission_filters` never drops
+/// the filter of a split whose selection reaches a Future holder (`selects_holder`), which is exactly when the
+/// analysis can clear the selected packet (review of #848).
+#[test]
+fn a_filter_the_analysis_relies_on_is_never_redundant() {
+    let (p, _) = split_into_block(false, true);
+    let f = &p.functions[0];
+    let split = f.code.iter().position(|instruction| matches!(instruction,
+        Instruction::Champ { op: O::ScopeSplit, .. })).unwrap();
+    assert!(!evidence::redundant_admission_filters(&p, f).unwrap().contains(&split));
 }
