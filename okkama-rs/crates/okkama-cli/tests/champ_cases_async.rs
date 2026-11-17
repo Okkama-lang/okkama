@@ -700,6 +700,33 @@ async main() is int {
     }
 }
 
+/// Duty slots, case 3 of the memo (#858): Okkama has no `while`, so a loop's condition is evaluated inside its body
+/// (`loop { last if !(await …); … }`), and the Future it creates belongs to the body's scope, created and settled
+/// once per iteration. Tomato (tree build) prints the same.
+#[test]
+fn a_loop_awaits_in_its_exit_condition() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+object Src {
+    has left is Atomic<int>;
+    Src() { left = Atomic(3); }
+    async more() is bool { let v = left.value(); left.replace(v - 1); v > 0; }
+}
+async main() is int {
+    let s = Src();
+    loop { last if !(await s.more()); Stdout().writeln("tick"); }
+    Stdout().writeln("done");
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!(run.result, Ok(0), "{mode:?}: stdout={:?}", run.stdout);
+        assert_eq!(run.stdout, "tick\ntick\ntick\ndone\n", "{mode:?}");
+    }
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
