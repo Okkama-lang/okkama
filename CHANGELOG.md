@@ -20,6 +20,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: `Raced` and `FirstSuccessful` (#810, G1 step 3).** Both collectors now run on
+  Champ through Tomato's driver. The driver reads the origins through their `Sequencing`
+  role, calling the sequence's own `size` and `item` through the driver call bridge, so a
+  Future that `item` makes fresh joins the driver's inputs. Losers are cancelled and waited
+  for. The new loader rule `HOLDER_ORIGINS` ties the origins' outcome type to the entry's
+  result. Conformance `race-empty` passes. The programs are checked under Structural
+  verification only: Full verification still refuses the array adapter over Futures (#796).
+  Found on the way: #845 (Tomato never destroys the outcomes of Futures that a user
+  sequence makes).
 - **Champ: persistent arrays (#826).** On Champ, `+`, `slice`, `removed_at` and
   `replaced` copied the whole array, so building an array by appends in a loop was
   quadratic. They now take Tomato's persistent forms: a chain of appends or prepends

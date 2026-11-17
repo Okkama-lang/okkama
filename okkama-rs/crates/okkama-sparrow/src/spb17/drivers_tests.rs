@@ -407,12 +407,13 @@ fn suffixes(template: &Template) -> Vec<&'static str> {
 
 /// The rows follow memo §§5.2 and 6.2: one per member Tomato runs as an intrinsic, a driver for each async member
 /// (thrown, program and cancelled), none of them in the Q1 catalogue, and only those with a runtime ready (#810:
-/// FutureGroup's five members, then the two timeouts).
+/// FutureGroup's five members, the two timeouts, then the race and first-success collectors).
 #[test]
 fn holder_rows_are_the_q2_and_g1_members() {
     let ready: Vec<_> = d::HOLDERS.iter().filter(|template| template.ready).map(|template| template.name).collect();
     assert_eq!(ready, ["okkama.scope.FutureGroup.new", "okkama.scope.FutureGroup.start",
         "okkama.scope.FutureGroup.active", "okkama.scope.FutureGroup.cancel", "okkama.scope.FutureGroup.wait",
+        "okkama.collect.Raced.winner", "okkama.collect.FirstSuccessful.outcome",
         "okkama.timeout.Within.outcome", "okkama.timeout.Before.outcome"]);
     let q2 = d::HOLDERS.iter().filter(|template| template.slice == Slice::Q2).count();
     assert_eq!((q2, d::HOLDERS.len() - q2), (9, 13));
@@ -567,4 +568,38 @@ fn the_timeout_helpers_and_the_origin_match_the_entry() {
     let symbols = (p.functions[0].symbol.clone(), p.functions[1].symbol.clone());
     (p.functions[0].symbol, p.functions[1].symbol) = (symbols.1, symbols.0);
     assert_eq!(d::check_helpers(&p, &entry, name).unwrap_err().rule, d::HOLDER_HELPER);
+}
+
+/// `Raced_int`'s winner entry over a receiver whose first storage field is a role with the slots `slots`: `size()`
+/// returns int and `item(int)` returns `Future(0)`, whose outcome is `outcome`; the entry's result is `result`.
+fn raced(outcome: Option<Type>, result: Type, slots: &[&str]) -> (Program, Function) {
+    let mut p = Program::default();
+    let mut sequence = object("collections.sequence.Sequencing_future_int", vec![], &[]);
+    sequence.role = Some(RoleDecl { slots: slots.iter().map(|&name| RoleSlot {
+        name: name.into(), entry_abi: EntryAbi::Observation,
+        params: if name == "item" { vec![Type::Int] } else { vec![] },
+        results: if name == "item" { vec![Type::Future(0)] } else { vec![Type::Int] },
+    }).collect() });
+    p.objects = vec![sequence, object("async.collect.Raced_int", vec![Type::Role(0)], &["origins"])];
+    p.tables.future_results = vec![outcome];
+    let name = "okkama.collect.Raced.winner$int";
+    let entry = shaped(name, EntryAbi::AsyncExternal, vec![Type::Object(1)], vec![result], Some(name));
+    (p, entry)
+}
+
+/// #810 G1 step 3, `HOLDER_ORIGINS`: the loader checks what Tomato's collector driver reads, a receiver whose first
+/// field is a sequence of Futures with `size` and `item`, and that those Futures' outcome is the entry's result (the
+/// driver hands a member's result word on as the winner).
+#[test]
+fn a_collectors_origins_match_the_entry() {
+    let name = "okkama.collect.Raced.winner$int";
+    let (p, entry) = raced(Some(Type::Int), Type::Int, &["size", "item"]);
+    d::check_origins(&p, &entry, name).unwrap();
+    let (p, entry) = raced(Some(Type::Str), Type::Int, &["size", "item"]);
+    assert_eq!(d::check_origins(&p, &entry, name).unwrap_err().rule, d::HOLDER_ORIGINS);
+    let (p, entry) = raced(Some(Type::Int), Type::Int, &["item"]);
+    assert_eq!(d::check_origins(&p, &entry, name).unwrap_err().rule, d::HOLDER_ORIGINS);
+    // A row whose driver reads no origins is not checked.
+    let (p, entry) = raced(Some(Type::Str), Type::Int, &["size", "item"]);
+    d::check_origins(&p, &entry, "okkama.timeout.Within.outcome$int").unwrap();
 }

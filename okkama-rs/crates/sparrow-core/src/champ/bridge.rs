@@ -56,6 +56,32 @@ impl Runtime {
         }
     }
 
+    /// The origins of a collector `receiver` (#810 G1 step 3): its `Sequencing` field and the functions that
+    /// implement that sequence's `size` and `item`, selected by its descriptor as a role dispatch would be. Tomato's
+    /// `collect_start` calls them through the driver call bridge. None, with a stop, for a receiver without that
+    /// shape (the loader checked it).
+    pub(crate) fn champ_sequence(&mut self, ctx: *mut Ctx, receiver: Word) -> Option<(Word, usize, usize)> {
+        let found = self.champ.machine.as_ref().and_then(|machine| {
+            let program = &machine.source;
+            let descriptor = crate::heap::payload(self.heap.header_of(receiver));
+            let Some(&s::Type::Role(role)) = program.objects.get(descriptor as usize)?.layout.storage_fields.first()
+            else {
+                return None;
+            };
+            let slots = &program.objects.get(role as usize)?.role.as_ref()?.slots;
+            let slot = |name: &str| slots.iter().position(|slot| slot.name == name).map(|slot| slot as u32);
+            let sequence = self.heap.field(receiver, 0);
+            let target = crate::heap::payload(self.heap.header_of(sequence));
+            let size = s::implementation(program, target, role, slot("size")?)?;
+            let item = s::implementation(program, target, role, slot("item")?)?;
+            Some((sequence, size as usize, item as usize))
+        });
+        if found.is_none() {
+            stop(ctx, error("a collector without a sequence of origins"));
+        }
+        found
+    }
+
     /// I-G5: the packet `record` a driver got back joins its INPUTS, checked before the first store, with the owner
     /// of the driver's cache.
     fn champ_merge_inputs(&mut self, frame: Word, record: Word) -> Result<(), Error> {

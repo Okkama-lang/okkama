@@ -277,15 +277,18 @@ fn b3_every_holder_row_is_a_std_member() {
 }
 
 /// #601 B3: until the runtime slices land, a program that reaches a holder member is refused by its row, never
-/// lowered with the std placeholder body (`Raced.winner` would throw NoFutures where Tomato returns the winner).
+/// lowered with the std placeholder body (a placeholder would throw or panic where Tomato runs the member). The G1
+/// example is FutureScope, the last G1 row to get its runtime (#810 step 5); Raced, which this test used before, is
+/// ready since step 3.
 #[test]
 fn b3_a_holder_member_is_refused_by_its_row() {
     for (source, slice) in [
         (concat!("module app; import \"async/channel\" take Channel; ",
             "async main() is int { let ch is Channel<int> = Channel(capacity: 1); 0; }"), "Q2"),
-        (concat!("module app; import \"async/collect\" take Raced; ",
-            "object Job { has n is int; Job(:n); async run() is int { n; } } ",
-            "async main() is int { await Raced(origins: [Job(n: 1).run()]).winner(); }"), "G1"),
+        (concat!("module app; import \"async/scope\" take FutureScope, Supervising; ",
+            "object Body { Body(); async run(children is Supervising<int>) is int { 1; } } ",
+            "async main() is int { let scope is FutureScope<int, int> = FutureScope(action: Body().run); ",
+            "await scope.outcome(); }"), "G1"),
     ] {
         match lower_std(source) {
             Err(super::super::LowerError::Unsupported { message, .. }) => {

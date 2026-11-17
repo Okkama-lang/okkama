@@ -849,6 +849,30 @@ fn collect(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
 /// Read the origins of a collection through their sequence role; None when
 /// the entries are ready to start.
 fn collect_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, receiver: Word) -> Option<Step> {
+    // Champ (#810 G1 step 3): the sequence's own `size` and `item`, called through the driver call bridge. Each
+    // origin joins the collection at once, so the next call's collection keeps it.
+    #[cfg(feature = "champ-abi")]
+    if runtime.champ.machine.is_some() {
+        let Some((sequence, size, item)) = runtime.champ_sequence(ctx, receiver) else {
+            return Some(Stop);
+        };
+        let Some(count) = helper_call(ctx, runtime, frame, size, &[sequence]) else {
+            return Some(call_failed(ctx).map_or(Stop, Failed));
+        };
+        let count = runtime.small_or_big(count).unwrap_or(0).max(0);
+        if count == 0 && collection(runtime, frame).strategy != Strategy::All {
+            return Some(Failed(failure_of(runtime, function, 0)));
+        }
+        for index in 0..count {
+            let sequence = runtime.heap.field(receiver, 0);
+            let position = runtime.heap.int(index);
+            let Some(origin) = helper_call(ctx, runtime, frame, item, &[sequence, position]) else {
+                return Some(call_failed(ctx).map_or(Stop, Failed));
+            };
+            collection(runtime, frame).entries.push(origin);
+        }
+        return None;
+    }
     let program = &runtime.loaded.program;
     let receiver_type = program.functions[function].registers[program.functions[function].params[0].0 as usize];
     let Some(okkama_sparrow::Type::Object(owner)) = program.ty(receiver_type) else {
