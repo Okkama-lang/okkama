@@ -293,23 +293,63 @@ fn lookup(runtime: &Runtime, program: &s::Program, map: Word, word: Word, key_ty
 }
 
 /// The verified operation at (function, pc): its data operation, operand types and result type.
-fn operation(program: &s::Program, function: u64, pc: u64) -> Option<(s::DataOp, Vec<s::Type>, s::Type)> {
-    let function = program.functions.get(function as usize)?;
-    let register = |id: u32| function.registers[id as usize];
-    match function.code.get(pc as usize)? {
-        s::Instruction::Data { op, inputs, output: Some(output), .. } => {
-            Some((*op, inputs.iter().map(|&id| register(id)).collect(), register(*output)))
-        }
-        s::Instruction::Champ { op: s::Opcode::Evaluate, arguments, .. } => {
-            let s::Argument::Evaluation(evaluation) = arguments.first()? else { return None };
-            let types = arguments[1..].iter().map(|argument| match argument {
-                s::Argument::Location(s::Location::Register(id)) => Some(register(*id)),
+/// What a data helper needs of the verified instruction at a call site (#832), computed once at load: machine
+/// code passes `(function, pc)` and words, and the helper reads its site instead of decoding the instruction on
+/// every call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Site {
+    /// A data operation or an `evaluate`: the operation, its first operand's type (or `Never`) and its result.
+    Collection { op: s::DataOp, operand: s::Type, result: s::Type },
+    /// A `lookup`: the type of its receiver.
+    Lookup { receiver: s::Type },
+    /// A builder transition: the opcode, whether a range is inclusive, the type of its buffer.
+    Builder { op: s::Opcode, inclusive: bool, buffer: s::Type },
+}
+
+/// The site of each instruction of `program`, by function and pc (#832).
+pub(crate) fn sites(program: &s::Program) -> Vec<Box<[Option<Site>]>> {
+    program.functions.iter().map(|function| {
+        let register = |location: &s::Location| match location {
+            s::Location::Register(id) => Some(function.registers[*id as usize]),
+            _ => None,
+        };
+        function.code.iter().map(|instruction| match instruction {
+            s::Instruction::Data { op, inputs, output: Some(output), .. } => Some(Site::Collection {
+                op: *op,
+                operand: inputs.first().map_or(s::Type::Never, |&id| function.registers[id as usize]),
+                result: function.registers[*output as usize],
+            }),
+            s::Instruction::Champ { op: s::Opcode::Evaluate, arguments, .. } => {
+                let s::Argument::Evaluation(evaluation) = arguments.first()? else { return None };
+                let operand = match arguments.get(1) {
+                    Some(s::Argument::Location(location)) => register(location)?,
+                    _ => s::Type::Never,
+                };
+                Some(Site::Collection { op: evaluation.op, operand, result: evaluation.result })
+            }
+            s::Instruction::Champ { op: s::Opcode::Lookup, arguments, .. } => match arguments.first() {
+                Some(s::Argument::Location(location)) => Some(Site::Lookup { receiver: register(location)? }),
                 _ => None,
-            }).collect::<Option<Vec<_>>>()?;
-            Some((evaluation.op, types, evaluation.result))
-        }
-        _ => None,
-    }
+            },
+            s::Instruction::Champ { op: op @ (s::Opcode::BuilderPush | s::Opcode::BuilderAppend
+                | s::Opcode::BuilderRange | s::Opcode::BuilderFinish | s::Opcode::BuilderAbandon), arguments, .. } => {
+                let buffer = arguments.iter().find_map(|argument| match argument {
+                    s::Argument::Location(location) => Some(location),
+                    _ => None,
+                })?;
+                Some(Site::Builder {
+                    op: *op, inclusive: arguments.contains(&s::Argument::Flag(true)), buffer: register(buffer)?,
+                })
+            }
+            _ => None,
+        }).collect()
+    }).collect()
+}
+
+/// The site at `(function, pc)`.
+fn site(runtime: &Runtime, function: u64, pc: u64) -> Option<Site> {
+    let machine = runtime.champ.machine.as_ref()?;
+    machine.sites.get(function as usize)?.get(pc as usize).copied().flatten()
 }
 
 /// A map, array or builder.new data operation; a failing one sets the program failure and returns 0.
@@ -321,10 +361,12 @@ pub extern "C" fn rt_machine_collection(ctx: *mut Ctx, function: u64, pc: u64, a
     let Some(program) = program(runtime) else {
         return stop(ctx, error("collection operation outside a Champ program"));
     };
-    let Some((op, types, result)) = operation(&program, function, pc) else {
+    let Some(Site::Collection { op, operand, result }) = site(runtime, function, pc) else {
         return stop(ctx, error("invalid verified collection operation"));
     };
-    let words = unsafe { std::slice::from_raw_parts(args, count as usize) }.to_vec();
+    let types = [operand];
+    // SAFETY: machine code passes its record of `count` words, which outlives the call.
+    let words = unsafe { std::slice::from_raw_parts(args, count as usize) };
     if op == s::DataOp::ArrayOrder {
         // Tomato's sort of scalars and text (#678): it never fails, but a budget stop ends the run.
         let word = super::ordering::order_natural(ctx, words[0], types[0]);
@@ -333,7 +375,7 @@ pub extern "C" fn rt_machine_collection(ctx: *mut Ctx, function: u64, pc: u64, a
         }
         return word;
     }
-    match collection(runtime, &program, op, &types, result, &words) {
+    match collection(runtime, &program, op, &types, result, words) {
         Ok(word) => {
             runtime.safepoint(frame, unsafe { &*ctx }, &[(word, repr(result))]);
             word
@@ -354,15 +396,10 @@ pub extern "C" fn rt_machine_lookup(ctx: *mut Ctx, function: u64, pc: u64, colle
     let Some(program) = program(runtime) else {
         return stop(ctx, error("lookup outside a Champ program"));
     };
-    let Some(s::Instruction::Champ { arguments, .. }) = program.functions.get(function as usize)
-        .and_then(|function| function.code.get(pc as usize)) else {
+    let Some(Site::Lookup { receiver }) = site(runtime, function, pc) else {
         return stop(ctx, error("invalid verified lookup"));
     };
-    let source = &program.functions[function as usize];
-    let Some(s::Argument::Location(s::Location::Register(receiver))) = arguments.first() else {
-        return stop(ctx, error("invalid verified lookup"));
-    };
-    let found = match source.registers[*receiver as usize] {
+    let found = match receiver {
         s::Type::Map(id) => match program.composites.get(id as usize) {
             Some(s::Composite::Map { key, .. }) => lookup(runtime, &program, collection, index, *key),
             _ => return stop(ctx, error("invalid verified lookup")),
@@ -478,18 +515,12 @@ pub extern "C" fn rt_machine_builder(ctx: *mut Ctx, function: u64, pc: u64, args
     let Some(program) = program(runtime) else {
         return stop(ctx, error("builder transition outside a Champ program"));
     };
-    let source = &program.functions[function as usize];
-    let Some(s::Instruction::Champ { op, arguments, .. }) = source.code.get(pc as usize) else {
+    let Some(Site::Builder { op, inclusive, buffer }) = site(runtime, function, pc) else {
         return stop(ctx, error("invalid verified builder transition"));
     };
-    let inclusive = arguments.contains(&s::Argument::Flag(true));
-    let Some(s::Argument::Location(s::Location::Register(buffer))) = arguments.iter()
-        .find(|argument| matches!(argument, s::Argument::Location(_))) else {
-        return stop(ctx, error("invalid verified builder transition"));
-    };
-    let buffer_type = source.registers[*buffer as usize];
-    let words = unsafe { std::slice::from_raw_parts(args, count as usize) }.to_vec();
-    match builder(runtime, &program, *op, inclusive, buffer_type, &words) {
+    // SAFETY: machine code passes its record of `count` words, which outlives the call.
+    let words = unsafe { std::slice::from_raw_parts(args, count as usize) };
+    match builder(runtime, &program, op, inclusive, buffer, words) {
         Ok(word) => {
             let roots = if word == 0 { vec![] } else { vec![(word, Repr::Ref)] };
             runtime.safepoint(frame, unsafe { &*ctx }, &roots);

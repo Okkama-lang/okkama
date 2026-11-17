@@ -52,6 +52,8 @@ pub(crate) struct Program {
     pub groups: Vec<bool>,
     /// The P1 Atomic operation of each function (#830), resolved once from its external name.
     pub atomic: Vec<Option<AtomicOp>>,
+    /// What the data helpers need of each instruction (#832), by function and pc.
+    pub sites: Vec<Box<[Option<super::collections::Site>]>>,
 }
 
 /// A P1 Atomic operation (#830). `p1::invoke` dispatches on it instead of matching the entry's name on every
@@ -401,7 +403,7 @@ impl Runtime {
             source: verified.source.clone(), plans, selections, entries, shielded_entries,
             external: implementations, p1, native_failure, frames, schedules, globals: Vec::new(),
             groups: source.objects.iter().map(|object| s::drivers::group_specialization(&object.name)).collect(),
-            atomic,
+            atomic, sites: super::collections::sites(source),
         });
         let globals = super::collections::build_globals(&mut runtime, source).map_err(Error)?;
         runtime.champ.machine.as_mut().expect("Champ program").globals = globals;
