@@ -20051,6 +20051,88 @@ November 17, 2026
 `UnavailableCollation`. Слова самого списка не переводятся: их переводит
 программа, через каталог.
 
+### Настройки и журналы: `config`, `logging`
+
+```okkama
+module bible/config v1.0.0;
+
+// Settings from a file and the environment, the later layer winning, each
+// value knowing where it came from; and a logger whose destination is the
+// program's own object, behind a filter that hides the password field.
+import "toml/parse" take ParsedToml;
+import "config/source" take LayeredSettings, SettingSource, SettingSourceKind;
+import "config/document" take TomlSettings;
+import "config/environment" take EnvironmentSettings, EnvironmentBinding;
+import "config/key" take SettingKey;
+import "os/environment" take Environment;
+import "logging/logger" take Logger;
+import "logging/level" take LogLevel, LogLevelName;
+import "logging/name" take LogName;
+import "logging/record" take LogRecord;
+import "logging/write" take LogWriting;
+import "logging/redact" take RedactedLogs;
+import "json" take JsonField;
+import "io/stdout" take Stdout;
+
+// A destination that prints the level, the logger's name, the message and
+// the fields, and nothing that changes from run to run.
+object Lines does LogWriting {
+    Lines();
+    write(origin is LogRecord) is void {
+        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " + origin.context().name().string() + ": "
+            + origin::Entry::message + " " + origin.context().fields().values().string());
+    }
+    enabled(name is LogName, level is LogLevel) is bool { true; }
+}
+
+main() is int {
+    let out = Stdout();
+    let file = TomlSettings(document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
+        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml"));
+    let env = EnvironmentSettings(environment: Environment(values: ["APP_PORT": "9090"]),
+        names: [EnvironmentBinding(name: "APP_PORT", key: SettingKey("server", "port"))],
+        source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
+    let settings = LayeredSettings(file, env);
+    out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
+        + (settings.source("server.port")?? .some(source): source::Source::name !! .none: "nowhere"));
+    out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
+        + (settings.bool("server.debug") else false).string());
+    let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
+        level: LogLevel.info);
+    log.debug("not written, not even built");
+    log.info("login", JsonField("user", "ann"), JsonField("password", "hunter2"));
+    0;
+}
+```
+
+Вывод:
+
+```text
+port 9090 from environment
+host localhost, debug false
+INFO shop.auth: login {"user":"ann","password":"[redacted]"}
+```
+
+Настройки приходят слоями, и каждый слой читает один источник: документ
+(TOML, JSON или INI), окружение, командную строку. `LayeredSettings`
+сливает их, побеждает более поздний слой, и каждое значение помнит свой
+источник, так что программа может сказать, что порт пришёл из `APP_PORT`, а
+не из `app.toml`. Читаются только переменные окружения, привязанные к
+ключу, а само окружение — значение: `Environment()` один раз берёт
+переменные процесса, а `Environment(values: ...)` даёт ровно перечисленные;
+так тест или пример не зависит от хоста. Каждое чтение отвечает `Maybe`,
+который решают в месте использования.
+
+Логгер пишет в назначение, а назначение — роль: текстовый и JSON-потоки
+библиотеки, файл с ротацией, syslog или, как здесь, собственный объект
+программы. Запись ниже уровня логгера стоит одного вопроса и ничего не
+строит, поэтому `log.debug(...)` с дорогими полями может оставаться в коде.
+Назначения оборачивают друг друга: `RedactedLogs` пишет названные поля как
+`[redacted]` раньше, чем что-либо дойдёт до обёрнутого назначения, так что
+пароль, переданный по ошибке, в журнал не попадает. Собственное назначение
+примера не печатает время и номер процесса, поэтому его вывод одинаков при
+каждом запуске.
+
 # Глава 23. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в

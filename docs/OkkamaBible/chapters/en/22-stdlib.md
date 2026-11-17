@@ -703,3 +703,27 @@ host: the system's locale, which the program asks for explicitly, and
 locale-aware sorting (`CollatedString`), which needs the pinned ICU library
 and says so with `UnavailableCollation` when it is missing. The words of the
 list are not translated: the program translates them, through the catalog.
+
+### Settings and logs: `config`, `logging`
+
+{{example:22-config}}
+
+Settings come in layers, each a reader of one source: a document (TOML,
+JSON or INI), the environment, the command line. `LayeredSettings` merges
+them, later layers winning, and every value remembers its source, so a
+program can say that the port came from `APP_PORT` and not from
+`app.toml`. Only the environment variables bound to a key are read, and the
+environment is itself a value: `Environment()` takes the process's variables
+once, and `Environment(values: ...)` gives exactly the ones listed, which is
+how a test or an example stays independent of the host. Every read answers a
+`Maybe`, settled at the point of use.
+
+A logger writes to a destination, and a destination is a role: the
+library's text and JSON streams, a file with rotation, syslog, or, as here,
+the program's own object. A record below the logger's level costs one
+question and builds nothing, which is why `log.debug(...)` with costly fields
+can stay in the code. Destinations wrap one another: `RedactedLogs` writes
+the named fields as `[redacted]` before anything reaches the destination
+it wraps, so a password passed in by mistake never reaches the log. The
+example's own destination leaves out the time and the process id, so its
+output is the same on every run.

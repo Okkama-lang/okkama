@@ -19847,6 +19847,88 @@ locale-aware sorting (`CollatedString`), which needs the pinned ICU library
 and says so with `UnavailableCollation` when it is missing. The words of the
 list are not translated: the program translates them, through the catalog.
 
+### Settings and logs: `config`, `logging`
+
+```okkama
+module bible/config v1.0.0;
+
+// Settings from a file and the environment, the later layer winning, each
+// value knowing where it came from; and a logger whose destination is the
+// program's own object, behind a filter that hides the password field.
+import "toml/parse" take ParsedToml;
+import "config/source" take LayeredSettings, SettingSource, SettingSourceKind;
+import "config/document" take TomlSettings;
+import "config/environment" take EnvironmentSettings, EnvironmentBinding;
+import "config/key" take SettingKey;
+import "os/environment" take Environment;
+import "logging/logger" take Logger;
+import "logging/level" take LogLevel, LogLevelName;
+import "logging/name" take LogName;
+import "logging/record" take LogRecord;
+import "logging/write" take LogWriting;
+import "logging/redact" take RedactedLogs;
+import "json" take JsonField;
+import "io/stdout" take Stdout;
+
+// A destination that prints the level, the logger's name, the message and
+// the fields, and nothing that changes from run to run.
+object Lines does LogWriting {
+    Lines();
+    write(origin is LogRecord) is void {
+        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " + origin.context().name().string() + ": "
+            + origin::Entry::message + " " + origin.context().fields().values().string());
+    }
+    enabled(name is LogName, level is LogLevel) is bool { true; }
+}
+
+main() is int {
+    let out = Stdout();
+    let file = TomlSettings(document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
+        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml"));
+    let env = EnvironmentSettings(environment: Environment(values: ["APP_PORT": "9090"]),
+        names: [EnvironmentBinding(name: "APP_PORT", key: SettingKey("server", "port"))],
+        source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
+    let settings = LayeredSettings(file, env);
+    out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
+        + (settings.source("server.port")?? .some(source): source::Source::name !! .none: "nowhere"));
+    out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
+        + (settings.bool("server.debug") else false).string());
+    let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
+        level: LogLevel.info);
+    log.debug("not written, not even built");
+    log.info("login", JsonField("user", "ann"), JsonField("password", "hunter2"));
+    0;
+}
+```
+
+Output:
+
+```text
+port 9090 from environment
+host localhost, debug false
+INFO shop.auth: login {"user":"ann","password":"[redacted]"}
+```
+
+Settings come in layers, each a reader of one source: a document (TOML,
+JSON or INI), the environment, the command line. `LayeredSettings` merges
+them, later layers winning, and every value remembers its source, so a
+program can say that the port came from `APP_PORT` and not from
+`app.toml`. Only the environment variables bound to a key are read, and the
+environment is itself a value: `Environment()` takes the process's variables
+once, and `Environment(values: ...)` gives exactly the ones listed, which is
+how a test or an example stays independent of the host. Every read answers a
+`Maybe`, settled at the point of use.
+
+A logger writes to a destination, and a destination is a role: the
+library's text and JSON streams, a file with rotation, syslog, or, as here,
+the program's own object. A record below the logger's level costs one
+question and builds nothing, which is why `log.debug(...)` with costly fields
+can stay in the code. Destinations wrap one another: `RedactedLogs` writes
+the named fields as `[redacted]` before anything reaches the destination
+it wraps, so a password passed in by mistake never reaches the log. The
+example's own destination leaves out the time and the process id, so its
+output is the same on every run.
+
 # Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
