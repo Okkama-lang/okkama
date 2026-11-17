@@ -20,6 +20,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future whose outcome has a `destroy` runs on Champ in a loop body (#851).** The load
+  gate stopped such programs at D18_EXECUTOR ("merge envelope omits destroy failures"):
+  every close of a function that creates such a Future was taken to release its outcome,
+  and a scope state carried around a loop across an await could not be proved empty. Now
+  only a close that settles a duty (or the entries admitted at run time) releases an
+  outcome, and the emptiness proof follows a `frame.resume` back to what its `frame.save`
+  stored. A compiler-level load test on an own fixture, mutation-checked both ways, and
+  end-to-end tests with Tomato's output (`for` and `map` bodies, awaited, abandoned, and a
+  throw after the await).
 - **A Future in the body of a `map`, `reduce` or `filter` runs on Champ (#849).** OIR-2
   coro refused such a body ("a cache duty that reaches its owner's close on some paths
   only"): the builder's unwind cleanup was shared by every failing site of the body, so the

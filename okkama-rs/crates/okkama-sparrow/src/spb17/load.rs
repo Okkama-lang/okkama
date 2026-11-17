@@ -369,8 +369,18 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
     let empty_reserve = !reserve || contract.reserve && locations.get(1)
         .is_some_and(|&loc| evidence.inventory(loc).is_some_and(|keys| keys.is_empty()));
     evidence.check_budget()?;
-    // A settled cache releases its Future's outcome or unstarted inputs into the plan, outside the inventory.
-    let releases = f.code.iter().any(|instruction| match instruction {
+    // A settled cache releases its Future's outcome or unstarted inputs into the plan, outside the inventory. Only a
+    // close that settles a duty (or the entries admitted at run time) can (#851): a close whose schedule is empty,
+    // like the close of a loop body's parent scope, releases nothing.
+    let settles = f.code.iter().skip(contract.begin_pc as usize + 1).map_while(|instruction| match instruction {
+        Instruction::Champ { op: Opcode::CleanupSettle, arguments, .. } => Some(arguments.iter()
+            .filter(|arg| matches!(arg, Argument::Location(_))).count() > 1),
+        Instruction::Champ { op: Opcode::CleanupSettleDynamic | Opcode::CleanupDeliverCancel, .. } => {
+            Some(matches!(instruction, Instruction::Champ { op: Opcode::CleanupSettleDynamic, .. }))
+        }
+        _ => None,
+    }).any(|settles| settles);
+    let releases = settles && f.code.iter().any(|instruction| match instruction {
         Instruction::Champ { op: Opcode::FutureNew, arguments, .. } => arguments.iter().any(|arg| matches!(arg,
             Argument::Entry(id) if !plain_inputs(p, &p.functions[*id as usize])
                 || !plain_results(p, &p.functions[*id as usize]))),
