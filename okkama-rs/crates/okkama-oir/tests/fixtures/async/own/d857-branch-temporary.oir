@@ -1,0 +1,59 @@
+oir 2 own
+// D26 (#857), a V2-shaped variant of the own golden async-never-awaited: the Future is created in one branch of
+// its owner, and the owner's close follows the join. Coro makes S1's duty a slot: empty after the begin, filled by
+// fut.new, merged at the join, settled at the close.
+module d857_branch_temporary
+entry @main
+scope S0 action in @explode
+scope S1 action in @main
+summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[panic, cancelled], suspends=true, publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[panic, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M5 internal contract call_contract(publication=atomic)
+summary M6 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @explode(%0: own) -> (int, own) [async] abi explicit(input_packet=0, output_packet=1) summary(M2) async-creation(M4) async-body(M2) {
+    ^b0 in S0:
+    %1: scope<S0> = scope.begin S0
+    %2: scope<S0> = own.accept %1, %0
+    br ^b1(%2)
+    ^b1(%3: scope<S0>) in S0:
+    %4: str = const "this body must not start"
+    br ^b2(%3, %4)
+    ^b2(%5: scope<S0>, %6: str) in S0 unwind ^b3(%5):
+    panic %6
+    ^b3(%7: scope<S0>, %8: failure) in S0:
+    %9: failure = scope.unwind %7, %8, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %9
+}
+
+func @main() -> int [entry] abi observation summary(M6) {
+    service.schedule Schedule0 owner S1, protocol P0, duties [%7]
+    binding b0 "pending": future<int> in S1
+    boundary B0 lexical in S1
+    key k0: key = service_of(value=%7, kind=cache)
+    dependency d0: dependency = key(k0)
+    selection s0: selection = union([])
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    br ^b1(%0)
+    ^b1(%1: scope<S1>) in S1:
+    %12: bool = const true
+    cond %12, ^b2, ^b3
+    ^b2 in S1:
+    %2: own = own.empty
+    (%3: own, %4: own, %5: deps) = own.split %2, s0
+    %6: own = own.join [%3, %4]
+    (%7: future<int> facts(managed(deps=d0)), %8: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@explode), result int, owner S1, binding b0
+    %9: deps = deps.of %7
+    br ^b4(%8)
+    ^b3 in S1:
+    br ^b4(%1)
+    ^b4(%13: scope<S1>) in S1:
+    %10: int = const 0
+    %11: closed = scope.end %13, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %10
+}

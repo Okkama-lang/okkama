@@ -1,8 +1,7 @@
 #![cfg(feature = "champ-abi")]
-//! D26 duty slots (#856, S2 step 5): the hand-written coro bodies with `duty.empty` and slot operands, from Coro
-//! to Champ in process. The Full verifier checks coro and low, codegen emits `duty.empty` and the slot operands,
-//! the load gate checks them (S1's loader rules meet compiler output here for the first time), and Champ runs the
-//! program. A body whose slot is filled in one branch runs both ways, so a close settles a full slot and, on the
+//! D26 duty slots (#856, S2 step 5; #857, S3): the coro bodies with `duty.empty` and slot operands, hand-written
+//! and produced by coro, from Coro to Champ in process. The Full verifier checks coro and low, codegen emits
+//! `duty.empty` and the slot operands, the load gate checks them, and Champ runs the program. A body whose slot is filled in one branch runs both ways, so a close settles a full slot and, on the
 //! other run, an empty one (a settle of nothing at run time).
 
 use okkama_compiler::lowering::oir2;
@@ -29,7 +28,9 @@ fn duty_slot_bodies_run_in_champ_with_full_and_empty_slots() {
     // The exit status of each body: main's result, or 0 for a void main. d26-slot-across-await publishes the
     // value it awaited, `@work(7)` = 7 + 7.
     let cases = [("d26-branch-temporary", 0), ("d26-branch-spawn", 0), ("d26-shared-handler", 0),
-        ("d26-outer-slot-across-inner-close", 0), ("d26-two-futures-order", 0), ("d26-slot-across-await", 14)];
+        ("d26-outer-slot-across-inner-close", 0), ("d26-two-futures-order", 0), ("d26-slot-across-await", 14),
+        // Coro's own output from the S3 variants (#857): the slots coro emits.
+        ("d857-branch-temporary", 0), ("d857-shared-handler", 0), ("d857-branch-spawn", 0)];
     for (name, status) in cases {
         let source = fixture(name);
         assert_eq!(run(name, &source), status, "{name}");
