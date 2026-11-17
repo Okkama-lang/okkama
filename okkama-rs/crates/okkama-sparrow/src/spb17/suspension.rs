@@ -257,11 +257,12 @@ pub(crate) fn check_structure(p: &Program, f: &Function) -> Check {
 /// resumes. `None` marks a token that two creations can reach. A `fut.spawn` passes its cache duty's origin to
 /// both its outputs: the cache duty it gives back and the task duty of the same Future (D24.1), so a task-state
 /// location has an origin exactly when a spawn can reach it.
+/// Where each token location flows, and the seeds: `fut.new` duties with their pc, empty slots with their scope.
+type CacheFlows = (BTreeMap<Location, Vec<Location>>, Vec<(Location, u32)>, Vec<(Location, u32)>);
+
 /// The flows of cache-state and task-state tokens through edges, spawns and frame saves; the `fut.new` seeds; and the
 /// `duty.empty` seeds with their scope (#855).
-fn cache_flows(p: &Program, f: &Function)
-    -> (BTreeMap<Location, Vec<Location>>, Vec<(Location, u32)>, Vec<(Location, u32)>)
-{
+fn cache_flows(p: &Program, f: &Function) -> CacheFlows {
     let tracked = |location: Location| matches!(kind(f, location),
         Some(ServiceKind::CacheState | ServiceKind::TaskState));
     let mut flows = BTreeMap::<Location, Vec<Location>>::new();
@@ -457,18 +458,23 @@ pub(crate) fn check_flow(p: &Program, f: &Function) -> Check {
         enforce(!origins.contains_key(location), TASK_RECEIPT,
             "one location holds an await's task and a spawned task's duty")?;
     }
-    check_duty_slots(f, &origins, &empty_slots(p, f))?;
+    let empty = empty_slots(p, f);
+    check_duty_slots(f, &origins, &empty)?;
     for instruction in &f.code {
         let Instruction::Champ { op, arguments, .. } = instruction else { continue };
         for (index, location) in locations(arguments).into_iter().enumerate() {
-            let spawned = kind(f, location) == Some(ServiceKind::TaskState) && origins.contains_key(&location);
-            if spawned {
+            let task = kind(f, location) == Some(ServiceKind::TaskState);
+            let spawned = task && origins.contains_key(&location);
+            // #855: an empty task slot is a duty slot too, which a spawn fills.
+            let slot = task && empty.contains_key(&location);
+            if spawned || slot {
                 // The duty is saved across suspensions, settled by its owner's close, or leaves with its cache
                 // duty through a rehome or an absorb (D24.2, C-4, D25.2).
                 let duty = match op {
                     Opcode::FrameSave | Opcode::ServiceAbsorb => index > 0,
                     Opcode::CleanupSettle => index == 1,
                     Opcode::CacheRehome => index == 2,
+                    Opcode::FutureSpawn => !spawned && index == 2,
                     _ => false,
                 };
                 enforce(duty, TASK_RECEIPT, &format!("a spawned task's duty reaches {}", op.name()))?;
@@ -526,21 +532,41 @@ fn check_duty_slots(f: &Function, origins: &BTreeMap<Location, Option<u32>>,
         let scope = arguments.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None });
         match op {
             Opcode::FutureNew => {
-                let Some(&slot) = operands.last().filter(|&&location| kind(f, location) == Some(ServiceKind::CacheState))
-                else { continue };
+                let cache = |location: &&Location| kind(f, **location) == Some(ServiceKind::CacheState);
+                let Some(&slot) = operands.last().filter(cache) else { continue };
                 enforce(!origins.contains_key(&slot), DUTY_SLOT, "fut.new fills a slot that a Future may occupy")?;
                 let scopes = empty.get(&slot);
-                enforce(scopes.is_some_and(|scopes| scope.is_some_and(|scope| scopes.len() == 1 && scopes.contains(&scope))),
-                    DUTY_SLOT, "fut.new fills a slot of another scope, or one with no empty version")?;
+                let own = scopes.is_some_and(|scopes| {
+                    scope.is_some_and(|scope| scopes.len() == 1 && scopes.contains(&scope))
+                });
+                enforce(own, DUTY_SLOT, "fut.new fills a slot of another scope, or one with no empty version")?;
             }
             Opcode::FutureSpawn | Opcode::ServiceAbsorb => {
                 if let Some(duty) = operands.get(1) {
                     enforce(!empty.contains_key(duty), DUTY_SLOT, "a duty leaves a slot that may be empty")?;
                 }
+                // The spawn fills its Future's task slot as fut.new fills the cache slot: of the Future's owner.
+                if *op == Opcode::FutureSpawn && let Some(&slot) = operands.get(2) {
+                    let owner = operands.get(1).and_then(|cache| origins.get(cache).copied().flatten())
+                        .and_then(|pc| match &f.code[pc as usize] {
+                            Instruction::Champ { arguments, .. } => arguments.iter().find_map(|arg| match arg {
+                                Argument::Scope(id) => Some(*id), _ => None,
+                            }),
+                            _ => None,
+                        });
+                    enforce(!origins.contains_key(&slot), DUTY_SLOT,
+                        "fut.spawn fills a task slot that a task may occupy")?;
+                    enforce(empty.get(&slot).is_some_and(|scopes| owner.is_some_and(|owner| scopes.len() == 1
+                        && scopes.contains(&owner))), DUTY_SLOT,
+                        "fut.spawn fills a task slot of another scope, or one with no empty version")?;
+                }
             }
             Opcode::CacheRehome => {
-                if let Some(&duty) = operands.get(1).filter(|&&location| kind(f, location) == Some(ServiceKind::CacheState)) {
-                    enforce(!empty.contains_key(&duty), DUTY_SLOT, "a duty leaves a slot that may be empty")?;
+                // The token form: the cache duty and, for a spawned Future, its task duty (D24.1).
+                let tokens = operands.iter().skip(1).filter(|&&location| matches!(kind(f, location),
+                    Some(ServiceKind::CacheState | ServiceKind::TaskState)));
+                for duty in tokens {
+                    enforce(!empty.contains_key(duty), DUTY_SLOT, "a duty leaves a slot that may be empty")?;
                 }
             }
             _ => {}

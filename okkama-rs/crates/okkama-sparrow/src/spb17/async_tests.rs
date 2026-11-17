@@ -1847,6 +1847,13 @@ enum SlotCase {
     OtherScope,
     /// After the join, the duty is absorbed into a packet although the slot may be empty (refused).
     ConsumedMaybe,
+    /// The Future is created and spawned on one branch only: its cache and task slots may be empty at the close.
+    SpawnMaybe,
+    /// The same, with the task slot's empty version of another scope (refused).
+    SpawnOtherScope,
+    /// The Future is created before the branch and spawned on one branch only; after the join a token-form rehome
+    /// takes its full cache duty and a task duty that may be empty (refused).
+    RehomeMaybeTask,
 }
 
 fn slotted(case: SlotCase) -> (Function, FrameLayout) {
@@ -1883,6 +1890,61 @@ fn slotted(case: SlotCase) -> (Function, FrameLayout) {
             let (first, state) = new(&mut b, state, None);
             let (cache, state) = new(&mut b, state, Some(first));
             (state, vec![cache])
+        }
+        SlotCase::SpawnMaybe | SlotCase::SpawnOtherScope => {
+            let slot = b.emit(O::DutyEmpty, vec![A::Scope(MAIN)], K::CacheState);
+            let task_scope = if case == SlotCase::SpawnOtherScope { MAIN + 1 } else { MAIN };
+            let task_slot = b.emit(O::DutyEmpty, vec![A::Scope(task_scope), A::Flag(true)], K::TaskState);
+            let flag = b.constant(Constant::Bool(true), Type::Bool);
+            b.cond(flag, "make", "skip");
+            b.block("make", &[]);
+            let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+            let [future, cache, next] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
+            b.next(O::FutureNew, vec![A::Entry(0), A::Scope(MAIN), A::Result(Some(FUTURE_INT)), l(seven),
+                l(offered), l(state), l(slot)], vec![future, cache, next]);
+            let [spawned, task] = [b.service(K::CacheState), b.service(K::TaskState)];
+            b.next(O::FutureSpawn, vec![l(future), l(cache), l(task_slot)], vec![spawned, task]);
+            b.br("join", vec![s(next), s(spawned), s(task)]);
+            b.block("skip", &[]);
+            b.br("join", vec![s(state), s(slot), s(task_slot)]);
+            let [joined, cache, task] = [b.service(K::ScopeState), b.service(K::CacheState), b.service(K::TaskState)];
+            b.block("join", &[joined, cache, task]);
+            (joined, vec![task, cache])
+        }
+        SlotCase::RehomeMaybeTask => {
+            let slot = b.emit(O::DutyEmpty, vec![A::Scope(MAIN)], K::CacheState);
+            let task_slot = b.emit(O::DutyEmpty, vec![A::Scope(MAIN), A::Flag(true)], K::TaskState);
+            let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+            let [future, cache, next] = [b.register(FUTURE_INT), b.service(K::CacheState), b.service(K::ScopeState)];
+            b.next(O::FutureNew, vec![A::Entry(0), A::Scope(MAIN), A::Result(Some(FUTURE_INT)), l(seven),
+                l(offered), l(state), l(slot)], vec![future, cache, next]);
+            let flag = b.constant(Constant::Bool(true), Type::Bool);
+            b.cond(flag, "make", "skip");
+            b.block("make", &[]);
+            let [spawned, task] = [b.service(K::CacheState), b.service(K::TaskState)];
+            b.next(O::FutureSpawn, vec![l(future), l(cache), l(task_slot)], vec![spawned, task]);
+            b.br("join", vec![s(spawned), s(task)]);
+            b.block("skip", &[]);
+            b.br("join", vec![s(cache), s(task_slot)]);
+            let [cache, task] = [b.service(K::CacheState), b.service(K::TaskState)];
+            b.block("join", &[cache, task]);
+            let empty = b.emit(O::OwnEmpty, vec![], K::Packet);
+            let selection = b.selection();
+            let pending = b.emit(O::ExitPrepare, vec![A::Kind(ExitKind::Return), A::Boundary(MAIN), l(empty),
+                A::Selection(selection)], K::Pending);
+            let reserve = b.service(K::Pending);
+            b.next(O::CacheRehome, vec![A::Destination(ExitDestination::Caller), l(pending), l(cache), l(task)],
+                vec![reserve]);
+            let [packet, deps] = [b.service(K::Packet), b.service(K::Deps)];
+            b.next(O::ExitCommit, vec![l(reserve), A::Destination(ExitDestination::Caller)], vec![packet, deps]);
+            b.next(O::FuturePublish, vec![l(body), A::Flag(true), l(packet), l(deps)], vec![]);
+            b.ret();
+            let layout = FrameLayout {
+                slots: vec![service(K::Packet)],
+                continuations: vec![Continuation { site: None, saved: vec![0], operands: vec![] }],
+            };
+            let _ = next;
+            return (b.finish_unchecked(), layout);
         }
         SlotCase::Maybe | SlotCase::ConsumedMaybe => {
             let slot = b.emit(O::DutyEmpty, vec![A::Scope(owner)], K::CacheState);
@@ -1943,4 +2005,63 @@ fn duty_slots_load_and_their_rules_hold() {
     reject_with(&slotted_program(SlotCase::Occupied), suspension::DUTY_SLOT, "a Future may occupy");
     reject_with(&slotted_program(SlotCase::OtherScope), suspension::DUTY_SLOT, "another scope");
     reject_with(&slotted_program(SlotCase::ConsumedMaybe), suspension::DUTY_SLOT, "may be empty");
+    // Review of #855: a spawned Future's task slot, as its cache slot.
+    verify_load(&slotted_program(SlotCase::SpawnMaybe), &NoExternalContracts).unwrap_or_else(|error| panic!("{error}"));
+    reject_with(&slotted_program(SlotCase::SpawnOtherScope), suspension::DUTY_SLOT, "task slot of another scope");
+    reject_with(&slotted_program(SlotCase::RehomeMaybeTask), suspension::DUTY_SLOT, "may be empty");
+}
+
+/// @make with a nested scope first, whose close settles only an empty duty slot under a merge plan with no
+/// failures declared; then @make's own Future, whose inputs a settle may destroy (failures `destroys`).
+fn make_with_empty_close(destroys: u32) -> Function {
+    const INNER: u32 = 5;
+    let mut b = Body::new("make", EntryAbi::Observation, vec![]);
+    let target = b.register(Type::Object(0));
+    b.f.params = vec![target];
+    b.f.proofs.entry = Some(EntryContract { failures: destroys, ..EntryContract::default() });
+    b.block("entry", &[target]);
+    let q0 = b.emit(O::ScopeBegin, vec![A::Scope(MAKE), A::Boundary(MAKE)], K::ScopeState);
+    let n0 = b.emit(O::ScopeBegin, vec![A::Scope(INNER), A::Boundary(INNER)], K::ScopeState);
+    let slot = b.emit(O::DutyEmpty, vec![A::Scope(INNER)], K::CacheState);
+    let finished = b.close(n0, None, None, INNER, &[slot], 0, true);
+    let closed = b.service(K::Closed);
+    b.dispatch(finished, [false, false, false], vec![(Tag::Success, "inner", vec![p(0)])]);
+    b.block("inner", &[closed]);
+    let offered = b.emit(O::OwnEmpty, vec![], K::Packet);
+    let [future, cache, q1] = [b.register(FUTURE_VOID), b.service(K::CacheState), b.service(K::ScopeState)];
+    b.next(O::FutureNew, vec![A::Entry(2), A::Scope(MAKE), A::Result(Some(FUTURE_VOID)), l(target), l(offered),
+        l(q0)], vec![future, cache, q1]);
+    let finished = b.close(q1, None, None, MAKE, &[cache], destroys, true);
+    let closed = b.service(K::Closed);
+    let mut edges = vec![(Tag::Success, "done", vec![p(0)])];
+    if destroys != 0 {
+        edges.push((Tag::Failure, "failed", vec![p(0), p(1)]));
+    }
+    b.dispatch(finished, [false, false, destroys != 0], edges);
+    b.block("done", &[closed]);
+    b.ret();
+    if destroys != 0 {
+        let [closed, failure] = [b.service(K::Closed), b.register(Type::Failure)];
+        b.block("failed", &[closed, failure]);
+        let Location::Register(id) = failure else { unreachable!() };
+        b.f.code.push(Instruction::Raise(id));
+    }
+    b.finish()
+}
+
+/// Review of #855 (Fable): a close that settles only an empty slot releases nothing, so its merge envelope need not
+/// declare what the function's Futures can destroy (D18_EXECUTOR). Before the fix every close with a duty step
+/// counted as releasing, and the close of a scope before a Future's creation was refused.
+#[test]
+fn a_close_that_settles_only_an_empty_slot_releases_nothing() {
+    let (work, work_layout) = work();
+    let (main, main_layout) = main(Main::Plain);
+    let (consume, consume_layout) = consume(1);
+    let mut p = program(vec![work, main, consume, make_with_empty_close(1), destroy(1)],
+        vec![work_layout, main_layout, consume_layout], None);
+    p.objects.push(res());
+    p.tables.scopes.push(Scope { function: 3, parent: Some(MAKE), boundary: 5 });
+    p.tables.boundaries.push(Boundary { scope: 5 });
+    assert_eq!(p.tables.scopes.len(), 6);
+    verify_load(&p, &NoExternalContracts).unwrap_or_else(|error| panic!("{error}"));
 }
