@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Duty slots in OIR-2, the verifier and Low (#853, S2 #856).** OIR-2 gains `duty.empty`
+  and the slot operands of `fut.new` and `fut.spawn` (coro and low only). The verifier
+  checks single occupancy (`d26-slot-occupied`), that no consumer moves an empty slot
+  (`d26-empty-duty-moved`) and that a close settles every slot; an empty slot adds no
+  effect to its close. Low settles every slot of a scope with slots at each close, by
+  schedule position. Hand-written coro bodies with branches, shared handlers, nested
+  scopes and a suspension run end to end on Champ with the slot full and empty. Nothing
+  emits the forms yet (S3).
 - **Duty slots, groundwork (#853, S1 #855).** SPB 17 gains `duty.empty` (opcode 88): the
   empty version of a Future's duty slot. `fut.new` takes it as an optional last operand.
   The load gate enforces single occupancy and that a duty leaves only a full slot

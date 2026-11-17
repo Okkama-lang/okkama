@@ -673,6 +673,33 @@ fn a_for_body_leaves_a_destroyable_future_unawaited() {
 "#, "round 0\nround 1\n", true);
 }
 
+/// #805: a `for` loop awaits a Future created outside it. Coro carries the cache duty round the loop as a block
+/// parameter, and Low settles it once at the owner's close. Tomato (okkama 0.5.8) prints the same.
+#[test]
+fn a_loop_awaits_a_future_created_outside_it() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job {
+    has n is int;
+    Job(:n);
+    async run() is int { Stdout().writeln("job " + n.string()); n; }
+}
+async main() is int {
+    let a = Job(n: 1).run();
+    for 1..=2 -> k {
+        Stdout().writeln("a " + (await a).string());
+    }
+    Stdout().writeln("main");
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!(run.result, Ok(0), "{mode:?}: stdout={:?}", run.stdout);
+        assert_eq!(run.stdout, "job 1\na 1\na 1\nmain\n", "{mode:?}");
+    }
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
