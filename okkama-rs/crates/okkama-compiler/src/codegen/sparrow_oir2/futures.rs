@@ -213,7 +213,7 @@ impl Emitter<'_> {
         let (opcode, arguments) = match op {
             // PR-B1 (#784): SPB 17 does not carry `binding`. A created Future's duty is a token at run time, and no
             // selection can reach a token.
-            X::FutureNew { packet, deps, owner_state, environment, result, owner, binding: _ } => {
+            X::FutureNew { packet, deps, owner_state, environment, result, owner, binding: _, slot } => {
                 // An async external's Future is run by its driver (D22, #601 Q1); `fut.new` names it the same way.
                 let (o::FutureEnvironment::Deferred { function, arguments, descriptors }
                     | o::FutureEnvironment::External { function, arguments, descriptors }) = environment else {
@@ -234,11 +234,28 @@ impl Emitter<'_> {
                     operands.push(location(value)?);
                 }
                 operands.extend([location(*packet)?, location(*deps)?, location(*owner_state)?]);
+                // D26 (#856): the empty cache slot the new duty fills comes last.
+                if let Some(slot) = slot {
+                    operands.push(location(*slot)?);
+                }
                 (O::FutureNew, operands)
             }
-            // D24.1 (#601 P1): the Future and its cache duty; the duty comes back with the task duty.
-            X::FutureSpawn { future, state: Some(cache) } => {
-                (O::FutureSpawn, vec![location(*future)?, location(*cache)?])
+            // D24.1 (#601 P1): the Future and its cache duty; the duty comes back with the task duty. D26 (#856): the
+            // empty task slot the task duty fills, when the program has one.
+            X::FutureSpawn { future, state: Some(cache), task_slot } => {
+                let mut operands = vec![location(*future)?, location(*cache)?];
+                if let Some(task_slot) = task_slot {
+                    operands.push(location(*task_slot)?);
+                }
+                (O::FutureSpawn, operands)
+            }
+            // D26 (#856): the empty version of a slot of `owner`; the flag marks a task slot (a task-state result).
+            X::DutyEmpty { owner, task } => {
+                let mut operands = vec![A::Scope(owner.as_u32())];
+                if *task {
+                    operands.push(A::Flag(true));
+                }
+                (O::DutyEmpty, operands)
             }
             X::FutureSpawn { state: None, .. } => return Err(error("High's fut.spawn reached codegen")),
             // Ruling PR-E (#766): the Future only; no duty goes in or comes out.

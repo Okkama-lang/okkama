@@ -578,7 +578,8 @@ impl<'s, 'a> Frames<'s, 'a> {
 }
 
 /// The token that created the duty a schedule entry names: a resumed version is the value its save stored, a
-/// block parameter the duty that every edge passes. `None` when the edges pass different duties.
+/// block parameter the duty that every edge passes. An empty slot (D26) passes no duty, so a version that is empty
+/// on some edges has the creation of the others. `None` when the edges pass different duties, or only empties.
 fn creation(body: &Body, edges: &[super::graph::Edge], value: ValueId, state: &mut State<'_>) -> Option<ValueId> {
     let mut pending = vec![value];
     let mut seen = BTreeSet::new();
@@ -589,7 +590,11 @@ fn creation(body: &Body, edges: &[super::graph::Edge], value: ValueId, state: &m
         }
         match body.values.get(value).ok()?.def {
             Definition::InstResult { inst, index } => {
-                let Operation::Async(AsyncOp::FrameResume { frame, slots, .. }) = &body.insts.get(inst).ok()?.op else {
+                let op = &body.insts.get(inst).ok()?.op;
+                if matches!(op, Operation::Async(AsyncOp::DutyEmpty { .. })) {
+                    continue;
+                }
+                let Operation::Async(AsyncOp::FrameResume { frame, slots, .. }) = op else {
                     if found.is_some_and(|previous| previous != value) {
                         return None;
                     }

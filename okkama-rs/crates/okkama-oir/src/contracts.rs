@@ -381,9 +381,11 @@ pub(crate) enum Rule {
     Await { future: ValueId, result: Option<TypeId>, take: Option<(ValueId, TakeBoundary)>, shielded: bool },
     UniqueProof(UniqueCacheProof),
     Protocol { state: ValueId, owner: Option<ValueId>, packet: Option<ValueId>, protocol: ProtocolId, transition: ProtocolTransition },
-    FutureNew { environment: FutureEnvironment, packet: ValueId, owner: ValueId, result: Option<TypeId> },
+    FutureNew { environment: FutureEnvironment, packet: ValueId, owner: ValueId, result: Option<TypeId>,
+        slot: Option<ValueId> },
+    DutyEmpty { task: bool },
     Publish { frame: ValueId, packet: Option<ValueId> },
-    Spawn { state: Option<ValueId> },
+    Spawn { state: Option<ValueId>, task_slot: Option<ValueId> },
     AwaitUnwind { state: ValueId, task: ValueId, receipt: ValueId, protocol: ProtocolId },
     Rehome { form: RehomeForm, target: RehomeTarget, protocol: ProtocolId },
     Materialize { packet: ValueId, kind: ServiceKeyKind },
@@ -813,7 +815,7 @@ impl<'a> ContractRegistry<'a> {
                 c.normal.postconditions.push(Postcondition::NoFreshAdmission);
                 self.protocol(protocol, transition, c, validate)?;
             }
-            Rule::FutureNew { environment, packet, owner, result } => {
+            Rule::FutureNew { environment, packet, owner, result, slot } => {
                 c.normal.results = vec![
                     ResultSlot::new(N::Value, ResultType::FutureOf(result)),
                     ResultSlot::new(N::To, ResultType::SameAs(owner)),
@@ -831,6 +833,10 @@ impl<'a> ContractRegistry<'a> {
                     outputs.insert(0, N::State);
                 }
                 c.normal.transfers.push(TransferRule::Move { inputs, outputs });
+                // D26 (#856): the empty slot ends here; a `Move` input would merge its fields into the outputs.
+                if let Some(slot) = slot {
+                    c.normal.transfers.push(TransferRule::Settle { inputs: vec![slot] });
+                }
                 c.normal.postconditions.push(Postcondition::OwnerServiceDuty {
                     value: N::Value, owner, kind: ServiceKeyKind::Cache,
                 });
@@ -850,7 +856,12 @@ impl<'a> ContractRegistry<'a> {
                 c.effects.publishes = true;
                 c.roots.roots.extend([RootKind::FrameSlots, RootKind::Cache]);
             }
-            Rule::Spawn { state } => {
+            Rule::DutyEmpty { task } => {
+                // D26 (#856): a fresh token that carries no duty: no transfer, no root, no effect. Its owner is the
+                // op's scope; the linearity verifier sets it, since there is no state operand to copy it from.
+                c.normal.results.push(ResultSlot::service(N::State, if task { S::TaskState } else { S::CacheState }));
+            }
+            Rule::Spawn { state, task_slot } => {
                 // Class X (D24.1): Normal only; it runs machine code, so it may stop. High names only the
                 // fresh Future (`fut.spawn %f`); own adds ServiceOf{f, Frame} to the owner state it forwards;
                 // coro/low return the cache duty unchanged plus a new task-state.
@@ -866,6 +877,10 @@ impl<'a> ContractRegistry<'a> {
                 }
                 let outputs = c.normal.results.iter().map(|slot| slot.name).collect();
                 c.normal.transfers.push(TransferRule::Move { inputs: vec![state], outputs });
+                // D26 (#856): the empty task slot ends here, as for `fut.new`'s slot.
+                if let Some(task_slot) = task_slot {
+                    c.normal.transfers.push(TransferRule::Settle { inputs: vec![task_slot] });
+                }
             }
             Rule::AwaitUnwind { state, task, receipt, protocol } => {
                 // C-3: Normal outcome only, shielded, suspends.

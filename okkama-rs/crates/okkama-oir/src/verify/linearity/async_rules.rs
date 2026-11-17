@@ -98,6 +98,38 @@ impl Engine<'_, '_> {
         })
     }
 
+    /// D26 (#856): the owner of the empty slot that the service origin `service` names, and whether it is a task
+    /// slot; `None` when the origin is not a `duty.empty` result.
+    pub(super) fn empty_slot(&self, service: Origin) -> Option<(ScopeId, bool)> {
+        let (Origin::Instruction(inst, _) | Origin::RetiredInstruction(inst, _)) = service else {
+            return None;
+        };
+        match self.body.insts.get(inst).ok()?.op {
+            Operation::Async(AsyncOp::DutyEmpty { owner, task }) => Some((owner, task)),
+            _ => None,
+        }
+    }
+
+    /// D26 (#856), R-1: `value` is an empty slot of `owner` of the kind `task`, so the duty that fills it is the
+    /// only one in it.
+    fn fills_empty_slot(&mut self, before: &Flow, value: ValueId, owner: Option<ScopeId>, task: bool) {
+        let slot = before.tokens[value.as_u32() as usize].service.and_then(|service| self.empty_slot(service));
+        if owner.is_none() || slot != owner.map(|owner| (owner, task)) {
+            self.error(R::D26SlotOccupied, if task {
+                "fut.spawn fills an empty task slot of its Future's owner (D26 R-1)"
+            } else {
+                "fut.new fills an empty cache slot of its owner (D26 R-1)"
+            });
+        }
+    }
+
+    /// D26 (#856), R-2: the rule of a consumer that took a token without a duty. An empty slot gets its own
+    /// diagnostic; any other token keeps the consumer's rule.
+    fn moved_without_duty(&self, before: &Flow, value: ValueId) -> R {
+        let empty = before.tokens[value.as_u32() as usize].service.and_then(|service| self.empty_slot(service));
+        if empty.is_some() { R::D26EmptyDutyMoved } else { R::B94 }
+    }
+
     /// D24.2, ABI §6.3 (`d24-schedule-task-first`): in the duties `values` of a close, in settle order, a spawned
     /// Future's task duty comes before its cache duty.
     pub(super) fn task_first(&mut self, before: &Flow, values: &[ValueId]) {
@@ -229,13 +261,16 @@ impl Engine<'_, '_> {
         match op {
             // D24.1: the cache duty of the Future its `fut.new` gave comes back unchanged, and the spawned task's
             // duty is new, owned by the same scope; own forwards the owner state, whose duty the task joins.
-            AsyncOp::FutureSpawn { future, state: Some(cache) }
+            AsyncOp::FutureSpawn { future, state: Some(cache), task_slot }
                 if matches!(self.module.profile, Profile::Coro | Profile::Low) => {
                 let key = self.identity(before, *future);
                 let duty = before.tokens[cache.as_u32() as usize].clone();
                 if duty.cache != Some(key) {
                     self.error(R::D24SpawnNotFresh,
                         "fut.spawn forwards the cache duty of the Future it starts (D24.1)");
+                }
+                if let Some(task_slot) = task_slot {
+                    self.fills_empty_slot(before, *task_slot, duty.scope, true);
                 }
                 for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
                     match info.name {
@@ -330,12 +365,14 @@ impl Engine<'_, '_> {
                 // coro/low: the duty tokens are consumed; the duty and what its cache holds leave
                 // every carrier that still holds them, the owner state included.
                 let Some(key) = before.tokens[cache.as_u32() as usize].cache else {
-                    self.error(R::B94, "cache.rehome consumes the cache-state token of a Future");
+                    self.error(self.moved_without_duty(before, *cache),
+                        "cache.rehome consumes the cache-state token of a Future");
                     return;
                 };
                 if let Some(task) = task
                     && before.tokens[task.as_u32() as usize].cache != Some(key) {
-                    self.error(R::B94, "cache.rehome consumes the task-state of the same spawned Future");
+                    self.error(self.moved_without_duty(before, *task),
+                        "cache.rehome consumes the task-state of the same spawned Future");
                 }
                 // #765, C-4 item 1: a spawned Future's task duty leaves with its cache duty.
                 let task_left = task.is_none() && (0..before.availability.len()).any(|index| {
@@ -375,7 +412,8 @@ impl Engine<'_, '_> {
             // here they join the packet, which carries them to the field or array that stores the Future.
             AsyncOp::ServiceAbsorb { token, .. } => {
                 let Some(key) = before.tokens[token.as_u32() as usize].cache else {
-                    self.error(R::B94, "service.absorb consumes the cache-state or task-state of a Future");
+                    self.error(self.moved_without_duty(before, *token),
+                        "service.absorb consumes the cache-state or task-state of a Future");
                     return;
                 };
                 let mut moved = vec![];
@@ -593,7 +631,21 @@ impl Engine<'_, '_> {
                     slot.token = before.tokens[frame.as_u32() as usize].clone();
                 }
             }
-            AsyncOp::FutureNew { packet, owner_state, environment, .. } => {
+            // D26 (#856): an empty slot of an open scope. It carries no duty (`cache` is `None`), so no consumer can
+            // move it (R-2), and the close of its scope settles it as nothing (R-3, the schedule coverage below).
+            AsyncOp::DutyEmpty { owner, .. } => {
+                if before.scopes.get(owner) != Some(&1) {
+                    self.error(R::B106, "duty.empty names a slot of a scope that is not open (D26)");
+                }
+                for slot in slots.iter_mut() {
+                    slot.token = Token { private: true, scope: Some(*owner), ..Token::default() };
+                }
+            }
+            AsyncOp::FutureNew { packet, owner_state, environment, slot: empty, .. } => {
+                if let Some(empty) = empty {
+                    let scope = before.tokens[owner_state.as_u32() as usize].scope;
+                    self.fills_empty_slot(before, *empty, scope, false);
+                }
                 let packet = &before.tokens[packet.as_u32() as usize];
                 let owner = &before.tokens[owner_state.as_u32() as usize];
                 let mut input = packet.clone();

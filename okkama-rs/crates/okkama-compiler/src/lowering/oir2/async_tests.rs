@@ -401,7 +401,8 @@ fn oir2_p1_spawn_of_an_async_action_is_its_call_then_fut_spawn() {
     assert!(matches!(created.op, ir::Operation::Call(ir::CallOp::Direct { function, .. }) if function == run));
     let future = created.results[0];
     assert_eq!(ops[spawn].0, block, "the spawn follows its creation in the same block");
-    assert_eq!(ops[spawn].1.op, ir::Operation::Async(ir::AsyncOp::FutureSpawn { future, state: None }));
+    let high_spawn = ir::AsyncOp::FutureSpawn { future, state: None, task_slot: None };
+    assert_eq!(ops[spawn].1.op, ir::Operation::Async(high_spawn));
     assert!(ops[spawn].1.results.is_empty());
     assert_eq!(ty(&module, body.values.get(future).unwrap().ty), &ir::Type::Future(Some(int(&module))));
     let awaited: Vec<_> = async_ops(main).into_iter().filter_map(|op| match op {

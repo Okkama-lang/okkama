@@ -162,23 +162,32 @@ operation_group! { AsyncOp {
                 .requires(Postcondition::CacheRehome(*target)),
             _ => Rule::Rehome { form: form.clone(), target: *target, protocol: *protocol },
         });
-    FutureSpawn { future: ValueId, state: Option<ValueId> }
-        => ("fut.spawn", [future: Borrow, state: Consume], Rule::Spawn { state: *state });
+    // Duty slots (D26, #856): `task_slot` is the empty version of the task slot the spawn fills; without it the
+    // task duty is created on the spot (the form before slots).
+    FutureSpawn { future: ValueId, state: Option<ValueId>, task_slot: Option<ValueId> }
+        => ("fut.spawn", [future: Borrow, state: Consume, task_slot: Consume],
+            Rule::Spawn { state: *state, task_slot: *task_slot });
     // Ruling PR-E (#766): spawn of a Future not created on the spot. It starts the Future if it is cold and registers
     // it; it takes and gives no duty, so its contract is High's stateless spawn.
     FutureSpawnBound { future: ValueId }
-        => ("fut.spawn.bound", [future: Observe], Rule::Spawn { state: None });
+        => ("fut.spawn.bound", [future: Observe], Rule::Spawn { state: None, task_slot: None });
     FutureCancel { future: ValueId }
         => ("fut.cancel", [future: Observe], Rule::Intent);
     FutureDone { future: ValueId }
         => ("fut.done", [future: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Bool), trap: false });
     FutureCancelled { future: ValueId }
         => ("fut.cancelled", [future: Observe], Rule::Data { ty: ResultType::Scalar(ScalarType::Bool), trap: false });
+    // `slot` (D26, #856) is the empty version of the owner's cache slot that the new duty fills; without it the
+    // duty is created on the spot (the form before slots).
     FutureNew { packet: ValueId, deps: ValueId, owner_state: ValueId, environment: FutureEnvironment,
-        result: Option<TypeId>, owner: ScopeId, binding: Option<BindingId> }
-        => ("fut.new", [packet: Consume, deps: Observe, owner_state: Consume, environment: Borrow],
+        result: Option<TypeId>, owner: ScopeId, binding: Option<BindingId>, slot: Option<ValueId> }
+        => ("fut.new", [packet: Consume, deps: Observe, owner_state: Consume, environment: Borrow, slot: Consume],
             Rule::FutureNew { environment: environment.clone(), packet: *packet, owner: *owner_state,
-            result: *result });
+            result: *result, slot: *slot });
+    // D26 (#856): the empty version of a slot of scope `owner` (a cache slot, or a task slot when `task`). It
+    // carries no duty; a close settles it as nothing.
+    DutyEmpty { owner: ScopeId, task: bool }
+        => ("duty.empty", [], Rule::DutyEmpty { task: *task });
     FuturePublish { frame: ValueId, outcome: PublishOutcome }
         => ("fut.publish", [frame: Consume, outcome: Consume], Rule::Publish { frame: *frame,
             packet: outcome.packet() });

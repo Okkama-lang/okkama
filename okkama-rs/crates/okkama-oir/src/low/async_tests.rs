@@ -124,6 +124,57 @@ fn low_goldens_of_the_plain_async_inputs() {
     }
 }
 
+/// D26 (#856): the hand-written coro bodies with duty slots lower, and the Low verifier accepts the result. Every
+/// close of a scope with slots settles each of its slots, an empty one included (a settle of nothing at run time),
+/// so main settles the sum of the slots over its closes.
+#[test]
+fn duty_slot_bodies_lower_and_settle_every_slot() {
+    macro_rules! slotted {
+        ($name:literal, $settles:expr) => {
+            ($name, include_str!(concat!("../../tests/fixtures/async/coro/", $name, ".oir")), $settles)
+        };
+    }
+    let cases = [
+        // One close, one cache slot: full or empty from the two branches.
+        slotted!("d26-branch-temporary", 1),
+        // The failure close (both slots empty) and the normal close (both full or both empty), task first.
+        slotted!("d26-branch-spawn", 4),
+        // The handler close (the slot empty or full) and the normal close.
+        slotted!("d26-shared-handler", 2),
+        // S2's close settles nothing of S1; S1's close settles its one slot.
+        slotted!("d26-outer-slot-across-inner-close", 1),
+        // Three closes of two slots each.
+        slotted!("d26-two-futures-order", 6),
+        // A slot saved and resumed across the await, and across await.unwind on the failure path: two closes.
+        slotted!("d26-slot-across-await", 4),
+    ];
+    for (name, source, settles) in cases {
+        let output = lowered(name, source);
+        let body = output.functions.get(function_id(&output, "main")).unwrap().body.as_ref().unwrap();
+        let count = body.insts.iter()
+            .filter(|(_, inst)| matches!(inst.op, Operation::Cleanup(CleanupOp::Settle { .. }))).count();
+        assert_eq!(count, settles, "{name}\n{}", text::print(&output).unwrap());
+    }
+}
+
+/// D26 (#856): Low refuses a close that does not settle every slot of its scope. Each edit of a slot fixture
+/// leaves a slot out of every schedule of its owner, or gives a close an empty of another scope.
+#[test]
+fn duty_slot_closes_settle_every_slot_of_their_scope() {
+    let spawn = include_str!("../../tests/fixtures/async/coro/d26-branch-spawn.oir");
+    let outer = include_str!("../../tests/fixtures/async/coro/d26-outer-slot-across-inner-close.oir");
+    // The two slots of S1 against schedules of one duty each: the failure close has an empty cache slot left.
+    let short = edited(&edited(spawn, "duties [%27, %26]", "duties [%27]"), "duties [%25, %24]", "duties [%25]");
+    let error = lower_cleanup(parsed(&short), &LowOptions::default()).unwrap_err();
+    assert!(error.to_string().contains("a close does not settle every slot of its scope"), "{error}");
+    // An empty of S2 made after S2 closed reaches the close of S1, whose schedule names it: S1's close settles
+    // only the slots of S1, and the schedule position stays untaken.
+    let stray = edited(&edited(outer, "    %2: own = own.empty",
+        "    %17: cache-state = duty.empty owner S2\n    %2: own = own.empty"), "duties [%8]", "duties [%8, %17]");
+    let error = lower_cleanup(parsed(&stray), &LowOptions::default()).unwrap_err();
+    assert!(error.to_string().contains("a close does not settle every slot of its scope"), "{error}");
+}
+
 /// Plan §3.4: Own input stays synchronous; its async rejections did not move.
 #[test]
 fn own_input_keeps_the_synchronous_rejections() {

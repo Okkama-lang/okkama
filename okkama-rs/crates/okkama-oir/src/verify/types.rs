@@ -258,6 +258,15 @@ impl Checker<'_, '_> {
     fn service(&mut self, value: ValueId, service: ServiceType) -> Checked<()> {
         self.expect(value, Type::Service(service))
     }
+    /// D26 (#856): duty slots (`duty.empty`, the slot of `fut.new`, the task slot of `fut.spawn`) are tokens, so
+    /// they exist only where duties are tokens. Own keeps a duty in its owner state (D12).
+    fn duty_slots(&mut self, valid: bool, message: &str) {
+        if matches!(self.module.profile, Profile::Coro | Profile::Low) {
+            self.require(valid, message);
+        } else {
+            self.report(R::B91, "duty slots are tokens of coro and low; own keeps a duty in its owner state (D26)");
+        }
+    }
     fn scope(&mut self, value: ValueId) -> Checked<()> {
         let valid = matches!(self.ty(value)?, Type::Service(ServiceType::Scope(_)));
         self.require(valid, "expected scope state");

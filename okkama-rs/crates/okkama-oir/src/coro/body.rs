@@ -290,7 +290,8 @@ impl Lowering<'_, '_> {
         let insts: Vec<_> = self.body.blocks.iter().flat_map(|(_, block)| block.insts.clone()).collect();
         for inst in insts {
             self.budget.step(1)?;
-            let Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state) }) = self.body.insts.get(inst)?.op
+            let Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state), task_slot: None }) =
+                self.body.insts.get(inst)?.op
             else {
                 continue;
             };
@@ -308,7 +309,8 @@ impl Lowering<'_, '_> {
             let cache = self.value(cache_ty, Definition::InstResult { inst, index: 0 }, ValueFacts::Service)?;
             let task = self.value(task_ty, Definition::InstResult { inst, index: 1 }, ValueFacts::Service)?;
             let instruction = self.body.insts.get_mut(inst)?;
-            instruction.op = Operation::Async(AsyncOp::FutureSpawn { future, state: Some(duty.token) });
+            let spawn = AsyncOp::FutureSpawn { future, state: Some(duty.token), task_slot: None };
+            instruction.op = Operation::Async(spawn);
             instruction.results = vec![cache, task];
             visit::rewrite_uses(&mut self.body, &mut repair::Replace::single(moved, state));
             duty.token = cache;

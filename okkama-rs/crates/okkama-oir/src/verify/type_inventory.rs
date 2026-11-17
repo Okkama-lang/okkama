@@ -236,6 +236,7 @@ pub(super) const TYPE_RULES: &[&str] = &[
     "fut.done",
     "fut.cancelled",
     "fut.new",
+    "duty.empty",
     "fut.publish",
     "await.unwind",
     "service.materialize",

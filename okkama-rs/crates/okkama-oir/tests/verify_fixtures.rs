@@ -1163,3 +1163,70 @@ fn high_still_rejects_future_state_operations() {
     assert_eq!(report.failure, VerifyFailure::Rejected);
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == "OIR2-H6"), "{report:?}");
 }
+
+/// D26 (#856): the negatives of §12.2 of the duty-slot memo beyond the two canonical ones of coro-matrix.tsv. Each
+/// edits a positive slot fixture and names the rule, and a part of its message, that must reject the result.
+#[test]
+fn d26_duty_slot_negatives() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async/coro");
+    let outer = "d26-outer-slot-across-inner-close.oir";
+    let spawn = "d26-branch-spawn.oir";
+    // (fixture, text edits, rule, a part of its message)
+    type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str, &'a str);
+    let cases: &[Case] = &[
+        // R-1: fut.new fills an empty slot of a scope other than its owner.
+        (outer, &[("%13: cache-state = duty.empty owner S1", "%13: cache-state = duty.empty owner S2")],
+            "d26-slot-occupied", "fut.new fills an empty cache slot of its owner"),
+        // R-1: fut.spawn fills an empty task slot of a scope other than its Future's owner.
+        (outer, &[
+            ("    %16: closed = scope.end",
+                "    %17: task-state = duty.empty owner S2, task true\n    %16: closed = scope.end"),
+            ("    %10: deps = deps.of %7\n",
+                "    %10: deps = deps.of %7\n    \
+                 (%18: cache-state, %19: task-state) = fut.spawn %7, state %8, task_slot %17\n"),
+            ("duties [%8]", "duties [%19, %18]"),
+        ], "d26-slot-occupied", "fut.spawn fills an empty task slot of its Future's owner"),
+        // The kinds do not mix: a task slot is not a cache slot.
+        (spawn, &[("owner S1, slot %24", "owner S1, slot %25")], "OIR2-T1", ""),
+        // R-2: a spawn forwards the cache duty of the Future it starts, never an empty slot.
+        (spawn, &[
+            ("    %25: task-state", "    %30: cache-state = duty.empty owner S1\n    %25: task-state"),
+            ("state %9, task_slot %25", "state %30, task_slot %25"),
+        ], "d24-spawn-not-fresh", "fut.spawn forwards the cache duty"),
+        // R-3: a close settles every slot of its scope, the empty ones included.
+        (spawn, &[("duties [%25, %24]", "duties [%24]")], "OIR2-B10.6", "complete, unique service schedule coverage"),
+        // A slot belongs to an open scope.
+        (outer, &[("    %2: own = own.empty",
+            "    %17: task-state = duty.empty owner S2, task true\n    %2: own = own.empty")],
+            "OIR2-B10.6", "duty.empty names a slot of a scope that is not open"),
+        // D16: the schedules of one owner list its duties in one order, also a duty whose slot is full on some
+        // paths only (the normal close lists the first Future, then the second's slot).
+        ("d26-two-futures-order.oir", &[("duties [%9, %39]", "duties [%39, %9]")], "OIR2-B10.6",
+            "list its duties in one order"),
+        // R-2 after a merge: the joined slot is empty on one edge, so absorbing it moves an empty duty there.
+        ("d26-branch-temporary.oir", &[("    %11: int = const 0\n",
+            "    %11: int = const 0\n    %17: own = own.empty\n    %18: own = service.absorb %17, %16\n")],
+            "d26-empty-duty-moved", "service.absorb consumes"),
+        // R-1 does not replace single occupancy of a site: a fresh empty in every iteration of a loop of the owner
+        // still meets the duty the owner holds from the iteration before.
+        ("d26-branch-temporary.oir", &[
+            ("    ^b2 in S1:\n", "    ^b2 in S1:\n    %17: cache-state = duty.empty owner S1\n"),
+            ("owner S1, binding b0, slot %13", "owner S1, binding b0, slot %17"),
+            ("    br ^b4(%9, %8)", "    br ^b1(%9)"),
+        ], "OIR2-B10.6", "reaches its owner again while the owner holds its earlier duty"),
+        // One empty slot filled twice: the second fill uses a consumed token.
+        ("d26-two-futures-order.oir", &[("owner S1, slot %30", "owner S1, slot %24")], "OIR2-B2.1",
+            "linear carrier is not available on every reaching path"),
+    ];
+    for (fixture, edits, rule, message) in cases {
+        let mut source = fs::read_to_string(root.join(fixture)).unwrap();
+        for (from, to) in *edits {
+            assert_eq!(source.matches(from).count(), 1, "{fixture}: {from}");
+            source = source.replacen(from, to, 1);
+        }
+        let module = text::parse(&source).unwrap_or_else(|error| panic!("{fixture}: {error}\n{source}"));
+        let report = fixture_result(&module, ErrorPolicy::All).unwrap_err();
+        assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule.as_str() == *rule
+            && diagnostic.message.contains(message)), "{fixture} {edits:?}: {report:?}");
+    }
+}

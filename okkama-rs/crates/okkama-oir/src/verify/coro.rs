@@ -207,7 +207,7 @@ fn spawn_fresh(module: &Module, function: FuncId, body: &Body, state: &mut State
             let Ok(inst) = body.insts.get(instruction) else {
                 continue;
             };
-            let Operation::Async(AsyncOp::FutureSpawn { future, state: forwarded }) = &inst.op else {
+            let Operation::Async(AsyncOp::FutureSpawn { future, state: forwarded, .. }) = &inst.op else {
                 continue;
             };
             // Ruling PR-E: only the duty form requires freshness. High's `fut.spawn %f` may name any Future: own keeps

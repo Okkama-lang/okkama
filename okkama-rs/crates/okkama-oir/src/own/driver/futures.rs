@@ -101,7 +101,7 @@ impl Driver<'_, '_> {
         let binding = self.future_bindings.get(original).into_iter().flatten().copied()
             .find(|binding| self.high.bindings.get(*binding).is_ok_and(|data| data.scope == owner));
         point = self.emit(point, Operation::Async(AsyncOp::FutureNew {
-            packet, deps, owner_state, environment, result, owner, binding,
+            packet, deps, owner_state, environment, result, owner, binding, slot: None,
         }))?;
         let future = point.result(SlotName::Value)?;
         // A temporary Future has no use but its take: naming its deps would be another use of
@@ -123,7 +123,8 @@ impl Driver<'_, '_> {
     /// Any other Future (a binding, a role slot's or an action value's result, a synchronous call's: #766) gets
     /// `fut.spawn.bound %f` (ruling PR-E): it starts the Future if it is cold and registers it, and changes no duty.
     pub(super) fn spawn_future(&mut self, point: Landing, instruction: &Instruction) -> Result<Landing, OwnError> {
-        let Operation::Async(AsyncOp::FutureSpawn { future: original, state: None }) = instruction.op else {
+        let Operation::Async(AsyncOp::FutureSpawn { future: original, state: None, task_slot: None }) = instruction.op
+        else {
             return Err(flow_error("expected High's fut.spawn"));
         };
         let future = point.env.value(original)?.value;
@@ -132,7 +133,7 @@ impl Driver<'_, '_> {
             return self.emit(point, Operation::Async(AsyncOp::FutureSpawnBound { future }));
         };
         let state = point.env.state(owner)?;
-        self.emit(point, Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state) }))
+        self.emit(point, Operation::Async(AsyncOp::FutureSpawn { future, state: Some(state), task_slot: None }))
     }
 
     /// Whether the High instruction just before the current one, in the same block, is the async call that created

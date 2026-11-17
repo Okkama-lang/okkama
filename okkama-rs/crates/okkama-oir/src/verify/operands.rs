@@ -1228,7 +1228,7 @@ impl Checker<'_, '_> {
                     }
                 }
             },
-            AsyncOp::FutureSpawn { future, state } => {
+            AsyncOp::FutureSpawn { future, state, task_slot } => {
                 self.future(*future)?;
                 // D24.1: High names only the Future; own forwards the scope state; coro/low forward the cache duty.
                 match (self.module.profile, state) {
@@ -1237,12 +1237,17 @@ impl Checker<'_, '_> {
                     (Profile::Own, Some(state)) => self.scope(*state)?,
                     _ => return Err(TypeCheckError),
                 }
+                // D26 (#856): the empty task slot the spawn fills, beside the cache duty it forwards.
+                if let Some(task_slot) = task_slot {
+                    self.service(*task_slot, ServiceType::TaskState)?;
+                    self.duty_slots(state.is_some(), "fut.spawn takes a task slot only with its cache duty");
+                }
             }
             // PR-E: the Future only (High refuses the form by H6: it names every spawn `fut.spawn %f`).
             AsyncOp::FutureSpawnBound { future } => { self.future(*future)?; }
             AsyncOp::FutureCancel { future }
             | AsyncOp::FutureDone { future } | AsyncOp::FutureCancelled { future } => { self.future(*future)?; }
-            AsyncOp::FutureNew { environment, packet, deps, owner, owner_state, result, .. } => {
+            AsyncOp::FutureNew { environment, packet, deps, owner, owner_state, result, slot, .. } => {
                 match environment {
                     FutureEnvironment::Deferred { function, arguments, descriptors }
                     | FutureEnvironment::External { function, arguments, descriptors } => {
@@ -1281,7 +1286,14 @@ impl Checker<'_, '_> {
                 self.service(*packet, ServiceType::Own)?;
                 self.service(*deps, ServiceType::Deps)?;
                 self.service(*owner_state, ServiceType::Scope(*owner))?;
+                // D26 (#856): the empty cache slot the new duty fills.
+                if let Some(slot) = slot {
+                    self.service(*slot, ServiceType::CacheState)?;
+                    self.duty_slots(true, "");
+                }
             }
+            // D26 (#856): the index pass checks that the scope exists and belongs to this function.
+            AsyncOp::DutyEmpty { .. } => self.duty_slots(true, ""),
             AsyncOp::FuturePublish { frame, outcome } => {
                 self.frame(*frame)?;
                 match outcome {
