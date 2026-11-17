@@ -31,9 +31,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   completion's result to the origins' own Future type. A request that started the stream
   keeps its receiver after its release: it is what hears the waiting origins settle, so a
   stream first read inside a helper still hands its later origins to the next request. The
-  conformance cases that consume the stream in a `map` body wait for #849; a helper that
-  binds a completion with `let` inside a loop or a branch waits for #848, and the same loop
-  over a local stream in `main` for #805.
+  refusal closes the returned packet under its own failure, so a failing destroy is linked to
+  it and a stop during the close stays a stop (review of steps 3–4). `AllFutures` over byte
+  outcomes is covered by a test. The conformance cases that consume the stream in a `map`
+  body wait for #849; a helper that binds a completion with `let` inside a loop or a branch
+  waits for #848, and the same loop over a local stream in `main` for #805.
 - **Champ: `AllFutures` (#810, G1 step 3).** `AllFutures.results` now runs on Champ. Its
   `Sequencing<T>` result is made by a helper that the compiler generates, `Wrap`. `Wrap`
   turns the array of the members' outcomes into the role through the program's own array

@@ -307,3 +307,6 @@ mod scalar_tests;
 
 #[cfg(test)]
 mod async_tests;
+
+#[cfg(test)]
+mod streams_tests;

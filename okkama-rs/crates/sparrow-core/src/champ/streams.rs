@@ -6,13 +6,17 @@
 //! Reading the origins calls the sequence's `size` and `item` with no driver frame to keep what they return, so a
 //! callee that returns obligations (a user sequence whose `item` makes a fresh Future) is refused: its packet is
 //! closed at once and the read fails with a program failure (ruling Q2).
-use super::helpers::{fail, stop};
+use super::helpers::stop;
 use super::*;
 use crate::heap::{self, Payload};
 use crate::primitives::Stream;
-use crate::runtime::{self, Ctx};
+use crate::runtime::{self, Ctx, FailureKind};
 use crate::word::Repr;
 use okkama_sparrow::spb17 as s;
+
+/// The program failure of a stream read whose `item` returned a Future with a duty of its own (ruling Q2, #850).
+pub(crate) const REFUSED_ORIGIN: &str = "FutureCompletions: an origin was returned with a duty of its own; only \
+    origins whose duties stay with their owners can be streamed";
 
 /// The stream of a Champ FutureCompletions, as a heap payload the object's runtime word refers to.
 #[derive(Debug)]
@@ -93,7 +97,10 @@ impl Runtime {
         }
         let register = self.loaded.program.functions[function].params.first()?.0;
         let offset = crate::tasks::REGISTERS + u64::from(register) * 8;
-        Some((offset, crate::tasks::get(frame, offset)))
+        let receiver = crate::tasks::get(frame, offset);
+        // Review of steps 3–4: the word kept is the stream's own object, a FutureCompletions of this program.
+        debug_assert!(self.champ_stream_word(receiver).is_some(), "a listening request's receiver is a stream");
+        Some((offset, receiver))
     }
 
     /// A call with no driver frame to keep what it returns (#810 G1 step 4, ruling Q2): an observation plainly; an
@@ -130,10 +137,7 @@ impl Runtime {
                         Some(post.value)
                     }
                     Ok(false) => {
-                        // Nothing could hold the obligation: close it now, then refuse the read.
-                        let _ = super::cleanup::close_packet(ctx, &mut post.packet, 0);
-                        fail(ctx, crate::Error("FutureCompletions: an origin was returned with a duty of its own; \
-                            only origins whose duties stay with their owners can be streamed".into()));
+                        refuse_origin(ctx, &mut post.packet);
                         None
                     }
                     Err(failure) => {
@@ -150,6 +154,29 @@ impl Runtime {
                 None
             }
             _ => None,
+        }
+    }
+}
+
+/// Refuse a stream read whose callee returned `packet` with a duty in it (ruling Q2): nothing could hold the
+/// obligation, so the packet closes now under the refusal, as `groups::start` closes a refused packet. A failing
+/// destroy links to the refusal as a secondary, and the read fails with the combined failure; a stop during the
+/// close (FATAL, EXHAUSTED) stays a stop, with no catchable failure.
+pub(super) fn refuse_origin(ctx: *mut Ctx, packet: &mut PacketSlot) {
+    let runtime = unsafe { &mut *(*ctx).runtime };
+    let failure = runtime.failure_new(FailureKind::Program(REFUSED_ORIGIN.into()));
+    let roots = runtime.roots.len();
+    runtime.roots.push((failure, Repr::Ref));
+    let closed = super::cleanup::close_packet(ctx, packet, failure);
+    unsafe { &mut *(*ctx).runtime }.roots.truncate(roots);
+    match closed {
+        Ok(combined) => unsafe {
+            (*ctx).failure = combined;
+            (*ctx).status = runtime::FAILED;
+        },
+        Err(_) if matches!(unsafe { (*ctx).status }, runtime::FATAL | runtime::EXHAUSTED) => {}
+        Err(failure) => {
+            stop(ctx, failure);
         }
     }
 }

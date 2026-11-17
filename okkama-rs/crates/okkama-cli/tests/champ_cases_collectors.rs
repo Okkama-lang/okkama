@@ -104,6 +104,12 @@ fn first_successful_skips_failures_until_one_succeeds() {
 
 /// A race on a temporary receiver whose origins return resources: the winner is the awaiting scope's, and both
 /// outcomes are destroyed once, when that scope ends, the loser first, as on Tomato.
+///
+/// Ruling Q3: a loser's outcome stays in its cache until the collector's duty settles. When the winner leaves the
+/// function that awaited the race (`pick() is Res { await Raced(origins: [res("a"), res("b")]).winner(); }`), the
+/// loser goes with that duty to the caller: Champ prints `inner end a / main has a / destroy b / destroy a`, Tomato
+/// destroys `b` before `main has a`. That follows from Q3 and is not a defect (review of steps 3–4, C3); no test pins
+/// Tomato's earlier moment.
 #[test]
 fn a_race_on_a_temporary_receiver_keeps_resource_outcomes_to_the_scope() {
     expect(r#"async main() is int {
@@ -699,4 +705,28 @@ async main() is int {
     0;
 }
 "#, "got a\nleft 1\nmain late\n");
+}
+
+/// AllFutures over byte outcomes: the `Wrap` helper takes a `bytes` value, which the bridge builds from the members'
+/// byte words, the whole range included (review of steps 3–4, C3).
+#[test]
+fn all_futures_over_bytes_keeps_every_byte_value() {
+    expect_program(r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/collect" take AllFutures;
+
+object Bits {
+    Bits();
+    async byte(value is int) is byte { value.byte(); }
+}
+
+async main() is int {
+    let inputs is @Future<byte> = [Bits().byte(7), Bits().byte(200), Bits().byte(0), Bits().byte(255)];
+    let values = await AllFutures(origins: inputs).results();
+    Stdout().writeln(values.size().string() + ": " + values.item(0).string() + " " + values.item(1).string() + " "
+        + values.item(2).string() + " " + values.item(3).string());
+    0;
+}
+"#, "4: 7 200 0 255\n");
 }
