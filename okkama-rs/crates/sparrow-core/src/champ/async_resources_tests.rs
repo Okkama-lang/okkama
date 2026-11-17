@@ -1890,3 +1890,41 @@ fn champ_d25_an_admissible_split_leaves_a_bound_future_s_entry() {
         assert_eq!(selected.services, [Service { holder: f, kind: SERVICE_CACHE, target: None }]);
     }
 }
+
+/// #855 (duty slots): a close settles every slot of its schedule; a slot that holds no duty on this path settles
+/// as 0. The step keeps the schedule's order and count and plans nothing; the full slot after it settles as usual,
+/// and the settlement completes, so the plan follows.
+#[test]
+fn champ_duty_slots_an_empty_slot_settles_to_nothing_in_schedule_order() {
+    let mut runtime = load_r5(false, Engine::Jit);
+    let mut ctx = context(&mut runtime);
+    ctx.entry_frame = frame_pointer!();
+    let mut state = owner(&mut ctx);
+    let inputs = empty(&mut ctx);
+    let f = new_future(&mut ctx, MAKE, &[], &mut state, inputs);
+    let begin = CloseInputs { scope: &mut state, packet: std::ptr::null_mut(), pending: std::ptr::null_mut(),
+        failure: 0, settlements: 0 };
+    let mut cleanup = CleanupSlot::default();
+    assert_eq!(rt_cleanup_begin(&mut ctx, &begin, &mut cleanup), NORMAL);
+    runtime.roots.push((cleanup.record, Repr::Ref));
+    let schedule = runtime.champ_register_schedule(vec![SERVICE_CACHE; 2]);
+    // A second empty step at the same position is out of order: the empty step counted.
+    assert_eq!(rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 0, 0, &mut cleanup), NORMAL);
+    let outcome = rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 0, 0, &mut cleanup);
+    stopped(&mut ctx, outcome, "settlement opened twice");
+    // A fresh close: the empty slot, then the full one, then the plan.
+    let mut state = owner(&mut ctx);
+    let inputs = empty(&mut ctx);
+    let f2 = new_future(&mut ctx, MAKE, &[], &mut state, inputs);
+    let begin = CloseInputs { scope: &mut state, packet: std::ptr::null_mut(), pending: std::ptr::null_mut(),
+        failure: 0, settlements: 0 };
+    assert_eq!(rt_cleanup_begin(&mut ctx, &begin, &mut cleanup), NORMAL);
+    runtime.roots.push((cleanup.record, Repr::Ref));
+    assert_eq!(rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 0, 0, &mut cleanup), NORMAL);
+    assert_eq!(rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 1, f2, &mut cleanup), NORMAL);
+    let plan = runtime.champ_register_cleanup_plan(CleanupPlan { reserve: false, direct: false, may_fail: false });
+    assert_eq!(rt_cleanup_plan(&mut ctx, &mut cleanup, plan, &mut cleanup), NORMAL);
+    // The cold Future of the full slot settled as Cancelled, as without slots.
+    assert_eq!(crate::tasks::get(f2, crate::tasks::STATE), crate::tasks::FAILURE_STATE);
+    let _ = f;
+}

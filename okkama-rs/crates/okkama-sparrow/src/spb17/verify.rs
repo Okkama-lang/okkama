@@ -1252,10 +1252,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(loc_type(f, location)? == *expected, "fut.new argument type mismatch")?;
             }
             input(inputs, Packet)?;
-            for index in inputs + 1..locations.len() - 1 {
+            // Duty slots (#855): the empty version of the Future's slot may follow the owner state.
+            let slot = locations.last().is_some_and(|&location| {
+                matches!(loc_type(f, location), Ok(ProducedType::Service(CacheState)))
+            });
+            let state = locations.len() - 1 - usize::from(slot);
+            require(state > inputs, "fut.new needs its arguments, input packet and owner state")?;
+            for index in inputs + 1..state {
                 input(index, Deps)?;
             }
-            input(locations.len() - 1, ScopeState)?;
+            input(state, ScopeState)?;
             ctx.value = future;
         }
         // PR-E (#791 N1): the bound spawn observes its Future, as a cancel does.
@@ -1556,6 +1562,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         ArrayGet => shape == "ll",
         ScopeBegin => shape == "sb",
         OwnEmpty | DepsEmpty => shape.is_empty(),
+        // The scope that owns the slot (#855).
+        DutyEmpty => shape == "s",
         OwnMove | DepsOf => shape == "l",
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
@@ -2653,4 +2661,10 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
         }
     }
     Ok(())
+}
+
+/// The owner state of a `fut.new`: its last scope-state operand. The duty slot's empty version may follow it (#855).
+pub(crate) fn future_new_state(f: &Function, locations: &[Location]) -> Option<Location> {
+    locations.iter().rev().copied()
+        .find(|&location| matches!(loc_type(f, location), Ok(ProducedType::Service(ServiceKind::ScopeState))))
 }

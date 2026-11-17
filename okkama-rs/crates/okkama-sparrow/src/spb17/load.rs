@@ -45,7 +45,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
             // A Future is a language value: awaiting, cancelling or reading it consumes nothing. Its proof
             // produces a capability, which the take consumes.
-            Await | FutureCancel | FutureDone | FutureCancelled | UniqueCacheProof => false,
+            Await | FutureCancel | FutureDone | FutureCancelled | UniqueCacheProof | DutyEmpty => false,
             AwaitTake => index == 1,
             // D24.1: the cache duty goes in and comes back with the task duty; the Future is a language value.
             FutureSpawn => index == 1,

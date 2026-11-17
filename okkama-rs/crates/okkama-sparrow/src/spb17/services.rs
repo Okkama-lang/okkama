@@ -237,7 +237,9 @@ fn next_carriers(f: &Function, op: Opcode, arguments: &[Argument], ins: &[bool],
     let last = ins.last().copied().unwrap_or(false);
     let operands = locations(arguments);
     match op {
-        ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | UniqueCacheProof => vec![false; outputs.len()],
+        ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | UniqueCacheProof | DutyEmpty => {
+            vec![false; outputs.len()]
+        }
         // An admission makes the state carry what the admitted packet carries.
         OwnAdmit | OwnAccept | OwnBind | OwnRebind => vec![first || last],
         OwnStage => outputs.iter().map(|_| any).collect(),
@@ -267,7 +269,11 @@ fn next_carriers(f: &Function, op: Opcode, arguments: &[Argument], ins: &[bool],
         ExitCommit => outputs.iter().map(|&location| kind(f, location) == Some(ServiceKind::Packet) && first)
             .collect(),
         // The owner state keeps what it carried; the inputs packet goes into the Future.
-        FutureNew => vec![false, false, last],
+        FutureNew => {
+            let state = verify::future_new_state(f, &operands)
+                .and_then(|state| operands.iter().position(|&location| location == state));
+            vec![false, false, state.is_some_and(|index| ins[index])]
+        }
         AwaitUnwind => vec![first, false],
         _ => outputs.iter().map(|_| any).collect(),
     }
@@ -710,7 +716,9 @@ fn next_held(p: &Program, f: &Function, pc: usize, op: Opcode, arguments: &[Argu
             let value = (pc as u32, u32::MAX, 0);
             facts[0].future = Some(value);
             facts[1].token = Some(value);
-            facts[2].entries = read(operands.len() - 1).entries;
+            let state = verify::future_new_state(f, &operands)
+                .and_then(|state| operands.iter().position(|&location| location == state));
+            facts[2].entries = state.map(|index| read(index).entries).unwrap_or_default();
         }
         // An admission adds the packet's entries to the state's (D25.3).
         OwnAdmit | OwnAccept | OwnBind | OwnRebind => {

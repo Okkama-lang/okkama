@@ -648,7 +648,9 @@ impl<'a> Evidence<'a> {
             ExitCommit => self.resolve(locations[0], identity),
             // The owner state keeps its identities: the input packet moves into the Future, and the cache
             // duty is a service token of its own.
-            FutureNew if !identity && slot == 2 => self.resolve(*locations.last()?, false),
+            FutureNew if !identity && slot == 2 => {
+                self.resolve(verify::future_new_state(self.function, &locations)?, false)
+            }
             AwaitUnwind if !identity && slot == 0 => self.resolve(locations[0], false),
             _ => None,
         }
@@ -701,7 +703,9 @@ impl<'a> Evidence<'a> {
                         (_, Some(Resumed::Saved(source))) => return self.query(source, 2),
                         // Call-entry consumes fresh admission, as for an owned entry's packet parameter.
                         (_, Some(Resumed::Start)) => return Some(Inventory::new()),
-                        (Opcode::FutureNew, _) if slot == 2 => return self.query(*locations.last()?, 2),
+                        (Opcode::FutureNew, _) if slot == 2 => {
+                            return self.query(verify::future_new_state(self.function, &locations)?, 2);
+                        }
                         (Opcode::AwaitUnwind, _) if slot == 0 => return self.query(locations[0], 2),
                         _ => {}
                     }

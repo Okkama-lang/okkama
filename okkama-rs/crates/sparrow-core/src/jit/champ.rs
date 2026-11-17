@@ -1271,6 +1271,15 @@ impl Emit<'_, '_> {
                 self.next();
                 return Ok(());
             }
+            // Duty slots (#855): an empty slot holds the zero word, which a close settles to nothing.
+            O::DutyEmpty => {
+                let s::Flow::Next(outputs) = flow else { unreachable!("verified duty.empty flow") };
+                let zero = self.iconst(0);
+                let width = self.width(outputs[0]);
+                self.write(outputs[0], &vec![zero; width]);
+                self.next();
+                return Ok(());
+            }
             O::OwnEmpty => helper = "champ_own_empty",
             O::OwnMove => {
                 helper = "champ_own_move";
