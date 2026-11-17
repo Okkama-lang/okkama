@@ -144,3 +144,71 @@ pub(crate) fn invoke_edges(term: &mut TermKind) -> Vec<&mut InvokeEdge> {
         _ => Vec::new(),
     }
 }
+
+/// Duty slots, S0 check 1 (#854, OIR-2-duty-slots.md §9): the closes of a scope that no `scope.begin` of that scope
+/// dominates, as (block, scope). A slot is defined empty at its scope's begin, so a close without a dominating begin
+/// would leave it without a version.
+#[cfg(test)]
+pub(crate) fn undominated_closes(module: &Module, body: &Body) -> Vec<(BlockId, ScopeId)> {
+    let count = body.blocks.len();
+    let predecessors = predecessors(body);
+    let entry = body.entry.as_u32() as usize;
+    // Iterative dominator sets over block indices; bodies of tests and programs are small enough.
+    let all: std::collections::BTreeSet<usize> = (0..count).collect();
+    let mut dominators: Vec<std::collections::BTreeSet<usize>> = vec![all.clone(); count];
+    dominators[entry] = std::collections::BTreeSet::from([entry]);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in 0..count {
+            if block == entry {
+                continue;
+            }
+            let mut next: Option<std::collections::BTreeSet<usize>> = None;
+            for predecessor in &predecessors[block] {
+                let set = &dominators[predecessor.as_u32() as usize];
+                next = Some(match next {
+                    None => set.clone(),
+                    Some(current) => current.intersection(set).copied().collect(),
+                });
+            }
+            let mut next = next.unwrap_or_default();
+            next.insert(block);
+            if next != dominators[block] {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    let scope_of = |op: &Operation| -> Option<ScopeId> {
+        let Operation::Ownership(OwnershipOp::ScopeEnd { state, .. } | OwnershipOp::ScopeUnwind { state, .. }) = op
+        else {
+            return None;
+        };
+        let ty = body.values.get(*state).ok()?.ty;
+        match module.types.get(ty).ok()? {
+            Type::Service(ServiceType::Scope(scope)) => Some(*scope),
+            _ => None,
+        }
+    };
+    let mut begins: std::collections::BTreeMap<ScopeId, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut closes = Vec::new();
+    for (block, data) in body.blocks.iter() {
+        for inst in &data.insts {
+            let Ok(instruction) = body.insts.get(*inst) else { continue };
+            if let Operation::Ownership(OwnershipOp::ScopeBegin { scope }) = &instruction.op {
+                begins.entry(*scope).or_default().push(block.as_u32() as usize);
+            } else if let Some(scope) = scope_of(&instruction.op) {
+                closes.push((block, scope));
+            }
+        }
+        if let TermKind::InvokeOwn { op, .. } = &data.term.kind
+            && let Some(scope) = scope_of(op) {
+            closes.push((block, scope));
+        }
+    }
+    closes.into_iter().filter(|(block, scope)| {
+        let dominating = &dominators[block.as_u32() as usize];
+        !begins.get(scope).is_some_and(|blocks| blocks.iter().any(|begin| dominating.contains(begin)))
+    }).collect()
+}

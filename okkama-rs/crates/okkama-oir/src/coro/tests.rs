@@ -824,3 +824,17 @@ fn a_loop_body_duty_ends_at_each_close_of_its_owner() {
     assert!(matches!(&error, CoroError::Unsupported { message, .. }
         if message == "a cache duty that reaches its owner's close on some paths only"), "{error:?}");
 }
+
+/// Duty slots, S0 check 1 (#854): in every own input of the coro goldens, each close of a scope is dominated by a
+/// begin of that scope, so a slot defined empty at the begin has a version at every close.
+#[test]
+fn every_close_is_dominated_by_its_scope_begin() {
+    for (name, own, _) in GOLDENS {
+        let module = parsed(own);
+        for (_, function) in module.functions.iter() {
+            let Some(body) = &function.body else { continue };
+            let undominated = graph::undominated_closes(&module, body);
+            assert!(undominated.is_empty(), "{name}: {}: {undominated:?}", function.symbol);
+        }
+    }
+}
