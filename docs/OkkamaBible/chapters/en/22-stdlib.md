@@ -638,3 +638,21 @@ file name to a media type is a table the program chooses:
 `StandardMediaTypes` is the library's built-in table, `SystemMediaTypes`
 reads the host's files and falls back to another table, and the program says
 which one it trusts.
+
+### Numbers: `math`, `statistics`, `locale`
+
+{{example:22-numbers}}
+
+Money is a `Decimal`: adding, subtracting and multiplying keep every digit,
+and the two operations that must drop digits, `divided` and `rounded`, take
+the scale and the `Rounding` as arguments, so no rounding mode is a hidden
+default (`half_even` and `away_from_zero` part ways on `2.5`). A decimal's
+`string()` is its canonical text, one spelling per value (`6.007e1`), made
+for storage and comparison, not for a receipt. Showing an amount to people
+is a separate step through a locale: the same number is `€60,070.00` in
+English and `60.070,00 €` in German, with the grouping, the separator and the
+symbol's place taken from the locale data. `Sample` gives the usual summary
+of a sample (mean, median, deviation, quantiles) and `Pairs` a least-squares
+line. A float has only `round()` to an integer, so the example rounds to
+hundredths by hand. `Numbers.accurate_sum()` keeps the terms a plain float
+sum loses: `1e16 + 1 - 1e16` is `0` in floating point and `1` exactly.

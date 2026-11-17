@@ -19582,6 +19582,77 @@ file name to a media type is a table the program chooses:
 reads the host's files and falls back to another table, and the program says
 which one it trusts.
 
+### Numbers: `math`, `statistics`, `locale`
+
+```okkama
+module bible/numbers v1.0.0;
+
+// Exact money with Decimal and a rounding the program names, shown to people
+// through a locale; a sample's summary statistics and a fitted line; and a
+// float sum that keeps the small terms.
+import "math/decimal" take Decimal;
+import "math/rounding" take Rounding;
+import "math/aggregate" take Numbers;
+import "statistics" take Sample, Pairs;
+import "locale/tag" take Locale;
+import "locale/number" take NumberFormat, NumberNotation, NumberGrouping, NumberSign, NumberPrecision;
+import "locale/currency" take Currency, CurrencyFormat, CurrencyDisplay, LocalizedCurrency;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let total = Decimal("19.99").times(Decimal(3)).plus(Decimal("0.10"));
+    out.writeln("stored " + total.string() + ", split in 7: "
+        + total.divided(by: Decimal(7), scale: 2, rounding: Rounding.half_even).string());
+    out.writeln("2.5 to even: " + Decimal("2.5").rounded(scale: 0, rounding: Rounding.half_even).string()
+        + ", away from zero: " + Decimal("2.5").rounded(scale: 0, rounding: Rounding.away_from_zero).string());
+    let digits = NumberFormat(notation: NumberNotation.standard, grouping: NumberGrouping.automatic,
+        sign: NumberSign.automatic, precision: NumberPrecision(minimum_integer: 1, minimum_fraction: 2,
+            maximum_fraction: 2, rounding: Rounding.half_even));
+    let money = CurrencyFormat(numbers: digits, display: CurrencyDisplay.symbol, accounting: false,
+        currency_digits: true);
+    for ["en", "de"] -> tag {
+        out.writeln(tag + ": " + LocalizedCurrency(amount: total.times(Decimal(1000)), currency: Currency("EUR"),
+            locale: Locale(tag), format: money).string());
+    }
+    let times = Sample(values: [12.0, 15.0, 11.0, 30.0, 14.0, 14.0]);
+    out.writeln("mean " + times.mean().string() + ", median " + times.median().string()
+        + ", deviation " + ((times.deviation() * 100.0).round() / 100.0).string());
+    let fit = Pairs(left: [1.0, 2.0, 3.0, 4.0], right: [2.1, 3.9, 6.2, 7.8]).line();
+    out.writeln("predicted at 5: " + ((fit.prediction(at: 5.0) * 100.0).round() / 100.0).string());
+    let terms = [1.0e16, 1.0, -1.0e16];
+    out.writeln("sum " + Numbers(values: terms).sum().string()
+        + ", accurate " + Numbers(values: terms).accurate_sum().string());
+    0;
+}
+```
+
+Output:
+
+```text
+stored 6.007e1, split in 7: 8.58
+2.5 to even: 2, away from zero: 3
+en: €60,070.00
+de: 60.070,00 €
+mean 16, median 14, deviation 7.01
+predicted at 5: 9.85
+sum 0, accurate 1
+```
+
+Money is a `Decimal`: adding, subtracting and multiplying keep every digit,
+and the two operations that must drop digits, `divided` and `rounded`, take
+the scale and the `Rounding` as arguments, so no rounding mode is a hidden
+default (`half_even` and `away_from_zero` part ways on `2.5`). A decimal's
+`string()` is its canonical text, one spelling per value (`6.007e1`), made
+for storage and comparison, not for a receipt. Showing an amount to people
+is a separate step through a locale: the same number is `€60,070.00` in
+English and `60.070,00 €` in German, with the grouping, the separator and the
+symbol's place taken from the locale data. `Sample` gives the usual summary
+of a sample (mean, median, deviation, quantiles) and `Pairs` a least-squares
+line. A float has only `round()` to an integer, so the example rounds to
+hundredths by hand. `Numbers.accurate_sum()` keeps the terms a plain float
+sum loses: `1e16 + 1 - 1e16` is `0` in floating point and `1` exactly.
+
 # Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This

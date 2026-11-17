@@ -19782,6 +19782,78 @@ UUID, прочитанный из текста, отвечает в канони
 встроенная в библиотеку, `SystemMediaTypes` читает файлы хоста, а чего там нет,
 ищет в запасной таблице, и программа сама говорит, какой из них доверяет.
 
+### Числа: `math`, `statistics`, `locale`
+
+```okkama
+module bible/numbers v1.0.0;
+
+// Exact money with Decimal and a rounding the program names, shown to people
+// through a locale; a sample's summary statistics and a fitted line; and a
+// float sum that keeps the small terms.
+import "math/decimal" take Decimal;
+import "math/rounding" take Rounding;
+import "math/aggregate" take Numbers;
+import "statistics" take Sample, Pairs;
+import "locale/tag" take Locale;
+import "locale/number" take NumberFormat, NumberNotation, NumberGrouping, NumberSign, NumberPrecision;
+import "locale/currency" take Currency, CurrencyFormat, CurrencyDisplay, LocalizedCurrency;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let total = Decimal("19.99").times(Decimal(3)).plus(Decimal("0.10"));
+    out.writeln("stored " + total.string() + ", split in 7: "
+        + total.divided(by: Decimal(7), scale: 2, rounding: Rounding.half_even).string());
+    out.writeln("2.5 to even: " + Decimal("2.5").rounded(scale: 0, rounding: Rounding.half_even).string()
+        + ", away from zero: " + Decimal("2.5").rounded(scale: 0, rounding: Rounding.away_from_zero).string());
+    let digits = NumberFormat(notation: NumberNotation.standard, grouping: NumberGrouping.automatic,
+        sign: NumberSign.automatic, precision: NumberPrecision(minimum_integer: 1, minimum_fraction: 2,
+            maximum_fraction: 2, rounding: Rounding.half_even));
+    let money = CurrencyFormat(numbers: digits, display: CurrencyDisplay.symbol, accounting: false,
+        currency_digits: true);
+    for ["en", "de"] -> tag {
+        out.writeln(tag + ": " + LocalizedCurrency(amount: total.times(Decimal(1000)), currency: Currency("EUR"),
+            locale: Locale(tag), format: money).string());
+    }
+    let times = Sample(values: [12.0, 15.0, 11.0, 30.0, 14.0, 14.0]);
+    out.writeln("mean " + times.mean().string() + ", median " + times.median().string()
+        + ", deviation " + ((times.deviation() * 100.0).round() / 100.0).string());
+    let fit = Pairs(left: [1.0, 2.0, 3.0, 4.0], right: [2.1, 3.9, 6.2, 7.8]).line();
+    out.writeln("predicted at 5: " + ((fit.prediction(at: 5.0) * 100.0).round() / 100.0).string());
+    let terms = [1.0e16, 1.0, -1.0e16];
+    out.writeln("sum " + Numbers(values: terms).sum().string()
+        + ", accurate " + Numbers(values: terms).accurate_sum().string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+stored 6.007e1, split in 7: 8.58
+2.5 to even: 2, away from zero: 3
+en: €60,070.00
+de: 60.070,00 €
+mean 16, median 14, deviation 7.01
+predicted at 5: 9.85
+sum 0, accurate 1
+```
+
+Деньги — это `Decimal`: сложение, вычитание и умножение сохраняют все
+цифры, а две операции, которым приходится отбрасывать цифры, `divided` и
+`rounded`, получают масштаб и `Rounding` аргументами, так что ни один способ
+округления не прячется в умолчании (`half_even` и `away_from_zero` расходятся
+на `2.5`). `string()` у decimal — его канонический текст, одно написание на
+значение (`6.007e1`), сделанный для хранения и сравнения, а не для чека.
+Показ суммы людям — отдельный шаг через локаль: одно и то же число — это
+`€60,070.00` по-английски и `60.070,00 €` по-немецки, а группировка,
+разделитель и место символа берутся из данных локали. `Sample` даёт обычную
+сводку выборки (среднее, медиана, отклонение, квантили), а `Pairs` — прямую
+наименьших квадратов. У float есть только `round()` до целого, поэтому
+пример округляет до сотых вручную. `Numbers.accurate_sum()` сохраняет
+слагаемые, которые теряет обычная сумма float: `1e16 + 1 - 1e16` во
+float — это `0`, а точно — `1`.
+
 # Глава 23. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в
