@@ -963,6 +963,10 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
     if matches!(op, Opcode::ScopeTransfer | Opcode::OwnStage) {
         ctx.between = flags.first().copied().ok_or_else(|| error("missing Same/Between discriminator"))?;
     }
+    // #855: `duty.empty scope S task` is the empty task slot of a spawned Future.
+    if op == Opcode::DutyEmpty {
+        ctx.between = flags.first() == Some(&true);
+    }
     if op == Opcode::ScopeTransfer {
         // An admissible transfer moves only what its source admitted (OIR-2 `admissible(...)`), a held one what its
         // source admitted or bound (`held(...)`, #697); a plain transfer takes no filter.
@@ -1252,10 +1256,16 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
                 require(loc_type(f, location)? == *expected, "fut.new argument type mismatch")?;
             }
             input(inputs, Packet)?;
-            for index in inputs + 1..locations.len() - 1 {
+            // Duty slots (#855): the empty version of the Future's slot may follow the owner state.
+            let slot = locations.last().is_some_and(|&location| {
+                matches!(loc_type(f, location), Ok(ProducedType::Service(CacheState)))
+            });
+            let state = locations.len() - 1 - usize::from(slot);
+            require(state > inputs, "fut.new needs its arguments, input packet and owner state")?;
+            for index in inputs + 1..state {
                 input(index, Deps)?;
             }
-            input(locations.len() - 1, ScopeState)?;
+            input(state, ScopeState)?;
             ctx.value = future;
         }
         // PR-E (#791 N1): the bound spawn observes its Future, as a cancel does.
@@ -1292,6 +1302,9 @@ pub fn result_context(p: &Program, f: &Function, op: Opcode, args: &[Argument]) 
             enforce(matches!(loc_type(f, locations[0])?, ProducedType::Value(Type::Future(_))), FUTURE_TYPES,
                 "fut.spawn needs a Future")?;
             input(1, CacheState)?;
+            if locations.len() == 3 {
+                input(2, TaskState)?;
+            }
         }
         CacheRehome if locations.len() == 3 && loc_type(f, locations[1])? == ProducedType::Service(ScopeState) => {
             // The state form (C-4): the reserve, the owner state and the Future whose entry it holds.
@@ -1556,6 +1569,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         ArrayGet => shape == "ll",
         ScopeBegin => shape == "sb",
         OwnEmpty | DepsEmpty => shape.is_empty(),
+        // The scope that owns the slot (#855).
+        DutyEmpty => shape == "s" || shape == "s?",
         OwnMove | DepsOf => shape == "l",
         OwnJoin => !shape.is_empty() && shape.chars().all(|ch| ch == 'l'),
         OwnAdmit | OwnAccept => shape == "ll",
@@ -1595,7 +1610,8 @@ fn check_arguments(op: Opcode, args: &[Argument]) -> Check {
         // The Future, its take capability and the awaiting scope of the temporary boundary (C5).
         AwaitTake => shape == "lls",
         // The Future and its cache duty (D24.1).
-        FutureSpawn => shape == "ll",
+        // The Future, its cache duty and, with duty slots (#855), the empty version of its task slot.
+        FutureSpawn => shape == "ll" || shape == "lll",
         // PR-E: the Future alone (#791 N1).
         FutureSpawnBound => shape == "l",
         // The exit's destination, the pending reserve and the cache duty with a spawned Future's task duty (C-4,
@@ -2653,4 +2669,10 @@ fn check_successors(p: &Program, f: &Function, pcs: &BTreeMap<u32, usize>) -> Ch
         }
     }
     Ok(())
+}
+
+/// The owner state of a `fut.new`: its last scope-state operand. The duty slot's empty version may follow it (#855).
+pub(crate) fn future_new_state(f: &Function, locations: &[Location]) -> Option<Location> {
+    locations.iter().rev().copied()
+        .find(|&location| matches!(loc_type(f, location), Ok(ProducedType::Service(ServiceKind::ScopeState))))
 }

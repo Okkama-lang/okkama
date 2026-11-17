@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Duty slots, groundwork (#853, S1 #855).** SPB 17 gains `duty.empty` (opcode 88): the
+  empty version of a Future's duty slot. `fut.new` takes it as an optional last operand.
+  The load gate enforces single occupancy and that a duty leaves only a full slot
+  (`SPB_DUTY_SLOT`). It accepts a close that settles a slot that may be empty, or is
+  empty, and the Champ runtime settles a zero duty to nothing in schedule order. Nothing
+  emits the new forms yet: coro does from S3 on, which lifts the "on some paths only"
+  refusals (#805). Loader and runtime tests, each rule mutation-checked; the codecs
+  round-trip the new forms; ABI text D26.
 - **An async helper can bind and await a borrowed Future in a nested scope (#848).** A
   helper whose parameter holds Futures (an array of them, a completion stream) was refused
   at load (SPB_SCHEDULE) when it bound an element with `let` inside a block, an `if` or a

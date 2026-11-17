@@ -1,6 +1,6 @@
 //! Cleanup phase and exactly-once checks over concrete SPB edges.
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 type Check = Result<(), Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,15 +86,31 @@ fn plan_complete(f: &Function, cleanup: &Cleanup) -> Result<bool, Error> {
 }
 
 /// One step of a nonempty schedule: the next duty in order, owned by the closing scope.
-fn settle_duty(p: &Program, f: &Function, origins: &BTreeMap<Location, Option<u32>>, cleanup: &mut Cleanup,
-    schedule: u32, duty: Location) -> Check
+fn settle_duty(p: &Program, f: &Function, origins: &BTreeMap<Location, Option<u32>>,
+    empty: &BTreeMap<Location, BTreeSet<u32>>, cleanup: &mut Cleanup, schedule: u32, duty: Location) -> Check
 {
     let duties = &f.proofs.schedules[schedule as usize].services;
     enforce(cleanup.phase == Phase::Begun && cleanup.schedule.is_none_or(|current| current == schedule),
         suspension::SCHEDULE, "a close settles the duties of one schedule, before its plan")?;
     enforce(duties.get(cleanup.settled as usize) == Some(&duty), suspension::SCHEDULE,
         "each scheduled duty is settled once, in schedule order")?;
+    let close = &f.proofs.closes[cleanup.close as usize];
+    let closing = p.tables.boundaries.get(close.boundary as usize).map(|boundary| boundary.scope);
+    // Duty slots (#855): the empty versions that reach the duty are of the closing scope's slot.
+    if let Some(scopes) = empty.get(&duty) {
+        enforce(closing.is_some_and(|closing| scopes.len() == 1 && scopes.contains(&closing)), suspension::SCHEDULE,
+            "a duty is settled by a scope that does not own its slot")?;
+    }
     let origin = origins.get(&duty).copied().flatten();
+    // A slot that only empty versions reach settles to nothing.
+    if !origins.contains_key(&duty) && empty.contains_key(&duty) {
+        cleanup.schedule = Some(schedule);
+        cleanup.settled += 1;
+        if cleanup.settled as usize == duties.len() {
+            cleanup.phase = Phase::Settled;
+        }
+        return Ok(());
+    }
     let creation = origin.map(|pc| &f.code[pc as usize]);
     let Some(Instruction::Champ { op: Opcode::FutureNew, arguments, .. }) = creation else {
         return Err(violation(suspension::SCHEDULE, "a settled duty has no single fut.new"));
@@ -106,8 +122,6 @@ fn settle_duty(p: &Program, f: &Function, origins: &BTreeMap<Location, Option<u3
     enforce(task(duty) || !task_later, suspension::SCHEDULE,
         "a spawned Future's task duty is settled before its cache duty (D24.2)")?;
     let owner = arguments.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None });
-    let close = &f.proofs.closes[cleanup.close as usize];
-    let closing = p.tables.boundaries.get(close.boundary as usize).map(|boundary| boundary.scope);
     enforce(owner.is_some() && owner == closing, suspension::SCHEDULE,
         "a duty is settled by a scope that does not own it")?;
     let callee = arguments.iter().find_map(|arg| match arg {
@@ -127,6 +141,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
     let mut reserves = vec![None; f.proofs.plans.len()];
     if f.code.is_empty() { return Ok(reserves) }
     let origins = suspension::cache_origins(p, f);
+    let empty = suspension::empty_slots(p, f);
     let admitting = services::admitting_closes(p, f)?;
     let rehome_scopes = services::rehome_scopes(p, f)?;
     let fixed_root = p.functions.iter().position(|function| std::ptr::eq(function, f))
@@ -281,7 +296,7 @@ fn infer(p: &Program, f: &Function, destroy_masks: &[u32]) -> Result<Vec<Option<
                     }).ok_or_else(|| error("missing schedule"))?;
                     let duties = &f.proofs.schedules[schedule as usize].services;
                     if let Some(&duty) = locations.get(1) {
-                        settle_duty(p, f, &origins, &mut cleanup, schedule, duty)?;
+                        settle_duty(p, f, &origins, &empty, &mut cleanup, schedule, duty)?;
                     } else {
                         enforce(duties.is_empty(), suspension::SCHEDULE,
                             "a nonempty schedule is settled duty by duty")?;

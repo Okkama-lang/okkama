@@ -293,6 +293,13 @@ pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut Clean
             if cleanup.settlements != count - index {
                 return Err(error("duty settled out of schedule order"));
             }
+            // #855 (duty slots): an empty slot of a close that paths reach both before and after its Future's
+            // creation holds no duty. The step keeps the schedule's order and count; nothing is planned or released.
+            if duty == 0 {
+                cleanup.settlements -= 1;
+                cleanup.settled = cleanup.settlements == 0;
+                return Ok(());
+            }
             if runtime.champ_cache(duty)?.flags & super::REHOMED != 0 {
                 return Err(error("a cache duty in an exit reserve settles with the reserve"));
             }

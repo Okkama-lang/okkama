@@ -45,10 +45,10 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
             // A Future is a language value: awaiting, cancelling or reading it consumes nothing. Its proof
             // produces a capability, which the take consumes.
-            Await | FutureCancel | FutureDone | FutureCancelled | UniqueCacheProof => false,
+            Await | FutureCancel | FutureDone | FutureCancelled | UniqueCacheProof | DutyEmpty => false,
             AwaitTake => index == 1,
             // D24.1: the cache duty goes in and comes back with the task duty; the Future is a language value.
-            FutureSpawn => index == 1,
+            FutureSpawn => index == 1 || index == 2,
             // PR-E: the bound spawn takes no duty; its Future is a language value.
             FutureSpawnBound => false,
             // Every linear operand: fut.new takes the input packet and the owner state; fut.publish the frame
@@ -372,9 +372,21 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
     // A settled cache releases its Future's outcome or unstarted inputs into the plan, outside the inventory. Only a
     // close that settles a duty (or the entries admitted at run time) can (#851): a close whose schedule is empty,
     // like the close of a loop body's parent scope, releases nothing.
+    // A step whose duty only empty slot versions reach (#855) settles nothing, so it releases nothing either. The
+    // slot analyses run only for a close that has a step with a duty.
+    let mut slots = None;
     let settles = f.code.iter().skip(contract.begin_pc as usize + 1).map_while(|instruction| match instruction {
-        Instruction::Champ { op: Opcode::CleanupSettle, arguments, .. } => Some(arguments.iter()
-            .filter(|arg| matches!(arg, Argument::Location(_))).count() > 1),
+        Instruction::Champ { op: Opcode::CleanupSettle, arguments, .. } => {
+            let duty = arguments.iter().filter_map(|arg| match arg {
+                Argument::Location(location) => Some(*location), _ => None,
+            }).nth(1);
+            Some(duty.is_some_and(|duty| {
+                let (origins, empty) = slots.get_or_insert_with(|| {
+                    (super::suspension::cache_origins(p, f), super::suspension::empty_slots(p, f))
+                });
+                origins.contains_key(&duty) || !empty.contains_key(&duty)
+            }))
+        }
         Instruction::Champ { op: Opcode::CleanupSettleDynamic | Opcode::CleanupDeliverCancel, .. } => {
             Some(matches!(instruction, Instruction::Champ { op: Opcode::CleanupSettleDynamic, .. }))
         }

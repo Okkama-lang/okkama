@@ -26,6 +26,9 @@ pub(crate) const TASK_RECEIPT: &str = "SPB_TASK_RECEIPT";
 /// Each scheduled duty is settled once, in schedule order, by the scope that owns it; a spawned Future's task duty
 /// before its cache duty (D24.2, ABI §6.3).
 pub(crate) const SCHEDULE: &str = "SPB_SCHEDULE";
+/// Duty slots (#855): `fut.new` fills only an empty slot of its own scope, and a duty leaves only a slot that is
+/// surely full.
+pub(crate) const DUTY_SLOT: &str = "SPB_DUTY_SLOT";
 /// `fut.spawn` takes the cache duty its Future's `fut.new` just gave; between them the Future is only observed
 /// (`deps.of`, `fut.done`, `fut.cancelled`, `fut.cancel`) and no edge enters that run (D24.1, `d24-spawn-not-fresh`).
 pub(crate) const SPAWN: &str = "SPB_SPAWN";
@@ -254,11 +257,17 @@ pub(crate) fn check_structure(p: &Program, f: &Function) -> Check {
 /// resumes. `None` marks a token that two creations can reach. A `fut.spawn` passes its cache duty's origin to
 /// both its outputs: the cache duty it gives back and the task duty of the same Future (D24.1), so a task-state
 /// location has an origin exactly when a spawn can reach it.
-pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Option<u32>> {
+/// Where each token location flows, and the seeds: `fut.new` duties with their pc, empty slots with their scope.
+type CacheFlows = (BTreeMap<Location, Vec<Location>>, Vec<(Location, u32)>, Vec<(Location, u32)>);
+
+/// The flows of cache-state and task-state tokens through edges, spawns and frame saves; the `fut.new` seeds; and the
+/// `duty.empty` seeds with their scope (#855).
+fn cache_flows(p: &Program, f: &Function) -> CacheFlows {
     let tracked = |location: Location| matches!(kind(f, location),
         Some(ServiceKind::CacheState | ServiceKind::TaskState));
     let mut flows = BTreeMap::<Location, Vec<Location>>::new();
     let mut seeds = Vec::new();
+    let mut empties = Vec::new();
     let layout = p.frame_layout(f);
     for (pc, instruction) in f.code.iter().enumerate() {
         for edge in allocation::outgoing(instruction) {
@@ -273,6 +282,13 @@ pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Opt
         let Instruction::Champ { op, arguments, flow: Flow::Next(outputs) } = instruction else { continue };
         if *op == Opcode::FutureNew && let Some(&cache) = outputs.get(1) {
             seeds.push((cache, pc as u32));
+        }
+        if *op == Opcode::DutyEmpty
+            && let (Some(&slot), Some(scope)) = (outputs.first(), arguments.iter().find_map(|arg| match arg {
+                Argument::Scope(id) => Some(*id), _ => None,
+            }))
+        {
+            empties.push((slot, scope));
         }
         if *op == Opcode::FutureSpawn && let Some(&cache) = locations(arguments).get(1) {
             flows.entry(cache).or_default().extend(outputs.iter().copied().filter(|&output| tracked(output)));
@@ -291,6 +307,37 @@ pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Opt
             }
         }
     }
+    (flows, seeds, empties)
+}
+
+/// Duty slots (#855): the cache-state locations that an empty slot version (`duty.empty`) can reach, with the scopes
+/// of the slots that reach each. An empty definition is the bottom of `cache_origins`: a location that a `fut.new`
+/// and an empty version both reach has that `fut.new` as its origin and may be empty at run time.
+pub(crate) fn empty_slots(p: &Program, f: &Function) -> BTreeMap<Location, BTreeSet<u32>> {
+    let (flows, _, empties) = cache_flows(p, f);
+    let mut reach = BTreeMap::<Location, BTreeSet<u32>>::new();
+    let mut work = VecDeque::new();
+    for (location, scope) in empties {
+        if reach.entry(location).or_default().insert(scope) {
+            work.push_back(location);
+        }
+    }
+    while let Some(location) = work.pop_front() {
+        let scopes = reach[&location].clone();
+        for &destination in flows.get(&location).into_iter().flatten() {
+            let entry = reach.entry(destination).or_default();
+            let before = entry.len();
+            entry.extend(&scopes);
+            if entry.len() != before {
+                work.push_back(destination);
+            }
+        }
+    }
+    reach
+}
+
+pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Option<u32>> {
+    let (flows, seeds, _) = cache_flows(p, f);
     let mut origin = BTreeMap::<Location, Option<u32>>::new();
     let mut work = VecDeque::new();
     for (location, pc) in seeds {
@@ -411,17 +458,23 @@ pub(crate) fn check_flow(p: &Program, f: &Function) -> Check {
         enforce(!origins.contains_key(location), TASK_RECEIPT,
             "one location holds an await's task and a spawned task's duty")?;
     }
+    let empty = empty_slots(p, f);
+    check_duty_slots(f, &origins, &empty)?;
     for instruction in &f.code {
         let Instruction::Champ { op, arguments, .. } = instruction else { continue };
         for (index, location) in locations(arguments).into_iter().enumerate() {
-            let spawned = kind(f, location) == Some(ServiceKind::TaskState) && origins.contains_key(&location);
-            if spawned {
+            let task = kind(f, location) == Some(ServiceKind::TaskState);
+            let spawned = task && origins.contains_key(&location);
+            // #855: an empty task slot is a duty slot too, which a spawn fills.
+            let slot = task && empty.contains_key(&location);
+            if spawned || slot {
                 // The duty is saved across suspensions, settled by its owner's close, or leaves with its cache
                 // duty through a rehome or an absorb (D24.2, C-4, D25.2).
                 let duty = match op {
                     Opcode::FrameSave | Opcode::ServiceAbsorb => index > 0,
                     Opcode::CleanupSettle => index == 1,
                     Opcode::CacheRehome => index == 2,
+                    Opcode::FutureSpawn => !spawned && index == 2,
                     _ => false,
                 };
                 enforce(duty, TASK_RECEIPT, &format!("a spawned task's duty reaches {}", op.name()))?;
@@ -462,6 +515,61 @@ pub(crate) fn check_flow(p: &Program, f: &Function) -> Check {
                 return Err(violation(ROOTS_SUSPEND, format!(
                     "{location:?} lives across the suspension at pc {site} outside the frame")));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Duty slots (#855, OIR-2-duty-slots.md R-1, R-2): a `fut.new` with a slot operand fills a slot that only empty
+/// versions of its own scope reach (single occupancy); a consumer of a cache duty (a spawn, the token form of a
+/// rehome, an absorb) takes a token that no empty version reaches, so it never moves an empty duty.
+fn check_duty_slots(f: &Function, origins: &BTreeMap<Location, Option<u32>>,
+    empty: &BTreeMap<Location, BTreeSet<u32>>) -> Check
+{
+    for instruction in &f.code {
+        let Instruction::Champ { op, arguments, .. } = instruction else { continue };
+        let operands = locations(arguments);
+        let scope = arguments.iter().find_map(|arg| match arg { Argument::Scope(id) => Some(*id), _ => None });
+        match op {
+            Opcode::FutureNew => {
+                let cache = |location: &&Location| kind(f, **location) == Some(ServiceKind::CacheState);
+                let Some(&slot) = operands.last().filter(cache) else { continue };
+                enforce(!origins.contains_key(&slot), DUTY_SLOT, "fut.new fills a slot that a Future may occupy")?;
+                let scopes = empty.get(&slot);
+                let own = scopes.is_some_and(|scopes| {
+                    scope.is_some_and(|scope| scopes.len() == 1 && scopes.contains(&scope))
+                });
+                enforce(own, DUTY_SLOT, "fut.new fills a slot of another scope, or one with no empty version")?;
+            }
+            Opcode::FutureSpawn | Opcode::ServiceAbsorb => {
+                if let Some(duty) = operands.get(1) {
+                    enforce(!empty.contains_key(duty), DUTY_SLOT, "a duty leaves a slot that may be empty")?;
+                }
+                // The spawn fills its Future's task slot as fut.new fills the cache slot: of the Future's owner.
+                if *op == Opcode::FutureSpawn && let Some(&slot) = operands.get(2) {
+                    let owner = operands.get(1).and_then(|cache| origins.get(cache).copied().flatten())
+                        .and_then(|pc| match &f.code[pc as usize] {
+                            Instruction::Champ { arguments, .. } => arguments.iter().find_map(|arg| match arg {
+                                Argument::Scope(id) => Some(*id), _ => None,
+                            }),
+                            _ => None,
+                        });
+                    enforce(!origins.contains_key(&slot), DUTY_SLOT,
+                        "fut.spawn fills a task slot that a task may occupy")?;
+                    enforce(empty.get(&slot).is_some_and(|scopes| owner.is_some_and(|owner| scopes.len() == 1
+                        && scopes.contains(&owner))), DUTY_SLOT,
+                        "fut.spawn fills a task slot of another scope, or one with no empty version")?;
+                }
+            }
+            Opcode::CacheRehome => {
+                // The token form: the cache duty and, for a spawned Future, its task duty (D24.1).
+                let tokens = operands.iter().skip(1).filter(|&&location| matches!(kind(f, location),
+                    Some(ServiceKind::CacheState | ServiceKind::TaskState)));
+                for duty in tokens {
+                    enforce(!empty.contains_key(duty), DUTY_SLOT, "a duty leaves a slot that may be empty")?;
+                }
+            }
+            _ => {}
         }
     }
     Ok(())

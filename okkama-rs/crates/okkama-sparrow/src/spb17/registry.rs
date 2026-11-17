@@ -132,6 +132,8 @@ registry! {
     85 => ServiceMaterialize, "service.materialize";
     86 => ServiceAbsorb, "service.absorb";
     87 => FutureSpawnBound, "fut.spawn.bound";
+    // Duty slots (#855, OIR-2-duty-slots.md): the empty version of a Future's duty slot in its scope.
+    88 => DutyEmpty, "duty.empty";
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
     98 => OwnDynamic, "own.dynamic";
@@ -253,6 +255,8 @@ impl Opcode {
             (AwaitTake, Tag::Normal) => valued(),
             // The take capability: a proof position of zero words (draft 3 §14.2).
             (UniqueCacheProof, Tag::Normal) => vec![S(UniqueCache)],
+            // A spawned Future's task slot when flagged (`between`), its cache slot otherwise (#855).
+            (DutyEmpty, Tag::Normal) => vec![S(if context.between { TaskState } else { CacheState })],
             // C-4: the cache duty joins the pending reserve, which continues the exit. The state form (`between`)
             // takes an entry the scope admitted (ABI D25.3) and gives the state back first, as own's form does.
             (CacheRehome, Tag::Normal) if context.between => vec![S(ScopeState), S(Pending)],
