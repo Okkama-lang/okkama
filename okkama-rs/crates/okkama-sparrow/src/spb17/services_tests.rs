@@ -632,6 +632,25 @@ fn a_creation_thunk_takes_entries_only_when_its_created_body_can() {
     services::call_input(&accepting, &accepting.functions[CALLER as usize], op, arguments, &carried).unwrap();
 }
 
+/// #863 (ruling PR-N2, third amendment): `deps.join` retains every deps value it joins, a proof dependency on each,
+/// as `deps.of` retains its anchor; a union that drops one is refused.
+#[test]
+fn a_deps_join_retains_every_value_it_joins() {
+    let joined = |retained: usize| {
+        let mut b = Body::new("join", EntryAbi::Observation, vec![]);
+        b.f.proofs.entry = Some(EntryContract::default());
+        b.block("entry", &[]);
+        let first = b.emit(O::DepsEmpty, vec![], K::Deps);
+        let second = b.emit(O::DepsEmpty, vec![], K::Deps);
+        let union = b.emit(O::DepsJoin, vec![l(first), l(second)], K::Deps);
+        b.f.proofs.dependencies.push(Dependency { value: union, obligations: [first, second][..retained].to_vec() });
+        b.ret();
+        program(vec![b.finish()], vec![], None)
+    };
+    loads(&joined(2));
+    reject_with(&joined(1), "SPB_STRUCTURE", "deps.join must retain every deps value it joins");
+}
+
 /// #848: an entry packet's entries accepted into a scope (`admitted` false: `own.accept`, the bound journal) or
 /// admitted into it (`own.admit`), then a split of that scope whose selection reaches a Future, admissible when
 /// `filtered`, and the selected packet admitted into a nested scope. Returns the program and the nested close's pc.

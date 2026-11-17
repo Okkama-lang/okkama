@@ -237,7 +237,7 @@ fn next_carriers(f: &Function, op: Opcode, arguments: &[Argument], ins: &[bool],
     let last = ins.last().copied().unwrap_or(false);
     let operands = locations(arguments);
     match op {
-        ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | UniqueCacheProof | DutyEmpty => {
+        ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | DepsJoin | UniqueCacheProof | DutyEmpty => {
             vec![false; outputs.len()]
         }
         // An admission makes the state carry what the admitted packet carries.

@@ -134,6 +134,9 @@ registry! {
     87 => FutureSpawnBound, "fut.spawn.bound";
     // Duty slots (#855, OIR-2-duty-slots.md): the empty version of a Future's duty slot in its scope.
     88 => DutyEmpty, "duty.empty";
+    // #863 (ruling PR-N2, third amendment): the union of deps values; like `deps.of`, a definition with proof
+    // dependencies and no machine storage.
+    89 => DepsJoin, "deps.join";
     96 => InvokeDispatch, "invoke.dispatch";
     97 => InvokeDispatchOwn, "invoke.dispatch.own";
     98 => OwnDynamic, "own.dynamic";
@@ -159,7 +162,7 @@ impl Opcode {
             (ScopeBegin | OwnAdmit | OwnAccept | OwnBind | OwnRebind | DeferRegister, Tag::Normal) => {
                 vec![S(ScopeState)]
             }
-            (DepsOf | DepsEmpty, Tag::Normal) => vec![S(Deps)],
+            (DepsOf | DepsEmpty | DepsJoin, Tag::Normal) => vec![S(Deps)],
             (OwnEmpty | OwnMove | OwnJoin | OwnCreateCommit, Tag::Normal) => vec![S(Packet)],
             (OwnStage, Tag::Normal) => {
                 if context.between { vec![S(ScopeState), S(ScopeState)] } else { vec![S(ScopeState)] }

@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An async role slot takes several fresh arguments (#863).** A creation thunk with more
+  than one owning input stopped with an unsupported-async error. Its Future now depends on the
+  union of their deps through a new read-only operation, `deps.join` (OIR) and opcode 89
+  `deps.join` (SPB 17). A thunk still never restructures its entry packet before `fut.new`
+  (ruling PR-N2, third amendment). The loader requires the union to retain every value it
+  joins. Two fresh resources passed through an async slot now print Tomato's order under
+  Structural and Full verification.
 - **An async role slot takes a fresh argument as a direct async call does (#860).** A call
   through an async role slot (or a bound async action, or an async capability field) reaches
   a creation thunk, which own and the verifier treated as an ordinary call. A fresh resource

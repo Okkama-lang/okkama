@@ -40,7 +40,7 @@ pub(super) fn consumed(f: &Function, op: Opcode, arguments: &[Argument]) -> Vec<
     let between = arguments.first() == Some(&Argument::Flag(true));
     locations.iter().copied().enumerate().filter_map(|(index, location)| {
         let consume = match op {
-            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | InvokeObserve | InvokeDispatch
+            ScopeBegin | OwnEmpty | OwnCreateCommit | DepsOf | DepsEmpty | DepsJoin | InvokeObserve | InvokeDispatch
                 | OrderDispatch
                 | ArrayGet | Fail | Evaluate | Catch | Lookup => false,
             // A Future is a language value: awaiting, cancelling or reading it consumes nothing. Its proof
