@@ -1201,6 +1201,20 @@ fn d26_duty_slot_negatives() {
         // paths only (the normal close lists the first Future, then the second's slot).
         ("d26-two-futures-order.oir", &[("duties [%9, %39]", "duties [%39, %9]")], "OIR2-B10.6",
             "list its duties in one order"),
+        // R-2 after a merge: the joined slot is empty on one edge, so absorbing it moves an empty duty there.
+        ("d26-branch-temporary.oir", &[("    %11: int = const 0\n",
+            "    %11: int = const 0\n    %17: own = own.empty\n    %18: own = service.absorb %17, %16\n")],
+            "d26-empty-duty-moved", "service.absorb consumes"),
+        // R-1 does not replace single occupancy of a site: a fresh empty in every iteration of a loop of the owner
+        // still meets the duty the owner holds from the iteration before.
+        ("d26-branch-temporary.oir", &[
+            ("    ^b2 in S1:\n", "    ^b2 in S1:\n    %17: cache-state = duty.empty owner S1\n"),
+            ("owner S1, binding b0, slot %13", "owner S1, binding b0, slot %17"),
+            ("    br ^b4(%9, %8)", "    br ^b1(%9)"),
+        ], "OIR2-B10.6", "reaches its owner again while the owner holds its earlier duty"),
+        // One empty slot filled twice: the second fill uses a consumed token.
+        ("d26-two-futures-order.oir", &[("owner S1, slot %30", "owner S1, slot %24")], "OIR2-B2.1",
+            "linear carrier is not available on every reaching path"),
     ];
     for (fixture, edits, rule, message) in cases {
         let mut source = fs::read_to_string(root.join(fixture)).unwrap();
