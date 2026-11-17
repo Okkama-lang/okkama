@@ -63,6 +63,11 @@ const GOLDENS: &[(&str, &str, &str)] = &[
     variant!("d857-branch-temporary"),
     variant!("d857-shared-handler"),
     variant!("d857-branch-spawn"),
+    // A suspension between the begin and the creation, a rehome in a slotted scope, a slotted owner that admits
+    // entries at run time (absorbs on both outcomes of a store).
+    variant!("d857-slot-across-await"),
+    variant!("d857-rehome-slotted"),
+    variant!("d857-stored-dynamic-slotted"),
     golden!("p1-sync-owner-spawn"),
     // C-4: a returned spawned Future's rehome takes its task duty with its cache duty (token form, `task`).
     golden!("p1-spawn-returned"),

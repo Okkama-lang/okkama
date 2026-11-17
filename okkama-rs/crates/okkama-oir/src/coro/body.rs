@@ -10,6 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// D26 R-2 (#857): a consumer (a store's absorb, a rehome) moves a duty only out of a slot that is full on every path.
 const R2_MAYBE: &str = "a duty leaves a slot that is full on some paths only (D26 R-2)";
 
+/// The duties each close settles, and the duty token of each slot version they list (D26).
+type Closes = (BTreeMap<Site, Vec<ValueId>>, BTreeMap<ValueId, ValueId>);
+/// Whether a duty is held at each close of its owner: on every path, on some path.
+type HeldAtCloses = Vec<(Site, (bool, bool))>;
+
 /// The owner's cache duty of one Future (C-1) and, for a spawned Future, its task duty (D24.1). `token` is the
 /// cache duty as the spawn forwards it; the task duty settles first (D24.2, §6.3).
 struct Duty {
@@ -1046,7 +1051,7 @@ impl Lowering<'_, '_> {
     /// of every slot: full, empty, or a merge of both. Other scopes keep the form before slots. Returns the closes
     /// and the duty token of each slot version they list.
     fn closes(&mut self, duties: &[Duty], rehomed: &BTreeMap<ValueId, Vec<InstId>>)
-        -> Result<(BTreeMap<Site, Vec<ValueId>>, BTreeMap<ValueId, ValueId>), CoroError> {
+        -> Result<Closes, CoroError> {
         let tokens: Vec<(ValueId, ScopeId)> = duties.iter()
             .flat_map(|duty| duty.tokens().map(|token| (token, duty.scope))).collect();
         let mut slotted = BTreeSet::new();
@@ -1103,7 +1108,7 @@ impl Lowering<'_, '_> {
 
     /// Whether `token`, a duty of `scope`, is held at each close of `scope` (on every path, on some path).
     fn held_at_closes(&mut self, token: ValueId, scope: ScopeId, consumed: &BTreeMap<ValueId, Vec<InstId>>)
-        -> Result<Vec<(Site, (bool, bool))>, CoroError> {
+        -> Result<HeldAtCloses, CoroError> {
         let predecessors = graph::predecessors(&self.body);
         let kills = consumed.get(&token).cloned().unwrap_or_default();
         let (must, may) = self.available(token, &kills, scope, &predecessors)?;
@@ -1133,9 +1138,11 @@ impl Lowering<'_, '_> {
     /// spawn's `task_slot` for a spawned Future's task duty. Returns each duty token's version at each close.
     fn slot_scope(&mut self, scope: ScopeId, duties: &[Duty], consumed: &BTreeMap<ValueId, Vec<InstId>>)
         -> Result<BTreeMap<ValueId, BTreeMap<Site, ValueId>>, CoroError> {
-        let begins: Vec<InstId> = self.body.insts.iter().filter(|(_, inst)| {
-            matches!(inst.op, Operation::Ownership(OwnershipOp::ScopeBegin { scope: begun }) if begun == scope)
-        }).map(|(inst, _)| inst).collect();
+        // The begins in the blocks: an arena entry that no block holds is not an instruction of the body.
+        let begins: Vec<InstId> = self.body.blocks.iter().flat_map(|(_, block)| block.insts.iter().copied())
+            .filter(|inst| self.body.insts.get(*inst).is_ok_and(|inst| {
+                matches!(inst.op, Operation::Ownership(OwnershipOp::ScopeBegin { scope: begun }) if begun == scope)
+            })).collect();
         let mut slots = Vec::new();
         for duty in duties.iter().filter(|duty| duty.scope == scope) {
             let created = self.definer(duty.future)?;
