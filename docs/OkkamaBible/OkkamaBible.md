@@ -19711,13 +19711,12 @@ policy (cost in memory and iterations) and the source of the salt as
 arguments, and `PasswordCheck` compares an attempt with the stored text in
 constant time, so how long the check takes says nothing about how close the
 attempt was. Keys and passwords travel as `SecretBytes`, a resource that
-never shows its bytes when printed and is wiped when it closes. `Hmac` signs a
-message with a key, and `matches` checks a tag, again in constant time.
-`AesGcm` seals data under a nonce that the program draws from an entropy
-source it names; opening checks the tag first, so a single changed byte is
-`AuthenticationFailed`, never a quietly different plaintext. The library
-offers the constructions that are hard to misuse and names the ones it
-does not (no unauthenticated encryption modes).
+never shows its bytes when printed or compared; `close()` overwrites them,
+though a copy the program exported may remain. `Hmac` signs a message with a
+key, and `matches` checks a tag, again in constant time. `AesGcm` seals data
+under a nonce that the program draws from an entropy source it names;
+opening checks the tag first, so a single changed byte is
+`AuthenticationFailed`, never a quietly different plaintext.
 
 ### Packing: `compression`, `archive`
 
