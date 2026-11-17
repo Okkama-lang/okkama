@@ -20133,6 +20133,71 @@ INFO shop.auth: login {"user":"ann","password":"[redacted]"}
 примера не печатает время и номер процесса, поэтому его вывод одинаков при
 каждом запуске.
 
+### Форматы сети: `mail`, `net`
+
+```okkama
+module bible/net v1.0.0;
+
+// The network's formats without the network: a mail message read from its
+// wire form, addresses tested against a network, and the registrable part
+// of a host name from the public suffix list.
+import "mail/message" take ParsedMail;
+import "net/ip" take IpAddress, IpNetwork, IpProperty;
+import "net/endpoint" take HostName;
+import "net/public_suffix" take PublicSuffixList;
+import "encoding/utf" take Utf8Encoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let wire = Utf8Encoded("From: Ada <ada@example.test>\r\nTo: grace@example.test\r\n" +
+        "Subject: Lunch on Thursday?\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" +
+        "Shall we try the new place?\r\n").bytes();
+    let mail = ParsedMail(wire).message();
+    out.writeln(mail.headers().first("From") + " asks: " + mail.headers().first("Subject"));
+    let office = IpNetwork(IpAddress("10.0.0.0"), 8);
+    for ["10.1.2.3", "192.168.1.10", "8.8.8.8"] -> text {
+        let address = IpAddress(text);
+        out.writeln(text + ": in the office " + office.membership(address).string()
+            + ", private " + address.properties().membership(IpProperty.private_network).string());
+    }
+    let suffixes = PublicSuffixList();
+    for ["www.example.co.uk", "ada.github.io", "пример.рф"] -> host {
+        out.writeln(host + " belongs to " + suffixes.registrable(HostName(host)).unicode());
+    }
+    out.writeln("on the wire: " + HostName("пример.рф").ascii());
+    0;
+}
+```
+
+Вывод:
+
+```text
+Ada <ada@example.test> asks: Lunch on Thursday?
+10.1.2.3: in the office true, private true
+192.168.1.10: in the office false, private true
+8.8.8.8: in the office false, private false
+www.example.co.uk belongs to example.co.uk
+ada.github.io belongs to ada.github.io
+пример.рф belongs to пример.рф
+on the wire: xn--e1afmkfd.xn--p1ai
+```
+
+Семейства протоколов состоят из двух половин: форматов, которые являются
+значениями, и сессий, которым нужны соединение и полномочия (глава 21).
+Форматы работают вообще без сети, поэтому их можно тестировать и
+использовать офлайн. Письмо читается из его формы для передачи, вместе с
+концами строк CRLF, а заголовки читаются по имени. Запись идёт через
+`MailMessage(from:, to:, subject:, text:)`, который ставит дату и свежий
+`Message-ID`; тест передаёт свои часы и случайность, чтобы результат был
+постоянным. `IpNetwork` отвечает, лежит ли в ней адрес, а адрес знает свои
+свойства (частный, loopback, для документации и так далее). Список
+публичных суффиксов, зафиксированный в библиотеке, говорит, какую часть
+имени хоста зарегистрировала организация: `example.co.uk` под `co.uk` и
+целиком `ada.github.io`, потому что `github.io` — суффикс, под которым
+регистрироваться может кто угодно. Имя хоста с буквами вне ASCII хранит их
+для людей (`unicode()`) и передаётся как IDNA (`ascii()`).
+
 # Глава 23. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в

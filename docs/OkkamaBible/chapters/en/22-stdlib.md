@@ -727,3 +727,22 @@ the named fields as `[redacted]` before anything reaches the destination
 it wraps, so a password passed in by mistake never reaches the log. The
 example's own destination leaves out the time and the process id, so its
 output is the same on every run.
+
+### The network's formats: `mail`, `net`
+
+{{example:22-net}}
+
+The protocol families come in two halves: the formats, which are values,
+and the sessions, which need a connection and authority (Chapter 21).
+The formats work with no network at all, so they can be tested and used
+offline. A mail message is read from its wire form, CRLF line ends
+included, and its headers are read by name. Writing goes through
+`MailMessage(from:, to:, subject:, text:)`, which stamps the date and a
+fresh `Message-ID`; a test passes its own clock and randomness for a fixed
+result. An `IpNetwork` answers whether an address is inside it, and an
+address knows its properties (private, loopback, documentation and so on).
+The public suffix list, pinned in the library, says which part of a host
+name an organization registered: `example.co.uk` under `co.uk`, and the whole
+of `ada.github.io`, because `github.io` is a suffix under which anyone may
+register. A host name with letters outside ASCII keeps them for people
+(`unicode()`) and travels as IDNA (`ascii()`).

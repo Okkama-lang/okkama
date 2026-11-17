@@ -19929,6 +19929,71 @@ it wraps, so a password passed in by mistake never reaches the log. The
 example's own destination leaves out the time and the process id, so its
 output is the same on every run.
 
+### The network's formats: `mail`, `net`
+
+```okkama
+module bible/net v1.0.0;
+
+// The network's formats without the network: a mail message read from its
+// wire form, addresses tested against a network, and the registrable part
+// of a host name from the public suffix list.
+import "mail/message" take ParsedMail;
+import "net/ip" take IpAddress, IpNetwork, IpProperty;
+import "net/endpoint" take HostName;
+import "net/public_suffix" take PublicSuffixList;
+import "encoding/utf" take Utf8Encoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let wire = Utf8Encoded("From: Ada <ada@example.test>\r\nTo: grace@example.test\r\n" +
+        "Subject: Lunch on Thursday?\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" +
+        "Shall we try the new place?\r\n").bytes();
+    let mail = ParsedMail(wire).message();
+    out.writeln(mail.headers().first("From") + " asks: " + mail.headers().first("Subject"));
+    let office = IpNetwork(IpAddress("10.0.0.0"), 8);
+    for ["10.1.2.3", "192.168.1.10", "8.8.8.8"] -> text {
+        let address = IpAddress(text);
+        out.writeln(text + ": in the office " + office.membership(address).string()
+            + ", private " + address.properties().membership(IpProperty.private_network).string());
+    }
+    let suffixes = PublicSuffixList();
+    for ["www.example.co.uk", "ada.github.io", "пример.рф"] -> host {
+        out.writeln(host + " belongs to " + suffixes.registrable(HostName(host)).unicode());
+    }
+    out.writeln("on the wire: " + HostName("пример.рф").ascii());
+    0;
+}
+```
+
+Output:
+
+```text
+Ada <ada@example.test> asks: Lunch on Thursday?
+10.1.2.3: in the office true, private true
+192.168.1.10: in the office false, private true
+8.8.8.8: in the office false, private false
+www.example.co.uk belongs to example.co.uk
+ada.github.io belongs to ada.github.io
+пример.рф belongs to пример.рф
+on the wire: xn--e1afmkfd.xn--p1ai
+```
+
+The protocol families come in two halves: the formats, which are values,
+and the sessions, which need a connection and authority (Chapter 21).
+The formats work with no network at all, so they can be tested and used
+offline. A mail message is read from its wire form, CRLF line ends
+included, and its headers are read by name. Writing goes through
+`MailMessage(from:, to:, subject:, text:)`, which stamps the date and a
+fresh `Message-ID`; a test passes its own clock and randomness for a fixed
+result. An `IpNetwork` answers whether an address is inside it, and an
+address knows its properties (private, loopback, documentation and so on).
+The public suffix list, pinned in the library, says which part of a host
+name an organization registered: `example.co.uk` under `co.uk`, and the whole
+of `ada.github.io`, because `github.io` is a suffix under which anyone may
+register. A host name with letters outside ASCII keeps them for people
+(`unicode()`) and travels as IDNA (`ascii()`).
+
 # Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This
