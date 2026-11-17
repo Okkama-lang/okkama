@@ -168,12 +168,29 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let coro = o::coro::lower_coro(own.module, &o::coro::CoroOptions::default())
         .map_err(|error| phase("coro", error))?;
     stages.mark("coro");
-    o::verify_coro_with(&coro, &options.verify, context()).map_err(|error| phase("verify_coro", error))?;
+    compile_coro_stages(coro, &options.verify, &catalog, stages)
+}
+
+/// The phases from a Coro module: verify_coro, low, verify_low, SPB 17 and its load check. Hand-written coro
+/// bodies (D26 duty slots, #856) reach Champ through it before coro produces their forms.
+pub fn compile_coro_with(coro: o::Module, mode: o::VerifyMode) -> Result<Vec<u8>, PipelineError> {
+    let limits = if mode == o::VerifyMode::Full { o::verify::VerifyLimits::gate() } else { Default::default() };
+    let verify = o::VerifyOptions { mode, limits, ..o::VerifyOptions::default() };
+    let catalog = P1NativeSummaries::for_module(&coro).map_err(|error| phase("contracts", error))?;
+    compile_coro_stages(coro, &verify, &catalog, Stages::start())
+}
+
+fn compile_coro_stages(
+    coro: o::Module, verify: &o::VerifyOptions, catalog: &P1NativeSummaries, mut stages: Stages,
+) -> Result<Vec<u8>, PipelineError> {
+    let context = || o::VerifyContext { external_contracts: catalog, ..o::VerifyContext::default() };
+    let options = verify;
+    o::verify_coro_with(&coro, options, context()).map_err(|error| phase("verify_coro", error))?;
     stages.mark("verify_coro");
     let low = o::low::lower_cleanup(coro, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
     stages.mark("low");
-    o::verify_low_with(&low, &options.verify, context()).map_err(|error| phase("verify_low", error))?;
+    o::verify_low_with(&low, options, context()).map_err(|error| phase("verify_low", error))?;
     stages.mark("verify_low");
     let layouts = sparrow_oir2::with_composites(&low, || layouts(&low))?;
     let objects = sparrow_oir2::with_composites(&low, || sparrow_oir2::objects(&low, &layouts))

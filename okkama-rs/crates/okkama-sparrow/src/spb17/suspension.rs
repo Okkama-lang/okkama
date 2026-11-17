@@ -314,6 +314,9 @@ fn cache_flows(p: &Program, f: &Function) -> CacheFlows {
 /// of the slots that reach each. An empty definition is the bottom of `cache_origins`: a location that a `fut.new`
 /// and an empty version both reach has that `fut.new` as its origin and may be empty at run time.
 pub(crate) fn empty_slots(p: &Program, f: &Function) -> BTreeMap<Location, BTreeSet<u32>> {
+    if !has_duty_slots(f) {
+        return BTreeMap::new();
+    }
     let (flows, _, empties) = cache_flows(p, f);
     let mut reach = BTreeMap::<Location, BTreeSet<u32>>::new();
     let mut work = VecDeque::new();
@@ -334,6 +337,12 @@ pub(crate) fn empty_slots(p: &Program, f: &Function) -> BTreeMap<Location, BTree
         }
     }
     reach
+}
+
+/// Whether `f` has a `duty.empty` (#855). Without one no location holds an empty slot, every slot rule holds
+/// trivially, and the slot analyses need not run: a load-time fast path for the programs before slots.
+pub(crate) fn has_duty_slots(f: &Function) -> bool {
+    f.code.iter().any(|instruction| matches!(instruction, Instruction::Champ { op: Opcode::DutyEmpty, .. }))
 }
 
 pub(crate) fn cache_origins(p: &Program, f: &Function) -> BTreeMap<Location, Option<u32>> {
