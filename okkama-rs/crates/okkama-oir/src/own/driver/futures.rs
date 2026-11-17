@@ -64,22 +64,9 @@ impl Driver<'_, '_> {
                 }
                 [input] => point.env.value(*input)?.deps
                     .ok_or_else(|| flow_error("a managed thunk input has its deps"))?,
-                _ => {
-                    // Several managed inputs: the external deps of their union, split off the entry packet and
-                    // joined back, as for an offered packet.
-                    let mut parts = vec![];
-                    for original in &managed {
-                        let value = point.env.value(*original)?.value;
-                        parts.push(self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?);
-                    }
-                    let selection = self.body.selections.alloc(SelectionExpr::Union(parts)).map_err(arena)?;
-                    point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet, selection }))?;
-                    let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-                    let deps = point.result(SlotName::ExternalDeps)?;
-                    point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
-                    packet = point.result(SlotName::Packet)?;
-                    deps
-                }
+                // Several managed inputs: a split of the unaccepted entry packet for the deps of their union is
+                // refused by Full (B5.1, "callee must accept"); that waits for a ruling, and end to end for #735.
+                _ => return Err(unsupported_async("a creation thunk with several managed inputs (#735, #860)")),
             };
         } else if !managed.is_empty() {
             // Only the managed inputs are offered: a Future input's cache is borrowed and no selection names it.

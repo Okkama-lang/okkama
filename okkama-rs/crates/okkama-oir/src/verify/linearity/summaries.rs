@@ -46,13 +46,23 @@ impl Engine<'_, '_> {
         };
         let target = target.or_else(|| super::super::summaries::cap_target(self.module, op));
         // Ruling PR-N2 (#860): a call of an async callee is a creation, which borrows a bare Future argument (OIR-2
-        // §10.2), as `fut.new` does: the Future and its cache duty stay with their owner.
-        if self.async_callee(op, target) && call.args.iter().any(|argument| {
-            argument.convention == OperandConvention::Consume
-                && matches!(super::super::later::value_type(self.module, self.body, argument.value),
+        // §10.2), as `fut.new` does: the Future and its cache duty stay with their owner. The callee declares it
+        // borrowed, and the offered packet holds no piece of its duty (in coro and low a duty reaches a packet
+        // through `service.absorb`).
+        if self.async_callee(op, target) {
+            let futures: Vec<_> = call.args.iter().filter(|argument| {
+                matches!(super::super::later::value_type(self.module, self.body, argument.value),
                     Some(Type::Future(_)))
-        }) {
-            self.error(R::B91, "a call of an async callee consumes no bare Future: it borrows it (PR-N2)");
+            }).collect();
+            if futures.iter().any(|argument| argument.convention == OperandConvention::Consume) {
+                self.error(R::B91, "a call of an async callee consumes no bare Future: it borrows it (PR-N2)");
+            }
+            let keys: Vec<Origin> = futures.iter()
+                .filter_map(|argument| before.identities[argument.value.as_u32() as usize]).collect();
+            if let Some(packet) = call.packet && before.tokens[packet.as_u32() as usize].pieces.iter()
+                .any(|piece| piece.holder.is_some_and(|holder| keys.contains(&holder))) {
+                self.error(R::B91, "a call of an async callee offers no bare Future's duty in its packet (PR-N2)");
+            }
         }
         self.call_deps(call, receiver, target, before);
         self.descriptor_arguments(call, target, before);
@@ -649,14 +659,14 @@ impl Engine<'_, '_> {
             // Ruling PR-N2 (#860, OIR-2-async-remaining §6.3b): a creation thunk exports its entry packet whole inside
             // the Future it returns. The packet holds only the fresh part of the arguments that may own, and no bare
             // Future, which its callers borrow (B9.1 at `call_entry`), so it is permitted whole when each of those
-            // arguments is declared taken into the result.
+            // arguments is declared taken whole into the result: a field retention does not cover the entry piece.
             let thunk = self.creation_thunk() && arguments.iter().enumerate().all(|(index, value)| {
                 let ty = self.body.values.get(*value).map(|value| value.ty);
                 ty.is_ok_and(|ty| !self.obligations[ty.as_u32() as usize]
                     || matches!(self.module.types.get(ty), Ok(Type::Future(_))))
                     || summary.parameters.get(index).is_some_and(|effect| {
                     effect.convention == FreshConvention::Take && effect.destination == TransferDestination::Result
-                        && effect.retention.is_some()
+                        && effect.retention.as_ref().is_some_and(|retention| retains_whole(retention, index))
                 })
             });
             for &value in values {
@@ -877,4 +887,13 @@ fn view_candidates(flow: &Flow, view: Origin) -> BTreeSet<Origin> {
 fn creation_key(key: Origin) -> bool {
     matches!(key, Origin::Instruction(..) | Origin::Invoke(..) | Origin::RetiredInstruction(..)
         | Origin::RetiredInvoke(..))
+}
+
+/// Ruling PR-N2 (#860): whether `retention` keeps parameter `index` whole, alone or in a union.
+fn retains_whole(retention: &SummarySelection, index: usize) -> bool {
+    match retention {
+        SummarySelection::Parameter(parameter) => *parameter as usize == index,
+        SummarySelection::Union(items) => items.iter().any(|item| retains_whole(item, index)),
+        _ => false,
+    }
 }

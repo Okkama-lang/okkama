@@ -369,6 +369,18 @@ fn f1_a_creation_thunk_exports_its_entry_only_as_a_taken_input_of_its_future() {
         .position(|effect| effect.convention == ir::FreshConvention::Take)
         .expect("the thunk takes the fresh Res");
     assert_eq!(own.summaries.get(summary).unwrap().parameters[taken].destination, ir::TransferDestination::Result);
+    assert_eq!(own.summaries.get(summary).unwrap().parameters[taken].retention,
+        Some(ir::SummarySelection::Parameter(taken as u16)), "the Res is kept whole");
+
+    // Retaining a field of the Res does not cover the whole entry piece that leaves with the Future.
+    let mut field = own.clone();
+    let res = field.declarations.iter().find(|(_, declaration)| declaration.name.ends_with(".Res"))
+        .map(|(id, _)| id).expect("Res");
+    field.summaries.get_mut(summary).unwrap().parameters[taken].retention =
+        Some(ir::SummarySelection::Field { parameter: taken as u16,
+            field: ir::FieldRef { declaration: res, index: 0 } });
+    let report = full_report(&field);
+    assert!(exports(&report, thunk), "a field retention exports the whole Res: {report:?}");
 
     let mut borrowed = own.clone();
     let effect = &mut borrowed.summaries.get_mut(summary).unwrap().parameters[taken];
@@ -409,4 +421,58 @@ fn f1_a_call_of_an_async_slot_offers_no_futures_duty() {
     methods[0].is_async = true;
     let report = full_report(&changed);
     assert!(reports(&report, ir::verify::RuleId::B91), "{report:?}");
+}
+
+/// An async slot that takes a Future: own borrows the bare Future argument (PR-N2).
+const TAKING: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "object Maker { Maker(); async make(l is string) is Res { Res(l: l); } } ",
+    "role Taking { async take(f is Future<Res>) is int; } ",
+    "object Taker does Taking { Taker(); async take(f is Future<Res>) is int { (await f).n(); } } ",
+    "async main() is int { let t is Taking = Taker(); await t.take(Maker().make(\"x\")); }",
+);
+
+/// Ruling PR-N2 (#860), the packet side of B9.1: in coro a Future's duty reaches a packet through `service.absorb`.
+/// The call of the async slot `Taking.take` borrows its bare Future, so a call packet that absorbed that Future's
+/// cache-state is refused, although the argument stays a borrow.
+#[test]
+fn f1_an_async_slot_call_packet_holds_no_duty_of_its_bare_future() {
+    let mut coro = super::super::async_tests::high_to_coro(super::lower_std(TAKING).unwrap())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let main = coro.functions.iter().find(|(_, function)| function.symbol == "main").map(|(id, _)| id).unwrap();
+    let body = coro.functions.get_mut(main).unwrap().body.as_mut().unwrap();
+    let (call_block, packet) = body.blocks.iter().find_map(|(id, block)| match &block.term.kind {
+        ir::TermKind::InvokeOwn { op, .. } => match &**op {
+            ir::Operation::Call(ir::CallOp::Role { call, .. }) => Some((id, call.packet.unwrap())),
+            _ => None,
+        },
+        _ => None,
+    }).expect("the role call");
+    let ir::Definition::InstResult { inst: empty, .. } = body.values.get(packet).unwrap().def else {
+        panic!("the call packet is an instruction result")
+    };
+    let cache = body.insts.iter().find_map(|(_, instruction)| match instruction.op {
+        ir::Operation::Async(ir::AsyncOp::FutureNew { .. }) => Some(instruction.results[1]),
+        _ => None,
+    }).expect("the Future's cache-state");
+    let ty = body.values.get(packet).unwrap().ty;
+    let absorb = body.insts.alloc(body.insts.get(empty).unwrap().clone()).unwrap();
+    let absorbed = body.values.alloc(ir::ValueData { ty, def: ir::Definition::InstResult { inst: absorb, index: 0 },
+        facts: body.values.get(packet).unwrap().facts.clone() }).unwrap();
+    let instruction = body.insts.get_mut(absorb).unwrap();
+    instruction.results = vec![absorbed];
+    instruction.op = ir::Operation::Async(ir::AsyncOp::ServiceAbsorb { packet, token: cache });
+    let block = body.blocks.get_mut(call_block).unwrap();
+    let at = block.insts.iter().position(|inst| *inst == empty).expect("the empty packet in the call's block") + 1;
+    block.insts.insert(at, absorb);
+    let ir::TermKind::InvokeOwn { op, .. } = &mut block.term.kind else { unreachable!() };
+    let ir::Operation::Call(ir::CallOp::Role { call, .. }) = &mut **op else { unreachable!() };
+    call.packet = Some(absorbed);
+    let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
+    let catalog = super::P1NativeSummaries::for_module(&coro).unwrap();
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    let report = ir::verify::verify_coro_with(&coro, &verify, context).expect_err("the absorbed duty is refused");
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B91
+        && diagnostic.message.contains("in its packet")), "{report:?}");
 }

@@ -28,8 +28,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `fut.new`, so the fresh resource leaves with the Future and is destroyed in the callee's
   body, and a bare Future argument is borrowed and stays with the scope that created it, as on
   a direct call. The verifier lets a creation thunk export its entry only when every owning
-  argument is taken into its result (B5.1), and refuses a call of an async callee that
-  consumes a bare Future (B9.1). The loader reads a thunk's entry as its created body's
+  argument is taken whole into its result (B5.1), and refuses a call of an async callee that
+  consumes a bare Future or offers its duty in the call packet (B9.1). The loader reads a
+  thunk's entry as its created body's
   (`entry_carries`) and checks what its callers give it (`SPB_CALL_INPUT`). Role methods in
   OIR text carry `async`. A fresh Future argument keeps PR-B2's order on both paths: its
   outcome is destroyed at the close of the scope that created it, where Tomato destroys it
