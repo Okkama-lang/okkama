@@ -1,0 +1,5 @@
+https example.org 8443
+/docs/guide/intro
+lang en, v 2
+https://ada@example.org:8443/docs/api/ref
+https://ada@example.org:8443/

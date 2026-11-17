@@ -317,6 +317,7 @@
   - [22.14 Чего стоит стиль](#2214-чего-стоит-стиль)
   - [22.15 Кодеки: по объекту на направление](#2215-кодеки-по-объекту-на-направление)
   - [22.16 Разобранный пример: часовые пояса без хоста](#2216-разобранный-пример-часовые-пояса-без-хоста)
+  - [22.17 Семейства на задачах](#2217-семейства-на-задачах)
 - [Глава 23. Пишем утилиту командной строки](#глава-23-пишем-утилиту-командной-строки)
   - [23.1 Чем утилита обязана пользователю](#231-чем-утилита-обязана-пользователю)
   - [23.2 Командная строка как данные](#232-командная-строка-как-данные)
@@ -19494,6 +19495,144 @@ Okkama берёт у Java встроенную базу и отказывает�
 ввода и обновление тулчейна ради новых правил. Взамен — обещание библиотеки
 в той области, где его труднее всего сдержать: ответ, который не зависит от
 того, где программе довелось выполняться.
+
+## 22.17 Семейства на задачах
+
+Правила этой главы действуют во всей библиотеке. Этот раздел показывает
+семейства по одной задаче на каждое, самой маленькой программой, которая
+делает с ним что-то полезное. Каждое семейство отвечает в той форме, какой
+пользуются люди, и сообщает об отказах собственными именованными ошибками.
+
+### Таблицы: `csv`
+
+```okkama
+module bible/csv v1.0.0;
+
+// CSV with a header: a record is read by column name, and rows are printed
+// back with the quoting the format needs. The dialect (separator, quote,
+// line end) is a value; the default ends lines with CRLF, this one with LF.
+import "csv" take CsvDialect, CsvRecords, CsvString;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let lines = CsvDialect(",", "\"", "\n");
+    let orders = CsvRecords("item,qty,note\ntea,2,\"green, loose\"\ncake,1,\n", lines);
+    let total = orders.reduce(0) -> sum, record { sum + record.int("qty"); };
+    for orders -> record {
+        out.writeln(record.text("item") + " x" + record.int("qty").string() + " [" + record.text("note") + "]");
+    }
+    out.writeln("total " + total.string());
+    let rows is @@string = [["item", "note"], ["tea", "green, loose"], ["quote", "say \"hi\""]];
+    out.write(CsvString(rows, lines).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+tea x2 [green, loose]
+cake x1 []
+total 3
+item,note
+tea,"green, loose"
+quote,"say ""hi"""
+```
+
+`CsvRecords` читает документ с заголовком, и каждая запись отвечает по имени
+столбца (`record.int("qty")`), поэтому программа не считает столбцы.
+`CsvString` пишет строки обратно и берёт в кавычки только то, что нужно: поле
+с запятой и поле с кавычкой, где кавычка удваивается. Диалект (разделитель,
+кавычка, конец строки) — значение, которое передаётся обеим сторонам. По
+умолчанию строки кончаются на CRLF, как в RFC 4180, поэтому документу со
+строками на голом `\n` нужен свой диалект. Испорченный документ отвергается
+целиком: `InvalidCsv` называет смещение, и неполных строк наружу не выходит.
+
+### Адреса: `url`
+
+```okkama
+module bible/url v1.0.0;
+
+// A URL taken apart through its cap, its query read by name, and a relative
+// reference resolved against it (RFC 3986).
+import "url/value" take ParsedUrl;
+import "url/query" take ParsedQuery;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let page = ParsedUrl("https://ada@example.org:8443/docs/guide/intro?lang=en&v=2#start").parts();
+    out.writeln(page::Parts::scheme + " " + (page::Parts::host else "-") + " " + (page::Parts::port else 443).string());
+    out.writeln(page::Parts::path);
+    let query = ParsedQuery(page::Parts::query else "").parameters();
+    out.writeln("lang " + query.text("lang") + ", v " + query.text("v"));
+    out.writeln(page.resolved(ParsedUrl("../api/ref").parts()).string());
+    out.writeln(page.resolved(ParsedUrl("/").parts()).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+https example.org 8443
+/docs/guide/intro
+lang en, v 2
+https://ada@example.org:8443/docs/api/ref
+https://ada@example.org:8443/
+```
+
+`ParsedUrl(text).parts()` разбирает URL, ничего в нём не меняя, а части
+читаются через cap (раздел 12.8): `page::Parts::host` — это
+`Maybe<string>`, потому что у URL может не быть хоста. Запрос — отдельный
+объект, который читают по имени. `resolved` следует RFC 3986: `../api/ref`
+от `/docs/guide/intro` выходит из `guide`, а authority остаётся.
+
+### Байты: дайджесты и кодировки
+
+```okkama
+module bible/bytes v1.0.0;
+
+// A digest is a value of an ordered byte history: hashing in pieces gives the
+// digest of the whole. Encodings carry bytes as text and back.
+import "digest/sha2" take Sha256;
+import "encoding/base64" take Base64Encoded, Base64Decoded;
+import "encoding/hex" take HexEncoded;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Sha256("hello world").hex());
+    let whole = Sha256("abc").hex();
+    let pieces = Sha256().state("ab").state([99.byte()]).hex();
+    out.writeln("pieces give the whole: " + (whole == pieces).string());
+    let data = Utf8Encoded("Okkama!").bytes();
+    let carried = Base64Encoded(origin: data).string();
+    out.writeln("base64 " + carried + ", hex " + HexEncoded(origin: data).string());
+    out.writeln("back: " + Utf8Decoded(Base64Decoded(origin: carried).bytes()).string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+pieces give the whole: true
+base64 T2trYW1hIQ==, hex 4f6b6b616d6121
+back: Okkama!
+```
+
+Дайджест — значение над упорядоченной историей байтов. `state(more)`
+возвращает преемника над удлинённой историей и оставляет исходный дайджест
+неизменным, поэтому хеширование по частям даёт дайджест целого без
+изменяемого хешера. Текст хешируется как UTF-8. Кодировки идут парами, по
+объекту на направление (раздел 22.15): `Base64Encoded` превращает байты в
+текст, `Base64Decoded` — текст обратно в байты. Переход от текста к байтам —
+тоже явный шаг (`Utf8Encoded`); ни одна кодировка не угадывает набор
+символов.
 
 # Глава 23. Пишем утилиту командной строки
 

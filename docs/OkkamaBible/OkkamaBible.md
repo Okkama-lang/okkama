@@ -317,6 +317,7 @@
   - [22.14 What the style costs](#2214-what-the-style-costs)
   - [22.15 Codecs: one object per direction](#2215-codecs-one-object-per-direction)
   - [22.16 A worked example: time zones without the host](#2216-a-worked-example-time-zones-without-the-host)
+  - [22.17 The families on tasks](#2217-the-families-on-tasks)
 - [Chapter 23. Building a CLI tool](#chapter-23-building-a-cli-tool)
   - [23.1 What a tool owes its user](#231-what-a-tool-owes-its-user)
   - [23.2 The command line as data](#232-the-command-line-as-data)
@@ -19295,6 +19296,143 @@ silent adjustment of a gap. The cost is a `try` around conversions of user
 input, and a toolchain update to receive new rules. What it buys is the
 library's promise in a domain where it is hardest to keep: an answer that
 does not depend on where the program happens to run.
+
+## 22.17 The families on tasks
+
+The rules of this chapter hold across the whole library. This section shows
+the families one task at a time, each with the smallest program that does
+something useful with it. Every family answers in the form people use and
+reports its failures as its own named errors.
+
+### Tables: `csv`
+
+```okkama
+module bible/csv v1.0.0;
+
+// CSV with a header: a record is read by column name, and rows are printed
+// back with the quoting the format needs. The dialect (separator, quote,
+// line end) is a value; the default ends lines with CRLF, this one with LF.
+import "csv" take CsvDialect, CsvRecords, CsvString;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let lines = CsvDialect(",", "\"", "\n");
+    let orders = CsvRecords("item,qty,note\ntea,2,\"green, loose\"\ncake,1,\n", lines);
+    let total = orders.reduce(0) -> sum, record { sum + record.int("qty"); };
+    for orders -> record {
+        out.writeln(record.text("item") + " x" + record.int("qty").string() + " [" + record.text("note") + "]");
+    }
+    out.writeln("total " + total.string());
+    let rows is @@string = [["item", "note"], ["tea", "green, loose"], ["quote", "say \"hi\""]];
+    out.write(CsvString(rows, lines).string());
+    0;
+}
+```
+
+Output:
+
+```text
+tea x2 [green, loose]
+cake x1 []
+total 3
+item,note
+tea,"green, loose"
+quote,"say ""hi"""
+```
+
+`CsvRecords` reads a document with a header, and each record answers by
+column name (`record.int("qty")`), so the program never counts columns.
+`CsvString` writes rows back and quotes only what needs quoting: the field
+with a comma, and the field with a quote, whose quote doubles. The dialect
+(separator, quote and line end) is a value passed to both sides. The
+default ends lines with CRLF, as RFC 4180 does, so a document with bare
+`\n` lines needs its own dialect. A malformed document is refused whole:
+`InvalidCsv` names the offset, and no partial rows are ever handed out.
+
+### Addresses: `url`
+
+```okkama
+module bible/url v1.0.0;
+
+// A URL taken apart through its cap, its query read by name, and a relative
+// reference resolved against it (RFC 3986).
+import "url/value" take ParsedUrl;
+import "url/query" take ParsedQuery;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let page = ParsedUrl("https://ada@example.org:8443/docs/guide/intro?lang=en&v=2#start").parts();
+    out.writeln(page::Parts::scheme + " " + (page::Parts::host else "-") + " " + (page::Parts::port else 443).string());
+    out.writeln(page::Parts::path);
+    let query = ParsedQuery(page::Parts::query else "").parameters();
+    out.writeln("lang " + query.text("lang") + ", v " + query.text("v"));
+    out.writeln(page.resolved(ParsedUrl("../api/ref").parts()).string());
+    out.writeln(page.resolved(ParsedUrl("/").parts()).string());
+    0;
+}
+```
+
+Output:
+
+```text
+https example.org 8443
+/docs/guide/intro
+lang en, v 2
+https://ada@example.org:8443/docs/api/ref
+https://ada@example.org:8443/
+```
+
+`ParsedUrl(text).parts()` takes a URL apart without changing it, and the
+parts are read through a cap (Section 12.8): `page::Parts::host` is a
+`Maybe<string>`, because a URL may have no host. The query is a separate
+object, read by name. `resolved` follows RFC 3986: `../api/ref` from
+`/docs/guide/intro` climbs out of `guide`, and the authority stays.
+
+### Bytes: digests and encodings
+
+```okkama
+module bible/bytes v1.0.0;
+
+// A digest is a value of an ordered byte history: hashing in pieces gives the
+// digest of the whole. Encodings carry bytes as text and back.
+import "digest/sha2" take Sha256;
+import "encoding/base64" take Base64Encoded, Base64Decoded;
+import "encoding/hex" take HexEncoded;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Sha256("hello world").hex());
+    let whole = Sha256("abc").hex();
+    let pieces = Sha256().state("ab").state([99.byte()]).hex();
+    out.writeln("pieces give the whole: " + (whole == pieces).string());
+    let data = Utf8Encoded("Okkama!").bytes();
+    let carried = Base64Encoded(origin: data).string();
+    out.writeln("base64 " + carried + ", hex " + HexEncoded(origin: data).string());
+    out.writeln("back: " + Utf8Decoded(Base64Decoded(origin: carried).bytes()).string());
+    0;
+}
+```
+
+Output:
+
+```text
+b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+pieces give the whole: true
+base64 T2trYW1hIQ==, hex 4f6b6b616d6121
+back: Okkama!
+```
+
+A digest is a value over an ordered history of bytes. `state(more)` returns
+a successor over the longer history and leaves the digest it came from
+unchanged, so hashing in pieces gives the digest of the whole without a
+mutable hasher. Text is hashed as UTF-8. The encodings come in pairs, one
+object per direction (Section 22.15): `Base64Encoded` turns bytes into text
+and `Base64Decoded` turns the text back into bytes. Text to bytes is itself
+an explicit step (`Utf8Encoded`); no encoding guesses a character set.
 
 # Chapter 23. Building a CLI tool
 

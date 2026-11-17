@@ -550,3 +550,45 @@ silent adjustment of a gap. The cost is a `try` around conversions of user
 input, and a toolchain update to receive new rules. What it buys is the
 library's promise in a domain where it is hardest to keep: an answer that
 does not depend on where the program happens to run.
+
+## 22.17 The families on tasks
+
+The rules of this chapter hold across the whole library. This section shows
+the families one task at a time, each with the smallest program that does
+something useful with it. Every family answers in the form people use and
+reports its failures as its own named errors.
+
+### Tables: `csv`
+
+{{example:22-csv}}
+
+`CsvRecords` reads a document with a header, and each record answers by
+column name (`record.int("qty")`), so the program never counts columns.
+`CsvString` writes rows back and quotes only what needs quoting: the field
+with a comma, and the field with a quote, whose quote doubles. The dialect
+(separator, quote and line end) is a value passed to both sides. The
+default ends lines with CRLF, as RFC 4180 does, so a document with bare
+`\n` lines needs its own dialect. A malformed document is refused whole:
+`InvalidCsv` names the offset, and no partial rows are ever handed out.
+
+### Addresses: `url`
+
+{{example:22-url}}
+
+`ParsedUrl(text).parts()` takes a URL apart without changing it, and the
+parts are read through a cap (Section 12.8): `page::Parts::host` is a
+`Maybe<string>`, because a URL may have no host. The query is a separate
+object, read by name. `resolved` follows RFC 3986: `../api/ref` from
+`/docs/guide/intro` climbs out of `guide`, and the authority stays.
+
+### Bytes: digests and encodings
+
+{{example:22-bytes}}
+
+A digest is a value over an ordered history of bytes. `state(more)` returns
+a successor over the longer history and leaves the digest it came from
+unchanged, so hashing in pieces gives the digest of the whole without a
+mutable hasher. Text is hashed as UTF-8. The encodings come in pairs, one
+object per direction (Section 22.15): `Base64Encoded` turns bytes into text
+and `Base64Decoded` turns the text back into bytes. Text to bytes is itself
+an explicit step (`Utf8Encoded`); no encoding guesses a character set.
