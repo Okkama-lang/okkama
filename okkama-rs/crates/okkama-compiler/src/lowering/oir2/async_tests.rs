@@ -615,3 +615,49 @@ fn oir2_v5_a_module_that_holds_futures_declares_the_services_protocol_once() {
     assert_eq!(services(&module), []);
 }
 
+
+/// The cleanup targets of the blocks that call `callee` or await, in `main` of `module`.
+fn cleanup_targets(module: &ir::Module, callee: &str) -> (Vec<ir::BlockId>, Vec<ir::BlockId>) {
+    let main = function(module, "main");
+    let body = main.body.as_ref().unwrap();
+    let callee = function_id(module, callee);
+    let target = |block: ir::BlockId| body.blocks.get(block).unwrap().unwind.as_ref().expect("an unwind").target.block;
+    let abandons = |block: ir::BlockId| body.blocks.get(block).unwrap().insts.iter().any(|inst| {
+        matches!(body.insts.get(*inst).unwrap().op, ir::Operation::Collection(ir::CollectionOp::BuilderAbandon { .. }))
+    });
+    let (mut calls, mut awaits) = (vec![], vec![]);
+    for (block, _, instruction) in instructions(main) {
+        match &instruction.op {
+            ir::Operation::Call(ir::CallOp::Direct { function, .. }) if *function == callee => calls.push(target(block)),
+            ir::Operation::Async(ir::AsyncOp::Await { .. }) => awaits.push(target(block)),
+            _ => continue,
+        }
+    }
+    for &cleanup in calls.iter().chain(&awaits) {
+        assert!(abandons(cleanup), "every failing site of the body unwinds through a cleanup that abandons the builder");
+    }
+    (calls, awaits)
+}
+
+/// #849: a `map` body's failing sites share the builder's cleanup until a Future is made; the await after it gets a
+/// cleanup of its own, so the body's close is reached with the Future's duty on all paths or on none (coro).
+#[test]
+fn a_map_body_does_not_share_its_cleanup_across_a_future() {
+    let module = lower(concat!("module app; object Now { Now(); async named(name is string) is string { name; } } ",
+        "async main() is int { let names = (0..2).map() -> index { await Now().named(\"x\" + index.string()); }; ",
+        "names.size(); }"));
+    let (calls, awaits) = cleanup_targets(&module, "app.Now.new#0");
+    let ([call], [awaited]) = (calls.as_slice(), awaits.as_slice()) else { panic!("{calls:?} {awaits:?}") };
+    assert_ne!(call, awaited, "the await after the Future has its own cleanup");
+}
+
+/// Without a Future in the body, its failing sites keep sharing one cleanup (#849 changes nothing there).
+#[test]
+fn a_map_body_without_futures_shares_one_cleanup() {
+    let module = lower(concat!("module app; object Now { Now(); text(n is int) is string { n.string(); } } ",
+        "main() is int { let texts = (0..2).map() -> index { Now().text(index) + Now().text(index + 1); }; ",
+        "texts.size(); }"));
+    let (calls, _) = cleanup_targets(&module, "app.Now.new#0");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0], calls[1], "one cleanup for both calls");
+}

@@ -98,7 +98,10 @@ pub(super) fn frame_layout(module: &o::Module, layout: &o::FrameLayout, instruct
             P::Service(K::Frame) => return Err(error("a frame is never stored in a frame slot")),
             P::Service(service) => service.linear(),
         };
-        if slot.linear != linear {
+        // #849: coro marks a builder's slot linear, since a unique builder moves through the frame (its saved mode
+        // is consume). In SPB 17 a builder is a value, and a frame slot is linear only for a linear service token.
+        let builder = matches!(module.types.get(slot.ty)?, o::Type::Builder(_) | o::Type::MapBuilder(..));
+        if slot.linear != (linear || builder) {
             return Err(error("frame slot linearity differs from its type"));
         }
         slots.push(s::FrameSlot { ty, linear });

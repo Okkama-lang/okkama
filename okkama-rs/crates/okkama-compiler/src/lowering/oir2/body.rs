@@ -58,7 +58,9 @@ pub(super) struct BodyLowerer<'a, 't> {
     pub registrations: HashMap<ir::ScopeId, Vec<ir::FuncId>>,
     loops: Vec<LoopFrame>,
     pub buffers: Vec<usize>,
-    pub buffer_unwinds: HashMap<ir::BlockId, (ir::BlockId, usize)>,
+    /// Each buffer cleanup block: the target it raises to, how many of its arguments that target takes, and how
+    /// many values the body had when it was made (#849: a cleanup made before a Future existed is not reused after).
+    pub buffer_unwinds: HashMap<ir::BlockId, (ir::BlockId, usize, usize)>,
     /// The accumulators of the `reduce` blocks being lowered whose accumulator lives in a builder (#831): in
     /// such a block `acc` stands for nothing added and `acc + parts` for the parts.
     pub(super) accumulators: Vec<thir::LocalId>,
