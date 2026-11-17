@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Champ: `AllFutures` (#810, G1 step 3).** `AllFutures.results` now runs on Champ. Its
+  `Sequencing<T>` result is made by a helper that the compiler generates, `Wrap`. `Wrap`
+  turns the array of the members' outcomes into the role through the program's own array
+  adapter, which the compiler declares when no conversion in the program needed it. The
+  entry retains its receiver, since the elements are views into the members' outcomes. The
+  loader checks `Wrap`'s shape and ties its element to the origins' outcome. Conformance
+  `all-futures-order`, `wake.transitive` and `concurrent-cas-and-dedup` pass.
 - **Champ: `Raced` and `FirstSuccessful` (#810, G1 step 3).** Both collectors now run on
   Champ through Tomato's driver. The driver reads the origins through their `Sequencing`
   role, calling the sequence's own `size` and `item` through the driver call bridge, so a

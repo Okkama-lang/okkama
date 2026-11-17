@@ -843,7 +843,7 @@ fn collect(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
             None => break,
         }
     }
-    collect_finish(runtime, frame, function)
+    collect_finish(runtime, ctx, frame, function)
 }
 
 /// Read the origins of a collection through their sequence role; None when
@@ -1044,7 +1044,8 @@ fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
     }
 }
 
-fn collect_finish(runtime: &mut Runtime, frame: Word, function: usize) -> Step {
+fn collect_finish(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize) -> Step {
+    let _ = ctx;
     let c = collection(runtime, frame);
     let (strategy, entries, winner, mut failures, external) =
         (c.strategy, c.entries.clone(), c.winner, c.failures.clone(), c.external);
@@ -1071,6 +1072,14 @@ fn collect_finish(runtime: &mut Runtime, frame: Word, function: usize) -> Step {
     }
     if strategy == Strategy::All {
         let values: Vec<Word> = entries.iter().map(|&e| tasks::get(e, RESULT)).collect();
+        // Champ (#810 G1 step 3, ruling Q1): the program's `Wrap` helper makes the `Sequencing<T>` result.
+        #[cfg(feature = "champ-abi")]
+        if runtime.champ.machine.is_some() {
+            return match runtime.champ_all_results(ctx, frame, function, &values) {
+                Some(result) => Done(result),
+                None => call_failed(ctx).map_or(Stop, Failed),
+            };
+        }
         let program = &runtime.loaded.program;
         let owner = program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
         let items = program.objects[owner as usize].fields[0].1;
