@@ -1171,7 +1171,9 @@ fn d26_duty_slot_negatives() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/async/coro");
     let outer = "d26-outer-slot-across-inner-close.oir";
     let spawn = "d26-branch-spawn.oir";
-    let cases: &[(&str, &[(&str, &str)], &str, &str)] = &[
+    // (fixture, text edits, rule, a part of its message)
+    type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str, &'a str);
+    let cases: &[Case] = &[
         // R-1: fut.new fills an empty slot of a scope other than its owner.
         (outer, &[("%13: cache-state = duty.empty owner S1", "%13: cache-state = duty.empty owner S2")],
             "d26-slot-occupied", "fut.new fills an empty cache slot of its owner"),
