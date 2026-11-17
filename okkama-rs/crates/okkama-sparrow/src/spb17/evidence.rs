@@ -133,7 +133,8 @@ pub fn redundant_admission_filters(p: &Program, f: &Function) -> Result<Vec<usiz
 }
 
 /// Whether a selection of these split arguments has a root that can reach a Future holder; an unknown selection or
-/// root type counts as one.
+/// root type counts as one. Such a filter is never dropped: `services::admitting_closes` relies on it to clear the
+/// selection of a state whose entries are only bound (#848).
 fn selects_holder(p: &Program, f: &Function, arguments: &[Argument]) -> bool {
     arguments.iter().any(|argument| {
         let Argument::Selection(id) = argument else {

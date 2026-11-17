@@ -447,6 +447,8 @@ pub(crate) fn admitting_closes(p: &Program, f: &Function) -> Result<BTreeSet<u32
                     }
                     Flow::Outcomes(outcomes) => {
                         let first_admitted = admitted_ins.first().copied().unwrap_or(false);
+                        // The filter stays at run time: `redundant_admission_filters` keeps it whenever the selection
+                        // reaches a holder (`selects_holder`), the only case in which the selection carries entries.
                         let admissible = *op == Opcode::ScopeSplit && arguments.contains(&Argument::Flag(true));
                         for outcome in outcomes {
                             let slots = schema(p, f, *op, arguments, outcome.tag)?;
