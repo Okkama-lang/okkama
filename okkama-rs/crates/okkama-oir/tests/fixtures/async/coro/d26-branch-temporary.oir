@@ -1,0 +1,66 @@
+oir 2 coro
+// D26 (#856), hand-written: async-never-awaited with the Future created in one branch of its owner. The owner's
+// cache slot starts empty (duty.empty); the branch that creates the Future fills it, the other passes it on empty,
+// and the close settles the slot that reaches it from either branch.
+module d26_branch_temporary
+entry @main
+scope S0 action in @explode
+scope S1 action in @main
+summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[panic, cancelled], suspends=true, publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[panic, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M4 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M5 internal contract call_contract(publication=atomic)
+summary M6 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @explode(%0: frame<@explode>) -> void [async] summary(M2) async-creation(M4) async-body(M2) {
+    frame.layout {
+        slot 0: own linear
+    }
+    continuation 0 start saves [0]
+    ^b0 in S0:
+    (%1: frame<@explode>, %2: own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=own, linear=true)]
+    %3: scope<S0> = scope.begin S0
+    %4: scope<S0> = own.accept %3, %2
+    br ^b1(%4)
+    ^b1(%5: scope<S0>) in S0:
+    %6: str = const "this body must not start"
+    br ^b2(%5, %6)
+    ^b2(%7: scope<S0>, %8: str) in S0 unwind ^b3(%7):
+    panic %8
+    ^b3(%9: scope<S0>, %10: failure) in S0:
+    %11: failure = scope.unwind %9, %10, effects scope_effects(failures=[], suspends=false, cancel=false)
+    fut.publish %1, failure(%11)
+    ret
+}
+
+func @main() -> int [entry] abi observation summary(M6) {
+    service.schedule Schedule0 owner S1, protocol P0, duties [%16]
+    binding b0 "pending": future<int> in S1
+    boundary B0 lexical in S1
+    key k0: key = service_of(value=%7, kind=cache)
+    dependency d0: dependency = key(k0)
+    selection s0: selection = union([])
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    %13: cache-state = duty.empty owner S1
+    br ^b1(%0)
+    ^b1(%1: scope<S1>) in S1:
+    %14: bool = const true
+    cond %14, ^b2, ^b3
+    ^b2 in S1:
+    %2: own = own.empty
+    (%3: own, %4: own, %5: deps) = own.split %2, s0
+    %6: own = own.join [%3, %4]
+    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@explode), result int, owner S1, binding b0, slot %13
+    %10: deps = deps.of %7
+    br ^b4(%9, %8)
+    ^b3 in S1:
+    br ^b4(%1, %13)
+    ^b4(%15: scope<S1>, %16: cache-state) in S1:
+    %11: int = const 0
+    %12: closed = scope.end %15, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %11
+}

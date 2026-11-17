@@ -200,7 +200,9 @@ impl Engine<'_, '_> {
                 }
             }
             CleanupOp::Settle { holder, protocol, .. } => {
-                let spawned = before.tokens[holder.as_u32() as usize].service.is_some_and(|key| self.spawn_task(key));
+                // D26 (#856): an empty task slot settles as a spawned task's duty does, with nothing to detach.
+                let spawned = before.tokens[holder.as_u32() as usize].service.is_some_and(|key| self.spawn_task(key)
+                    || self.empty_slot(key).is_some_and(|(_, task)| task));
                 let kind = match super::super::later::value_type(self.module, self.body, *holder) {
                     // D24.2: a spawned task's duty settles through `frame → root`.
                     Some(Type::Service(ServiceType::TaskState)) if spawned => HolderKind::Frame,
@@ -611,11 +613,12 @@ impl Engine<'_, '_> {
             .cloned().collect();
         let mut required = self.required_effects(&pieces, before);
         // A cache-state token settles by the parity protocol of async ABI D24.2: it adds neither suspension nor
-        // failures, and the cleanup effects of its outcome come with its duty in the inventory (D12, B10.4). Any
-        // other service token keeps the unknown effects.
+        // failures, and the cleanup effects of its outcome come with its duty in the inventory (D12, B10.4). An
+        // empty slot (D26) settles as nothing: the runtime counts the step and returns. Any other service token
+        // keeps the unknown effects.
         let unknown = before.tokens.iter().enumerate().any(|(index, token)| {
-            before.availability[index] == AVAILABLE
-                && token.service.is_some_and(|origin| !self.cache_state(origin) && !self.spawn_task(origin))
+            before.availability[index] == AVAILABLE && token.service.is_some_and(|origin| !self.cache_state(origin)
+                && !self.spawn_task(origin) && self.empty_slot(origin).is_none())
         });
         if unknown {
             required.suspends = true;

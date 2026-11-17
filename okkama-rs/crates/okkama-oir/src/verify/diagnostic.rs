@@ -122,6 +122,9 @@ rule_ids! {
     // #776: a Future leaves its owner only with the cache duties of the Futures its creation borrows, unless their
     // owner outlives the destination.
     B9BorrowedFutureLeft => "b9-borrowed-future-left",
+    // D26 (#856): a slot is filled only while it is empty (R-1), and a consumer never moves an empty duty (R-2).
+    D26SlotOccupied => "d26-slot-occupied",
+    D26EmptyDutyMoved => "d26-empty-duty-moved",
 }
 impl std::fmt::Display for RuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }
