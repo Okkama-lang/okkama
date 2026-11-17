@@ -240,6 +240,42 @@ impl Emit<'_, '_> {
         self.builder.ins().store(MEMORY, value, pointer, offset as i32);
     }
 
+    /// `words` words of a new object (#828), as Tomato's machine code allocates them: popped inline from the
+    /// free list of their size class; an empty list, a large object, a collection and the accounting of a new
+    /// chain take the `allocate` helper, and a refused allocation stops.
+    fn allocate(&mut self, words: usize) -> Value {
+        let Some(class) = crate::heap::Heap::class_of(words) else {
+            return self.allocate_slowly(words);
+        };
+        let head = self.heap.free_head(class) as u64;
+        let head = self.iconst(head);
+        let cell = self.load(head, 0);
+        let (fast, slow, done) = (self.builder.create_block(), self.builder.create_block(),
+            self.builder.create_block());
+        self.builder.append_block_param(done, types::I64);
+        self.builder.ins().brif(cell, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        let next = self.load(cell, 8);
+        self.store(head, 0, next);
+        self.builder.ins().jump(done, &[cell.into()]);
+        self.builder.switch_to_block(slow);
+        let fresh = self.allocate_slowly(words);
+        self.builder.ins().jump(done, &[fresh.into()]);
+        self.builder.switch_to_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// The `allocate` helper; a refused allocation (the memory budget) stops.
+    fn allocate_slowly(&mut self, words: usize) -> Value {
+        let count = self.iconst(words as u64);
+        let pointer = self.call("allocate", &[self.ctx, count]).expect("allocate returns a cell");
+        let null = self.builder.ins().icmp_imm_s(IntCC::Equal, pointer, 0);
+        let allocated = self.builder.create_block();
+        self.builder.ins().brif(null, self.stop, &[], allocated, &[]);
+        self.builder.switch_to_block(allocated);
+        pointer
+    }
+
     /// An Atomic observation (#830), inline over the cell `[header, value, closed]` as Tomato's machine code:
     /// `closed` reads the flag; `close` sets it and unbinds the value, as `p1::invoke` does; `value` reads the
     /// value of an open cell. A closed cell's `value` takes the call, which throws `AtomicClosed`.
@@ -1736,12 +1772,7 @@ impl Emit<'_, '_> {
                     _ => unreachable!("verified construction"),
                 };
                 let layout = self.heap.object_runtime_layout(descriptor).clone();
-                let count = self.iconst(layout.allocation_words() as u64);
-                let pointer = self.call("allocate", &[self.ctx, count]).unwrap();
-                let null = self.builder.ins().icmp_imm_s(IntCC::Equal, pointer, 0);
-                let allocated = self.builder.create_block();
-                self.builder.ins().brif(null, self.stop, &[], allocated, &[]);
-                self.builder.switch_to_block(allocated);
+                let pointer = self.allocate(layout.allocation_words());
                 let header = self.iconst(layout.header(descriptor));
                 self.store(pointer, 0, header);
                 let zero = self.iconst(0);

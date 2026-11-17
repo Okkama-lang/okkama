@@ -1721,6 +1721,78 @@ fn champ_scalar_equality_by_word() {
     }
 }
 
+/// #828: machine code allocates an object from the free list of its size class, as Tomato's does: it pops the
+/// head cell inline and writes the header, the fields and zeroed tail words; with the list empty it takes the
+/// `allocate` helper. Both objects read back whole.
+#[test]
+fn champ_objects_allocate_inline_from_the_free_list() {
+    let reg = L::Register;
+    let point = s::Object {
+        name: "Point".into(), error_cases: vec![], enum_cases: 0, variant_cases: vec![], handle: false,
+        fields: vec![s::Field { name: "x".into(), storage: 0, once: false }, s::Field { name: "y".into(), storage: 1,
+            once: false }],
+        role: None, implements: vec![], any_box: false, enum_names: vec![],
+        layout: s::ObjectRuntimeLayout {
+            allocation_words: 3, trace_layout: vec![], storage_fields: vec![s::Type::Int, s::Type::Int],
+            identity_offset: None, has_destroy: false, may_reach_resource: false, may_async_destroy: false,
+            selection_layout: vec![],
+        },
+    };
+    let mut function = s::Function {
+        symbol: "point".into(), entry_abi: s::EntryAbi::Observation,
+        registers: vec![s::Type::Int, s::Type::Int, s::Type::Object(0)],
+        services: vec![], params: vec![reg(0), reg(1)], results: vec![s::Type::Object(0)],
+        blocks: vec![s::Block { pc: 0, params: vec![reg(0), reg(1)] }],
+        proofs: s::FunctionProofs {
+            entry: Some(s::EntryContract { failures: 2, ..s::EntryContract::default() }),
+            ..s::FunctionProofs::default()
+        },
+        code: vec![
+            s::Instruction::Data { op: s::DataOp::ObjNew, inputs: vec![0, 1], output: Some(2),
+                immediate: s::Immediate::Object(0) },
+            s::Instruction::Ret(vec![2]),
+        ],
+    };
+    function.proofs.roots = s::live_locations(&function).unwrap().into_iter().enumerate()
+        .map(|(pc, locations)| s::RootRequirement { pc: pc as u32, locations: locations.into_iter().collect() })
+        .collect();
+    let source = s::Program { functions: vec![function], objects: vec![point], ..s::Program::default() };
+    let mut runtime = Runtime::new_champ(source, vec![]).unwrap();
+    let mut ctx = context(&mut runtime);
+    let code = compile(&mut runtime, 0).unwrap();
+    let words = runtime.heap.object_runtime_layout(0).allocation_words();
+    let class = crate::heap::Heap::class_of(words).unwrap();
+    // A cell on the free list: allocate one and give it back by the list's own link.
+    let spare = runtime.heap.allocate_class(class);
+    let head = runtime.heap.free_head(class);
+    unsafe {
+        *((spare + 8) as *mut Word) = *head;
+        *head = spare;
+    }
+    let next = unsafe { *((spare + 8) as *const Word) };
+    let (x, y) = (runtime.heap.int(3), runtime.heap.int(-4));
+    // Under collector stress the helper's safepoint collects; the inline path has none.
+    runtime.heap.set_stress(true);
+    let collections = runtime.heap.stats().collections;
+    let inline = unsafe { invoke(code, &mut ctx, &[x, y]) };
+    assert_eq!((ctx.status, inline), (OK, spare), "the head cell of the class");
+    assert_eq!(unsafe { *head }, next, "the list advanced by one");
+    assert_eq!(runtime.heap.stats().collections, collections, "no helper, so no safepoint");
+    runtime.constants.push((inline, Repr::Ref));
+    // An empty list: the helper allocates, at a safepoint.
+    unsafe { *head = 0 };
+    let helped = unsafe { invoke(code, &mut ctx, &[y, x]) };
+    assert_eq!(ctx.status, OK);
+    assert_ne!(helped, 0);
+    assert!(runtime.heap.stats().collections > collections, "the helper's safepoint");
+    for (object, (a, b)) in [(inline, (3, -4)), (helped, (-4, 3))] {
+        assert_eq!(runtime.heap.header_of(object), runtime.heap.object_runtime_layout(0).header(0));
+        let fields: Vec<_> = (0..2).map(|index| runtime.small_or_big(runtime.heap.field(object, index)).unwrap())
+            .collect();
+        assert_eq!(fields, vec![a, b]);
+    }
+}
+
 /// S1 data form: `left op right`, then a use of the result that would misread a failed helper's zero.
 fn s1_fallible(op: s::DataOp, result: s::Type, immediate: s::Immediate, use_op: s::DataOp) -> s::Function {
     let reg = L::Register;

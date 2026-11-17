@@ -45,6 +45,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   entry's operation once, when the program loads, instead of matching the entry's name on
   every call. Machine code computes `value`, `closed` and `close` inline over the cell, as
   Tomato does. A closed cell's `value` still throws `AtomicClosed`.
+- **Champ: inline object allocation (#828).** Champ's machine code now takes a new
+  object's cell from the free list of its size class inline, as Tomato's does. An empty
+  list, a large object, a collection or a refusal takes the `allocate` helper. Array
+  literals still go through the `array` helper on both engines.
 
 - **Champ: `Within` and `Before` timeouts (#810, G1 step 2).**
   - A timed-out origin is cancelled, and its cleanup finishes before `TimedOut`.
