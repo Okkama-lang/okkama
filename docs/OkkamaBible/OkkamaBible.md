@@ -19775,6 +19775,78 @@ and takes a limit too. An entry's name is a path inside the archive, checked
 when it is added and when it is read: `../escape.txt` is `UnsafeArchivePath`,
 so unpacking cannot write outside the target directory (the "zip slip" bug).
 
+### Languages: `i18n`, `locale`
+
+```okkama
+module bible/locale v1.0.0;
+
+// What a user reads depends on their language: plural forms come from the
+// locale's rules, lists are joined the way the language joins them, dates
+// are written in its words.
+import "locale/tag" take Locale;
+import "i18n/plural" take PluralNumber, PluralCategory;
+import "i18n/catalog" take MessageKey, MessageCatalog, PluralMessage, PluralForm;
+import "locale/list" take LocalizedList, ListKind, ListStyle;
+import "locale/date_time" take LocalizedDate, DateStyle;
+import "time/date" take Date;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let unread = MessageKey(context: "", identity: "unread");
+    let russian = MessageCatalog(locale: Locale("ru"), entries: [
+        PluralMessage(key: unread, forms: [
+            PluralForm(category: PluralCategory.one, text: "непрочитанное письмо"),
+            PluralForm(category: PluralCategory.few, text: "непрочитанных письма"),
+            PluralForm(category: PluralCategory.many, text: "непрочитанных писем"),
+            PluralForm(category: PluralCategory.other, text: "непрочитанного письма")
+        ])
+    ]);
+    for ["1", "3", "5", "21", "1.5"] -> count {
+        out.writeln(count + " " + russian.plural(unread, PluralNumber(count)));
+    }
+    for ["en", "ru", "ja"] -> tag {
+        out.writeln(LocalizedList(values: ["tea", "milk", "bread"], locale: Locale(tag),
+            kind: ListKind.conjunction, style: ListStyle.long).string());
+    }
+    let day = Date(year: 2026, month: 11, day: 17);
+    for ["en", "fr", "ru"] -> tag {
+        out.writeln(LocalizedDate(origin: day, locale: Locale(tag), style: DateStyle.long).string());
+    }
+    0;
+}
+```
+
+Output:
+
+```text
+1 непрочитанное письмо
+3 непрочитанных письма
+5 непрочитанных писем
+21 непрочитанное письмо
+1.5 непрочитанного письма
+tea, milk, and bread
+tea, milk и bread
+tea、milk、bread
+November 17, 2026
+17 novembre 2026
+17 ноября 2026 г.
+```
+
+A message with a number in it has as many forms as the language has plural
+categories: English has two, Russian has four, and which one a number takes
+is a rule of the locale, not of the program (`21` takes the same form as
+`1` in Russian, and `1.5` takes a form of its own). A `MessageCatalog` holds
+the forms by category, and `plural` picks one from the number given as text,
+so `1.5` is not first rounded to an int. The locale data is CLDR's, pinned
+in the library, so the output does not depend on the host: a list is joined
+as the language joins it (an Oxford comma in English, `и` in Russian, `、`
+in Japanese), and a date is written in its words. Two things do come from the
+host: the system's locale, which the program asks for explicitly, and
+locale-aware sorting (`CollatedString`), which needs the pinned ICU library
+and says so with `UnavailableCollation` when it is missing. The words of the
+list are not translated: the program translates them, through the catalog.
+
 # Chapter 23. Building a CLI tool
 
 The chapters before this one describe the language a piece at a time. This

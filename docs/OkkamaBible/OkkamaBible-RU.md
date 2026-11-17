@@ -19978,6 +19978,79 @@ notes/b.txt: 1000 bytes
 так что распаковка не может писать за пределами целевого каталога (ошибка
 «zip slip»).
 
+### Языки: `i18n`, `locale`
+
+```okkama
+module bible/locale v1.0.0;
+
+// What a user reads depends on their language: plural forms come from the
+// locale's rules, lists are joined the way the language joins them, dates
+// are written in its words.
+import "locale/tag" take Locale;
+import "i18n/plural" take PluralNumber, PluralCategory;
+import "i18n/catalog" take MessageKey, MessageCatalog, PluralMessage, PluralForm;
+import "locale/list" take LocalizedList, ListKind, ListStyle;
+import "locale/date_time" take LocalizedDate, DateStyle;
+import "time/date" take Date;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let unread = MessageKey(context: "", identity: "unread");
+    let russian = MessageCatalog(locale: Locale("ru"), entries: [
+        PluralMessage(key: unread, forms: [
+            PluralForm(category: PluralCategory.one, text: "непрочитанное письмо"),
+            PluralForm(category: PluralCategory.few, text: "непрочитанных письма"),
+            PluralForm(category: PluralCategory.many, text: "непрочитанных писем"),
+            PluralForm(category: PluralCategory.other, text: "непрочитанного письма")
+        ])
+    ]);
+    for ["1", "3", "5", "21", "1.5"] -> count {
+        out.writeln(count + " " + russian.plural(unread, PluralNumber(count)));
+    }
+    for ["en", "ru", "ja"] -> tag {
+        out.writeln(LocalizedList(values: ["tea", "milk", "bread"], locale: Locale(tag),
+            kind: ListKind.conjunction, style: ListStyle.long).string());
+    }
+    let day = Date(year: 2026, month: 11, day: 17);
+    for ["en", "fr", "ru"] -> tag {
+        out.writeln(LocalizedDate(origin: day, locale: Locale(tag), style: DateStyle.long).string());
+    }
+    0;
+}
+```
+
+Вывод:
+
+```text
+1 непрочитанное письмо
+3 непрочитанных письма
+5 непрочитанных писем
+21 непрочитанное письмо
+1.5 непрочитанного письма
+tea, milk, and bread
+tea, milk и bread
+tea、milk、bread
+November 17, 2026
+17 novembre 2026
+17 ноября 2026 г.
+```
+
+У сообщения с числом столько форм, сколько в языке категорий
+множественного числа: в английском их две, в русском четыре, и какую форму
+берёт число — правило локали, а не программы (`21` в русском берёт ту же
+форму, что `1`, а `1.5` — свою собственную). `MessageCatalog` хранит формы по
+категориям, а `plural` выбирает форму по числу, переданному текстом, поэтому
+`1.5` не округляется сперва до int. Данные локалей взяты из CLDR и
+зафиксированы в библиотеке, так что вывод не зависит от хоста: список
+соединяется так, как соединяет его язык (оксфордская запятая в английском,
+`и` в русском, `、` в японском), а дата пишется его словами. От хоста
+приходят две вещи: системная локаль, которую программа запрашивает явно, и
+сортировка по правилам языка (`CollatedString`), которой нужна
+зафиксированная библиотека ICU; когда её нет, она так и говорит:
+`UnavailableCollation`. Слова самого списка не переводятся: их переводит
+программа, через каталог.
+
 # Глава 23. Пишем утилиту командной строки
 
 Предыдущие главы описывают язык по частям. Эта и следующая собирают части в

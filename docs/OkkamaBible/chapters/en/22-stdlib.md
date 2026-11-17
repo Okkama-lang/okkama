@@ -685,3 +685,21 @@ directory goes out when the writer closes. Reading an entry is asynchronous
 and takes a limit too. An entry's name is a path inside the archive, checked
 when it is added and when it is read: `../escape.txt` is `UnsafeArchivePath`,
 so unpacking cannot write outside the target directory (the "zip slip" bug).
+
+### Languages: `i18n`, `locale`
+
+{{example:22-locale}}
+
+A message with a number in it has as many forms as the language has plural
+categories: English has two, Russian has four, and which one a number takes
+is a rule of the locale, not of the program (`21` takes the same form as
+`1` in Russian, and `1.5` takes a form of its own). A `MessageCatalog` holds
+the forms by category, and `plural` picks one from the number given as text,
+so `1.5` is not first rounded to an int. The locale data is CLDR's, pinned
+in the library, so the output does not depend on the host: a list is joined
+as the language joins it (an Oxford comma in English, `и` in Russian, `、`
+in Japanese), and a date is written in its words. Two things do come from the
+host: the system's locale, which the program asks for explicitly, and
+locale-aware sorting (`CollatedString`), which needs the pinned ICU library
+and says so with `UnavailableCollation` when it is missing. The words of the
+list are not translated: the program translates them, through the catalog.
