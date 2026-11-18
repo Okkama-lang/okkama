@@ -22,10 +22,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 - **The verifier checks a Future's deps against its inputs (#864, first part).** Nothing
   compared `fut.new`'s deps operand with its arguments, unlike a call, where B32 does. Now
-  the operand must cover what every argument that the target's creation summary takes, and a
-  bare Future argument, refers to, except what the Future's inputs packet owns (the split's
-  ExternalDeps computation). A Future created from managed inputs beside a borrowed Future now
-  also depends on that Future. A creation thunk takes its deps from exactly those
+  the operand's full deps must cover two things. First, the external keys of what each argument
+  the target's creation summary takes, and a bare Future argument, refers to, except what the
+  Future's inputs packet owns. Second, those arguments' requirements, the dependencies they hold
+  without a key. A split's ExternalDeps now carries the selected values' requirements too. A
+  Future created from managed inputs beside a borrowed Future now also depends on that Future. A creation thunk takes its deps from exactly those
   inputs. With none, the deps are the empty `deps.join []`, never those of a receiver that a
   witness entry declares managed only for transport.
 - **An async role slot takes several fresh arguments (#863).** A creation thunk with more

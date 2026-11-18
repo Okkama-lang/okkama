@@ -542,6 +542,37 @@ impl Engine<'_, '_> {
         }
         (result, fresh)
     }
+    /// #864: the requirements of the values a selection names: what they depend on without a key (`full_deps` minus
+    /// references). A split's ExternalDeps carries them beside the external keys.
+    pub(super) fn selection_requirements(&mut self, flow: &Flow, root: SelectionId) -> BTreeSet<Origin> {
+        let mut result = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if !self.state.step(1) {
+                break;
+            }
+            if !seen.insert(id) {
+                continue;
+            }
+            let value = match self.body.selections.get(id) {
+                Ok(SelectionExpr::Value(v) | SelectionExpr::OwnerGraph(v) | SelectionExpr::ViewOwner(v)) => *v,
+                Ok(SelectionExpr::Descriptor { value, .. }) => *value,
+                Ok(SelectionExpr::Admissible(inner) | SelectionExpr::Held(inner)) => {
+                    pending.push(*inner);
+                    continue;
+                }
+                Ok(SelectionExpr::Union(items)) => {
+                    pending.extend(items);
+                    continue;
+                }
+                Ok(SelectionExpr::Projection(_)) | Err(_) => continue,
+            };
+            let index = value.as_u32() as usize;
+            result.extend(flow.full_deps[index].difference(&flow.refs[index]).copied());
+        }
+        result
+    }
     pub(super) fn live_use(&mut self, flow: &Flow, value: ValueId) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("metadata::live_use");

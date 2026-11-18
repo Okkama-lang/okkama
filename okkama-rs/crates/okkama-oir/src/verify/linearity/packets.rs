@@ -371,6 +371,8 @@ impl Engine<'_, '_> {
                     if let Some(i) = slot_index(SlotName::ExternalDeps) {
                         let (keys, _) = self.selection(&before, *selection);
                         slots[i].refs = external_keys(keys, slots.iter().map(|slot| &slot.token));
+                        // #864: and what the selected values depend on without a key (their requirements).
+                        slots[i].requirements = self.selection_requirements(&before, *selection);
                     }
                 }
                 TransferRule::Admit { state, packet, output, provenance } => {
