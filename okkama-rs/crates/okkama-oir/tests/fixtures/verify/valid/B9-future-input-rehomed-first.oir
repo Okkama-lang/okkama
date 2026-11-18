@@ -193,7 +193,8 @@ func @main() -> int [entry, async] abi observation summary(M16) async-creation(M
     %48: own = own.join [%43, %40]
     (%49: own, %50: own, %51: deps) = own.split %48, s3
     %52: own = own.join [%49, %50]
-    (%53: future<int> facts(managed(deps=d7)), %54: scope<S5>) = fut.new %52, %51, %42, environment deferred(function=@read, arguments=[%44, %46]), result int, owner S5
+    %joined: deps = deps.join [%51, %47]
+    (%53: future<int> facts(managed(deps=d7)), %54: scope<S5>) = fut.new %52, %joined, %42, environment deferred(function=@read, arguments=[%44, %46]), result int, owner S5
     %55: deps = deps.of %53
     %56: own = own.empty
     %57: pending = exit.prepare fallthrough %53, %56, deps(%55) at B0
