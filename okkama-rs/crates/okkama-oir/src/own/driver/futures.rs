@@ -82,9 +82,20 @@ impl Driver<'_, '_> {
             let selection = self.body.selections.alloc(SelectionExpr::Union(parts)).map_err(arena)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet: offered, selection }))?;
             let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-            deps = point.result(SlotName::ExternalDeps)?;
+            let external = point.result(SlotName::ExternalDeps)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
             packet = point.result(SlotName::Packet)?;
+            // #864: a borrowed Future input beside the managed ones adds its own deps, which no selection names.
+            deps = if let Some(future) = future_input {
+                let value = point.env.value(future)?.value;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
+                let borrowed = point.result(SlotName::Value)?;
+                let deps = vec![external, borrowed];
+                point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps }))?;
+                point.result(SlotName::Value)?
+            } else {
+                external
+            };
         } else {
             point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
             packet = point.result(SlotName::Packet)?;
