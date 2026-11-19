@@ -1311,6 +1311,56 @@ fn no_partition_takes_a_bound_future_it_names() {
         "{named:?}");
 }
 
+const MOVES: &str = include_str!("../../../tests/fixtures/verify/valid/B9-own-split-moves-named-future.oir");
+
+/// §6.3c (Fable, tightening of the direct move, #862): a Future whose `fut.new` carries no binding, once an
+/// `own.bind` admits its duty, has a bound duty. An admissible split that names it directly (surgery on
+/// valid/B9-own-split-moves-named-future: the steal's packet is bound to `f`, then offered) leaves the duty with its
+/// owner: the direct move is for a duty no binding holds. The structural rule `b9-bound-future-named` refuses the
+/// selection too.
+#[test]
+fn an_admissible_split_leaves_the_duty_of_a_future_bound_after_its_creation() {
+    let replace = |source: String, old: &str, new: &str| {
+        assert_eq!(source.matches(old).count(), 1, "{old}");
+        source.replace(old, new)
+    };
+    let source = replace(MOVES.to_owned(), "    dependency d100: dependency = from_ssa(%204)\n",
+        "    dependency d100: dependency = from_ssa(%204)\n    dependency d101: dependency = from_ssa(%213)\n");
+    let source = replace(source, "    selection s6: selection = admissible(s5)\n",
+        "    selection s6: selection = admissible(s5)\n    selection s7: selection = union([selection(%203)])\n\
+         \x20   selection s8: selection = admissible(s7)\n");
+    let source = replace(source, "    %205: scope<S4> = own.admit %200, %201\n    %10: scope<S5> = scope.begin S5\n\
+        \x20   br ^b2(%203, %204, %205, %10)\n",
+        "    %205: scope<S4> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%203, \
+         packet=%201), state=%200, original_scope=S4)\n\
+         \x20   invoke.own scope.split %205, s8\n\
+         \x20       normal ^named($state, $selected, $external_deps, %203, %204)\n\
+         \x20       unwind ^stole($state, $failure)\n\
+         \x20   ^named(%209: scope<S4>, %210: own, %211: deps, %212: future<Res> facts(managed(deps=d101)), \
+         %213: deps) in S4:\n\
+         \x20   %214: scope<S4> = own.admit %209, %210\n\
+         \x20   %10: scope<S5> = scope.begin S5\n\
+         \x20   br ^b2(%212, %213, %214, %10)\n");
+    let module = crate::text::parse(&source).unwrap();
+    let (id, main) = function(&module, "main");
+    let body = main.body.as_ref().unwrap();
+    let created = creation(body, Some(false));
+    crate::verify::take_partitions();
+    let report = verify_own(&module).unwrap_err();
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::B9BoundFutureNamed), "{report:?}");
+    let future = |value: &ValueId| matches!(module.types.get(body.values.get(*value).unwrap().ty),
+        Ok(Type::Future(_)));
+    let offered: Vec<_> = crate::verify::take_partitions().into_iter().filter(|record| record.function == id && {
+        let Ok(SelectionExpr::Admissible(inner)) = body.selections.get(record.selection) else { return false };
+        matches!(body.selections.get(*inner), Ok(SelectionExpr::Union(items)) if items.iter().any(|item| {
+            matches!(body.selections.get(*item), Ok(SelectionExpr::Value(value)) if future(value))
+        }))
+    }).collect();
+    assert!(!offered.is_empty(), "the admissible split that names f is partitioned");
+    assert!(offered.iter().all(|record| record.rest.contains(&created) && !record.selected.contains(&created)),
+        "{offered:?}");
+}
+
 /// #776 (OIR-2 §10.2, D12): a Future that leaves its owner takes along the cache duty of the Future its creation
 /// borrows, when both are created in the scope it leaves, also beside a managed input. Own's rehome follows its
 /// analysis deps, which name every argument; the full verifier refuses the escape without the input's rehome

@@ -146,8 +146,10 @@ impl Engine<'_, '_> {
             }
             // §6.3c (Fable, the timeout-in-a-group case): the cache duty of a Future the selection names directly and
             // no binding holds goes with the rest of its holder graph whatever its provenance, as `service.absorb`
-            // moves it in coro; the two profiles then agree on where the duty is.
-            let direct = piece.holder.is_some_and(|holder| self.named_futures.get(&holder) == Some(&false));
+            // moves it in coro; the two profiles then agree on where the duty is. A duty an `own.bind` or
+            // `own.rebind` admitted (bound provenance) stays: a binding never moves it, whatever its `fut.new` says.
+            let direct = piece.holder.is_some_and(|holder| self.named_futures.get(&holder) == Some(&false))
+                && piece.provenance & provenance_bit(AdmissionProvenance::Bound) == 0;
             if base.futures && related && (eligible || direct) && !piece.channel
                 && piece.holder.as_ref().is_some_and(reached) {
                 let mut moved = piece.clone();
@@ -166,10 +168,11 @@ impl Engine<'_, '_> {
                 continue;
             }
             // §6.3c (Fable, KEEPER): a returned entry of a Future (its duty piece back from a result packet) is taken
-            // only by a futures selection. Any other selection names no value that can hold a Future, so the runtime's
-            // walk cannot meet one: the piece stays, silently. A duty its scope created (cache-owned) and what a cache
-            // holds (another origin) keep the check below (`B9-cold-shared-cache`).
-            if !base.futures && returned_entry {
+            // only by a futures selection. Any other admissible selection names no value that can hold a Future, so
+            // the runtime's walk cannot meet one: the piece stays, silently. A selection that is not admissible keeps
+            // the check below, as do a duty its scope created (cache-owned) and what a cache holds (another origin)
+            // (`B9-cold-shared-cache`).
+            if *fresh && !base.futures && returned_entry {
                 rest.pieces.insert(piece.clone());
                 continue;
             }
