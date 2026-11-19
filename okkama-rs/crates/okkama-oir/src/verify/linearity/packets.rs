@@ -843,19 +843,28 @@ impl Engine<'_, '_> {
         // #864 (OIR-2-async-remaining §6.3c, ruling (i)): an await's outcome inherits what the Future requires only
         // when its type can hold a reference, since a body may return something that refers to a borrowed input. Its
         // deps result then names those requirements too (`FromSsa` reads references), so own's facts for the outcome
-        // agree with the flow. A value of closed plain type depends on nothing.
+        // agree with the flow. A value of closed plain type depends on nothing. #862 (ruling (b)): it does not
+        // inherit what the Future owns, the inputs its holder graph holds: the body owns them and destroys them at its
+        // end, and an outcome that refers to one takes it along in the outcome packet.
         let mut inherited_deps = BTreeSet::new();
         if let Operation::Async(AsyncOp::Await { future, .. } | AsyncOp::AwaitShielded { future, .. }
             | AsyncOp::AwaitTake { future, .. }) = op {
             let index = future.as_u32() as usize;
-            let inherited: BTreeSet<_> = before.full_deps[index].difference(&before.refs[index]).copied().collect();
+            let identity = before.identities[index];
+            let owned: BTreeSet<_> = identity.map(|identity| {
+                before.tokens.iter().flat_map(|token| token.pieces.iter())
+                    .filter(|piece| piece.holder == Some(identity) && piece.origin != identity)
+                    .map(|piece| piece.origin).collect()
+            }).unwrap_or_default();
+            let inherited: BTreeSet<_> = before.full_deps[index].iter()
+                .filter(|key| !before.refs[index].contains(key) && !owned.contains(key)).copied().collect();
             let value = schema.results.iter().position(|slot| slot.name == SlotName::Value);
             let managed = value.is_some_and(|i| match schema.results[i].ty {
                 ResultType::Exact(ty) => self.managed.get(ty.as_u32() as usize).copied().unwrap_or(true),
                 _ => true,
             });
-            if let Some(i) = value && !managed {
-                slots[i].requirements.retain(|key| !inherited.contains(key));
+            if let Some(i) = value {
+                slots[i].requirements.retain(|key| !owned.contains(key) && (managed || !inherited.contains(key)));
             }
             if managed {
                 inherited_deps = inherited;

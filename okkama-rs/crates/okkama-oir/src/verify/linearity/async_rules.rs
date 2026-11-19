@@ -709,12 +709,11 @@ impl Engine<'_, '_> {
                         SlotName::Value => {
                             slot.refs.insert(origin);
                             slot.identity = Some(origin);
-                            // #864: the Future depends on what its `deps` operand retains, except what its own inputs
-                            // packet owns (Fable, §6.3c, #862: the operand is `deps.of` each input, own keys included;
-                            // a Future does not depend on what it owns). Its references stay its identity, which
-                            // other rules read by origin.
-                            slot.requirements.extend(super::packets::external_keys(
-                                before.full_deps[deps.as_u32() as usize].clone(), [packet]));
+                            // #864: the Future depends on what its `deps` operand retains; its references stay its
+                            // identity, which other rules read by origin. The operand names its fresh inputs' own
+                            // keys (`deps.of`, #862 ruling (b)), and so does own's fact for it; an await's outcome
+                            // does not inherit what the Future owns (packets.rs, ruling (i)).
+                            slot.requirements.extend(before.full_deps[deps.as_u32() as usize].iter().copied());
                         }
                         _ => {}
                     }
