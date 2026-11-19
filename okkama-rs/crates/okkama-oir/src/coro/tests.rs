@@ -211,9 +211,9 @@ fn an_edge_without_saved_values_resumes_in_its_own_successor() {
     // D20 form (a): the successor starts with the resume; no extra block is needed.
     let source = edited(PLAIN, "normal ^b2($value, $deps, %5, %6, %7)", "normal ^b2($value, $deps)");
     let source = edited(&source, "unwind ^b3($failure, $task, $receipt, %6)", "unwind ^b3($failure, $task, $receipt)");
-    let source = edited(&source, "    dependency d1: dependency = from_ssa(%12)\n", "");
+    let source = edited(&source, "    dependency d3: dependency = from_ssa(%12)\n", "");
     let source = edited(&source,
-        "^b2(%8: int, %9: deps, %10: future<int> facts(managed(deps=d1)), %11: scope<S1>, %12: deps) in S1:",
+        "^b2(%8: int, %9: deps, %10: future<int> facts(managed(deps=d3)), %11: scope<S1>, %12: deps) in S1:",
         "^b2(%8: int, %9: deps) in S1:");
     let source = edited(&source, "invoke.own scope.end %11,", "invoke.own scope.end %6,");
     let source = edited(&source, "^b3(%13: failure, %14: task-state, %15: receipt, %16: scope<S1>) in S1:",
