@@ -160,7 +160,7 @@ pub(super) fn creation_summary(
             });
         }
     }
-    let result = ResultRelation {
+    let result = ResultRelation { beside: vec![],
         fresh: vec![],
         aliases: managed.iter().map(|index| SummarySelection::Parameter(*index)).collect(),
         external_deps: managed,

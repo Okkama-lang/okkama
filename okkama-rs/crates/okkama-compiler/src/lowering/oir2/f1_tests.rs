@@ -723,3 +723,72 @@ fn f1_a_returned_future_over_a_fresh_input_declares_no_dependency_on_it() {
     }).count();
     assert_eq!(splits, 0, "create_future restructures no packet");
 }
+
+/// #865 (OIR-2-async-remaining §6.3d): `make` returns a Future over its local binding `r`, which stays beside the
+/// Future in the result packet (a binding is never moved into a Future, ruling (iii) of §6.3c).
+const LOCAL_BESIDE: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object U { U(); async use(r is Res) is int { r.n(); } } ",
+    "object Mk { Mk(); make() is Future<int> { let r = Res(l: \"local\"); U().use(r); } } ",
+    "async main() is int { let f = Mk().make(); await f; }",
+);
+
+fn relation_of<'m>(own: &'m ir::Module, symbol: &str) -> (ir::SummaryId, &'m ir::ResultRelation) {
+    let (_, function) = function(own, symbol);
+    let summary = function.summary.unwrap();
+    (summary, &own.summaries.get(summary).unwrap().results[0])
+}
+
+/// #865: own declares the local's creation beside the returned Future, with its type, and Full accepts the exit that
+/// carries it.
+#[test]
+fn f1_a_returned_future_declares_its_local_input_beside_it() {
+    let (own, _) = super::own_case_tests::own_stage(LOCAL_BESIDE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, relation) = relation_of(&own, "app.Mk.make#0");
+    let [ir::BesideEntry::Site { ty, .. }] = relation.beside.as_slice() else { panic!("{relation:?}") };
+    assert!(matches!(own.types.get(*ty), Ok(ir::Type::Object { .. })), "{relation:?}");
+}
+
+/// #865: the marker is what lets the exit carry the local beside the Future: without it, the Future's selection
+/// names a creation its relation does not declare beside it.
+#[test]
+fn f1_a_local_beside_a_future_needs_its_marker() {
+    let (own, _) = super::own_case_tests::own_stage(LOCAL_BESIDE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (summary, _) = relation_of(&own, "app.Mk.make#0");
+    let mut cut = own.clone();
+    cut.summaries.get_mut(summary).unwrap().results[0].beside.clear();
+    let report = full_report(&cut);
+    assert!(reports(&report, ir::verify::RuleId::B101), "{report:?}");
+}
+
+/// #865: a `beside` entry belongs to a bare Future result only.
+#[test]
+fn f1_only_a_future_result_has_entries_beside_it() {
+    let (own, _) = super::own_case_tests::own_stage(LOCAL_BESIDE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, use_) = function(&own, "app.Res.n#0");
+    let summary = use_.summary.unwrap();
+    let mut cut = own.clone();
+    let ty = cut.types.iter().find(|(_, ty)| matches!(ty, ir::Type::Object { .. })).map(|(id, _)| id).unwrap();
+    let result = &mut cut.summaries.get_mut(summary).unwrap().results[0];
+    result.beside.push(ir::BesideEntry::Site { site: ir::CreationSiteId::from_u32(0), ty });
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "only a bare Future result declares entries beside it"), "{report:?}");
+}
+
+/// #865 (§6.3d, fail-closed): a caller that returns such a Future again has no value naming what came beside it, so
+/// its exit cannot carry it, and Full refuses the return.
+#[test]
+fn f1_a_future_with_a_local_beside_it_is_not_returned_further() {
+    let source = LOCAL_BESIDE.replace("async main() is int { let f = Mk().make(); await f; }",
+        "object P { P(); pass() is Future<int> { Mk().make(); } } async main() is int { await P().pass(); }");
+    let Err(error) = super::own_case_tests::own_stage(&source, None, ir::verify::VerifyMode::Full) else {
+        panic!("Full refuses the second return");
+    };
+    // The returned Future depends on the `Res` beside it, which `pass` closes.
+    assert!(error.contains("B31 use of a value whose stable dependency has been closed at app.P.pass#0"), "{error}");
+}

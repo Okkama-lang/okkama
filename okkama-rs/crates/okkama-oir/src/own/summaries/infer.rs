@@ -385,6 +385,12 @@ impl Universe {
         // whole instead: an over-approximation, so no dependency is lost.
         // An async body's summary describes its Future's outcome, and coro gives the body a frame for parameters
         // (OIR-2 §12): PR-P declarations are a synchronous call boundary's, so an async body keeps none.
+        // #865 (§6.3d): only a bare Future result has entries beside it.
+        for (result, ty) in summary.results.iter_mut().zip(summary.contract.results.clone()) {
+            if futures::is_async(module, function) || !futures::is_future(module, ty) {
+                result.beside.clear();
+            }
+        }
         let parameters = language_parameters(module, body);
         let asynchronous = futures::is_async(module, function);
         for result in &mut summary.results {
@@ -546,6 +552,45 @@ impl Universe {
                     result.fresh.push(site.origin(body, index, self.strides[&function]));
                     result.provenance = relation.provenance;
                 }
+                // #865 (OIR-2-async-remaining §6.3c-d): a creation borrows each bound input (a binding or a
+                // parameter, ruling (iii)); it stays beside the Future, which a returned Future's packet then carries
+                // and the Future's cache does not hold. A creation thunk forwards its inputs into the Future instead.
+                let thunk = module.functions.get(function).is_ok_and(|declaration| declaration.attrs.iter()
+                    .any(|attr| matches!(attr, FunctionAttr::Adapter { .. })));
+                if creates && !thunk {
+                    let bound = bound_values(body);
+                    for argument in &arguments {
+                        let Ok(data) = body.values.get(*argument) else { continue };
+                        if !bound.contains(argument) || futures::is_future(module, data.ty)
+                            || !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
+                            continue;
+                        }
+                        let actual = &values[argument.as_u32() as usize];
+                        result.beside.extend(actual.fresh.iter()
+                            .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                        result.beside.extend(actual.aliases.iter().filter_map(|alias| match alias {
+                            SummarySelection::Parameter(parameter) => Some(BesideEntry::Parameter(*parameter)),
+                            _ => None,
+                        }));
+                    }
+                }
+                // A callee's beside parameter is the actual it took: the caller's own parameter, or its fresh
+                // creation, stays beside the Future in the caller too. A callee's beside creation has no name in the
+                // caller (fail-closed, §6.3d).
+                for entry in &relation.beside {
+                    let BesideEntry::Parameter(parameter) = entry else { continue };
+                    let Some(argument) = arguments.get(usize::from(*parameter)) else { continue };
+                    let Ok(data) = body.values.get(*argument) else { continue };
+                    let actual = &values[argument.as_u32() as usize];
+                    result.beside.extend(actual.fresh.iter()
+                        .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                    result.beside.extend(actual.aliases.iter().filter_map(|alias| match alias {
+                        SummarySelection::Parameter(parameter) => Some(BesideEntry::Parameter(*parameter)),
+                        _ => None,
+                    }));
+                }
+                result.beside.sort();
+                result.beside.dedup();
                 // An opaque callee result stays opaque in every caller relation.
                 result.opaque |= relation.opaque;
                 results.push(result);
@@ -933,4 +978,14 @@ fn retention(
         normal::relation(&mut result, &actual, budget)?;
     }
     Ok(result)
+}
+
+/// The values a binding holds (High `Bind`/`Rebind` operands) and the entry parameters: the inputs a creation borrows
+/// (OIR-2-async-remaining §6.3c, ruling (iii)), as the driver's partition does.
+fn bound_values(body: &Body) -> BTreeSet<ValueId> {
+    let parameters = body.blocks.get(body.entry).map(|block| block.params.clone()).unwrap_or_default();
+    body.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+        Operation::Lexical(LexicalOp::Bind { value, .. } | LexicalOp::Rebind { value, .. }) => Some(*value),
+        _ => None,
+    }).chain(parameters).collect()
 }

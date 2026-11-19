@@ -406,9 +406,16 @@ pub(super) fn analyze(
             result.cleanup_effects.insert(*ty, universe.cleanup(module, facts));
         }
     }
+    let beside = universe.beside_types(module);
     for (scope, facts) in &universe.inventories {
         budget.work(1)?;
         let mut facts = facts.clone();
+        for ty in beside.get(scope).into_iter().flatten() {
+            if types.get(ty).is_some_and(TypeClassification::may_own) {
+                facts.potential_owned_types.insert(*ty);
+                facts.blockers.insert(ElisionBlocker::Obligation);
+            }
+        }
         for ty in &facts.potential_owned_types {
             let effects = &result.cleanup_effects[ty];
             normal::failures(&mut facts.effects.failures, &effects.failures);
