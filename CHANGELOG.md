@@ -51,6 +51,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **No more silent use of a destroyed resource when such a Future is passed on (#871,
+  fail-closed).** Example: `pass(r) { Starter().start(r); }`. It returns a Future whose callee
+  left a resource beside it (#865). The default build compiled it and destroyed `r` at `pass`'s
+  close, before the Future read it.
+
+  Own now refuses, in both modes, any escape of such a Future from the scope that owns what came
+  beside it: the call's scope for a creation, or the binding's scope for a bound argument. A
+  Future that moves only out of an inner block, while the binding lives in the enclosing scope,
+  is unaffected. Carrying the beside part along is #871.
 - **A function can return a Future over its local resource (#865).** Example:
   `make() is Future<int> { let r = Res(…); U().use(r); }`. It stopped at load with
   `D18_EXECUTOR`, and Full refused it with B101.

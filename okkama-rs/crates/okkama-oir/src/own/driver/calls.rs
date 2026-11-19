@@ -158,7 +158,34 @@ impl Driver<'_, '_> {
             _ => return Err(flow_error("expected direct call")),
         };
         call.summary = self.module.functions.get(function).map_err(arena)?.summary;
+        let entries: Vec<_> = call.summary.and_then(|id| self.module.summaries.get(id).ok()).into_iter()
+            .flat_map(|summary| summary.results.iter()).flat_map(|relation| relation.beside.iter().cloned()).collect();
+        if !entries.is_empty() && let [result] = instruction.results.as_slice()
+            && self.high.values.get(*result).is_ok_and(|value| is_future(self.module, value.ty))
+            && let Some((site, receiver)) = crate::own::summaries::call(&instruction.op) {
+            let here = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
+            let arguments: Vec<_> = receiver.iter().chain(&site.args).map(|argument| argument.value).collect();
+            let owners = entries.iter().map(|entry| match entry {
+                BesideEntry::Parameter(parameter) => arguments.get(usize::from(*parameter))
+                    .and_then(|argument| self.binding_scope(*argument)).unwrap_or(here),
+                BesideEntry::Site { .. } => here,
+            }).collect();
+            self.futures_with_beside.insert(*result, owners);
+        }
         self.emit_call(point, instruction, op)
+    }
+
+    /// #871: the scope that owns a bound High value: its binding's scope, or the function's root for a parameter.
+    fn binding_scope(&self, value: ValueId) -> Option<ScopeId> {
+        let bound = self.high.insts.iter().find_map(|(_, instruction)| match &instruction.op {
+            Operation::Lexical(LexicalOp::Bind { binding, value: bound }
+                | LexicalOp::Rebind { binding, value: bound, .. })
+                if *bound == value => self.high.bindings.get(*binding).ok().map(|binding| binding.scope),
+            _ => None,
+        });
+        let parameter = self.high.blocks.get(self.high.entry).ok().filter(|entry| entry.params.contains(&value))
+            .map(|entry| entry.lexical_scope);
+        bound.or(parameter)
     }
 
     /// Ruling PR-N2 (#860): whether a role, closure or capability call reaches an async callee, whose call creates a

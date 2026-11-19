@@ -469,6 +469,12 @@ impl Driver<'_, '_> {
             if !self.flow.value_shapes.get(&future).is_some_and(|shape| duties.contains(shape)) {
                 continue;
             }
+            // #871 (Fable, fail-closed): a Future a call returned with something beside it (#865) cannot leave this
+            // scope yet. What came beside it would be destroyed at this scope's close while the Future still reads it.
+            if self.futures_with_beside.get(&future).is_some_and(|owners| owners.contains(&scope)) {
+                return Err(unsupported_async("a Future that a call returned with a resource beside it cannot leave \
+                    the scope that admitted them yet (#871)"));
+            }
             // #867 (Fable): a temporary Future has no use but its take (§10.3). The take moved its outcome out of the
             // cache into the awaiting scope, so an escaping outcome is no view of the cache and needs no rehome; its
             // unique-cache proof says the cache is never published (B92).

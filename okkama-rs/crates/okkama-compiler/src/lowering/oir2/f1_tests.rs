@@ -780,15 +780,38 @@ fn f1_only_a_future_result_has_entries_beside_it() {
         && diagnostic.message == "only a bare Future result declares entries beside it"), "{report:?}");
 }
 
-/// #865 (§6.3d, fail-closed): a caller that returns such a Future again has no value naming what came beside it, so
-/// its exit cannot carry it, and Full refuses the return.
+/// #865 and #871 (§6.3d, fail-closed): a caller that returns such a Future again has no name for what came beside
+/// it, so it cannot carry it out, and its close would destroy it while the Future still reads it. Own refuses the
+/// escape in both modes until #871 gives the beside part of an admitted packet a name.
 #[test]
 fn f1_a_future_with_a_local_beside_it_is_not_returned_further() {
     let source = LOCAL_BESIDE.replace("async main() is int { let f = Mk().make(); await f; }",
         "object P { P(); pass() is Future<int> { Mk().make(); } } async main() is int { await P().pass(); }");
-    let Err(error) = super::own_case_tests::own_stage(&source, None, ir::verify::VerifyMode::Full) else {
-        panic!("Full refuses the second return");
-    };
-    // The returned Future depends on the `Res` beside it, which `pass` closes.
-    assert!(error.contains("B31 use of a value whose stable dependency has been closed at app.P.pass#0"), "{error}");
+    for mode in [ir::verify::VerifyMode::Structural, ir::verify::VerifyMode::Full] {
+        let Err(error) = super::own_case_tests::own_stage(&source, None, mode) else {
+            panic!("the escape is refused");
+        };
+        assert!(error.contains("UnsupportedAsync") && error.contains("(#871)"), "{error}");
+    }
+}
+
+/// #871 (fail-closed): `start(r)` leaves its parameter beside the Future; `pass(r)` gets both back and returns the
+/// Future further, which it cannot carry `r` out with yet. Structural compiled it and destroyed `r` at `pass`'s close,
+/// before the Future read it; own now refuses the escape in both modes.
+#[test]
+fn f1_a_future_with_a_parameter_beside_it_is_not_returned_further() {
+    let source = concat!(
+        "module app v1.0.0; ",
+        "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+        "object Feeder { Feeder(); async feed(r is Res) is int { r.n(); } } ",
+        "object Starter { Starter(); start(r is Res) is Future<int> { Feeder().feed(r); } } ",
+        "object Passer { Passer(); pass(r is Res) is Future<int> { Starter().start(r); } } ",
+        "async main() is int { await Passer().pass(Res(l: \"on\")); }",
+    );
+    for mode in [ir::verify::VerifyMode::Structural, ir::verify::VerifyMode::Full] {
+        let Err(error) = super::own_case_tests::own_stage(source, None, mode) else {
+            panic!("the escape is refused");
+        };
+        assert!(error.contains("UnsupportedAsync") && error.contains("(#871)"), "{error}");
+    }
 }
