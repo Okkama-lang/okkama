@@ -1044,6 +1044,47 @@ async main() is int {
 "#, "made\nuse local\ngot 5\nmain end\ndestroy local\n");
 }
 
+/// #866 (Fable, §6.3c for a Future): a synchronous function returns a cold Future over its Future parameter. The
+/// creation borrows `f` (PR-B2) and `f` goes back beside the returned Future; with a bound argument nothing was offered
+/// and nothing comes back. Tomato's output.
+#[test]
+fn a_returned_future_over_a_future_parameter_with_a_bound_argument() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object M { M(); async make(l is string) is Res { Stdout().writeln("make " + l); Res(l: l); } }
+object U { U(); async take(f is Future<Res>) is int { (await f).n(); } }
+object C { C(); chain(f is Future<Res>) is Future<int> { U().take(f); } }
+async main() is int {
+    let g = M().make("x");
+    let h = C().chain(g);
+    Stdout().writeln("got " + (await h).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make x\ngot 1\nmain end\ndestroy x\n");
+}
+
+/// #866: the same `chain` called with a fresh Future argument. The caller offers its entry, `chain` hands it back
+/// beside the Future it returns, and the caller settles it at its own close; a `chain` that kept it would cancel the
+/// cold Future while the returned one awaits it. Tomato's output.
+#[test]
+fn a_returned_future_over_a_future_parameter_with_a_fresh_argument() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object M { M(); async make(l is string) is Res { Stdout().writeln("make " + l); Res(l: l); } }
+object U { U(); async take(f is Future<Res>) is int { (await f).n(); } }
+object C { C(); chain(f is Future<Res>) is Future<int> { U().take(f); } }
+async main() is int {
+    let h = C().chain(M().make("x"));
+    Stdout().writeln("got " + (await h).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make x\ngot 1\nmain end\ndestroy x\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

@@ -561,13 +561,16 @@ impl Universe {
                     let bound = bound_values(body);
                     for argument in &arguments {
                         let Ok(data) = body.values.get(*argument) else { continue };
-                        if !bound.contains(argument) || futures::is_future(module, data.ty)
-                            || !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
+                        if !bound.contains(argument) || !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
                             continue;
                         }
                         let actual = &values[argument.as_u32() as usize];
-                        result.beside.extend(actual.fresh.iter()
-                            .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                        // #866 (Fable, §6.3c for a Future): a bare Future parameter the creation borrows goes back
+                        // beside the Future too; a bound local Future is not ruled yet, so only parameters count.
+                        if !futures::is_future(module, data.ty) {
+                            result.beside.extend(actual.fresh.iter()
+                                .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                        }
                         result.beside.extend(actual.aliases.iter().filter_map(|alias| match alias {
                             SummarySelection::Parameter(parameter) => Some(BesideEntry::Parameter(*parameter)),
                             _ => None,

@@ -895,3 +895,52 @@ fn f1_a_thunk_input_travels_with_the_future_it_is_passed_on_with() {
     super::own_case_tests::own_stage(source, None, ir::verify::VerifyMode::Full)
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
+const CHAIN: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object M { M(); async make(l is string) is Res { Res(l: l); } } ",
+    "object U { U(); async take(f is Future<Res>) is int { (await f).n(); } } ",
+    "object C { C(); chain(f is Future<Res>) is Future<int> { U().take(f); } } ",
+    "async main() is int { let g = M().make(\"x\"); let h = C().chain(g); await h; }",
+);
+
+/// #866: the creation borrows `f` (PR-B2), and `f` goes back to the caller beside the returned Future, as a resource
+/// parameter does under §6.3c: `chain` takes it into its result and marks it beside the Future.
+#[test]
+fn f1_a_future_parameter_goes_back_beside_the_future_over_it() {
+    let (own, _) = super::own_case_tests::own_stage(CHAIN, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (summary, relation) = relation_of(&own, "app.C.chain#0");
+    let summary = own.summaries.get(summary).unwrap();
+    assert_eq!(summary.parameters[1].convention, ir::FreshConvention::Take, "{summary:?}");
+    assert_eq!(summary.parameters[1].destination, ir::TransferDestination::Result, "{summary:?}");
+    assert_eq!(relation.beside, [ir::BesideEntry::Parameter(1)], "{summary:?}");
+}
+
+/// #866: with a fresh Future argument the caller offers its entry, `chain` hands it back beside the Future, and the
+/// caller keeps it until its own close (Tomato's order); Full accepts.
+#[test]
+fn f1_a_fresh_future_argument_comes_back_beside_the_future_over_it() {
+    let source = CHAIN.replace("let g = M().make(\"x\"); let h = C().chain(g); await h;",
+        "let h = C().chain(M().make(\"x\")); await h;");
+    super::own_case_tests::own_stage(&source, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// #866: the marker is checked: without it, `chain`'s exit exports `f`'s entry outside the Future it returns.
+#[test]
+fn f1_a_future_parameter_beside_a_future_must_be_marked() {
+    let source = CHAIN.replace("let g = M().make(\"x\"); let h = C().chain(g); await h;",
+        "let h = C().chain(M().make(\"x\")); await h;");
+    let (own, _) = super::own_case_tests::own_stage(&source, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (summary, _) = relation_of(&own, "app.C.chain#0");
+    let mut cut = own.clone();
+    cut.summaries.get_mut(summary).unwrap().results[0].beside.clear();
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "a returned Future's packet holds an accepted input beside it that its relation does \
+            not declare"), "{report:?}");
+}

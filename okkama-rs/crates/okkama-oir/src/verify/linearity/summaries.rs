@@ -419,7 +419,19 @@ impl Engine<'_, '_> {
             let mut filter = self.graph_filter(flow, permitted, labels, false);
             filter.futures = futures;
             let (denied, allowed) = self.partition_filter(&before.tokens[packet.as_u32() as usize], filter);
-            let mut filter = self.graph_filter(flow, all_refs.clone(), all_labels.clone(), false);
+            // #866 (§6.3c-d): a parameter declared beside a returned Future comes back in the packet although no
+            // result refers to it (the Future only depends on it).
+            let mut returned = all_refs.clone();
+            let mut returned_labels = all_labels.clone();
+            for entry in summary.results.iter().flat_map(|relation| &relation.beside) {
+                if let BesideEntry::Parameter(parameter) = entry
+                    && let Some(selection) = summary.parameters.get(usize::from(*parameter))
+                        .and_then(|effect| effect.retention.as_ref()) {
+                    returned.extend(self.summary_selection(before, &arguments, selection));
+                    returned_labels.extend(self.summary_labels(before, &arguments, selection));
+                }
+            }
+            let mut filter = self.graph_filter(flow, returned, returned_labels, false);
             filter.futures = futures;
             let (unused, selected) = self.partition_filter(&allowed, filter);
             let settled: Vec<_> = denied.pieces.union(&unused.pieces).cloned().collect();
@@ -816,8 +828,11 @@ impl Engine<'_, '_> {
                     continue;
                 }
                 // A bare Future parameter brings no entry of its own (PR-B2): its duty does not travel as a piece of
-                // the accepted input.
-                if arguments.get(index).is_some_and(|value| {
+                // the accepted input. #866 (Fable): unless the relation declares it beside a returned Future, which
+                // hands back whatever entry the caller offered, as for any other parameter.
+                let beside = summary.results.iter().flat_map(|relation| &relation.beside)
+                    .any(|entry| *entry == BesideEntry::Parameter(index as u16));
+                if !beside && arguments.get(index).is_some_and(|value| {
                     matches!(super::super::later::value_type(self.module, self.body, *value), Some(Type::Future(_)))
                 }) {
                     continue;

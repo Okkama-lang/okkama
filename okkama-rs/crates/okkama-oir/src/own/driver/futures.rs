@@ -45,6 +45,7 @@ impl Driver<'_, '_> {
         // deps are those of a plain argument, or `deps.join []` when there is no argument.
         let deps;
         let packet;
+        let thunk = self.forward_entry;
         if std::mem::take(&mut self.forward_entry) {
             // Ruling PR-N2 (#860): a creation thunk's `fut.new` takes the thunk's entry packet whole, and depends on
             // the deps of its managed inputs, which the prologue gave its parameters.
@@ -122,6 +123,15 @@ impl Driver<'_, '_> {
                 point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps: vec![] }))?;
                 point.result(SlotName::Value)?
             };
+        }
+        // #866 (Fable, §6.3c for a Future): a bare Future parameter the creation borrows goes back beside the
+        // Future it returns, as a bound resource parameter does: the exit names it (its entry, when the caller
+        // offered one).
+        // A creation thunk forwards its entry into the Future instead (PR-N2).
+        if !thunk && let Some(future) = future_input
+            && self.high.blocks.get(self.high.entry).is_ok_and(|entry| entry.params.contains(&future)) {
+            let value = point.env.value(future)?.value;
+            self.future_bound_inputs.entry(*original).or_default().push(value);
         }
         // The arguments as the offer left them, as for an owning call.
         let mut op = instruction.op.clone();
