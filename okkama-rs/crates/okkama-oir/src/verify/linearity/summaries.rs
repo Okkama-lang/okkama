@@ -113,6 +113,47 @@ impl Engine<'_, '_> {
             self.error(R::B51, "a returned Future's packet holds an accepted input beside it that its relation does \
                 not declare");
         }
+        // #873 (Fable): the creations the Future holds, typed, against the types its relation declares held. Compared
+        // as sets: one site of a caller brings every type a callee's cache holds, so pieces and entries need not pair.
+        let mut held = BTreeSet::new();
+        for piece in pieces.iter().filter(|piece| !free(piece) && !accepted(piece)) {
+            match self.held_piece_types(flow, piece, future) {
+                Some(types) => held.extend(types.into_iter().map(Some)),
+                None => {
+                    held.insert(None);
+                }
+            }
+        }
+        let declared: BTreeSet<_> = relation.held.iter().map(|entry| Some(entry.ty)).collect();
+        if held != declared {
+            self.error(R::B51, "a returned Future's cache holds creations other than its relation declares");
+        }
+    }
+
+    /// #873 (Fable): the types a piece that a returned Future holds brings into its cache. A creation of this body
+    /// brings its value's type. A piece of a call's fresh family brings what the callee's relation declares held at
+    /// its site, which the callee's exit checked. The Future's own identity brings only that, or nothing when this
+    /// body created it: the inputs of `fut.new` are pieces of their own. `None` when nothing accounts for the piece.
+    fn held_piece_types(&self, flow: &Flow, piece: &Piece, future: Origin) -> Option<Vec<TypeId>> {
+        if piece.origin != future && let Some((_, data)) = self.body.values.iter()
+            .find(|(id, _)| flow.identities[id.as_u32() as usize] == Some(piece.origin)) {
+            return Some(vec![data.ty]);
+        }
+        let (op, site) = match piece.origin {
+            Origin::Instruction(inst, site) => (&self.body.insts.get(inst).ok()?.op, site),
+            Origin::Invoke(block, site) => match &self.body.blocks.get(block).ok()?.term.kind {
+                TermKind::InvokeOwn { op, .. } => (&**op, site),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Some((call, _, _)) = super::super::summaries::call(op) else {
+            return (piece.origin == future && matches!(op, Operation::Async(AsyncOp::FutureNew { .. })))
+                .then(Vec::new);
+        };
+        let summary = self.module.summaries.get(call.summary?).ok()?;
+        Some(summary.results.iter().flat_map(|relation| &relation.held)
+            .filter(|entry| entry.site.as_u32() == site).map(|entry| entry.ty).collect())
     }
 
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
@@ -868,6 +909,9 @@ impl Engine<'_, '_> {
                 Some(Type::Future(_)));
             if !relation.beside.is_empty() && !future {
                 self.error(R::B51, "only a bare Future result declares entries beside it");
+            }
+            if !relation.held.is_empty() && !future {
+                self.error(R::B51, "only a bare Future result declares creations its cache holds");
             }
             if future && summary.entry_kind == EntryKind::CallBoundary {
                 self.beside_checked(flow, *value, relation, values, &arguments, summary);

@@ -111,12 +111,15 @@ pub(super) fn relation(
     target.beside.extend_from_slice(&source.beside);
     target.beside.sort();
     target.beside.dedup();
+    target.held.extend_from_slice(&source.held);
+    target.held.sort();
+    target.held.dedup();
     target.opaque |= source.opaque;
     Ok(())
 }
 
 pub(super) fn empty_relation() -> ResultRelation {
-    ResultRelation { beside: vec![],
+    ResultRelation { beside: vec![], held: vec![],
         fresh: vec![],
         aliases: vec![],
         external_deps: vec![],

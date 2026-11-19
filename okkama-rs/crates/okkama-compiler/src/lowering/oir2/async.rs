@@ -89,7 +89,7 @@ fn envelope(parameters: usize, results: Vec<ir::TypeId>, creation: bool) -> ir::
         deps: vec![],
         destination: ir::TransferDestination::None,
     };
-    let relation = ir::ResultRelation { beside: vec![],
+    let relation = ir::ResultRelation { beside: vec![], held: vec![],
         fresh: vec![],
         aliases: vec![],
         external_deps: vec![],

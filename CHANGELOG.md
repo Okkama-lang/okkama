@@ -51,6 +51,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A returned Future's relation types what its cache holds (#873).** A function that returned the Future of
+  an async role slot over a fresh resource was refused by the loader (`D18_EXECUTOR`): the caller's close may
+  settle that cache, but its envelope came from `Future<int>` and missed the resource's destroy failures.
+  - Following Fable's ruling, a bare Future result's relation lists each creation its cache holds with its type
+    (`held=[site(site=3, ty=app.Res)]`). A function that returns such a Future further brings the same types
+    through the one site of its call. A parameter the cache holds needs no entry.
+  - The scope that admits the Future counts the destroy effects of those types, as it does for what comes
+    beside the Future (#865).
+  - The verifier checks the entries at the exit, by type, against the pieces the Future holds. It refuses a
+    `held` entry on any other result.
+  - Not covered yet: a Future that reaches a callee inside its entry packet (a bare Future parameter, or an
+    aggregate that stores one) has no relation, and the callee's close may still miss what its cache destroys.
+    This is #875.
 - **A function can return a Future over its Future parameter (#866).** Example:
   `chain(f is Future<Res>) is Future<int> { U().take(f); }`. Full refused it with B31 and B94.
   - Following Fable's ruling, this is §6.3c for a parameter that happens to be a Future: `f`

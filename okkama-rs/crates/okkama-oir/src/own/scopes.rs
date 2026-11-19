@@ -406,7 +406,7 @@ pub(super) fn analyze(
             result.cleanup_effects.insert(*ty, universe.cleanup(module, facts));
         }
     }
-    let beside = universe.beside_types(module);
+    let beside = universe.packet_types(module);
     for (scope, facts) in &universe.inventories {
         budget.work(1)?;
         let mut facts = facts.clone();

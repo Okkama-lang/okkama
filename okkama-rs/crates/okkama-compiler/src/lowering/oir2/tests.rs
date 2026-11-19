@@ -1520,7 +1520,7 @@ fn oir2_high_observation_requires_a_trusted_external() {
         let summary = module.summaries.alloc(ir::Summary {
             entry_kind: ir::EntryKind::ObservationAdmissionStaysCaller,
             parameters: vec![],
-            results: vec![ir::ResultRelation { beside: vec![],
+            results: vec![ir::ResultRelation { beside: vec![], held: vec![],
                 fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
                 provenance: ir::AdmissionProvenance::UnboundResult,
             }],

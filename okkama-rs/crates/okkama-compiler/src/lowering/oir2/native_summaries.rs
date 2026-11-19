@@ -346,7 +346,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, native: bool, signature:
             deps: vec![],
             destination: ir::TransferDestination::None,
         }).collect(),
-        results: results.iter().map(|_| ir::ResultRelation { beside: vec![],
+        results: results.iter().map(|_| ir::ResultRelation { beside: vec![], held: vec![],
             fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
             provenance: ir::AdmissionProvenance::UnboundResult,
         }).collect(),

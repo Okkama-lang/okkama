@@ -20,8 +20,9 @@ impl Site {
             Self::Terminator(id) => HighOperationSite::Terminator(id),
         }
     }
-    fn origin(self, body: &Body, slot: usize, stride: usize) -> CreationSiteId {
-        let value = match self {
+    /// The value the operation at this site produces in result slot `slot`.
+    fn result_value(self, body: &Body, slot: usize) -> Option<ValueId> {
+        match self {
             Self::Instruction(id) => body.insts.get(id).ok().and_then(|inst| inst.results.get(slot)).copied(),
             Self::Terminator(id) => body.blocks.get(id).ok().and_then(|block| {
                 let TermKind::InvokeOwn { normal, .. } = &block.term.kind else {
@@ -31,7 +32,10 @@ impl Site {
                     matches!(arg, EdgeArg::Produced(result) if usize::from(result.slot) == slot).then_some(*value)
                 })
             }),
-        };
+        }
+    }
+    fn origin(self, body: &Body, slot: usize, stride: usize) -> CreationSiteId {
+        let value = self.result_value(body, slot);
         if let Some(value) = value
             && let Some(site) = body.keys.iter().find_map(|(_, key)| match key {
                 KeyExpr::Created { site, instance } if *instance == value => Some(*site),
@@ -62,6 +66,38 @@ impl Site {
         // guarantees this multiplication fits in the CreationSiteId namespace.
         CreationSiteId::from_u32((base + index * stride + slot) as u32)
     }
+}
+
+/// #873 (Fable): the type of what fresh site `site` of `body` creates, the inverse of [`Site::origin`]: a created
+/// key's instance, or the result in the slot that the site numbers at its layout position.
+pub(super) fn site_type(body: &Body, site: CreationSiteId, stride: usize) -> Option<TypeId> {
+    let mut base = 0usize;
+    for (_, key) in body.keys.iter() {
+        if let KeyExpr::Created { site: created, instance } = key {
+            if *created == site {
+                return body.values.get(*instance).ok().map(|value| value.ty);
+            }
+            base = base.max(created.as_u32() as usize + 1);
+        }
+    }
+    let offset = (site.as_u32() as usize).checked_sub(base)?;
+    let (index, slot) = (offset.checked_div(stride)?, offset % stride);
+    let mut layout = 0usize;
+    for (block_id, block) in body.blocks.iter() {
+        for instruction in &block.insts {
+            if layout == index {
+                return Site::Instruction(*instruction).result_value(body, slot)
+                    .and_then(|value| body.values.get(value).ok()).map(|value| value.ty);
+            }
+            layout += 1;
+        }
+        if layout == index {
+            return Site::Terminator(block_id).result_value(body, slot)
+                .and_then(|value| body.values.get(value).ok()).map(|value| value.ty);
+        }
+        layout += 1;
+    }
+    None
 }
 
 #[derive(Clone)]
@@ -222,15 +258,17 @@ impl Universe {
         self.calls.get(&(function, site)).map(|node| &self.nodes[*node].summary)
     }
     /// #865 (OIR-2-async-remaining §6.3d): per scope, the types of what the returned Futures of its calls bring beside
-    /// them. The scope admits them with the Future's packet, so its close destroys them.
-    pub(super) fn beside_types(&self, module: &Module) -> BTreeMap<ScopeId, BTreeSet<TypeId>> {
+    /// them. The scope admits them with the Future's packet, so its close destroys them. #873 (Fable): and the types of
+    /// the creations those Futures' caches hold, which the close settles with the cache.
+    pub(super) fn packet_types(&self, module: &Module) -> BTreeMap<ScopeId, BTreeSet<TypeId>> {
         let mut result: BTreeMap<ScopeId, BTreeSet<TypeId>> = BTreeMap::new();
         for ((function, site), node) in &self.calls {
-            let types: Vec<_> = self.nodes[*node].summary.results.iter().flat_map(|relation| &relation.beside)
+            let results = &self.nodes[*node].summary.results;
+            let types: Vec<_> = results.iter().flat_map(|relation| &relation.beside)
                 .filter_map(|entry| match entry {
                     BesideEntry::Site { ty, .. } => Some(*ty),
                     BesideEntry::Parameter(_) => None,
-                }).collect();
+                }).chain(results.iter().flat_map(|relation| relation.held.iter().map(|held| held.ty))).collect();
             if types.is_empty() {
                 continue;
             }
