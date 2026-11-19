@@ -33,37 +33,35 @@ func @work(%0: own) -> (int, own) [async] abi explicit(input_packet=0, output_pa
 }
 
 func @main() -> int [entry, async] abi observation summary(M9) async-creation(M7) async-body(M9) {
-    service.schedule Schedule0 owner S1, protocol P0, duties [%7]
+    service.schedule Schedule0 owner S1, protocol P0, duties [%4]
     binding b0 "x": int in S1
     boundary B0 lexical in S1
-    key k0: key = service_of(value=%7, kind=cache)
+    key k0: key = service_of(value=%4, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%5)
+    dependency d1: dependency = from_ssa(%3)
     dependency d2: dependency = union([d0, d1])
-    dependency d3: dependency = from_ssa(%14)
-    selection s0: selection = union([])
+    dependency d3: dependency = from_ssa(%11)
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1
     br ^b1(%0)
     ^b1(%1: scope<S1>) in S1:
     %2: own = own.empty
-    (%3: own, %4: own, %5: deps) = own.split %2, s0
-    %6: own = own.join [%3, %4]
-    (%7: future<int> facts(managed(deps=d2)), %8: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@work), result int, owner S1
-    %9: deps = deps.of %7
-    invoke.own await %7, result int
-        normal ^b2($value, $deps, %7, %8, %9)
-        unwind ^b3($failure, $task, $receipt, %8)
-    ^b2(%10: int, %11: deps, %12: future<int> facts(managed(deps=d3)), %13: scope<S1>, %14: deps) in S1:
-    invoke.own scope.end %13, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, %10)
+    %3: deps = deps.join
+    (%4: future<int> facts(managed(deps=d2)), %5: scope<S1>) = fut.new %2, %3, %1, environment deferred(function=@work), result int, owner S1
+    %6: deps = deps.of %4
+    invoke.own await %4, result int
+        normal ^b2($value, $deps, %4, %5, %6)
+        unwind ^b3($failure, $task, $receipt, %5)
+    ^b2(%7: int, %8: deps, %9: future<int> facts(managed(deps=d3)), %10: scope<S1>, %11: deps) in S1:
+    invoke.own scope.end %10, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b4($closed, %7)
         unwind ^b5($closed, $failure)
-    ^b3(%15: failure, %16: task-state, %17: receipt, %18: scope<S1>) in S1:
-    (%19: scope<S1>, %20: failure) = await.unwind %18, %15, %16, %17, protocol P0
-    %21: failure = scope.unwind %19, %20, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %21
-    ^b4(%22: closed, %23: int) in S1:
-    ret %23
-    ^b5(%24: closed, %25: failure) in S1:
-    raise %25
+    ^b3(%12: failure, %13: task-state, %14: receipt, %15: scope<S1>) in S1:
+    (%16: scope<S1>, %17: failure) = await.unwind %15, %12, %13, %14, protocol P0
+    %18: failure = scope.unwind %16, %17, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %18
+    ^b4(%19: closed, %20: int) in S1:
+    ret %20
+    ^b5(%21: closed, %22: failure) in S1:
+    raise %22
 }

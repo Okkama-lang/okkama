@@ -95,18 +95,17 @@ func @consume(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) 
 }
 
 func @main() -> int [entry] abi observation summary(M9) {
-    service.schedule Schedule0 owner S3, protocol P0, duties [%21]
+    service.schedule Schedule0 owner S3, protocol P0, duties [%18]
     binding b0 "pending": future<int> in S3
     boundary B0 lexical in S3
-    key k0: key = service_of(value=%21, kind=cache)
+    key k0: key = service_of(value=%18, kind=cache)
     dependency d0: dependency = from_ssa(%5)
     dependency d1: dependency = from_ssa(%15)
     dependency d2: dependency = key(k0)
-    dependency d3: dependency = from_ssa(%19)
+    dependency d3: dependency = from_ssa(%17)
     dependency d4: dependency = union([d2, d3])
     selection s0: selection = union([selection(%3)])
     selection s1: selection = admissible(s0)
-    selection s2: selection = union([selection(%14)])
     ^b0 in S3:
     %0: scope<S3> = scope.begin S3
     br ^b1(%0)
@@ -125,14 +124,13 @@ func @main() -> int [entry] abi observation summary(M9) {
     raise %10
     ^b4(%11: scope<S3>, %12: own, %13: deps, %14: Res facts(managed(deps=d1)), %15: deps) in S3:
     %16: own = own.join [%12]
-    (%17: own, %18: own, %19: deps) = own.split %16, s2
-    %20: own = own.join [%17, %18]
-    (%21: future<int> facts(managed(deps=d4)), %22: scope<S3>) = fut.new %20, %19, %11, environment deferred(function=@consume, arguments=[%14]), result int, owner S3, binding b0
-    %23: deps = deps.of %21
-    %24: int = const 0
-    %25: closed = scope.end %22, effects scope_effects(failures=[], suspends=false, cancel=false)
-    ret %24
-    ^b5(%26: scope<S3>, %27: failure) in S3:
-    %28: failure = scope.unwind %26, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %28
+    %17: deps = deps.of %14
+    (%18: future<int> facts(managed(deps=d4)), %19: scope<S3>) = fut.new %16, %17, %11, environment deferred(function=@consume, arguments=[%14]), result int, owner S3, binding b0
+    %20: deps = deps.of %18
+    %21: int = const 0
+    %22: closed = scope.end %19, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ret %21
+    ^b5(%23: scope<S3>, %24: failure) in S3:
+    %25: failure = scope.unwind %23, %24, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %25
 }

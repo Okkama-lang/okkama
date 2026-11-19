@@ -38,12 +38,13 @@ impl Driver<'_, '_> {
         let future_input = originals.iter().copied()
             .find(|original| ty(original).is_ok_and(|ty| is_future(self.module, ty)));
         // OIR-2 §10.1, #587: the creation retains the fresh part of every managed input in the
-        // input packet, which the Future's inputs holder keeps until the first start, and the
-        // Future depends on their external deps (the creation summary). Plain inputs offer
-        // nothing: their empty deps are those of a plain argument, or the external deps of an
-        // empty selection when there is no argument. A Future input alone gives its own deps.
+        // input packet, which the Future's inputs holder keeps until the first start. Its deps
+        // operand is `deps.of` each managed input and a bare Future input, joined (#862, Fable,
+        // §6.3c): `create_future` never restructures a packet to compute a static fact; the
+        // verifier subtracts what the inputs packet owns. Plain inputs offer nothing: their empty
+        // deps are those of a plain argument, or `deps.join []` when there is no argument.
         let deps;
-        let mut packet;
+        let packet;
         if std::mem::take(&mut self.forward_entry) {
             // Ruling PR-N2 (#860): a creation thunk's `fut.new` takes the thunk's entry packet whole, and depends on
             // the deps of its managed inputs, which the prologue gave its parameters.
@@ -78,7 +79,9 @@ impl Driver<'_, '_> {
         } else if !managed.is_empty() {
             // #862 (OIR-2-async-remaining §6.3c): a bound input (a parameter or a `let`) is never moved into another
             // holder. The Future borrows it and depends on `deps.of` it; it leaves beside the Future through the
-            // exit (`extend`). Only the fresh managed inputs are offered; a Future input's cache is borrowed too.
+            // exit (`extend`). Only the fresh managed inputs are offered, and the offered packet is the Future's
+            // inputs packet as it is (no `own.split`: the loader cannot inventory a packet beside a duty that came
+            // back from a call). A Future input's cache is borrowed too.
             let bound_values = self.bound_values();
             let (bound, fresh): (Vec<_>, Vec<_>) = managed.iter().copied()
                 .partition(|original| bound_values.contains(original));
@@ -89,20 +92,10 @@ impl Driver<'_, '_> {
             } else {
                 let (next, offered) = self.offered(point, &fresh)?;
                 point = next;
-                let mut selected = vec![];
-                for original in &fresh {
-                    let value = point.env.value(*original)?.value;
-                    selected.push(self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?);
-                }
-                let selection = self.body.selections.alloc(SelectionExpr::Union(selected)).map_err(arena)?;
-                point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet: offered, selection }))?;
-                let halves = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-                parts.push(point.result(SlotName::ExternalDeps)?);
-                point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: halves }))?;
-                packet = point.result(SlotName::Packet)?;
+                packet = offered;
             }
-            // #864: a borrowed input, bound or a Future, adds its own deps, which no selection names.
-            for original in bound.iter().chain(future_input.iter()) {
+            // #864: every managed input, fresh or borrowed, and a Future input add their own deps.
+            for original in fresh.iter().chain(bound.iter()).chain(future_input.iter()) {
                 let value = point.env.value(*original)?.value;
                 point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
                 parts.push(point.result(SlotName::Value)?);
@@ -126,13 +119,8 @@ impl Driver<'_, '_> {
                 point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
                 point.result(SlotName::Value)?
             } else {
-                let selection = self.body.selections.alloc(SelectionExpr::Union(vec![])).map_err(arena)?;
-                point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet, selection }))?;
-                let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-                let deps = point.result(SlotName::ExternalDeps)?;
-                point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
-                packet = point.result(SlotName::Packet)?;
-                deps
+                point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps: vec![] }))?;
+                point.result(SlotName::Value)?
             };
         }
         // The arguments as the offer left them, as for an owning call.

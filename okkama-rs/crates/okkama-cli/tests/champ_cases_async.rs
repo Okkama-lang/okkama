@@ -875,6 +875,62 @@ async main() is int {
 "#, "feed shared\nfeed shared\ngot 2\nmain end\ndestroy shared\n");
 }
 
+/// #862, ruling (b) of §6.3c: a direct creation over a fresh resource after a call that returned a Future (its duty
+/// came back into main). `create_future` offers the fresh resource and takes `deps.of` it, without an `own.split`
+/// whose static inventory the loader could not prove beside the returned duty. Tomato's output.
+#[test]
+fn a_direct_creation_after_a_returned_future_offers_its_fresh_input() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Feeder {
+    Feeder();
+    async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; }
+}
+object Starter { Starter(); start(r is Res) is Future<int> { Feeder().feed(r); } }
+async main() is int {
+    let f = Starter().start(Res(name: "via start"));
+    Stdout().writeln("fed " + (await f).string());
+    let direct = await Feeder().feed(Res(name: "direct"));
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed via start\nfed 1\nfeed direct\ndestroy direct\nmain end\ndestroy via start\n");
+}
+
+/// #860 case 1 with #862: an async role slot called with a fresh resource, then a direct creation over another in
+/// the same main. Tomato's output.
+#[test]
+fn a_direct_creation_after_an_async_role_call_offers_its_fresh_input() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Feeding { async feed(r is Res) is int; }
+object Feeder does Feeding {
+    Feeder();
+    async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; }
+}
+async main() is int {
+    let f is Feeding = Feeder();
+    let n = await f.feed(Res(name: "fresh"));
+    Stdout().writeln("fed " + n.string());
+    let direct = await Feeder().feed(Res(name: "direct"));
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed fresh\ndestroy fresh\nfed 1\nfeed direct\ndestroy direct\nmain end\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

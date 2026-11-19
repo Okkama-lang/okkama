@@ -133,25 +133,24 @@ func @work(%0: own) -> (Res, own) [async] abi explicit(input_packet=0, output_pa
 }
 
 func @main() -> int [entry, async] abi observation summary(M13) async-creation(M10) async-body(M13) {
-    service.schedule Schedule0 owner S5, protocol P0, duties [%10]
+    service.schedule Schedule0 owner S5, protocol P0, duties [%7]
     service.schedule Schedule1 owner S4, protocol P0, duties [dynamic]
     binding b0 "f": future<Res> in S5
     boundary B0 lexical in S5
     boundary B1 lexical in S4
-    key k0: key = service_of(value=%10, kind=cache)
-    dependency d0: dependency = from_ssa(%14)
+    key k0: key = service_of(value=%7, kind=cache)
+    dependency d0: dependency = from_ssa(%11)
     dependency d1: dependency = key(k0)
-    dependency d2: dependency = from_ssa(%8)
+    dependency d2: dependency = from_ssa(%6)
     dependency d3: dependency = union([d1, d2])
-    dependency d4: dependency = from_ssa(%21)
-    dependency d5: dependency = from_ssa(%17)
-    dependency d6: dependency = from_ssa(%38)
-    dependency d7: dependency = from_ssa(%38)
-    dependency d8: dependency = from_ssa(%57)
-    dependency d9: dependency = from_ssa(%66)
-    selection s0: selection = union([])
-    selection s1: selection = union([selection(%13)])
-    selection s2: selection = admissible(s1)
+    dependency d4: dependency = from_ssa(%18)
+    dependency d5: dependency = from_ssa(%14)
+    dependency d6: dependency = from_ssa(%35)
+    dependency d7: dependency = from_ssa(%35)
+    dependency d8: dependency = from_ssa(%54)
+    dependency d9: dependency = from_ssa(%63)
+    selection s0: selection = union([selection(%10)])
+    selection s1: selection = admissible(s0)
     ^b0 in S4:
     %0: scope<S4> = scope.begin S4
     br ^b1(%0)
@@ -160,57 +159,56 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     br ^b2(%1, %2)
     ^b2(%3: scope<S4>, %4: scope<S5>) in S5:
     %5: own = own.empty
-    (%6: own, %7: own, %8: deps) = own.split %5, s0
-    %9: own = own.join [%6, %7]
-    (%10: future<Res> facts(managed(deps=d3)), %11: scope<S5>) = fut.new %9, %8, %4, environment deferred(function=@work), result Res, owner S5, binding b0
-    %12: deps = deps.of %10
-    invoke.own await %10, result Res
-        normal ^b4($value, $deps, %3, %10, %11, %12)
-        unwind ^b5($failure, $task, $receipt, %3, %11)
-    ^b3(%13: Res facts(managed(deps=d0)), %14: deps, %15: scope<S4>) in S4:
-    invoke.own scope.split %15, s2
-        normal ^b9($state, $selected, $external_deps, %13, %14)
-        unwind ^b10($state, $failure, %13, %14)
-    ^b4(%16: Res facts(managed(deps=d5)), %17: deps, %18: scope<S4>, %19: future<Res> facts(managed(deps=d4)), %20: scope<S5>, %21: deps) in S5:
-    %22: own = own.empty
-    %23: pending = exit.prepare fallthrough %16, %22, deps(%17) at B0
-    (%24: scope<S5>, %25: pending) = cache.rehome %20, %23, future %10, target S4, protocol P0
-    invoke.own scope.split %24, selection(%16)
-        normal ^b6($state, $selected, $external_deps, %16, %17, %18, %25)
-        unwind ^b7($state, $failure, %18, %25)
-    ^b5(%26: failure, %27: task-state, %28: receipt, %29: scope<S4>, %30: scope<S5>) in S5:
-    (%31: scope<S5>, %32: failure) = await.unwind %30, %26, %27, %28, protocol P0
-    %33: failure = scope.unwind %31, %32, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %6: deps = deps.join
+    (%7: future<Res> facts(managed(deps=d3)), %8: scope<S5>) = fut.new %5, %6, %4, environment deferred(function=@work), result Res, owner S5, binding b0
+    %9: deps = deps.of %7
+    invoke.own await %7, result Res
+        normal ^b4($value, $deps, %3, %7, %8, %9)
+        unwind ^b5($failure, $task, $receipt, %3, %8)
+    ^b3(%10: Res facts(managed(deps=d0)), %11: deps, %12: scope<S4>) in S4:
+    invoke.own scope.split %12, s1
+        normal ^b9($state, $selected, $external_deps, %10, %11)
+        unwind ^b10($state, $failure, %10, %11)
+    ^b4(%13: Res facts(managed(deps=d5)), %14: deps, %15: scope<S4>, %16: future<Res> facts(managed(deps=d4)), %17: scope<S5>, %18: deps) in S5:
+    %19: own = own.empty
+    %20: pending = exit.prepare fallthrough %13, %19, deps(%14) at B0
+    (%21: scope<S5>, %22: pending) = cache.rehome %17, %20, future %7, target S4, protocol P0
+    invoke.own scope.split %21, selection(%13)
+        normal ^b6($state, $selected, $external_deps, %13, %14, %15, %22)
+        unwind ^b7($state, $failure, %15, %22)
+    ^b5(%23: failure, %24: task-state, %25: receipt, %26: scope<S4>, %27: scope<S5>) in S5:
+    (%28: scope<S5>, %29: failure) = await.unwind %27, %23, %24, %25, protocol P0
+    %30: failure = scope.unwind %28, %29, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b14
-    ^b6(%34: scope<S5>, %35: own, %36: deps, %37: Res facts(managed(deps=d6)), %38: deps, %39: scope<S4>, %40: pending) in S5:
-    %41: pending = exit.extend %40, %35
-    (%42: closed, %43: pending) = scope.end %34, reserve %41, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ^b6(%31: scope<S5>, %32: own, %33: deps, %34: Res facts(managed(deps=d6)), %35: deps, %36: scope<S4>, %37: pending) in S5:
+    %38: pending = exit.extend %37, %32
+    (%39: closed, %40: pending) = scope.end %31, reserve %38, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b8
-    ^b7(%44: scope<S5>, %45: failure, %46: scope<S4>, %47: pending) in S5:
-    %48: failure = scope.unwind %44, %45, reserve %47, effects scope_effects(failures=[], suspends=false, cancel=false)
+    ^b7(%41: scope<S5>, %42: failure, %43: scope<S4>, %44: pending) in S5:
+    %45: failure = scope.unwind %41, %42, reserve %44, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b13
     ^b8 in S4:
-    (%49: Res facts(managed(deps=d7)), %50: own, %51: deps) = exit.commit %43, destination scope(S4), result Res
-    %52: scope<S4> = own.admit %39, %50
-    br ^b3(%49, %51, %52)
-    ^b9(%53: scope<S4>, %54: own, %55: deps, %56: Res facts(managed(deps=d8)), %57: deps) in S4:
-    %58: own = own.join [%54]
-    (%59: int, %60: own, %61: deps) = call @label(%56; %58) deps [%57]
-    %62: scope<S4> = own.admit %53, %60
-    invoke.own scope.end %62, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b11($closed, %59)
+    (%46: Res facts(managed(deps=d7)), %47: own, %48: deps) = exit.commit %40, destination scope(S4), result Res
+    %49: scope<S4> = own.admit %36, %47
+    br ^b3(%46, %48, %49)
+    ^b9(%50: scope<S4>, %51: own, %52: deps, %53: Res facts(managed(deps=d8)), %54: deps) in S4:
+    %55: own = own.join [%51]
+    (%56: int, %57: own, %58: deps) = call @label(%53; %55) deps [%54]
+    %59: scope<S4> = own.admit %50, %57
+    invoke.own scope.end %59, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b11($closed, %56)
         unwind ^b12($closed, $failure)
-    ^b10(%63: scope<S4>, %64: failure, %65: Res facts(managed(deps=d9)), %66: deps) in S4:
-    %67: failure = scope.unwind %63, %64, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %67
-    ^b11(%68: closed, %69: int) in S4:
-    ret %69
-    ^b12(%70: closed, %71: failure) in S4:
-    raise %71
+    ^b10(%60: scope<S4>, %61: failure, %62: Res facts(managed(deps=d9)), %63: deps) in S4:
+    %64: failure = scope.unwind %60, %61, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %64
+    ^b11(%65: closed, %66: int) in S4:
+    ret %66
+    ^b12(%67: closed, %68: failure) in S4:
+    raise %68
     ^b13 in S4:
-    %72: failure = scope.unwind %46, %48, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %72
+    %69: failure = scope.unwind %43, %45, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %69
     ^b14 in S4:
-    %73: failure = scope.unwind %29, %33, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %73
+    %70: failure = scope.unwind %26, %30, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %70
 }
