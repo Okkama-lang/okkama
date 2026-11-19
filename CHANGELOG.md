@@ -51,6 +51,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **An async action can return the awaited outcome of a temporary Future (#867).** Examples:
+  - `async relay() is Res { await Wrapper().wrap(Res(…)); }`;
+  - the same through `let r = await …; r;`.
+
+  Full refused both with B92. Own rehomed the taken cache to the caller, which broke the
+  temporary's unique-cache proof. The verifier also treated the taken outcome as a view of the
+  cache.
+
+  Changes (Fable's ruling):
+  - A taken outcome belongs to the awaiting scope. Own does not rehome it.
+  - In the verifier, the outcome has an identity of its own, with a piece in the outcome packet.
+  - The outcome does not inherit what the Future owned. In coro that also covers the holder
+    graph saved across the suspension.
+
+  The bound form `let f = …; let r = await f; r;` is a view of a bound Future's outcome. It is
+  still refused (B91) and tracked separately.
 - **Full no longer refuses an async body that returns a resource after an await, or beside a
   local resource (#869).** Two examples:
   - `async relay() is Res { let n = await W().wait(); Res(…); }`;

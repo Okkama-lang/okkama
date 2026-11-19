@@ -490,9 +490,35 @@ impl Engine<'_, '_> {
                     }
                 }
                 flow.taken_caches.insert(key);
+                // #867 (Fable): an outcome taken from a temporary Future is owned by the awaiting scope, not a view
+                // of the cache. It is an identity of its own with a piece in the outcome packet; the Future's key stays
+                // the cache's, which its duty settles at the owner's close. A plain outcome has no identity.
+                let provenance = match boundary {
+                    TakeBoundary::Temporary { .. } => AdmissionProvenance::TemporaryAwaitResult,
+                    _ => AdmissionProvenance::ExtractedAtExistingBoundary,
+                };
+                let value = schema.results.iter().position(|slot| slot.name == SlotName::Value);
+                let owned = value.and_then(|i| match schema.results[i].ty {
+                    ResultType::Exact(ty) => self.obligations.get(ty.as_u32() as usize).copied(),
+                    _ => Some(true),
+                }).unwrap_or(false);
+                if owned && let Some(i) = value {
+                    slots[i].refs.remove(&key);
+                    slots[i].refs.insert(origin);
+                    slots[i].identity = Some(origin);
+                    extracted.pieces.insert(Piece::new(origin, provenance));
+                    flow.provenance.insert(origin, provenance_bit(provenance));
+                    flow.dead.remove(&origin);
+                }
                 for (info, slot) in schema.results.iter().zip(slots.iter_mut()) {
                     if info.name == SlotName::Packet {
                         slot.token = extracted.clone();
+                    }
+                    // The deps result names the outcome's dependencies, its own identity among them, as a creation's
+                    // does.
+                    if info.name == SlotName::Deps && owned {
+                        slot.refs.remove(&key);
+                        slot.refs.insert(origin);
                     }
                 }
                 if matches!(boundary, TakeBoundary::Temporary { .. })
