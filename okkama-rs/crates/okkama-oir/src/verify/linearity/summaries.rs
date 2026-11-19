@@ -63,6 +63,58 @@ impl Engine<'_, '_> {
             Origin::Instruction(..) | Origin::Invoke(..)))).copied().collect()
     }
 
+    /// #872 (Fable, §6.3d): the `beside` marker of a returned bare Future is checked, not trusted. At the exit, what
+    /// the packet exports and the Future does not hold is exactly what the relation declares beside it: creations as
+    /// a multiset of types (two creations of one type are interchangeable for the caller), parameters by key; and a
+    /// beside parameter is exported and not held by the Future.
+    fn beside_checked(
+        &mut self, flow: &Flow, value: ValueId, relation: &ResultRelation, values: &[ValueId], arguments: &[ValueId],
+        summary: &Summary,
+    ) {
+        // A Future created here or returned by a call; a parameter returned as it is carries its own entry.
+        let Some(future) = flow.identities[value.as_u32() as usize]
+            .filter(|origin| !matches!(origin, Origin::External(_) | Origin::Input(_))) else { return };
+        let pieces: Vec<_> = values.iter().filter(|value| self.body.values.get(**value).ok()
+            .and_then(|data| self.module.types.get(data.ty).ok()) == Some(&Type::Service(ServiceType::Own)))
+            .flat_map(|value| flow.tokens[value.as_u32() as usize].pieces.iter().cloned()).collect();
+        let free = |piece: &Piece| piece.holder != Some(future) && piece.origin != future;
+        let accepted = |piece: &Piece| matches!(piece.origin, Origin::Input(input) if self.body.values.get(input).ok()
+            .and_then(|v| self.module.types.get(v.ty).ok()) == Some(&Type::Service(ServiceType::Own)));
+        // Creations: the types of the free pieces against the declared sites.
+        let mut exported: Vec<Option<TypeId>> = pieces.iter().filter(|piece| free(piece) && !accepted(piece))
+            .map(|piece| self.body.values.iter().find(|(id, _)| flow.identities[id.as_u32() as usize]
+                == Some(piece.origin)).map(|(_, data)| data.ty))
+            .collect();
+        let mut declared: Vec<Option<TypeId>> = relation.beside.iter().filter_map(|entry| match entry {
+            BesideEntry::Site { ty, .. } => Some(Some(*ty)),
+            BesideEntry::Parameter(_) => None,
+        }).collect();
+        exported.sort();
+        declared.sort();
+        if exported != declared {
+            self.error(R::B51, "a returned Future's packet holds creations beside it other than its relation declares");
+        }
+        // Parameters: a beside parameter's accepted part is exported and not held; nothing else accepted is free.
+        let marked: Vec<u16> = relation.beside.iter().filter_map(|entry| match entry {
+            BesideEntry::Parameter(parameter) => Some(*parameter),
+            BesideEntry::Site { .. } => None,
+        }).collect();
+        for parameter in &marked {
+            let keys = summary.parameters.get(usize::from(*parameter)).and_then(|effect| effect.retention.as_ref())
+                .map(|selection| self.summary_selection(flow, arguments, selection)).unwrap_or_default();
+            let carried = pieces.iter().any(|piece| accepted(piece) && free(piece) && !keys.iter().all(|key| {
+                piece.predicates.iter().any(|(filter, selected)| !*selected && filter.keys.contains(key))
+            }));
+            if keys.is_empty() || !carried {
+                self.error(R::B51, "a parameter declared beside a returned Future is not exported beside it");
+            }
+        }
+        if marked.is_empty() && pieces.iter().any(|piece| accepted(piece) && free(piece)) {
+            self.error(R::B51, "a returned Future's packet holds an accepted input beside it that its relation does \
+                not declare");
+        }
+    }
+
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("summaries::call_entry");
@@ -415,6 +467,35 @@ impl Engine<'_, '_> {
                 }
                 piece
             }).collect();
+            // #872 (OIR-2-async-remaining §6.3d): a parameter taken into a returned bare Future that the relation does
+            // not mark beside it went into the Future's inputs (a creation thunk forwards it): its cache holds it.
+            if let Some(&key) = held_sites.values().next() {
+                let beside: BTreeSet<u16> = summary.results.iter().flat_map(|relation| &relation.beside)
+                    .filter_map(|entry| match entry {
+                        BesideEntry::Parameter(parameter) => Some(*parameter),
+                        BesideEntry::Site { .. } => None,
+                    }).collect();
+                let mut keys = BTreeSet::new();
+                let mut labels = SharedSet::new();
+                for (index, parameter) in summary.parameters.iter().enumerate() {
+                    if parameter.convention == FreshConvention::Take
+                        && parameter.destination == TransferDestination::Result
+                        && !beside.contains(&(index as u16)) && let Some(selection) = &parameter.retention {
+                        keys.extend(self.summary_selection(before, &arguments, selection));
+                        labels.extend(self.summary_labels(before, &arguments, selection));
+                    }
+                }
+                if !keys.is_empty() {
+                    let filter = self.graph_filter(flow, keys, labels, false);
+                    let (rest, held) = self.partition_filter(&output, filter);
+                    output.pieces = rest.pieces;
+                    output.pieces.extend(held.pieces.into_iter().map(|mut piece| {
+                        piece.holder = Some(key);
+                        piece.provenance = provenance_bit(AdmissionProvenance::CacheOwned);
+                        piece
+                    }));
+                }
+            }
         }
         for (site, state) in fresh_states {
             let key = creation(origin, site);
@@ -768,9 +849,13 @@ impl Engine<'_, '_> {
         }
         for (value, relation) in language.iter().zip(&summary.results) {
             // #865 (OIR-2-async-remaining §6.3d): only a bare Future result has entries beside it.
-            if !relation.beside.is_empty()
-                && !matches!(super::super::later::value_type(self.module, self.body, *value), Some(Type::Future(_))) {
+            let future = matches!(super::super::later::value_type(self.module, self.body, *value),
+                Some(Type::Future(_)));
+            if !relation.beside.is_empty() && !future {
                 self.error(R::B51, "only a bare Future result declares entries beside it");
+            }
+            if future && summary.entry_kind == EntryKind::CallBoundary {
+                self.beside_checked(flow, *value, relation, values, &arguments, summary);
             }
             if summary.entry_kind == EntryKind::CallBoundary {
                 let keys = flow.refs[value.as_u32() as usize].clone();

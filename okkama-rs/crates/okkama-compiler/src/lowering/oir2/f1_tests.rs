@@ -815,3 +815,83 @@ fn f1_a_future_with_a_parameter_beside_it_is_not_returned_further() {
         assert!(error.contains("UnsupportedAsync") && error.contains("(#871)"), "{error}");
     }
 }
+
+/// #872 (Fable, §6.3d): the `beside` marker is checked against the exit. A creation thunk forwards its entry into the
+/// Future's inputs, where the Future holds it; marking its parameter beside is refused.
+#[test]
+fn f1_a_thunk_parameter_marked_beside_is_refused() {
+    let (own, _) = super::own_case_tests::own_stage(LOADER, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let thunk = witness(&own, "Net", 0);
+    let summary = own.functions.get(thunk).unwrap().summary.unwrap();
+    let taken = own.summaries.get(summary).unwrap().parameters.iter()
+        .position(|effect| effect.convention == ir::FreshConvention::Take).expect("the thunk takes the fresh Res");
+    let mut cut = own.clone();
+    cut.summaries.get_mut(summary).unwrap().results[0].beside.push(ir::BesideEntry::Parameter(taken as u16));
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "a parameter declared beside a returned Future is not exported beside it"),
+        "{report:?}");
+}
+
+/// #872: `start(r)` returns `r` beside the Future, so its relation must say so.
+#[test]
+fn f1_a_parameter_beside_a_future_must_be_marked() {
+    let (own, _) = super::own_case_tests::own_stage(STARTER, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (summary, relation) = relation_of(&own, "app.Starter.start#0");
+    assert!(matches!(relation.beside.as_slice(), [ir::BesideEntry::Parameter(_)]), "{relation:?}");
+    let mut cut = own.clone();
+    cut.summaries.get_mut(summary).unwrap().results[0].beside.clear();
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "a returned Future's packet holds an accepted input beside it that its relation does \
+            not declare"), "{report:?}");
+}
+
+/// #872: creations beside a returned Future are checked as a multiset of types: one more declared than carried, or a
+/// carried one of another type, is refused.
+#[test]
+fn f1_creations_beside_a_future_match_their_types_and_count() {
+    let (own, _) = super::own_case_tests::own_stage(LOCAL_BESIDE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (summary, relation) = relation_of(&own, "app.Mk.make#0");
+    let entry = relation.beside[0].clone();
+    let message = "a returned Future's packet holds creations beside it other than its relation declares";
+    let mut extra = own.clone();
+    extra.summaries.get_mut(summary).unwrap().results[0].beside.push(match entry.clone() {
+        ir::BesideEntry::Site { site, ty } => {
+            ir::BesideEntry::Site { site: ir::CreationSiteId::from_u32(site.as_u32() + 1), ty }
+        }
+        other => other,
+    });
+    let report = full_report(&extra);
+    assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51 && d.message == message), "{report:?}");
+    let (_, u) = function(&own, "app.U.new#0");
+    let other = u.signature.results[0];
+    let mut retyped = own.clone();
+    retyped.summaries.get_mut(summary).unwrap().results[0].beside = vec![match entry {
+        ir::BesideEntry::Site { site, .. } => ir::BesideEntry::Site { site, ty: other },
+        other => other,
+    }];
+    let report = full_report(&retyped);
+    assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51 && d.message == message), "{report:?}");
+}
+
+/// #872 (§6.3d): a creation thunk (here an async role slot) forwards its fresh `Res` into the Future's inputs, so its
+/// relation marks nothing beside the Future, and the caller holds that input in the Future's cache. `pass` returns the
+/// Future further and the input travels with its cache (cache.rehome), in the model as at run time; modelled as an
+/// ordinary piece, it stayed in `pass`, which Full refused (B31).
+#[test]
+fn f1_a_thunk_input_travels_with_the_future_it_is_passed_on_with() {
+    let source = concat!(
+        "module app v1.0.0; ",
+        "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+        "role Feeding { async feed(r is Res) is int; } ",
+        "object Feeder does Feeding { Feeder(); async feed(r is Res) is int { r.n(); } } ",
+        "object P { P(); pass() is Future<int> { let f is Feeding = Feeder(); f.feed(Res(l: \"via role\")); } } ",
+        "async main() is int { await P().pass(); }",
+    );
+    super::own_case_tests::own_stage(source, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+}

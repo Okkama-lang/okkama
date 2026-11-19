@@ -51,6 +51,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **The verifier checks the `beside` marker; a thunk's input travels with its Future (#872).**
+  At a returned bare Future's exit, what the packet exports and the Future does not hold must be
+  exactly what the relation declares beside it:
+  - creations, as a multiset of types;
+  - parameters, by key (a beside parameter is exported and not held);
+  - nothing undeclared.
+
+  On the caller's side, a parameter taken into such a Future without being marked beside (a
+  creation thunk forwards it) is held by the Future's cache. So it now travels with the Future
+  when that Future is passed on, where before Full refused that with B31.
 - **No more silent use of a destroyed resource when such a Future is passed on (#871,
   fail-closed).** Example: `pass(r) { Starter().start(r); }`. It returns a Future whose callee
   left a resource beside it (#865). The default build compiled it and destroyed `r` at `pass`'s
