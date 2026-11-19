@@ -736,11 +736,12 @@ impl Engine<'_, '_> {
                     let accepted = matches!(piece.origin, Origin::Input(input) if self.body.values.get(input).ok()
                         .and_then(|v| self.module.types.get(v.ty).ok()) == Some(&Type::Service(ServiceType::Own)));
                     // The piece lies in the intersection of its selected filters' graphs: it holds the parameter's
-                    // part unless a rejected filter covers those keys, and when it is restricted, one of its selected
+                    // part unless rejected filters cover those keys, each key by one of them (Fable's review: one
+                    // filter covering them all is too generous), and when it is restricted, one of its selected
                     // filters names one of them.
-                    let excluded = piece.predicates.iter().any(|(filter, selected)| {
-                        !*selected && keys.is_subset(&filter.keys)
-                    });
+                    let excluded = keys.iter().all(|key| piece.predicates.iter().any(|(filter, selected)| {
+                        !*selected && filter.keys.contains(key)
+                    }));
                     let mut chosen = piece.predicates.iter().filter(|(_, selected)| **selected).peekable();
                     let named = chosen.peek().is_none() || chosen.any(|(filter, _)| !filter.keys.is_disjoint(&keys));
                     accepted && !excluded && named
