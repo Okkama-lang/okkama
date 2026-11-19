@@ -51,15 +51,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
-- **A function can return a Future over a Future it borrows (#866).** Example:
+- **A function can return a Future over its Future parameter (#866).** Example:
   `chain(f is Future<Res>) is Future<int> { U().take(f); }`. Full refused it with B31 and B94.
-  - A creation now borrows a bare Future argument (PR-B2): its summary declares that parameter
-    borrowed, and the created Future depends on it.
-  - A result that depends on a bare Future parameter no longer takes it. `chain` declares `f`
-    borrowed, and its result declares `external_deps=[1]`.
-  - Closing a synchronous callee's accepted input no longer ends a borrowed bare Future
-    parameter: the caller keeps it and its cache. An async body's frame parameters and other
-    borrows still end with the call.
+  - Following Fable's ruling, this is §6.3c for a parameter that happens to be a Future: `f`
+    goes back to the caller beside the returned Future (`beside=[parameter(1)]`), and the exit
+    names it. The caller's model counts it as returned.
+  - The creation itself borrows the bare Future (PR-B2): a creation summary declares such a
+    parameter borrowed, with a dependency on it.
+  - With a fresh argument, the caller offers the entry, gets it back beside the Future, and
+    settles it at its own close, as Tomato does. Before, an intermediate fix made Structural
+    print `Cancelled`.
 - **The verifier checks the `beside` marker; a thunk's input travels with its Future (#872).**
   At a returned bare Future's exit, what the packet exports and the Future does not hold must be
   exactly what the relation declares beside it:

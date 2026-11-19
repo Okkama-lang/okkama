@@ -28,13 +28,8 @@ impl Universe {
         // PR-P (#749): the borrowed parameters by value, for the fields they lend. A block parameter fed by several
         // borrowed parameters lends the fields of each of them.
         let mut lent: BTreeMap<ValueId, BTreeSet<u16>> = BTreeMap::new();
-        // #866 (PR-B2): the bare Future parameters, which a result may depend on without taking them.
-        let mut future_parameters = BTreeSet::new();
         for value in &entry.params {
             let ty = body.values.get(*value).map_err(arena)?.ty;
-            if futures::is_future(module, ty) {
-                future_parameters.insert(parameter);
-            }
             if !language(module, &[ty]).is_empty() {
                 if !types[&ty].may_own() && types[&ty].references {
                     borrowed.insert(parameter);
@@ -298,8 +293,7 @@ impl Universe {
                         }
                         if let Some(selection) = &effect.retention {
                             let relation = instantiate(selection, &arguments, &values, budget)?;
-                            retain_inputs((module, types), &mut summary, &relation, effect.destination.clone(),
-                                &borrowed, &future_parameters, budget)?;
+                            retain_inputs((module, types), &mut summary, &relation, effect.destination.clone(), &borrowed, budget)?;
                         }
                     }
                 }
@@ -328,7 +322,7 @@ impl Universe {
                         let relation = replacements.entry(label.clone()).or_insert_with(normal::empty_relation);
                         normal::relation(relation, &values[value.as_u32() as usize], budget)?;
                         retain_inputs((module, types), &mut summary, &values[value.as_u32() as usize],
-                            TransferDestination::Result, &borrowed, &future_parameters, budget)?;
+                            TransferDestination::Result, &borrowed, budget)?;
                     }
                 }
                 TermKind::Ret { values: returned } | TermKind::RetDefer { values: returned, .. } => {
@@ -407,8 +401,7 @@ impl Universe {
         }
         if summary.entry_kind == EntryKind::CallBoundary {
             for result in summary.results.clone() {
-                retain_inputs((module, types), &mut summary, &result, TransferDestination::Result,
-                    &borrowed, &future_parameters, budget)?;
+                retain_inputs((module, types), &mut summary, &result, TransferDestination::Result, &borrowed, budget)?;
             }
         }
         if entry.params.iter().any(|value| body.values.get(*value).is_ok_and(|value| {
@@ -568,13 +561,16 @@ impl Universe {
                     let bound = bound_values(body);
                     for argument in &arguments {
                         let Ok(data) = body.values.get(*argument) else { continue };
-                        if !bound.contains(argument) || futures::is_future(module, data.ty)
-                            || !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
+                        if !bound.contains(argument) || !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
                             continue;
                         }
                         let actual = &values[argument.as_u32() as usize];
-                        result.beside.extend(actual.fresh.iter()
-                            .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                        // #866 (Fable, §6.3c for a Future): a bare Future parameter the creation borrows goes back
+                        // beside the Future too; a bound local Future is not ruled yet, so only parameters count.
+                        if !futures::is_future(module, data.ty) {
+                            result.beside.extend(actual.fresh.iter()
+                                .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                        }
                         result.beside.extend(actual.aliases.iter().filter_map(|alias| match alias {
                             SummarySelection::Parameter(parameter) => Some(BesideEntry::Parameter(*parameter)),
                             _ => None,
@@ -733,16 +729,10 @@ fn retain_inputs(
     relation: &ResultRelation,
     destination: TransferDestination,
     borrowed: &BTreeSet<u16>,
-    future_parameters: &BTreeSet<u16>,
     budget: &mut Budget<'_>,
 ) -> Result<(), OwnError> {
     let mut selections = normal::selections(&relation.aliases, budget)?;
     for parameter in &relation.external_deps {
-        // #866 (PR-B2): a result that depends on a bare Future parameter borrows its cache; it takes it only when it
-        // aliases it (a Future returned as it is).
-        if future_parameters.contains(parameter) {
-            continue;
-        }
         if !selections.iter().any(|selection| normal::parameter(selection) == *parameter) {
             selections.push(SummarySelection::OwnerGraph(*parameter));
         }
