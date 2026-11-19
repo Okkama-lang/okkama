@@ -1,8 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/d857-rehome-slotted.oir.
-// D26 (#857), a V2-shaped variant of the own golden p1-spawn-returned: before the Future it returns, start creates a
-// second Future of S1 in one branch. S1 is slotted: the returned Future's slots are emptied after its rehome, the
-// branch's slot merges at the join, and the close with the reserve settles both, the returned ones empty.
 module d857_rehome_slotted
 requires core, async
 entry @main

@@ -1,7 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/async-await-failure.oir.
-// failure.rethrown-at-every-await: the body raises its failure and publishes it; both awaits rethrow
-// it, the first inside a try whose catch arm resumes main.
 module async_await_failure
 entry @main
 
@@ -76,10 +73,12 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     dependency d3: dependency = from_ssa(%30)
     dependency d4: dependency = from_ssa(%36)
     dependency d5: dependency = key(k0)
-    dependency d6: dependency = from_ssa(%45)
-    dependency d7: dependency = from_ssa(%51)
-    dependency d8: dependency = from_ssa(%62)
-    dependency d9: dependency = from_ssa(%68)
+    dependency d6: dependency = from_ssa(%7)
+    dependency d7: dependency = union([d5, d6])
+    dependency d8: dependency = from_ssa(%45)
+    dependency d9: dependency = from_ssa(%51)
+    dependency d10: dependency = from_ssa(%62)
+    dependency d11: dependency = from_ssa(%68)
     selection s0: selection = union([])
     ^b0 in S1:
     %1: frame<@main> = frame.resume %0, continuation 0
@@ -89,7 +88,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %4: own = own.empty
     (%5: own, %6: own, %7: deps) = own.split %4, s0
     %8: own = own.join [%5, %6]
-    (%9: future<int> facts(managed(deps=d5)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@fail), result int, owner S1, binding b0
+    (%9: future<int> facts(managed(deps=d7)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@fail), result int, owner S1, binding b0
     %12: deps = deps.of %9
     br ^b2(%9, %12, %11)
     ^b2(%13: future<int> facts(managed(deps=d0)), %14: deps, %15: scope<S1>) in S2:
@@ -113,18 +112,18 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     invoke.own await %35, result int
         normal ^b18($value, $deps)
         unwind ^b19($failure, $task, $receipt)
-    ^b8(%42: int, %43: deps, %44: future<int> facts(managed(deps=d6)), %45: deps, %46: scope<S1>) in S2:
+    ^b8(%42: int, %43: deps, %44: future<int> facts(managed(deps=d8)), %45: deps, %46: scope<S1>) in S2:
     br ^b7(%44, %45, %42, %46, %90, %93)
-    ^b9(%47: failure, %48: task-state, %49: receipt, %50: future<int> facts(managed(deps=d7)), %51: deps, %52: scope<S1>) in S2:
+    ^b9(%47: failure, %48: task-state, %49: receipt, %50: future<int> facts(managed(deps=d9)), %51: deps, %52: scope<S1>) in S2:
     %53: frame<@main> = frame.save %97, slots [frame_slot(slot=3, value=%50, mode=borrow), frame_slot(slot=0, value=%51, mode=borrow), frame_slot(slot=2, value=%100, mode=consume)], continuation 3
     [i13] (%54: scope<S1>, %55: failure) = await.unwind %52, %47, %48, %49, protocol P0
-    (%56: frame<@main>, %57: future<int> facts(managed(deps=d7)), %58: deps, %59: cache-state) = frame.resume %53, continuation 3, slots [saved_slot(slot=3, ty=future<int>), saved_slot(slot=0, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
+    (%56: frame<@main>, %57: future<int> facts(managed(deps=d9)), %58: deps, %59: cache-state) = frame.resume %53, continuation 3, slots [saved_slot(slot=3, ty=future<int>), saved_slot(slot=0, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
     br ^b3(%57, %58, %55, %54)
-    ^b10(%60: Broken facts(plain(certificate=scalar)), %61: future<int> facts(managed(deps=d8)), %62: deps, %63: failure, %64: scope<S1>) in S1:
+    ^b10(%60: Broken facts(plain(certificate=scalar)), %61: future<int> facts(managed(deps=d10)), %62: deps, %63: failure, %64: scope<S1>) in S1:
     br ^b5(%61, %62, %63, %60, %64)
     ^b11 in S1:
     br ^b4(%19, %20)
-    ^b12(%65: int, %66: deps, %67: future<int> facts(managed(deps=d9)), %68: deps, %69: int, %70: scope<S1>) in S1:
+    ^b12(%65: int, %66: deps, %67: future<int> facts(managed(deps=d11)), %68: deps, %69: int, %70: scope<S1>) in S1:
     %71: int = int.add %69, %65
     %72: deps = deps.of %71
     invoke.own scope.end %70, effects scope_effects(failures=[], suspends=false, cancel=true)

@@ -171,6 +171,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             flow: &flows[&function], elide_offers, definitions: BTreeMap::new(), origins,
             witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
             dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(), future_bindings: BTreeMap::new(),
+            future_bound_inputs: BTreeMap::new(),
             forward_entry: false,
         };
         driver.temporaries = driver.temporary_futures();
@@ -707,6 +708,9 @@ struct Driver<'a, 'o> {
     /// `rebind`s. An alias (`let g = f`) binds the same SSA value again, so one value can have several. A created
     /// Future's `fut.new` carries the one that lives in the Future's owner.
     future_bindings: BTreeMap<ValueId, Vec<BindingId>>,
+    /// #862 (§6.3c): the own values of the bound inputs a created Future borrows, at its creation. They dominate an
+    /// exit that returns the Future, which names them beside it without their being live in High.
+    future_bound_inputs: BTreeMap<ValueId, Vec<ValueId>>,
     /// Ruling PR-M (#818): an adapter whose one call owns its inputs. The call takes the entry packet as its packet,
     /// so what the caller offered reaches the target whole; nothing accepts, admits or splits it.
     forward_entry: bool,

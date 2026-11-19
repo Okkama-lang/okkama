@@ -175,9 +175,13 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M17)
     key k0: key = service_of(value=%8, kind=cache)
     key k1: key = service_of(value=%22, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%18)
-    dependency d2: dependency = key(k1)
-    dependency d3: dependency = from_ssa(%34)
+    dependency d1: dependency = from_ssa(%7)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%18)
+    dependency d4: dependency = key(k1)
+    dependency d5: dependency = from_ssa(%21)
+    dependency d6: dependency = union([d4, d5])
+    dependency d7: dependency = from_ssa(%34)
     ^b0 in S2:
     %1: frame<@main> = frame.resume %0, continuation 0
     %2: scope<S2> = scope.begin S2
@@ -189,7 +193,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M17)
     ^b2(%4: app.Quiet facts(plain(certificate=closed_graph(ty=app.Quiet))), %5: scope<S2>) in S2:
     %6: own = own.empty
     %7: deps = deps.of %4
-    (%8: future<int> facts(managed(deps=d0)), %9: cache-state, %10: scope<S2>) = fut.new %6, %7, %5, environment deferred(function=@app.Quiet.run#0, arguments=[%4]), result int, owner S2, binding b0
+    (%8: future<int> facts(managed(deps=d2)), %9: cache-state, %10: scope<S2>) = fut.new %6, %7, %5, environment deferred(function=@app.Quiet.run#0, arguments=[%4]), result int, owner S2, binding b0
     %11: deps = deps.of %8
     invoke.own call @app.Adder.new#0()
         normal ^b4($value, %8, %10, %11)
@@ -198,11 +202,11 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M17)
     %14: failure = scope.unwind %13, %12, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%14)
     ret
-    ^b4(%15: app.Adder facts(plain(certificate=closed_graph(ty=app.Adder))), %16: future<int> facts(managed(deps=d1)), %17: scope<S2>, %18: deps) in S2:
+    ^b4(%15: app.Adder facts(plain(certificate=closed_graph(ty=app.Adder))), %16: future<int> facts(managed(deps=d3)), %17: scope<S2>, %18: deps) in S2:
     %19: int = const 1
     %20: own = own.empty
     %21: deps = deps.of %16
-    (%22: future<int> facts(managed(deps=d2)), %23: cache-state, %24: scope<S2>) = fut.new %20, %21, %17, environment deferred(function=@app.Adder.plus#0, arguments=[%15, %16, %19]), result int, owner S2
+    (%22: future<int> facts(managed(deps=d6)), %23: cache-state, %24: scope<S2>) = fut.new %20, %21, %17, environment deferred(function=@app.Adder.plus#0, arguments=[%15, %16, %19]), result int, owner S2
     %25: deps = deps.of %22
     %26: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%24, mode=consume), frame_slot(slot=1, value=%25, mode=borrow), frame_slot(slot=2, value=%9, mode=consume), frame_slot(slot=3, value=%23, mode=consume)], continuation 1
     invoke.own await %22, result int
@@ -212,7 +216,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M17)
     %29: failure = scope.unwind %28, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%29)
     ret
-    ^b6(%30: int, %31: deps, %32: future<int> facts(managed(deps=d3)), %33: scope<S2>, %34: deps) in S2:
+    ^b6(%30: int, %31: deps, %32: future<int> facts(managed(deps=d7)), %33: scope<S2>, %34: deps) in S2:
     %35: deps = deps.of %30
     invoke.own scope.end %33, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b8($closed, %30)

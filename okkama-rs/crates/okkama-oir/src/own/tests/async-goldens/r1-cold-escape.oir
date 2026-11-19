@@ -110,9 +110,11 @@ func @main() -> int [entry, async] abi observation summary(M12) async-creation(M
     dependency d2: dependency = from_ssa(%23)
     dependency d3: dependency = from_ssa(%35)
     dependency d4: dependency = key(k0)
-    dependency d5: dependency = from_ssa(%43)
-    dependency d6: dependency = from_ssa(%66)
-    dependency d7: dependency = from_ssa(%74)
+    dependency d5: dependency = from_ssa(%39)
+    dependency d6: dependency = union([d4, d5])
+    dependency d7: dependency = from_ssa(%43)
+    dependency d8: dependency = from_ssa(%66)
+    dependency d9: dependency = from_ssa(%74)
     selection s0: selection = union([selection(%9)])
     selection s1: selection = admissible(s0)
     selection s2: selection = union([selection(%34)])
@@ -151,7 +153,7 @@ func @main() -> int [entry, async] abi observation summary(M12) async-creation(M
     %36: own = own.join [%33, %30]
     (%37: own, %38: own, %39: deps) = own.split %36, s2
     %40: own = own.join [%37, %38]
-    (%41: future<int> facts(managed(deps=d4)), %42: scope<S4>) = fut.new %40, %39, %32, environment deferred(function=@read, arguments=[%34]), result int, owner S4
+    (%41: future<int> facts(managed(deps=d6)), %42: scope<S4>) = fut.new %40, %39, %32, environment deferred(function=@read, arguments=[%34]), result int, owner S4
     %43: deps = deps.of %41
     %44: own = own.empty
     %45: pending = exit.prepare fallthrough %41, %44, deps(%43) at B0
@@ -165,10 +167,10 @@ func @main() -> int [entry, async] abi observation summary(M12) async-creation(M
     %57: failure = scope.unwind %56, %53, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b17
     ^b10 in S3:
-    (%58: future<int> facts(managed(deps=d5)), %59: own, %60: deps) = exit.commit %51, destination scope(S3), result future<int>
+    (%58: future<int> facts(managed(deps=d7)), %59: own, %60: deps) = exit.commit %51, destination scope(S3), result future<int>
     %61: scope<S3> = own.admit %29, %59
     br ^b3(%58, %60, %61)
-    ^b11(%62: scope<S3>, %63: own, %64: deps, %65: future<int> facts(managed(deps=d6)), %66: deps) in S3:
+    ^b11(%62: scope<S3>, %63: own, %64: deps, %65: future<int> facts(managed(deps=d8)), %66: deps) in S3:
     %67: scope<S3> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%65, packet=%63), state=%62, original_scope=S3)
     invoke.own await %65, result int
         normal ^b13($value, $deps, %65, %66, %67)
@@ -176,7 +178,7 @@ func @main() -> int [entry, async] abi observation summary(M12) async-creation(M
     ^b12(%68: scope<S3>, %69: failure) in S3:
     %70: failure = scope.unwind %68, %69, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %70
-    ^b13(%71: int, %72: deps, %73: future<int> facts(managed(deps=d7)), %74: deps, %75: scope<S3>) in S3:
+    ^b13(%71: int, %72: deps, %73: future<int> facts(managed(deps=d9)), %74: deps, %75: scope<S3>) in S3:
     invoke.own scope.end %75, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b15($closed, %71)
         unwind ^b16($closed, $failure)

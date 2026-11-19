@@ -24,7 +24,9 @@ func @task() -> R [extern "fixture.task"] abi observation summary(Mt);
 func @f() -> void summary(Mf) {
     service.schedule Schedule0 owner S, protocol Services, duties [%a]
     key ka: key = service_of(value=%a, kind=cache)
-    dependency da: dependency = key(ka)
+    dependency dak864: dependency = key(ka)
+    dependency daf864: dependency = from_ssa(%x0)
+    dependency da: dependency = union([dak864, daf864])
     selection s0: selection = union([])
 ^entry in S:
     %q: scope<S> = scope.begin S

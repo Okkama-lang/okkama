@@ -56,10 +56,19 @@ impl Driver<'_, '_> {
             point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value: plain.value }))?;
             plain.deps = Some(point.result(SlotName::Value)?);
         }
-        let selection = self.body.selections.alloc(match latest {
-            Some(latest) => SelectionExpr::Value(latest.value),
-            None => SelectionExpr::Union(vec![]),
-        }).map_err(arena)?;
+        // #862 (§6.3c): a returned Future's selection also names the bound inputs it borrows, which leave beside it.
+        let bound = value.and_then(|value| self.future_bound_inputs.get(&value)).cloned().unwrap_or_default();
+        let selection = match latest {
+            Some(latest) if !bound.is_empty() => {
+                let mut parts = vec![self.body.selections.alloc(SelectionExpr::Value(latest.value)).map_err(arena)?];
+                for input in bound {
+                    parts.push(self.body.selections.alloc(SelectionExpr::Value(input)).map_err(arena)?);
+                }
+                self.body.selections.alloc(SelectionExpr::Union(parts)).map_err(arena)?
+            }
+            Some(latest) => self.body.selections.alloc(SelectionExpr::Value(latest.value)).map_err(arena)?,
+            None => self.body.selections.alloc(SelectionExpr::Union(vec![])).map_err(arena)?,
+        };
         point = self.emit(point, Operation::Exit(ExitOp::Prepare { exit: PreparedExit {
             kind,
             value: latest.map(|latest| latest.value), packet: Some(packet),
@@ -124,6 +133,8 @@ impl Driver<'_, '_> {
                     crate::own::futures::is_future(self.module, value.ty)
                 });
                 if future && !self.borrowed_future(scope, *original) {
+                    // #862 (§6.3c): the bound inputs the Future borrows leave beside it, in the exit's packet.
+                    values.extend(self.future_bound_inputs.get(original).into_iter().flatten().copied());
                     continue;
                 }
                 values.push(point.env.value(*original)?.value);

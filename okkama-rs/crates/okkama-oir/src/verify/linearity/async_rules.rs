@@ -709,6 +709,9 @@ impl Engine<'_, '_> {
                         SlotName::Value => {
                             slot.refs.insert(origin);
                             slot.identity = Some(origin);
+                            // #864: the Future depends on what its `deps` operand retains; its references stay its
+                            // identity, which other rules read by origin.
+                            slot.requirements.extend(before.full_deps[deps.as_u32() as usize].iter().copied());
                         }
                         _ => {}
                     }

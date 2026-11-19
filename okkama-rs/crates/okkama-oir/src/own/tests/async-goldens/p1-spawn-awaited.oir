@@ -64,7 +64,9 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     boundary B0 lexical in S1
     key k0: key = service_of(value=%6, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%16)
+    dependency d1: dependency = from_ssa(%5)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%16)
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1
     br ^b1(%0)
@@ -75,7 +77,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     ^b2(%2: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %3: scope<S1>) in S1:
     %4: own = own.empty
     %5: deps = deps.of %2
-    (%6: future<int> facts(managed(deps=d0)), %7: scope<S1>) = fut.new %4, %5, %3, environment deferred(function=@app.Job.run#0, arguments=[%2]), result int, owner S1, binding b0
+    (%6: future<int> facts(managed(deps=d2)), %7: scope<S1>) = fut.new %4, %5, %3, environment deferred(function=@app.Job.run#0, arguments=[%2]), result int, owner S1, binding b0
     %8: deps = deps.of %6
     %9: scope<S1> = fut.spawn %6, state %7
     invoke.own await %6, result int
@@ -84,7 +86,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     ^b3(%10: failure, %11: scope<S1>) in S1:
     %12: failure = scope.unwind %11, %10, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %12
-    ^b4(%13: int, %14: deps, %15: future<int> facts(managed(deps=d1)), %16: deps, %17: scope<S1>) in S1:
+    ^b4(%13: int, %14: deps, %15: future<int> facts(managed(deps=d3)), %16: deps, %17: scope<S1>) in S1:
     invoke.own scope.end %17, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b6($closed, %13)
         unwind ^b7($closed, $failure)

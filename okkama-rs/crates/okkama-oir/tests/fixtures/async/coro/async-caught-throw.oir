@@ -1,7 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/async-caught-throw.oir.
-// The body throws; its block unwind catches the throw inside the body, so only the failure after the
-// lexical unwind is published (C-2).
 module async_caught_throw
 entry @main
 
@@ -60,7 +57,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     boundary B0 lexical in S1
     key k0: key = service_of(value=%9, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%18)
+    dependency d1: dependency = from_ssa(%7)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%18)
     selection s0: selection = union([])
     ^b0 in S1:
     %1: frame<@main> = frame.resume %0, continuation 0
@@ -70,13 +69,13 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %4: own = own.empty
     (%5: own, %6: own, %7: deps) = own.split %4, s0
     %8: own = own.join [%5, %6]
-    (%9: future<int> facts(managed(deps=d0)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@work), result int, owner S1
+    (%9: future<int> facts(managed(deps=d2)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@work), result int, owner S1
     %12: deps = deps.of %9
     %13: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%11, mode=consume), frame_slot(slot=1, value=%12, mode=borrow), frame_slot(slot=2, value=%10, mode=consume)], continuation 1
     invoke.own await %9, result int
         normal ^b6($value, $deps)
         unwind ^b7($failure, $task, $receipt)
-    ^b2(%14: int, %15: deps, %16: future<int> facts(managed(deps=d1)), %17: scope<S1>, %18: deps) in S1:
+    ^b2(%14: int, %15: deps, %16: future<int> facts(managed(deps=d3)), %17: scope<S1>, %18: deps) in S1:
     %19: deps = deps.of %14
     invoke.own scope.end %17, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b4($closed, %14)

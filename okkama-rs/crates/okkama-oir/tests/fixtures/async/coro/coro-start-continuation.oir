@@ -1,6 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/coro-start-continuation.oir.
-// C-2: continuation 0 restores the receiver, the language arguments and the input packet, in order.
 module coro_start_continuation
 entry @main
 
@@ -97,7 +95,9 @@ func @run(%0: frame<@run>) -> void [async] summary(M8) async-creation(M11) async
     boundary B1 lexical in S2
     key k0: key = service_of(value=%12, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%21)
+    dependency d1: dependency = from_ssa(%11)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%21)
     ^b0 in S2:
     (%1: frame<@run>, %2: Box facts(plain(certificate=closed_graph(ty=Box))), %3: int, %4: own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=Box), saved_slot(slot=1, ty=int), saved_slot(slot=2, ty=own, linear=true)]
     %5: scope<S2> = scope.begin S2
@@ -106,13 +106,13 @@ func @run(%0: frame<@run>) -> void [async] summary(M8) async-creation(M11) async
     ^b1(%7: Box facts(plain(certificate=closed_graph(ty=Box))), %8: int, %9: scope<S2>) in S2:
     %10: own = own.empty
     %11: deps = deps.of %7
-    (%12: future<int> facts(managed(deps=d0)), %13: cache-state, %14: scope<S2>) = fut.new %10, %11, %9, environment deferred(function=@Box.get, arguments=[%7, %8]), result int, owner S2
+    (%12: future<int> facts(managed(deps=d2)), %13: cache-state, %14: scope<S2>) = fut.new %10, %11, %9, environment deferred(function=@Box.get, arguments=[%7, %8]), result int, owner S2
     %15: deps = deps.of %12
     %16: frame<@run> = frame.save %1, slots [frame_slot(slot=3, value=%14, mode=consume), frame_slot(slot=4, value=%15, mode=borrow), frame_slot(slot=5, value=%13, mode=consume)], continuation 1
     invoke.own await %12, result int
         normal ^b6($value, $deps)
         unwind ^b7($failure, $task, $receipt)
-    ^b2(%17: int, %18: deps, %19: future<int> facts(managed(deps=d1)), %20: scope<S2>, %21: deps) in S2:
+    ^b2(%17: int, %18: deps, %19: future<int> facts(managed(deps=d3)), %20: scope<S2>, %21: deps) in S2:
     %22: own = own.empty
     %23: deps = deps.of %17
     %24: pending = exit.prepare return %17, %22, deps(%23) at B1
@@ -159,7 +159,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M15)
     boundary B0 lexical in S3
     key k0: key = service_of(value=%10, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%22)
+    dependency d1: dependency = from_ssa(%9)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%22)
     ^b0 in S3:
     %1: frame<@main> = frame.resume %0, continuation 0
     %2: scope<S3> = scope.begin S3
@@ -173,7 +175,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M15)
     %7: int = const 5
     %8: own = own.empty
     %9: deps = deps.of %5
-    (%10: future<int> facts(managed(deps=d0)), %11: cache-state, %12: scope<S3>) = fut.new %8, %9, %6, environment deferred(function=@run, arguments=[%5, %7]), result int, owner S3
+    (%10: future<int> facts(managed(deps=d2)), %11: cache-state, %12: scope<S3>) = fut.new %8, %9, %6, environment deferred(function=@run, arguments=[%5, %7]), result int, owner S3
     %13: deps = deps.of %10
     %14: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%12, mode=consume), frame_slot(slot=1, value=%13, mode=borrow), frame_slot(slot=2, value=%11, mode=consume)], continuation 1
     invoke.own await %10, result int
@@ -183,7 +185,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M15)
     %17: failure = scope.unwind %16, %15, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%17)
     ret
-    ^b4(%18: int, %19: deps, %20: future<int> facts(managed(deps=d1)), %21: scope<S3>, %22: deps) in S3:
+    ^b4(%18: int, %19: deps, %20: future<int> facts(managed(deps=d3)), %21: scope<S3>, %22: deps) in S3:
     %23: deps = deps.of %18
     invoke.own scope.end %21, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b6($closed, %18)

@@ -1,8 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/d857-branch-temporary.oir.
-// D26 (#857), a V2-shaped variant of the own golden async-never-awaited: the Future is created in one branch of
-// its owner, and the owner's close follows the join. Coro makes S1's duty a slot: empty after the begin, filled by
-// fut.new, merged at the join, settled at the close.
 module d857_branch_temporary
 entry @main
 scope S0 action in @explode

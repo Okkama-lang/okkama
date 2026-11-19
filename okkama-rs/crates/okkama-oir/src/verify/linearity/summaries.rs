@@ -32,6 +32,31 @@ impl Engine<'_, '_> {
             if self.module.functions.get(*target).is_ok_and(|target| target.attrs.contains(&FunctionAttr::Async))))
     }
 
+    /// #862 (OIR-2-async-remaining §6.3c, ruling (a)): the keys a returned bare Future carries beside its references,
+    /// in the exit's selection and its result graph. They are in its full deps but not its references, and belong to a
+    /// parameter the summary declares taken into the result. Empty for any other value.
+    pub(super) fn future_carried_keys(&mut self, flow: &Flow, value: ValueId) -> BTreeSet<Origin> {
+        if !matches!(super::super::later::value_type(self.module, self.body, value), Some(Type::Future(_))) {
+            return BTreeSet::new();
+        }
+        let Some(summary) = self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok()) else {
+            return BTreeSet::new();
+        };
+        let arguments: Vec<_> = self.entry_values().into_iter().filter(|v| {
+            self.body.values.get(*v).ok().and_then(|v| self.module.types.get(v.ty).ok())
+                .is_some_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
+        }).collect();
+        let mut taken = BTreeSet::new();
+        for parameter in &summary.parameters {
+            if parameter.convention == FreshConvention::Take && parameter.destination == TransferDestination::Result
+                && let Some(selection) = &parameter.retention {
+                taken.extend(self.summary_selection(flow, &arguments, selection));
+            }
+        }
+        let index = value.as_u32() as usize;
+        flow.full_deps[index].difference(&flow.refs[index]).filter(|key| taken.contains(key)).copied().collect()
+    }
+
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
         #[cfg(any(test, feature = "verifier-differential"))]
         let _work = super::super::work_profile::Operation::new("summaries::call_entry");
@@ -680,6 +705,48 @@ impl Engine<'_, '_> {
                     if accepted && !thunk && !self.subset(piece, &permitted, &labels) {
                         self.error(R::B51, "body exports accepted inputs beyond its declared take retention");
                     }
+                }
+            }
+            // #862 (V2, OIR-2-async-remaining §6.3c, narrowed): the converse, for what a result depends on. When an
+            // exported value's references or full deps reach the keys of a parameter declared taken into the result,
+            // some exported piece of the accepted input still holds that parameter's part: a result does not depend on
+            // an accepted input the callee closes. A parameter that only may leave (`pick`, `maybe`) is unaffected.
+            let reached: BTreeSet<_> = language.iter().flat_map(|value| {
+                flow.refs[value.as_u32() as usize].iter().chain(&flow.full_deps[value.as_u32() as usize]).copied()
+            }).collect();
+            for (index, parameter) in summary.parameters.iter().enumerate() {
+                if parameter.convention != FreshConvention::Take
+                    || parameter.destination != TransferDestination::Result {
+                    continue;
+                }
+                // A bare Future parameter brings no entry of its own (PR-B2): its duty does not travel as a piece of
+                // the accepted input.
+                if arguments.get(index).is_some_and(|value| {
+                    matches!(super::super::later::value_type(self.module, self.body, *value), Some(Type::Future(_)))
+                }) {
+                    continue;
+                }
+                let Some(selection) = &parameter.retention else { continue };
+                let keys = self.summary_selection(flow, &arguments, selection);
+                if keys.is_empty() || keys.is_disjoint(&reached) {
+                    continue;
+                }
+                let pieces = values.iter().flat_map(|value| flow.tokens[value.as_u32() as usize].pieces.iter());
+                let exported = pieces.into_iter().any(|piece| {
+                    let accepted = matches!(piece.origin, Origin::Input(input) if self.body.values.get(input).ok()
+                        .and_then(|v| self.module.types.get(v.ty).ok()) == Some(&Type::Service(ServiceType::Own)));
+                    // The piece lies in the intersection of its selected filters' graphs: it holds the parameter's
+                    // part unless a rejected filter covers those keys, and when it is restricted, one of its selected
+                    // filters names one of them.
+                    let excluded = piece.predicates.iter().any(|(filter, selected)| {
+                        !*selected && keys.is_subset(&filter.keys)
+                    });
+                    let mut chosen = piece.predicates.iter().filter(|(_, selected)| **selected).peekable();
+                    let named = chosen.peek().is_none() || chosen.any(|(filter, _)| !filter.keys.is_disjoint(&keys));
+                    accepted && !excluded && named
+                });
+                if !exported {
+                    self.error(R::B51, "a parameter declared taken into the result stays in the callee");
                 }
             }
         }

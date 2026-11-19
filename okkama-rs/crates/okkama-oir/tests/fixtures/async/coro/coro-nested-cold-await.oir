@@ -1,6 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/coro-nested-cold-await.oir.
-// A cold Future awaited inside the body of another cold Future: each body brackets its own await.
 module coro_nested_cold_await
 entry @main
 scope S0 action in @inner
@@ -72,7 +70,9 @@ func @outer(%0: frame<@outer>) -> void [async] summary(M7) async-creation(M10) a
     boundary B1 lexical in S1
     key k0: key = service_of(value=%10, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%19)
+    dependency d1: dependency = from_ssa(%9)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%19)
     ^b0 in S1:
     (%1: frame<@outer>, %2: int, %3: own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=int), saved_slot(slot=1, ty=own, linear=true)]
     %4: scope<S1> = scope.begin S1
@@ -81,13 +81,13 @@ func @outer(%0: frame<@outer>) -> void [async] summary(M7) async-creation(M10) a
     ^b1(%6: int, %7: scope<S1>) in S1:
     %8: own = own.empty
     %9: deps = deps.of %6
-    (%10: future<int> facts(managed(deps=d0)), %11: cache-state, %12: scope<S1>) = fut.new %8, %9, %7, environment deferred(function=@inner, arguments=[%6]), result int, owner S1
+    (%10: future<int> facts(managed(deps=d2)), %11: cache-state, %12: scope<S1>) = fut.new %8, %9, %7, environment deferred(function=@inner, arguments=[%6]), result int, owner S1
     %13: deps = deps.of %10
     %14: frame<@outer> = frame.save %1, slots [frame_slot(slot=2, value=%12, mode=consume), frame_slot(slot=3, value=%13, mode=borrow), frame_slot(slot=4, value=%11, mode=consume)], continuation 1
     invoke.own await %10, result int
         normal ^b6($value, $deps)
         unwind ^b7($failure, $task, $receipt)
-    ^b2(%15: int, %16: deps, %17: future<int> facts(managed(deps=d1)), %18: scope<S1>, %19: deps) in S1:
+    ^b2(%15: int, %16: deps, %17: future<int> facts(managed(deps=d3)), %18: scope<S1>, %19: deps) in S1:
     %20: own = own.empty
     %21: deps = deps.of %15
     %22: pending = exit.prepare return %15, %20, deps(%21) at B1
@@ -134,7 +134,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M13)
     boundary B0 lexical in S2
     key k0: key = service_of(value=%7, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%16)
+    dependency d1: dependency = from_ssa(%6)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%16)
     ^b0 in S2:
     %1: frame<@main> = frame.resume %0, continuation 0
     %2: scope<S2> = scope.begin S2
@@ -143,13 +145,13 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M13)
     %4: int = const 7
     %5: own = own.empty
     %6: deps = deps.of %4
-    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S2>) = fut.new %5, %6, %3, environment deferred(function=@outer, arguments=[%4]), result int, owner S2
+    (%7: future<int> facts(managed(deps=d2)), %8: cache-state, %9: scope<S2>) = fut.new %5, %6, %3, environment deferred(function=@outer, arguments=[%4]), result int, owner S2
     %10: deps = deps.of %7
     %11: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%9, mode=consume), frame_slot(slot=1, value=%10, mode=borrow), frame_slot(slot=2, value=%8, mode=consume)], continuation 1
     invoke.own await %7, result int
         normal ^b6($value, $deps)
         unwind ^b7($failure, $task, $receipt)
-    ^b2(%12: int, %13: deps, %14: future<int> facts(managed(deps=d1)), %15: scope<S2>, %16: deps) in S2:
+    ^b2(%12: int, %13: deps, %14: future<int> facts(managed(deps=d3)), %15: scope<S2>, %16: deps) in S2:
     %17: deps = deps.of %12
     invoke.own scope.end %15, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b4($closed, %12)

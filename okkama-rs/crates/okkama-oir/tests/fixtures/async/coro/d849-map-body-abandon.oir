@@ -1,7 +1,4 @@
 oir 2 coro
-// #849: a Future created in a `map` body and never awaited: `(0..2).map() -> index { let pending =
-// Now().named("x" + index.string()); index * 10; }`. The body scope S3 settles the cold Future's duty at each
-// iteration's close; the failure of `Now()` before the creation reaches its own cleanup. Coro's output for ../own/d849-map-body-abandon.oir.
 module app v1.0.0
 requires core, async
 entry @main

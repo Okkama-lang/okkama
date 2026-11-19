@@ -33,6 +33,8 @@ func @main() -> int [entry] abi observation summary(M6) {
     boundary B0 lexical in S1
     key k0: key = service_of(value=%7, kind=cache)
     dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%5)
+    dependency d2: dependency = union([d0, d1])
     selection s0: selection = union([])
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1
@@ -41,7 +43,7 @@ func @main() -> int [entry] abi observation summary(M6) {
     %2: own = own.empty
     (%3: own, %4: own, %5: deps) = own.split %2, s0
     %6: own = own.join [%3, %4]
-    (%7: future<int> facts(managed(deps=d0)), %8: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@explode), result int, owner S1, binding b0
+    (%7: future<int> facts(managed(deps=d2)), %8: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@explode), result int, owner S1, binding b0
     %9: deps = deps.of %7
     %10: int = const 0
     %11: closed = scope.end %8, effects scope_effects(failures=[], suspends=false, cancel=false)

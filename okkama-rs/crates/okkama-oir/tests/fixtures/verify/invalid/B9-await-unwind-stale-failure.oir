@@ -62,7 +62,9 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     binding b0 "f": future<int> in S1
     boundary B0 lexical in S1
     key k0: key = service_of(value=%6, kind=cache)
-    dependency d0: dependency = key(k0)
+    dependency d0k864: dependency = key(k0)
+    dependency d0f864: dependency = from_ssa(%5)
+    dependency d0: dependency = union([d0k864, d0f864])
     dependency d1: dependency = from_ssa(%16)
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1

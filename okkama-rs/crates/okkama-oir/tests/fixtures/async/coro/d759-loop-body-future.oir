@@ -1,7 +1,4 @@
 oir 2 coro
-// #759: a Future created and bound in a `for` body: `for 1..=3 -> i { let f = Job(n: i).run(); }`. The body
-// scope S2 owns the duty and settles it at each iteration's close; the back edge carries no token, so the unwind
-// close of a failed `Job(n: i)` in a later iteration settles nothing. Coro's output for ../own/d759-loop-body-future.oir.
 module app v1.0.0
 requires core, async
 entry @main

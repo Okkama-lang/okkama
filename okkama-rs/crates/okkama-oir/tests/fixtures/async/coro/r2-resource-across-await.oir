@@ -1,6 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/r2-resource-across-await.oir (R2): the bracket of the await saves the
-// scope state that owns R, the reference to R and its deps, and the resume restores them.
 module resource_across_await
 
 object R {

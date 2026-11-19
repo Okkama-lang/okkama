@@ -504,7 +504,7 @@ fn r1_a_rehome_names_the_destination_of_its_exit() {
     let caller = edit(&valid, COLD_REHOME, &COLD_REHOME.replace("target S3", "target caller"));
     assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
     let make = golden("r1-make-escape");
-    let returned = "cache.rehome %47, %50, future %46, target caller, protocol P0";
+    let returned = "cache.rehome %49, %52, future %48, target caller, protocol P0";
     assert!(make.contains(returned));
     // make's own scope is no destination of its return.
     let own = edit(&make, returned, &returned.replace("target caller", "target S3"));

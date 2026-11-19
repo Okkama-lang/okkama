@@ -1,8 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/d857-branch-spawn.oir.
-// D26 (#857), a V2-shaped variant of the own golden p1-spawn-detached: the Future is created and spawned in one
-// branch of its owner, and the owner's close follows the join. Coro makes both duties of S1 slots, the task slot
-// filled by the spawn, and the close settles the two merged slots, the task first.
 module d857_branch_spawn
 requires core, async
 entry @main

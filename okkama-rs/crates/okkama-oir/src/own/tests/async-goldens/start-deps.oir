@@ -125,9 +125,13 @@ func @main() -> int [entry, async] abi observation summary(M17) async-creation(M
     key k0: key = service_of(value=%6, kind=cache)
     key k1: key = service_of(value=%19, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%15)
-    dependency d2: dependency = key(k1)
-    dependency d3: dependency = from_ssa(%29)
+    dependency d1: dependency = from_ssa(%5)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%15)
+    dependency d4: dependency = key(k1)
+    dependency d5: dependency = from_ssa(%18)
+    dependency d6: dependency = union([d4, d5])
+    dependency d7: dependency = from_ssa(%29)
     ^b0 in S2:
     %0: scope<S2> = scope.begin S2
     br ^b1(%0)
@@ -138,7 +142,7 @@ func @main() -> int [entry, async] abi observation summary(M17) async-creation(M
     ^b2(%2: app.Quiet facts(plain(certificate=closed_graph(ty=app.Quiet))), %3: scope<S2>) in S2:
     %4: own = own.empty
     %5: deps = deps.of %2
-    (%6: future<int> facts(managed(deps=d0)), %7: scope<S2>) = fut.new %4, %5, %3, environment deferred(function=@app.Quiet.run#0, arguments=[%2]), result int, owner S2, binding b0
+    (%6: future<int> facts(managed(deps=d2)), %7: scope<S2>) = fut.new %4, %5, %3, environment deferred(function=@app.Quiet.run#0, arguments=[%2]), result int, owner S2, binding b0
     %8: deps = deps.of %6
     invoke.own call @app.Adder.new#0()
         normal ^b4($value, %6, %7, %8)
@@ -146,11 +150,11 @@ func @main() -> int [entry, async] abi observation summary(M17) async-creation(M
     ^b3(%9: failure, %10: scope<S2>) in S2:
     %11: failure = scope.unwind %10, %9, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %11
-    ^b4(%12: app.Adder facts(plain(certificate=closed_graph(ty=app.Adder))), %13: future<int> facts(managed(deps=d1)), %14: scope<S2>, %15: deps) in S2:
+    ^b4(%12: app.Adder facts(plain(certificate=closed_graph(ty=app.Adder))), %13: future<int> facts(managed(deps=d3)), %14: scope<S2>, %15: deps) in S2:
     %16: int = const 1
     %17: own = own.empty
     %18: deps = deps.of %13
-    (%19: future<int> facts(managed(deps=d2)), %20: scope<S2>) = fut.new %17, %18, %14, environment deferred(function=@app.Adder.plus#0, arguments=[%12, %13, %16]), result int, owner S2
+    (%19: future<int> facts(managed(deps=d6)), %20: scope<S2>) = fut.new %17, %18, %14, environment deferred(function=@app.Adder.plus#0, arguments=[%12, %13, %16]), result int, owner S2
     %21: deps = deps.of %19
     invoke.own await %19, result int
         normal ^b6($value, $deps, %19, %20, %21)
@@ -158,7 +162,7 @@ func @main() -> int [entry, async] abi observation summary(M17) async-creation(M
     ^b5(%22: failure, %23: scope<S2>) in S2:
     %24: failure = scope.unwind %23, %22, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %24
-    ^b6(%25: int, %26: deps, %27: future<int> facts(managed(deps=d3)), %28: scope<S2>, %29: deps) in S2:
+    ^b6(%25: int, %26: deps, %27: future<int> facts(managed(deps=d7)), %28: scope<S2>, %29: deps) in S2:
     invoke.own scope.end %28, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b8($closed, %25)
         unwind ^b9($closed, $failure)

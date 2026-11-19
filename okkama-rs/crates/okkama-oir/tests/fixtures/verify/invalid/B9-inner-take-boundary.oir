@@ -60,7 +60,9 @@ func @f(%0: frame<@f>) -> void [async] summary(M3) async-creation(M2) async-body
     service.schedule Schedule0#1 owner S1, protocol P0, duties [%39]
     boundary B0 lexical in S1
     key k0: key = service_of(value=%8, kind=cache)
-    dependency d0: dependency = key(k0)
+    dependency d0k864: dependency = key(k0)
+    dependency d0f864: dependency = from_ssa(%7)
+    dependency d0: dependency = union([d0k864, d0f864])
     selection s0: selection = union([])
     ^b0 in S1:
     (%1: frame<@f>, %2: own) = frame.resume %0, continuation 0, slots [saved_slot(slot=0, ty=own, linear=true)]

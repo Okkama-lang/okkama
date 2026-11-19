@@ -371,8 +371,11 @@ impl Engine<'_, '_> {
                     if let Some(i) = slot_index(SlotName::ExternalDeps) {
                         let (keys, _) = self.selection(&before, *selection);
                         slots[i].refs = external_keys(keys, slots.iter().map(|slot| &slot.token));
-                        // #864: and what the selected values depend on without a key (their requirements).
-                        slots[i].requirements = self.selection_requirements(&before, *selection);
+                        // #864: and what the selected values depend on without a key (their requirements). A deps
+                        // value retains them as references, as `deps.of` does, so a fact that names it (`FromSsa`)
+                        // states them too.
+                        let requirements = self.selection_requirements(&before, *selection);
+                        slots[i].refs.extend(requirements);
                     }
                 }
                 TransferRule::Admit { state, packet, output, provenance } => {
@@ -814,6 +817,27 @@ impl Engine<'_, '_> {
             }
             retained.extend(deps);
         }
+        // #864 (OIR-2-async-remaining §6.3c, ruling (i)): an await's outcome inherits what the Future requires only
+        // when its type can hold a reference, since a body may return something that refers to a borrowed input. Its
+        // deps result then names those requirements too (`FromSsa` reads references), so own's facts for the outcome
+        // agree with the flow. A value of closed plain type depends on nothing.
+        let mut inherited_deps = BTreeSet::new();
+        if let Operation::Async(AsyncOp::Await { future, .. } | AsyncOp::AwaitShielded { future, .. }
+            | AsyncOp::AwaitTake { future, .. }) = op {
+            let index = future.as_u32() as usize;
+            let inherited: BTreeSet<_> = before.full_deps[index].difference(&before.refs[index]).copied().collect();
+            let value = schema.results.iter().position(|slot| slot.name == SlotName::Value);
+            let managed = value.is_some_and(|i| match schema.results[i].ty {
+                ResultType::Exact(ty) => self.managed.get(ty.as_u32() as usize).copied().unwrap_or(true),
+                _ => true,
+            });
+            if let Some(i) = value && !managed {
+                slots[i].requirements.retain(|key| !inherited.contains(key));
+            }
+            if managed {
+                inherited_deps = inherited;
+            }
+        }
         let call = super::super::summaries::call(op);
         if normal && let Some((call, receiver, _)) = call {
             self.call_results(call, receiver, origin, before, flow, schema, slots);
@@ -996,6 +1020,9 @@ impl Engine<'_, '_> {
             }
             if slot.refs.is_empty() && schema.results[i].name == SlotName::Deps {
                 slot.refs.extend(&retained);
+            }
+            if schema.results[i].name == SlotName::Deps {
+                slot.refs.extend(&inherited_deps);
             }
         }
     }

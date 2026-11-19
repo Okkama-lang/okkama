@@ -826,6 +826,55 @@ async main() is int {
 "#, "pair one two\ndestroy two\ndestroy one\ngot one3\nmain end\n");
 }
 
+/// #862 (OIR-2-async-remaining §6.3c): a synchronous function returns a cold Future over its parameter. The
+/// parameter is a binding of `start`, never moved into the Future: the Future borrows it, and it leaves beside the
+/// Future in the result packet, so the caller destroys it at its own close. Tomato's output.
+#[test]
+fn a_returned_future_over_a_parameter_takes_the_parameter_back_beside_it() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Feeder { Feeder(); async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; } }
+object Starter { Starter(); start(r is Res) is Future<int> { Feeder().feed(r); } }
+async main() is int {
+    let f = Starter().start(Res(name: "via start"));
+    Stdout().writeln("fed " + (await f).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed via start\nfed 1\nmain end\ndestroy via start\n");
+}
+
+/// #862 (§6.3c): two Futures over one parameter, both returned and both awaited. The resource is read twice and
+/// destroyed once, at the caller's close: a Future that owned it would destroy it at the end of its body.
+#[test]
+fn two_returned_futures_over_one_parameter_read_it_and_the_caller_destroys_it() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Feeder { Feeder(); async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; } }
+object Starter { Starter(); start(r is Res) is Future<int> { Feeder().feed(r); } }
+async main() is int {
+    let r = Res(name: "shared");
+    let f = Starter().start(r);
+    let g = Starter().start(r);
+    Stdout().writeln("got " + (await f + await g).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed shared\nfeed shared\ngot 2\nmain end\ndestroy shared\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

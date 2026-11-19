@@ -65,7 +65,9 @@ func @check(%0: frame<@check>) -> void [async] abi observation summary(M9) async
     boundary B0 lexical in S1
     key k0: key = service_of(value=%9, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%17)
+    dependency d1: dependency = from_ssa(%8)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%17)
     ^b0 in S1:
     %1: frame<@check> = frame.resume %0, continuation 0
     %2: int = const 0
@@ -76,13 +78,13 @@ func @check(%0: frame<@check>) -> void [async] abi observation summary(M9) async
     %6: str = const "effect"
     %7: own = own.empty
     %8: deps = deps.of %6
-    (%9: future<void> facts(managed(deps=d0)), %10: cache-state, %11: scope<S1>) = fut.new %7, %8, %5, environment deferred(function=@note, arguments=[%6]), owner S1, binding b0
+    (%9: future<void> facts(managed(deps=d2)), %10: cache-state, %11: scope<S1>) = fut.new %7, %8, %5, environment deferred(function=@note, arguments=[%6]), owner S1, binding b0
     %12: deps = deps.of %9
     %13: frame<@check> = frame.save %1, slots [frame_slot(slot=0, value=%11, mode=consume), frame_slot(slot=1, value=%12, mode=borrow), frame_slot(slot=2, value=%10, mode=consume), frame_slot(slot=3, value=%3, mode=borrow)], continuation 1
     invoke.own await %9
         normal ^b6($deps)
         unwind ^b7($failure, $task, $receipt)
-    ^b2(%14: deps, %15: future<void> facts(managed(deps=d1)), %16: scope<S1>, %17: deps) in S1:
+    ^b2(%14: deps, %15: future<void> facts(managed(deps=d3)), %16: scope<S1>, %17: deps) in S1:
     invoke.own scope.end %16, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b4($closed)
         unwind ^b5($closed, $failure)

@@ -1,7 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/async-void.oir.
-// void.await-for-effect: two void Futures of one owner; each close names the versions of both duties
-// that reach it, in own's schedule order.
 module async_void
 entry @main
 scope S0 action in @note
@@ -74,10 +71,14 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     key k0: key = service_of(value=%7, kind=cache)
     key k1: key = service_of(value=%19, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%15)
-    dependency d2: dependency = key(k1)
-    dependency d3: dependency = from_ssa(%37)
-    dependency d4: dependency = from_ssa(%53)
+    dependency d1: dependency = from_ssa(%6)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%15)
+    dependency d4: dependency = key(k1)
+    dependency d5: dependency = from_ssa(%18)
+    dependency d6: dependency = union([d4, d5])
+    dependency d7: dependency = from_ssa(%37)
+    dependency d8: dependency = from_ssa(%53)
     ^b0 in S1:
     %1: frame<@main> = frame.resume %0, continuation 0
     %2: scope<S1> = scope.begin S1
@@ -86,17 +87,17 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %4: str = const "first"
     %5: own = own.empty
     %6: deps = deps.of %4
-    (%7: future<void> facts(managed(deps=d0)), %8: cache-state, %9: scope<S1>) = fut.new %5, %6, %3, environment deferred(function=@note, arguments=[%4]), owner S1
+    (%7: future<void> facts(managed(deps=d2)), %8: cache-state, %9: scope<S1>) = fut.new %5, %6, %3, environment deferred(function=@note, arguments=[%4]), owner S1
     %10: deps = deps.of %7
     %11: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%9, mode=consume), frame_slot(slot=1, value=%10, mode=borrow), frame_slot(slot=2, value=%8, mode=consume)], continuation 1
     invoke.own await %7
         normal ^b10($deps)
         unwind ^b11($failure, $task, $receipt)
-    ^b2(%12: deps, %13: future<void> facts(managed(deps=d1)), %14: scope<S1>, %15: deps) in S1:
+    ^b2(%12: deps, %13: future<void> facts(managed(deps=d3)), %14: scope<S1>, %15: deps) in S1:
     %16: str = const "second"
     %17: own = own.empty
     %18: deps = deps.of %16
-    (%19: future<void> facts(managed(deps=d2)), %20: cache-state, %21: scope<S1>) = fut.new %17, %18, %14, environment deferred(function=@note, arguments=[%16]), owner S1, binding b0
+    (%19: future<void> facts(managed(deps=d6)), %20: cache-state, %21: scope<S1>) = fut.new %17, %18, %14, environment deferred(function=@note, arguments=[%16]), owner S1, binding b0
     %22: deps = deps.of %19
     %23: frame<@main> = frame.save %73, slots [frame_slot(slot=0, value=%21, mode=consume), frame_slot(slot=1, value=%22, mode=borrow), frame_slot(slot=2, value=%76, mode=consume), frame_slot(slot=4, value=%20, mode=consume)], continuation 2
     invoke.own await %19
@@ -109,7 +110,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %33: failure = scope.unwind %29, %30, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %31, failure(%33)
     ret
-    ^b4(%34: deps, %35: future<void> facts(managed(deps=d3)), %36: scope<S1>, %37: deps) in S1:
+    ^b4(%34: deps, %35: future<void> facts(managed(deps=d7)), %36: scope<S1>, %37: deps) in S1:
     %38: frame<@main> = frame.save %85, slots [frame_slot(slot=0, value=%36, mode=consume), frame_slot(slot=1, value=%37, mode=borrow), frame_slot(slot=2, value=%88, mode=consume), frame_slot(slot=4, value=%89, mode=consume)], continuation 4
     invoke.own await %35
         normal ^b14($deps)
@@ -121,7 +122,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %49: failure = scope.unwind %44, %45, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %46, failure(%49)
     ret
-    ^b6(%50: deps, %51: future<void> facts(managed(deps=d4)), %52: scope<S1>, %53: deps) in S1:
+    ^b6(%50: deps, %51: future<void> facts(managed(deps=d8)), %52: scope<S1>, %53: deps) in S1:
     %54: int = const 0
     %55: deps = deps.of %54
     invoke.own scope.end %52, effects scope_effects(failures=[], suspends=false, cancel=true)

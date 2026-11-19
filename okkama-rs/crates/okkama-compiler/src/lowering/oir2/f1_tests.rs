@@ -627,3 +627,70 @@ fn f1_a_thunk_over_plain_inputs_names_no_deps() {
             ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { deps }) if deps.is_empty()), "{}", function.symbol);
     }
 }
+
+/// A function that returns a cold Future of its parameter (#862's shape).
+const STARTER: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "object Feeder { Feeder(); async feed(r is Res) is int { r.n(); } } ",
+    "object Starter { Starter(); start(r is Res) is Future<int> { Feeder().feed(r); } } ",
+    "async main() is int { let f = Starter().start(Res(l: \"s\")); await f; }",
+);
+
+/// Parameters that only may leave with the result.
+const PICKS: &str = concat!(
+    "module app v1.0.0; import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "object P { P(); pick(a is Res, b is Res, c is bool) is Res { if c { a; } else { b; } } ",
+    "maybe(r is Res, c is bool) is Res { if c { r; } else { Res(l: \"new\"); } } } ",
+    "main() is int { P().pick(Res(l: \"a\"), Res(l: \"b\"), true).n() + P().maybe(Res(l: \"x\"), false).n(); }",
+);
+
+/// #862 (V2, OIR-2-async-remaining §6.3c, narrowed): a parameter declared taken into the result that only may leave
+/// with it, as in `pick` and `maybe`, stays in the callee on the other exits; the results do not depend on it there.
+#[test]
+fn f1_a_parameter_that_may_leave_with_the_result_stays_on_other_exits() {
+    super::own_case_tests::own_stage(PICKS, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// #862 (V2 and ruling (a), §6.3c): `Starter.start` returns a Future of `feed(r)`, which depends on `r`, and `r`
+/// leaves beside it. An exit that names only the Future and extends nothing leaves `r` in the callee, which closes it
+/// while the Future depends on it.
+#[test]
+fn f1_a_returned_future_takes_back_the_parameter_it_depends_on() {
+    let (own, _) = super::own_case_tests::own_stage(STARTER, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (start, _) = function(&own, "app.Starter.start#0");
+    let mut cut = own.clone();
+    let body = cut.functions.get_mut(start).unwrap().body.as_mut().unwrap();
+    let empty = body.insts.iter()
+        .find(|(_, inst)| matches!(inst.op, ir::Operation::Ownership(ir::OwnershipOp::Empty {})))
+        .map(|(id, inst)| (id, inst.clone())).expect("an own.empty");
+    let prepare = body.insts.iter().find_map(|(id, inst)| match &inst.op {
+        ir::Operation::Exit(ir::ExitOp::Prepare { exit }) => Some((id, exit.value.unwrap())),
+        _ => None,
+    }).expect("the exit");
+    let only = body.selections.alloc(ir::SelectionExpr::Value(prepare.1)).unwrap();
+    let ir::Operation::Exit(ir::ExitOp::Prepare { exit }) = &mut body.insts.get_mut(prepare.0).unwrap().op else {
+        unreachable!()
+    };
+    exit.selection = only;
+    let extend = body.insts.iter().find(|(_, inst)| matches!(inst.op, ir::Operation::Exit(ir::ExitOp::Extend { .. })))
+        .map(|(id, _)| id).expect("the extension");
+    let fresh = body.insts.alloc(empty.1.clone()).unwrap();
+    let data = body.values.get(empty.1.results[0]).unwrap().clone();
+    let packet = body.values.alloc(ir::ValueData { def: ir::Definition::InstResult { inst: fresh, index: 0 }, ..data })
+        .unwrap();
+    body.insts.get_mut(fresh).unwrap().results = vec![packet];
+    let ir::Operation::Exit(ir::ExitOp::Extend { packet: extended, .. }) = &mut body.insts.get_mut(extend).unwrap().op
+    else { unreachable!() };
+    *extended = packet;
+    let (_, block) = body.blocks.iter_mut().find(|(_, block)| block.insts.contains(&extend)).unwrap();
+    let at = block.insts.iter().position(|inst| *inst == extend).unwrap();
+    block.insts.insert(at, fresh);
+    let _ = empty.0;
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "a parameter declared taken into the result stays in the callee"), "{report:?}");
+}

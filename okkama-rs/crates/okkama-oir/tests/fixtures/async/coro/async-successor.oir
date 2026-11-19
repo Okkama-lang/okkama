@@ -112,7 +112,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M13)
     boundary B0 lexical in S2
     key k0: key = service_of(value=%9, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%21)
+    dependency d1: dependency = from_ssa(%8)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%21)
     ^b0 in S2:
     %1: frame<@main> = frame.resume %0, continuation 0
     %2: scope<S2> = scope.begin S2
@@ -125,7 +127,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M13)
     ^b2(%5: app.Counter facts(plain(certificate=closed_graph(ty=app.Counter))), %6: scope<S2>) in S2:
     %7: own = own.empty
     %8: deps = deps.of %5
-    (%9: future<^app.Counter> facts(managed(deps=d0)), %10: cache-state, %11: scope<S2>) = fut.new %7, %8, %6, environment deferred(function=@app.Counter.bumped#0, arguments=[%5]), result ^app.Counter, owner S2
+    (%9: future<^app.Counter> facts(managed(deps=d2)), %10: cache-state, %11: scope<S2>) = fut.new %7, %8, %6, environment deferred(function=@app.Counter.bumped#0, arguments=[%5]), result ^app.Counter, owner S2
     %12: deps = deps.of %9
     %13: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%11, mode=consume), frame_slot(slot=1, value=%12, mode=borrow), frame_slot(slot=2, value=%10, mode=consume)], continuation 1
     invoke.own await %9, result ^app.Counter
@@ -135,7 +137,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M13)
     %16: failure = scope.unwind %15, %14, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%16)
     ret
-    ^b4(%17: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %18: deps, %19: future<^app.Counter> facts(managed(deps=d1)), %20: scope<S2>, %21: deps) in S2:
+    ^b4(%17: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %18: deps, %19: future<^app.Counter> facts(managed(deps=d3)), %20: scope<S2>, %21: deps) in S2:
     %22: int = const 5
     invoke.own call @app.Counter.new#0(%22)
         normal ^b6($value, %17, %20)
