@@ -74,14 +74,14 @@ func @app.Work.value#0(%0: frame<@app.Work.value#0>) -> void [method app.Work, a
     %10: deps = deps.of %8
     %11: pending = exit.prepare return %8, %9, deps(%10) at B1
     invoke.own scope.end %7, reserve %11, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %8)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%12: closed, %13: pending, %14: int) in S0:
-    (%15: int, %16: own, %17: deps) = exit.commit %13, destination caller, result int
-    fut.publish %1, success(value=%15, packet=%16, deps=%17)
+    ^b2(%12: closed, %13: pending) in S0:
+    (%14: int, %15: own, %16: deps) = exit.commit %13, destination caller, result int
+    fut.publish %1, success(value=%14, packet=%15, deps=%16)
     ret
-    ^b3(%18: closed, %19: failure) in S0:
-    fut.publish %1, failure(%19)
+    ^b3(%17: closed, %18: failure) in S0:
+    fut.publish %1, failure(%18)
     ret
 }
 
@@ -134,28 +134,28 @@ func @app.Watcher.run#0(%0: frame<@app.Watcher.run#0>) -> void [method app.Watch
     %19: deps = deps.of %13
     %20: pending = exit.prepare return %13, %18, deps(%19) at B1
     invoke.own scope.end %17, reserve %20, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, $pending, %13)
+        normal ^b4($closed, $pending)
         unwind ^b5($closed, $failure)
     ^b3(%21: failure, %22: task-state, %23: receipt, %24: scope<S1>) in S1:
-    %25: frame<@app.Watcher.run#0> = frame.save %46, continuation 2
+    %25: frame<@app.Watcher.run#0> = frame.save %45, continuation 2
     [i8] (%26: scope<S1>, %27: failure) = await.unwind %24, %21, %22, %23, protocol P0
     %28: frame<@app.Watcher.run#0> = frame.resume %25, continuation 2
     %29: failure = scope.unwind %26, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %28, failure(%29)
     ret
-    ^b4(%30: closed, %31: pending, %32: int) in S1:
-    (%33: int, %34: own, %35: deps) = exit.commit %31, destination caller, result int
-    fut.publish %40, success(value=%33, packet=%34, deps=%35)
+    ^b4(%30: closed, %31: pending) in S1:
+    (%32: int, %33: own, %34: deps) = exit.commit %31, destination caller, result int
+    fut.publish %39, success(value=%32, packet=%33, deps=%34)
     ret
-    ^b5(%36: closed, %37: failure) in S1:
-    fut.publish %40, failure(%37)
+    ^b5(%35: closed, %36: failure) in S1:
+    fut.publish %39, failure(%36)
     ret
-    ^b6(%38: int, %39: deps) in S1:
-    (%40: frame<@app.Watcher.run#0>, %41: deps, %42: scope<S1>) = frame.resume %12, continuation 1, slots [saved_slot(slot=2, ty=deps), saved_slot(slot=4, ty=scope<S1>, linear=true)]
-    br ^b2(%38, %39, %9, %41, %42)
-    ^b7(%43: failure, %44: task-state, %45: receipt) in S1:
-    (%46: frame<@app.Watcher.run#0>, %47: deps, %48: scope<S1>) = frame.resume %12, continuation 1, slots [saved_slot(slot=2, ty=deps), saved_slot(slot=4, ty=scope<S1>, linear=true)]
-    br ^b3(%43, %44, %45, %48)
+    ^b6(%37: int, %38: deps) in S1:
+    (%39: frame<@app.Watcher.run#0>, %40: deps, %41: scope<S1>) = frame.resume %12, continuation 1, slots [saved_slot(slot=2, ty=deps), saved_slot(slot=4, ty=scope<S1>, linear=true)]
+    br ^b2(%37, %38, %9, %40, %41)
+    ^b7(%42: failure, %43: task-state, %44: receipt) in S1:
+    (%45: frame<@app.Watcher.run#0>, %46: deps, %47: scope<S1>) = frame.resume %12, continuation 1, slots [saved_slot(slot=2, ty=deps), saved_slot(slot=4, ty=scope<S1>, linear=true)]
+    br ^b3(%42, %43, %44, %47)
 }
 
 func @app.Kick.new#0() -> app.Kick [ctor app.Kick] abi observation summary(M19) {

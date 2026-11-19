@@ -39,8 +39,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%31)
-    dependency d4: dependency = from_ssa(%31)
+    dependency d3: dependency = from_ssa(%32)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -65,16 +64,16 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
     %23: pending = exit.extend %22, %18
     invoke.own scope.end %17, reserve %23, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-        normal ^b6($closed, $pending, %20, %21)
+        normal ^b6($closed, $pending)
         unwind ^b7($closed, $failure)
     ^b5(%24: scope<S1>, %25: failure, %26: pending) in S1:
     %27: failure = scope.unwind %24, %25, reserve %26, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
     raise %27
-    ^b6(%28: closed, %29: pending, %30: R facts(managed(deps=d3)), %31: deps) in S1:
-    (%32: R facts(managed(deps=d4)), %33: own, %34: deps) = exit.commit %29, destination caller, result R
-    ret %32, %33
-    ^b7(%35: closed, %36: failure) in S1:
-    raise %36
+    ^b6(%28: closed, %29: pending) in S1:
+    (%30: R facts(managed(deps=d3)), %31: own, %32: deps) = exit.commit %29, destination caller, result R
+    ret %30, %31
+    ^b7(%33: closed, %34: failure) in S1:
+    raise %34
 }
 
 func @defer_fail(%0: own) -> own [defer()] abi explicit(input_packet=0, output_packet=0) summary(M2) {
@@ -103,8 +102,7 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     dependency d4: dependency = from_ssa(%54)
     dependency d5: dependency = from_ssa(%63)
     dependency d6: dependency = from_ssa(%74)
-    dependency d7: dependency = from_ssa(%83)
-    dependency d8: dependency = from_ssa(%83)
+    dependency d7: dependency = from_ssa(%84)
     selection s0: selection = admissible(selection(%8))
     ^b0 in S2:
     %1: scope<S2> = scope.begin S2
@@ -175,45 +173,45 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     ^b16(%69: scope<S2>, %70: own, %71: deps, %72: pending, %73: R facts(managed(deps=d6)), %74: deps) in S2:
     %75: pending = exit.extend %72, %70
     invoke.own scope.end %69, reserve %75, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-        normal ^b18($closed, $pending, %73, %74)
+        normal ^b18($closed, $pending)
         unwind ^b19($closed, $failure)
     ^b17(%76: scope<S2>, %77: failure, %78: pending) in S2:
     %79: failure = scope.unwind %76, %77, reserve %78, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
     raise %79
-    ^b18(%80: closed, %81: pending, %82: R facts(managed(deps=d7)), %83: deps) in S2:
-    (%84: R facts(managed(deps=d8)), %85: own, %86: deps) = exit.commit %81, destination caller, result R
-    ret %84, %85
-    ^b19(%87: closed, %88: failure) in S2:
-    raise %88
-    ^b20(%89: failure, %90: scope<S2>) in S2:
-    %91: failure = scope.unwind %90, %89, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %91
-    ^b21(%92: failure, %93: failure, %94: scope<S2>) in S2:
-    %95: failure = fail.secondary %93, %92
-    %96: failure = scope.unwind %94, %95, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %96
+    ^b18(%80: closed, %81: pending) in S2:
+    (%82: R facts(managed(deps=d7)), %83: own, %84: deps) = exit.commit %81, destination caller, result R
+    ret %82, %83
+    ^b19(%85: closed, %86: failure) in S2:
+    raise %86
+    ^b20(%87: failure, %88: scope<S2>) in S2:
+    %89: failure = scope.unwind %88, %87, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %89
+    ^b21(%90: failure, %91: failure, %92: scope<S2>) in S2:
+    %93: failure = fail.secondary %91, %90
+    %94: failure = scope.unwind %92, %93, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %94
     ^b22 in S2:
-    %97: own = own.empty
-    invoke.defer @defer_fail(; %97) summary(M2)
+    %95: own = own.empty
+    invoke.defer @defer_fail(; %95) summary(M2)
         continue ^b23(%48, %50)
         unwind ^b24($failure, %48, %50)
-    ^b23(%98: scope<S2>, %99: failure) in S2:
-    %100: failure = scope.unwind %98, %99, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %100
-    ^b24(%101: failure, %102: scope<S2>, %103: failure) in S2:
-    %104: failure = fail.secondary %103, %101
-    %105: failure = scope.unwind %102, %104, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %105
+    ^b23(%96: scope<S2>, %97: failure) in S2:
+    %98: failure = scope.unwind %96, %97, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %98
+    ^b24(%99: failure, %100: scope<S2>, %101: failure) in S2:
+    %102: failure = fail.secondary %101, %99
+    %103: failure = scope.unwind %100, %102, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %103
     ^b25 in S2:
-    %106: own = own.empty
-    invoke.defer @defer_fail(; %106) summary(M2)
+    %104: own = own.empty
+    invoke.defer @defer_fail(; %104) summary(M2)
         continue ^b26(%35, %37)
         unwind ^b27($failure, %35, %37)
-    ^b26(%107: scope<S2>, %108: failure) in S2:
-    %109: failure = scope.unwind %107, %108, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %109
-    ^b27(%110: failure, %111: scope<S2>, %112: failure) in S2:
-    %113: failure = fail.secondary %112, %110
-    %114: failure = scope.unwind %111, %113, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %114
+    ^b26(%105: scope<S2>, %106: failure) in S2:
+    %107: failure = scope.unwind %105, %106, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %107
+    ^b27(%108: failure, %109: scope<S2>, %110: failure) in S2:
+    %111: failure = fail.secondary %110, %108
+    %112: failure = scope.unwind %109, %111, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %112
 }

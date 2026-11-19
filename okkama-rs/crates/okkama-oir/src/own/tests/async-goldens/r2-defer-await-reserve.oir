@@ -47,7 +47,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -153,8 +153,7 @@ func @f(%0: own) -> (R, own) [async] abi explicit(input_packet=0, output_packet=
     dependency d5: dependency = from_ssa(%44)
     dependency d6: dependency = from_ssa(%50)
     dependency d7: dependency = from_ssa(%61)
-    dependency d8: dependency = from_ssa(%71)
-    dependency d9: dependency = from_ssa(%71)
+    dependency d8: dependency = from_ssa(%72)
     selection s0: selection = admissible(selection(%14))
     selection s1: selection = admissible(selection(%32))
     ^b0 in S4:
@@ -216,14 +215,14 @@ func @f(%0: own) -> (R, own) [async] abi explicit(input_packet=0, output_packet=
     ^b14(%57: scope<S4>, %58: own, %59: deps, %60: R facts(managed(deps=d7)), %61: deps, %62: pending) in S4:
     %63: pending = exit.extend %62, %58
     invoke.own scope.end %57, reserve %63, effects scope_effects(failures=[thrown, program, panic, native], suspends=false, cancel=true)
-        normal ^b16($closed, $pending, %60, %61)
+        normal ^b16($closed, $pending)
         unwind ^b17($closed, $failure)
     ^b15(%64: scope<S4>, %65: failure, %66: pending) in S4:
     %67: failure = scope.unwind %64, %65, reserve %66, effects scope_effects(failures=[thrown, program, panic, native], suspends=false, cancel=false)
     raise %67
-    ^b16(%68: closed, %69: pending, %70: R facts(managed(deps=d8)), %71: deps) in S4:
-    (%72: R facts(managed(deps=d9)), %73: own, %74: deps) = exit.commit %69, destination caller, result R
-    ret %72, %73
-    ^b17(%75: closed, %76: failure) in S4:
-    raise %76
+    ^b16(%68: closed, %69: pending) in S4:
+    (%70: R facts(managed(deps=d8)), %71: own, %72: deps) = exit.commit %69, destination caller, result R
+    ret %70, %71
+    ^b17(%73: closed, %74: failure) in S4:
+    raise %74
 }

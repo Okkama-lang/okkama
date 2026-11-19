@@ -68,18 +68,18 @@ func @app.Counter.bumped#0(%0: frame<@app.Counter.bumped#0>) -> void [successor 
     %17: deps = deps.of %12
     %18: pending = exit.prepare return %12, %16, deps(%17) at B1
     invoke.own scope.end %14, reserve %18, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, $pending, %12)
+        normal ^b4($closed, $pending)
         unwind ^b5($closed, $failure)
     ^b3(%19: failure, %20: scope<S0>) in S0:
     %21: failure = scope.unwind %20, %19, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%21)
     ret
-    ^b4(%22: closed, %23: pending, %24: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter)))) in S0:
-    (%25: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %26: own, %27: deps) = exit.commit %23, destination caller, result ^app.Counter
-    fut.publish %1, success(value=%25, packet=%26, deps=%27)
+    ^b4(%22: closed, %23: pending) in S0:
+    (%24: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %25: own, %26: deps) = exit.commit %23, destination caller, result ^app.Counter
+    fut.publish %1, success(value=%24, packet=%25, deps=%26)
     ret
-    ^b5(%28: closed, %29: failure) in S0:
-    fut.publish %1, failure(%29)
+    ^b5(%27: closed, %28: failure) in S0:
+    fut.publish %1, failure(%28)
     ret
 }
 

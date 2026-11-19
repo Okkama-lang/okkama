@@ -27,13 +27,13 @@ func @work(%0: int; %1: own) -> (int, own) [async] abi explicit(input_packet=1, 
     %7: deps = deps.of %4
     %8: pending = exit.prepare return %4, %6, deps(%7) at B1
     invoke.own scope.end %5, reserve %8, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %4)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%9: closed, %10: pending, %11: int) in S0:
-    (%12: int, %13: own, %14: deps) = exit.commit %10, destination caller, result int
-    ret %12, %13
-    ^b3(%15: closed, %16: failure) in S0:
-    raise %16
+    ^b2(%9: closed, %10: pending) in S0:
+    (%11: int, %12: own, %13: deps) = exit.commit %10, destination caller, result int
+    ret %11, %12
+    ^b3(%14: closed, %15: failure) in S0:
+    raise %15
 }
 
 func @main() -> int [entry, async] abi observation summary(M9) async-creation(M7) async-body(M9) {

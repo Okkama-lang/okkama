@@ -44,7 +44,7 @@ func @res(%0: own) -> (Res, own) [ctor Res] abi explicit(input_packet=0, output_
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -95,13 +95,13 @@ func @read(%0: Res facts(managed(deps=d3)), %1: Res facts(managed(deps=d4)), %2:
     %18: deps = deps.of %16
     %19: pending = exit.prepare return %16, %17, deps(%18) at B1
     invoke.own scope.end %15, reserve %19, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %16)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%20: closed, %21: pending, %22: int) in S2:
-    (%23: int, %24: own, %25: deps) = exit.commit %21, destination caller, result int
-    ret %23, %24
-    ^b3(%26: closed, %27: failure) in S2:
-    raise %27
+    ^b2(%20: closed, %21: pending) in S2:
+    (%22: int, %23: own, %24: deps) = exit.commit %21, destination caller, result int
+    ret %22, %23
+    ^b3(%25: closed, %26: failure) in S2:
+    raise %26
 }
 
 func @make(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (future<int>, own) abi explicit(input_packet=2, output_packet=1) summary(M7) {
@@ -123,7 +123,7 @@ func @make(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (future<int>, 
     dependency d11: dependency = from_ssa(%45)
     dependency d12: dependency = union([d10, d11])
     dependency d13: dependency = from_ssa(%60)
-    dependency d14: dependency = from_ssa(%60)
+    dependency d14: dependency = from_ssa(%67)
     selection s0: selection = union([selection(%20), selection(%23)])
     selection s1: selection = admissible(s0)
     selection s2: selection = union([selection(%46), selection(%39)])
@@ -196,7 +196,7 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     dependency d6: dependency = from_ssa(%46)
     dependency d7: dependency = from_ssa(%53)
     dependency d8: dependency = from_ssa(%58)
-    dependency d9: dependency = from_ssa(%58)
+    dependency d9: dependency = from_ssa(%76)
     dependency d10: dependency = from_ssa(%82)
     dependency d11: dependency = from_ssa(%90)
     selection s0: selection = admissible(selection(%10))

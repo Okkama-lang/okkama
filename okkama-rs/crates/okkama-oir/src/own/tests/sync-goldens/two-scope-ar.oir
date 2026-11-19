@@ -37,8 +37,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%31)
-    dependency d4: dependency = from_ssa(%31)
+    dependency d3: dependency = from_ssa(%32)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -63,16 +62,16 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
     %23: pending = exit.extend %22, %18
     invoke.own scope.end %17, reserve %23, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-        normal ^b6($closed, $pending, %20, %21)
+        normal ^b6($closed, $pending)
         unwind ^b7($closed, $failure)
     ^b5(%24: scope<S1>, %25: failure, %26: pending) in S1:
     %27: failure = scope.unwind %24, %25, reserve %26, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
     raise %27
-    ^b6(%28: closed, %29: pending, %30: R facts(managed(deps=d3)), %31: deps) in S1:
-    (%32: R facts(managed(deps=d4)), %33: own, %34: deps) = exit.commit %29, destination caller, result R
-    ret %32, %33
-    ^b7(%35: closed, %36: failure) in S1:
-    raise %36
+    ^b6(%28: closed, %29: pending) in S1:
+    (%30: R facts(managed(deps=d3)), %31: own, %32: deps) = exit.commit %29, destination caller, result R
+    ret %30, %31
+    ^b7(%33: closed, %34: failure) in S1:
+    raise %34
 }
 
 func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summary(M2) {
@@ -85,8 +84,7 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     dependency d3: dependency = from_ssa(%42)
     dependency d4: dependency = from_ssa(%54)
     dependency d5: dependency = from_ssa(%65)
-    dependency d6: dependency = from_ssa(%74)
-    dependency d7: dependency = from_ssa(%74)
+    dependency d6: dependency = from_ssa(%75)
     selection s0: selection = admissible(selection(%8))
     ^b0 in S2:
     %1: scope<S2> = scope.begin S2
@@ -147,20 +145,20 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     ^b14(%60: scope<S2>, %61: own, %62: deps, %63: pending, %64: R facts(managed(deps=d5)), %65: deps) in S2:
     %66: pending = exit.extend %63, %61
     invoke.own scope.end %60, reserve %66, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-        normal ^b16($closed, $pending, %64, %65)
+        normal ^b16($closed, $pending)
         unwind ^b17($closed, $failure)
     ^b15(%67: scope<S2>, %68: failure, %69: pending) in S2:
     %70: failure = scope.unwind %67, %68, reserve %69, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
     raise %70
-    ^b16(%71: closed, %72: pending, %73: R facts(managed(deps=d6)), %74: deps) in S2:
-    (%75: R facts(managed(deps=d7)), %76: own, %77: deps) = exit.commit %72, destination caller, result R
-    ret %75, %76
-    ^b17(%78: closed, %79: failure) in S2:
-    raise %79
+    ^b16(%71: closed, %72: pending) in S2:
+    (%73: R facts(managed(deps=d6)), %74: own, %75: deps) = exit.commit %72, destination caller, result R
+    ret %73, %74
+    ^b17(%76: closed, %77: failure) in S2:
+    raise %77
     ^b18 in S2:
-    %80: failure = scope.unwind %48, %50, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %80
+    %78: failure = scope.unwind %48, %50, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %78
     ^b19 in S2:
-    %81: failure = scope.unwind %35, %37, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-    raise %81
+    %79: failure = scope.unwind %35, %37, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
+    raise %79
 }

@@ -184,9 +184,9 @@ fn every_await_unwind_flows_into_await_unwind() {
 
 #[test]
 fn a_success_exit_publishes_the_outcome_of_its_commit() {
-    let commit = "    (%13: int, %14: own, %15: deps) = exit.commit %11, destination caller, result int\n";
-    let source = edited(PLAIN, &format!("{commit}    ret %13, %14"),
-        &format!("{commit}    %moved: own = own.move %14\n    ret %13, %moved"));
+    let commit = "    (%12: int, %13: own, %14: deps) = exit.commit %11, destination caller, result int\n";
+    let source = edited(PLAIN, &format!("{commit}    ret %12, %13"),
+        &format!("{commit}    %moved: own = own.move %13\n    ret %12, %moved"));
     assert!(matches!(lower(&source), Err(CoroError::InvalidInput { message, .. }) if message.contains("C-2")));
 }
 

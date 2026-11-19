@@ -62,14 +62,14 @@ func @Box.get(%0: frame<@Box.get>) -> void [method Box, async] summary(M7) async
     %13: deps = deps.of %11
     %14: pending = exit.prepare return %11, %12, deps(%13) at B1
     invoke.own scope.end %9, reserve %14, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %11)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%15: closed, %16: pending, %17: int) in S1:
-    (%18: int, %19: own, %20: deps) = exit.commit %16, destination caller, result int
-    fut.publish %1, success(value=%18, packet=%19, deps=%20)
+    ^b2(%15: closed, %16: pending) in S1:
+    (%17: int, %18: own, %19: deps) = exit.commit %16, destination caller, result int
+    fut.publish %1, success(value=%17, packet=%18, deps=%19)
     ret
-    ^b3(%21: closed, %22: failure) in S1:
-    fut.publish %1, failure(%22)
+    ^b3(%20: closed, %21: failure) in S1:
+    fut.publish %1, failure(%21)
     ret
 }
 
@@ -91,7 +91,7 @@ func @run(%0: frame<@run>) -> void [async] summary(M8) async-creation(M11) async
     continuation 1 at ^b1 saves [3, 4, 5, 6] operands [7]
     continuation 2 at #12 saves [6] operands [4, 8, 9, 10]
     service.schedule Schedule0 owner S2, protocol P0, duties [%33]
-    service.schedule Schedule0#1 owner S2, protocol P0, duties [%49]
+    service.schedule Schedule0#1 owner S2, protocol P0, duties [%48]
     boundary B0 lexical in S2
     boundary B1 lexical in S2
     key k0: key = service_of(value=%12, kind=cache)
@@ -118,28 +118,28 @@ func @run(%0: frame<@run>) -> void [async] summary(M8) async-creation(M11) async
     %23: deps = deps.of %17
     %24: pending = exit.prepare return %17, %22, deps(%23) at B1
     invoke.own scope.end %20, reserve %24, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, $pending, %17)
+        normal ^b4($closed, $pending)
         unwind ^b5($closed, $failure)
     ^b3(%25: failure, %26: task-state, %27: receipt, %28: scope<S2>) in S2:
-    %29: frame<@run> = frame.save %53, slots [frame_slot(slot=6, value=%57, mode=consume)], continuation 2
+    %29: frame<@run> = frame.save %52, slots [frame_slot(slot=6, value=%56, mode=consume)], continuation 2
     [i12] (%30: scope<S2>, %31: failure) = await.unwind %28, %25, %26, %27, protocol P0
     (%32: frame<@run>, %33: cache-state) = frame.resume %29, continuation 2, slots [saved_slot(slot=6, ty=cache-state, linear=true)]
     %34: failure = scope.unwind %30, %31, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %32, failure(%34)
     ret
-    ^b4(%35: closed, %36: pending, %37: int) in S2:
-    (%38: int, %39: own, %40: deps) = exit.commit %36, destination caller, result int
-    fut.publish %45, success(value=%38, packet=%39, deps=%40)
+    ^b4(%35: closed, %36: pending) in S2:
+    (%37: int, %38: own, %39: deps) = exit.commit %36, destination caller, result int
+    fut.publish %44, success(value=%37, packet=%38, deps=%39)
     ret
-    ^b5(%41: closed, %42: failure) in S2:
-    fut.publish %45, failure(%42)
+    ^b5(%40: closed, %41: failure) in S2:
+    fut.publish %44, failure(%41)
     ret
-    ^b6(%43: int, %44: deps) in S2:
-    (%45: frame<@run>, %46: deps, %47: scope<S2>, %48: deps, %49: cache-state) = frame.resume %16, continuation 1, slots [saved_slot(slot=3, ty=deps), saved_slot(slot=4, ty=scope<S2>, linear=true), saved_slot(slot=5, ty=deps), saved_slot(slot=6, ty=cache-state, linear=true)]
-    br ^b2(%43, %44, %12, %47, %48)
-    ^b7(%50: failure, %51: task-state, %52: receipt) in S2:
-    (%53: frame<@run>, %54: deps, %55: scope<S2>, %56: deps, %57: cache-state) = frame.resume %16, continuation 1, slots [saved_slot(slot=3, ty=deps), saved_slot(slot=4, ty=scope<S2>, linear=true), saved_slot(slot=5, ty=deps), saved_slot(slot=6, ty=cache-state, linear=true)]
-    br ^b3(%50, %51, %52, %55)
+    ^b6(%42: int, %43: deps) in S2:
+    (%44: frame<@run>, %45: deps, %46: scope<S2>, %47: deps, %48: cache-state) = frame.resume %16, continuation 1, slots [saved_slot(slot=3, ty=deps), saved_slot(slot=4, ty=scope<S2>, linear=true), saved_slot(slot=5, ty=deps), saved_slot(slot=6, ty=cache-state, linear=true)]
+    br ^b2(%42, %43, %12, %46, %47)
+    ^b7(%49: failure, %50: task-state, %51: receipt) in S2:
+    (%52: frame<@run>, %53: deps, %54: scope<S2>, %55: deps, %56: cache-state) = frame.resume %16, continuation 1, slots [saved_slot(slot=3, ty=deps), saved_slot(slot=4, ty=scope<S2>, linear=true), saved_slot(slot=5, ty=deps), saved_slot(slot=6, ty=cache-state, linear=true)]
+    br ^b3(%49, %50, %51, %54)
 }
 
 func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M15) async-creation(M12) async-body(M15) {

@@ -480,8 +480,12 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                         } else {
                             None
                         };
-                        let mut values = values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
-                            .collect::<Result<Vec<_>, _>>()?;
+                        let mut values = if committed.is_some() {
+                            vec![]
+                        } else {
+                            values.iter().map(|value| point.env.value(*value).map(|latest| latest.value))
+                                .collect::<Result<Vec<_>, _>>()?
+                        };
                         if let Some((value, packet, deps)) = committed {
                             values = value.into_iter().chain([packet]).collect();
                             if matches!(tag, Some(DeferReturnTag::Replace(_))) {
@@ -946,6 +950,16 @@ impl Driver<'_, '_> {
         if !unwind && point.env.cleanup.pending.is_some() {
             point = self.rehome_caches(point, scope)?;
             point = self.extend(point, scope)?;
+            // #869 (Fable, ruling (ii)): the returned value is not carried through the close as an SSA edge value.
+            // Its packet is in the pending exit, which the runtime traces; after `exit.commit` the value and its
+            // deps come from the commit. A carried copy would be bound by the roots of a close plan that, after a
+            // destroy failure, aborts the reserve and destroys it.
+            // Only at the last close, the action root's: an enclosing close's `extend` still selects by it.
+            if point.env.cleanup.replacement.is_none()
+                && self.module.scopes.get(scope).map_err(arena)?.parent.is_none()
+                && let Some(original) = point.env.cleanup.wanted {
+                point.env.values.remove(&original);
+            }
         }
         let state = point.env.state(scope)?;
         let reserve = point.env.cleanup.pending;

@@ -44,7 +44,7 @@ func @res(%0: own) -> (Res, own) [ctor Res] abi explicit(input_packet=0, output_
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -97,8 +97,7 @@ func @identity(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (Res, own)
     dependency d0: dependency = from_ssa(%6)
     dependency d1: dependency = from_ssa(%1)
     dependency d2: dependency = from_ssa(%14)
-    dependency d3: dependency = from_ssa(%24)
-    dependency d4: dependency = from_ssa(%24)
+    dependency d3: dependency = from_ssa(%25)
     ^b0 in S3:
     %3: scope<S3> = scope.begin S3
     %4: scope<S3> = own.accept %3, %2
@@ -112,16 +111,16 @@ func @identity(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (Res, own)
     ^b2(%10: scope<S3>, %11: own, %12: deps, %13: Res facts(managed(deps=d2)), %14: deps, %15: pending) in S3:
     %16: pending = exit.extend %15, %11
     invoke.own scope.end %10, reserve %16, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, $pending, %13, %14)
+        normal ^b4($closed, $pending)
         unwind ^b5($closed, $failure)
     ^b3(%17: scope<S3>, %18: failure, %19: pending) in S3:
     %20: failure = scope.unwind %17, %18, reserve %19, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %20
-    ^b4(%21: closed, %22: pending, %23: Res facts(managed(deps=d3)), %24: deps) in S3:
-    (%25: Res facts(managed(deps=d4)), %26: own, %27: deps) = exit.commit %22, destination caller, result Res
-    ret %25, %26
-    ^b5(%28: closed, %29: failure) in S3:
-    raise %29
+    ^b4(%21: closed, %22: pending) in S3:
+    (%23: Res facts(managed(deps=d3)), %24: own, %25: deps) = exit.commit %22, destination caller, result Res
+    ret %23, %24
+    ^b5(%26: closed, %27: failure) in S3:
+    raise %27
 }
 
 func @main() -> int [entry, async] abi observation summary(M13) async-creation(M10) async-body(M13) {

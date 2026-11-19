@@ -13,28 +13,15 @@ scope S1 action in @make
 scope S2 action in @f
 scope S3 action in @read
 scope S4 action in @own_witness_entry_4
-summary M0 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] contract call_contract(publication=atomic)
-summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[R],
-        failures=[program], publication=atomic)
-summary M2 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        failures=[program], publication=atomic)
-summary M4 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M5 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M6 observation parameters [parameter_effect(convention=borrow,
-        destination=none)] contract call_contract(publication=atomic)
-summary M7 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[R],
-        failures=[program], publication=atomic)
-summary M8 observation parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M1 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M6 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M7 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M8 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
 
 func @destroy(%0: R facts(plain(certificate=closed_graph(ty=R)))) -> void abi observation summary(M6) {
     ^b0 in S0:
@@ -92,8 +79,7 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     raise %17
 }
 
-func @own_witness_entry_4(%0: R facts(managed(deps=d0)); %1: deps, %2: own) -> (int, own) [method
-        R] abi explicit(input_packet=2, output_packet=1) summary(M4) {
+func @own_witness_entry_4(%0: R facts(managed(deps=d0)); %1: deps, %2: own) -> (int, own) [method R] abi explicit(input_packet=2, output_packet=1) summary(M4) {
     boundary B0 lexical in S4
     dependency d0: dependency = from_ssa(%1)
     ^b0 in S4:

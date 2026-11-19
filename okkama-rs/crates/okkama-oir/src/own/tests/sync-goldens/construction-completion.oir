@@ -27,7 +27,7 @@ func @app.O.new#0(%0: int; %1: own) -> (app.O, own) [ctor app.O] abi explicit(in
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%22)
     dependency d3: dependency = from_ssa(%37)
-    dependency d4: dependency = from_ssa(%37)
+    dependency d4: dependency = from_ssa(%44)
     selection s0: selection = admissible(selection(%8))
     ^b0 in S2:
     %2: scope<S2> = scope.begin S2

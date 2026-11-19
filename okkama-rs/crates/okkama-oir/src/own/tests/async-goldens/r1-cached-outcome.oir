@@ -44,7 +44,7 @@ func @make(%0: own) -> (Res, own) [ctor Res] abi explicit(input_packet=0, output
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -96,8 +96,7 @@ func @work(%0: own) -> (Res, own) [async] abi explicit(input_packet=0, output_pa
     boundary B1 lexical in S3
     dependency d0: dependency = from_ssa(%7)
     dependency d1: dependency = from_ssa(%19)
-    dependency d2: dependency = from_ssa(%29)
-    dependency d3: dependency = from_ssa(%29)
+    dependency d2: dependency = from_ssa(%30)
     ^b0 in S3:
     %1: scope<S3> = scope.begin S3
     %2: scope<S3> = own.accept %1, %0
@@ -120,16 +119,16 @@ func @work(%0: own) -> (Res, own) [async] abi explicit(input_packet=0, output_pa
     ^b4(%15: scope<S3>, %16: own, %17: deps, %18: Res facts(managed(deps=d1)), %19: deps, %20: pending) in S3:
     %21: pending = exit.extend %20, %16
     invoke.own scope.end %15, reserve %21, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b6($closed, $pending, %18, %19)
+        normal ^b6($closed, $pending)
         unwind ^b7($closed, $failure)
     ^b5(%22: scope<S3>, %23: failure, %24: pending) in S3:
     %25: failure = scope.unwind %22, %23, reserve %24, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %25
-    ^b6(%26: closed, %27: pending, %28: Res facts(managed(deps=d2)), %29: deps) in S3:
-    (%30: Res facts(managed(deps=d3)), %31: own, %32: deps) = exit.commit %27, destination caller, result Res
-    ret %30, %31
-    ^b7(%33: closed, %34: failure) in S3:
-    raise %34
+    ^b6(%26: closed, %27: pending) in S3:
+    (%28: Res facts(managed(deps=d2)), %29: own, %30: deps) = exit.commit %27, destination caller, result Res
+    ret %28, %29
+    ^b7(%31: closed, %32: failure) in S3:
+    raise %32
 }
 
 func @main() -> int [entry, async] abi observation summary(M13) async-creation(M10) async-body(M13) {

@@ -51,6 +51,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **Full no longer refuses an async body that returns a resource after an await, or beside a
+  local resource (#869).** Two examples:
+  - `async relay() is Res { let n = await W().wait(); Res(…); }`;
+  - an async function that destroys a local resource and returns another.
+
+  Full stopped these in `verify_low` with B105 ("cleanup root map refers to an unavailable or
+  duplicate SSA holder"). Own carried the returned value through the final close as an SSA edge
+  value, though only `exit.commit` needs it. If a destroy in the close plan failed, the reserve
+  went into the plan and the value was destroyed, while a root of the next plan still named it.
+
+  Changes:
+  - The returned value is no longer carried through the action root's close. The commit's value
+    and deps come from the commit itself.
+  - The verifier defines all results of an instruction before it checks their facts.
+  - `cleanup.deliver_cancel` is modelled as the runtime does it: it delivers nothing (ruling
+    #601 K2).
 - **The verifier checks a Future's deps against its inputs (#864, first part).** Nothing
   compared `fut.new`'s deps operand with its arguments, unlike a call, where B32 does. Now
   the operand's full deps must cover two things. First, the external keys of what each argument

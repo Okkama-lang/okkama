@@ -62,16 +62,16 @@ func @app.Counter.bumped#0(%0: app.Counter facts(plain(certificate=closed_graph(
     %15: deps = deps.of %10
     %16: pending = exit.prepare return %10, %14, deps(%15) at B1
     invoke.own scope.end %12, reserve %16, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, $pending, %10)
+        normal ^b4($closed, $pending)
         unwind ^b5($closed, $failure)
     ^b3(%17: failure, %18: scope<S0>) in S0:
     %19: failure = scope.unwind %18, %17, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %19
-    ^b4(%20: closed, %21: pending, %22: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter)))) in S0:
-    (%23: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %24: own, %25: deps) = exit.commit %21, destination caller, result ^app.Counter
-    ret %23, %24
-    ^b5(%26: closed, %27: failure) in S0:
-    raise %27
+    ^b4(%20: closed, %21: pending) in S0:
+    (%22: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %23: own, %24: deps) = exit.commit %21, destination caller, result ^app.Counter
+    ret %22, %23
+    ^b5(%25: closed, %26: failure) in S0:
+    raise %26
 }
 
 func @app.Counter.n#1(%0: app.Counter facts(plain(certificate=closed_graph(ty=app.Counter)))) -> int [method app.Counter] abi observation summary(M12) {

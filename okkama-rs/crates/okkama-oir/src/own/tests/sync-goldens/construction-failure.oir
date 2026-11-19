@@ -38,7 +38,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -126,7 +126,7 @@ func @f(%0: own) -> (Built, own) abi explicit(input_packet=0, output_packet=1) s
     dependency d1: dependency = from_ssa(%17)
     dependency d2: dependency = from_ssa(%24)
     dependency d3: dependency = from_ssa(%36)
-    dependency d4: dependency = from_ssa(%36)
+    dependency d4: dependency = from_ssa(%43)
     selection s0: selection = union([selection(%5)])
     selection s1: selection = admissible(s0)
     ^b0 in S2:

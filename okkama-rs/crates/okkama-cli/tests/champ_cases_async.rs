@@ -931,6 +931,56 @@ async main() is int {
 "#, "feed fresh\ndestroy fresh\nfed 1\nfeed direct\ndestroy direct\nmain end\n");
 }
 
+/// #869 (Fable, ruling (ii)): an async body that awaits and then returns a managed value. Its final close delivers a
+/// deferred cancellation, so low runs a second plan; the result is not carried through that close as an SSA value
+/// (its packet is in the pending exit), so no root of a plan binds it. Tomato's output.
+#[test]
+fn an_async_body_that_awaits_returns_a_resource() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Waiter { Waiter(); async wait() is int { 1; } }
+object Relay { Relay(); async relay() is Res { let n = await Waiter().wait(); Res(name: "made " + n.string()); } }
+async main() is int {
+    let r = await Relay().relay();
+    Stdout().writeln("got " + r.label());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "got made 1\nmain end\ndestroy made 1\n");
+}
+
+/// #869: a function returns a resource while its close destroys a local one whose destroy may fail. A failure there
+/// aborts the reserve into the plan; the returned value carried through the close would then be a root of a destroyed
+/// identity. Synchronous and async alike; Tomato's output.
+#[test]
+fn a_returned_resource_beside_a_destroyed_local() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object M { M(); make() is Res { let a = Res(name: "local"); Stdout().writeln("have " + a.label()); Res(name: "made"); } }
+object A { A(); async make() is Res { let a = Res(name: "alocal"); Stdout().writeln("have " + a.label()); Res(name: "amade"); } }
+async main() is int {
+    let r = M().make();
+    Stdout().writeln("got " + r.label());
+    let q = await A().make();
+    Stdout().writeln("got " + q.label());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "have local\ndestroy local\ngot made\nhave alocal\ndestroy alocal\ngot amade\nmain end\ndestroy amade\ndestroy made\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
