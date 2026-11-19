@@ -144,6 +144,11 @@ struct BodyInference {
 /// #875 (Fable): the functions whose entry packet can carry a Future: a language input whose graph reaches one, bare
 /// or stored. A bare Future input of an async body is borrowed (PR-N2), and a creation thunk forwards its entry whole
 /// to `fut.new`. The loader's `entry_carries_future` asks the same.
+///
+/// This is wider than the loader for a FutureGroup: the classification reaches a group's members, which are Futures,
+/// so a function that takes a group counts here. A group starts every member it registers and holds no cold Future,
+/// so the loader skips it (`reaches_future`). Counting it here is sound (an envelope may be wider than the demand),
+/// only less precise; telling a group's members apart needs a path-aware classification (#877).
 pub(super) fn futures_in_entry(
     module: &Module,
     types: &BTreeMap<TypeId, TypeClassification>,
