@@ -896,6 +896,72 @@ fn f1_a_thunk_input_travels_with_the_future_it_is_passed_on_with() {
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
+/// #873 (Fable): `pass` returns the Future of an async role slot over a fresh `Res`, which the slot's creation thunk
+/// forwards into the Future's inputs; `relay` returns that Future further.
+const HELD: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "role Feeding { async feed(r is Res) is int; } ",
+    "object Feeder does Feeding { Feeder(); async feed(r is Res) is int { r.n(); } } ",
+    "object P { P(); pass() is Future<int> { let f is Feeding = Feeder(); f.feed(Res(l: \"held\")); } } ",
+    "object R { R(); relay() is Future<int> { P().pass(); } } ",
+    "async main() is int { await R().relay(); }",
+);
+
+/// #873: both relations type the `Res` the Future's cache holds at one of their fresh sites; `relay` brings it through
+/// the one site of its call. Full accepts both exits.
+#[test]
+fn f1_a_returned_future_types_what_its_cache_holds() {
+    let (own, _) = super::own_case_tests::own_stage(HELD, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let res = function(&own, "app.Res.new#0").1.signature.results[0];
+    for symbol in ["app.P.pass#0", "app.R.relay#0"] {
+        let (_, relation) = relation_of(&own, symbol);
+        let [held] = relation.held.as_slice() else { panic!("{symbol}: {relation:?}") };
+        assert_eq!(held.ty, res, "{symbol}: {relation:?}");
+        assert!(relation.fresh.contains(&held.site), "{symbol}: {relation:?}");
+    }
+}
+
+/// #873: what a returned Future's cache holds is checked against its relation by type, at the exit of the function
+/// that creates the Future and of one that returns it further: none declared, or another type, is refused.
+#[test]
+fn f1_what_a_returned_future_holds_matches_its_relation() {
+    let (own, _) = super::own_case_tests::own_stage(HELD, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let message = "a returned Future's cache holds creations other than its relation declares";
+    let other = function(&own, "app.Feeder.new#0").1.signature.results[0];
+    for symbol in ["app.P.pass#0", "app.R.relay#0"] {
+        let (summary, _) = relation_of(&own, symbol);
+        let mut cleared = own.clone();
+        cleared.summaries.get_mut(summary).unwrap().results[0].held.clear();
+        let report = full_report(&cleared);
+        assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51 && d.message == message),
+            "{symbol}: {report:?}");
+        let mut retyped = own.clone();
+        retyped.summaries.get_mut(summary).unwrap().results[0].held[0].ty = other;
+        let report = full_report(&retyped);
+        assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51 && d.message == message),
+            "{symbol}: {report:?}");
+    }
+}
+
+/// #873: a `held` entry belongs to a bare Future result only.
+#[test]
+fn f1_only_a_future_result_declares_what_its_cache_holds() {
+    let (own, _) = super::own_case_tests::own_stage(HELD, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, n) = function(&own, "app.Res.n#0");
+    let summary = n.summary.unwrap();
+    let res = function(&own, "app.Res.new#0").1.signature.results[0];
+    let mut cut = own.clone();
+    cut.summaries.get_mut(summary).unwrap().results[0].held
+        .push(ir::HeldSite { site: ir::CreationSiteId::from_u32(0), ty: res });
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "only a bare Future result declares creations its cache holds"), "{report:?}");
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",

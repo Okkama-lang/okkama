@@ -917,7 +917,8 @@ variants!(TransferDestination {
     Cache => "cache",
     FailureContext => "failure_context"
 });
-record!(ResultRelation, "result_relation", { fresh, aliases, external_deps, opaque, provenance, beside });
+record!(ResultRelation, "result_relation", { fresh, aliases, external_deps, opaque, provenance, beside, held });
+record!(HeldSite, "site", { site, ty });
 variants!(BesideEntry { Site { site, ty } => "site", Parameter(x0) => "parameter" });
 record!(Summary, "summary", { entry_kind, parameters, results, contract });
 record!(CallContract, "call_contract", { results, failures, suspends, async_destroy, publication, protocol });

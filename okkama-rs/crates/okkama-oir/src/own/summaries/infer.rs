@@ -385,10 +385,11 @@ impl Universe {
         // whole instead: an over-approximation, so no dependency is lost.
         // An async body's summary describes its Future's outcome, and coro gives the body a frame for parameters
         // (OIR-2 §12): PR-P declarations are a synchronous call boundary's, so an async body keeps none.
-        // #865 (§6.3d): only a bare Future result has entries beside it.
+        // #865 (§6.3d): only a bare Future result has entries beside it, and (#873) creations its cache holds.
         for (result, ty) in summary.results.iter_mut().zip(summary.contract.results.clone()) {
             if futures::is_async(module, function) || !futures::is_future(module, ty) {
                 result.beside.clear();
+                result.held.clear();
             }
         }
         let parameters = language_parameters(module, body);
@@ -523,10 +524,23 @@ impl Universe {
                 )));
             }
             let mut results = vec![];
+            let stride = self.strides[&function];
             for (index, relation) in callee.results.iter().enumerate() {
                 let mut result = normal::empty_relation();
+                // #873 (Fable): a callee that creates the bare Future it returns holds each aliased input it does not
+                // leave beside it (a creation thunk forwards it into the Future's inputs): its creations are what the
+                // Future's cache holds here, each with its type.
+                let creator = !relation.fresh.is_empty() && callee.contract.results.get(index)
+                    .is_some_and(|ty| futures::is_future(module, *ty));
                 for selection in &relation.aliases {
                     let selected = instantiate(selection, &arguments, values, budget)?;
+                    let beside = !matches!(selection, SummarySelection::Union(_))
+                        && relation.beside.contains(&BesideEntry::Parameter(normal::parameter(selection)));
+                    if creator && !beside {
+                        result.held.extend(selected.fresh.iter().filter_map(|site| {
+                            summaries::site_type(body, *site, stride).map(|ty| HeldSite { site: *site, ty })
+                        }));
+                    }
                     normal::relation(&mut result, &selected, budget)?;
                 }
                 for dep in &relation.external_deps {
@@ -549,8 +563,11 @@ impl Universe {
                     if futures::is_async(module, *callee));
                 if !relation.fresh.is_empty() || creates {
                     budget.work(body.keys.len() + body.insts.len() + body.blocks.len())?;
-                    result.fresh.push(site.origin(body, index, self.strides[&function]));
+                    let origin = site.origin(body, index, stride);
+                    result.fresh.push(origin);
                     result.provenance = relation.provenance;
+                    // #873: the call's one site brings what the callee's returned Future holds.
+                    result.held.extend(relation.held.iter().map(|held| HeldSite { site: origin, ty: held.ty }));
                 }
                 // #865 (OIR-2-async-remaining §6.3c-d): a creation borrows each bound input (a binding or a
                 // parameter, ruling (iii)); it stays beside the Future, which a returned Future's packet then carries
@@ -561,10 +578,21 @@ impl Universe {
                     let bound = bound_values(body);
                     for argument in &arguments {
                         let Ok(data) = body.values.get(*argument) else { continue };
-                        if !bound.contains(argument) || !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
+                        if !types.get(&data.ty).is_some_and(TypeClassification::may_own) {
                             continue;
                         }
                         let actual = &values[argument.as_u32() as usize];
+                        if !bound.contains(argument) {
+                            // #873 (Fable): a fresh input goes into the Future's inputs, which its cache holds: each
+                            // of its creations with its type. A bare Future argument is borrowed (PR-N2).
+                            if !futures::is_future(module, data.ty) {
+                                result.held.extend(actual.fresh.iter().filter_map(|site| {
+                                    summaries::site_type(body, *site, stride).map(|ty| HeldSite { site: *site, ty })
+                                }));
+                                result.held.extend_from_slice(&actual.held);
+                            }
+                            continue;
+                        }
                         // #866 (Fable, §6.3c for a Future): a bare Future parameter the creation borrows goes back
                         // beside the Future too; a bound local Future is not ruled yet, so only parameters count.
                         if !futures::is_future(module, data.ty) {
@@ -594,6 +622,8 @@ impl Universe {
                 }
                 result.beside.sort();
                 result.beside.dedup();
+                result.held.sort();
+                result.held.dedup();
                 // An opaque callee result stays opaque in every caller relation.
                 result.opaque |= relation.opaque;
                 results.push(result);

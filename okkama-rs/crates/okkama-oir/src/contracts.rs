@@ -267,6 +267,11 @@ pub enum TransferDestination { None, Result, Scope(ScopeId), Protocol(ProtocolId
 /// the Future's cache does not hold: a fresh creation of the callee with its type, or a taken parameter.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BesideEntry { Site { site: CreationSiteId, ty: TypeId }, Parameter(u16) }
+/// #873 (Fable): a creation a returned bare Future's cache holds, with its type: fresh site `site` of the relation
+/// brings a `ty` into the cache. A site may bring several types: a Future returned by a call is one site of the caller
+/// that brings what the callee's cache holds. A parameter the cache holds needs no entry: its type is the argument's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HeldSite { pub site: CreationSiteId, pub ty: TypeId }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResultRelation {
     pub fresh: Vec<CreationSiteId>,
@@ -281,6 +286,9 @@ pub struct ResultRelation {
     /// #865 (§6.3d): for a bare Future result only, the entries of its result packet that the Future does not hold.
     /// Every other fresh site and taken parameter of the relation is held by the Future's cache (D25.1).
     pub beside: Vec<BesideEntry>,
+    /// #873 (Fable): for a bare Future result only, the types of the creations its cache holds. The caller that admits
+    /// the Future counts their destroy effects in the envelope of the scope that may settle it.
+    pub held: Vec<HeldSite>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Summary {

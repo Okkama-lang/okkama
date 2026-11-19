@@ -1085,6 +1085,38 @@ async main() is int {
 "#, "make x\ngot 1\nmain end\ndestroy x\n");
 }
 
+/// #873 (Fable): `pass` returns the Future of an async role slot over a fresh `Res`, which the Future's cache holds,
+/// and `relay` returns that Future further. Their relations type what the cache holds, so main's close, which may
+/// settle it, counts the `Res` destroy among its failures; without that the loader refused main (D18_EXECUTOR). Each
+/// Future is a temporary, so Tomato and Champ (#868) destroy the input at the same point. Tomato's output.
+#[test]
+fn a_returned_future_brings_the_types_its_cache_holds() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+role Feeding { async feed(r is Res) is int; }
+object Feeder does Feeding {
+    Feeder();
+    async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; }
+}
+object P { P(); pass(name is string) is Future<int> { let f is Feeding = Feeder(); f.feed(Res(name: name)); } }
+object R { R(); relay() is Future<int> { P().pass("relayed"); } }
+async main() is int {
+    let n = await P().pass("passed");
+    Stdout().writeln("fed " + n.string());
+    let m = await R().relay();
+    Stdout().writeln("fed " + m.string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed passed\ndestroy passed\nfed 1\nfeed relayed\ndestroy relayed\nfed 1\nmain end\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
