@@ -172,6 +172,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
             witnesses: &entry_sets.witnesses, builder_owners, cache_duties: vec![], exit_landing: None,
             dynamic_owners: BTreeSet::new(), temporaries: BTreeSet::new(), future_bindings: BTreeMap::new(),
             future_bound_inputs: BTreeMap::new(),
+            futures_with_beside: BTreeMap::new(),
             forward_entry: false,
         };
         driver.temporaries = driver.temporary_futures();
@@ -715,6 +716,10 @@ struct Driver<'a, 'o> {
     /// #862 (§6.3c): the own values of the bound inputs a created Future borrows, at its creation. They dominate an
     /// exit that returns the Future, which names them beside it without their being live in High.
     future_bound_inputs: BTreeMap<ValueId, Vec<ValueId>>,
+    /// #871: the Futures a call returned with something beside them in its packet (#865, §6.3d), with the scopes that
+    /// own what came beside: the call's scope for a creation, the binding's scope for a bound actual. Such a Future
+    /// cannot leave one of those scopes yet: its close would destroy what the Future still reads.
+    futures_with_beside: BTreeMap<ValueId, BTreeSet<ScopeId>>,
     /// Ruling PR-M (#818): an adapter whose one call owns its inputs. The call takes the entry packet as its packet,
     /// so what the caller offered reaches the target whole; nothing accepts, admits or splits it.
     forward_entry: bool,
