@@ -302,7 +302,8 @@ impl Engine<'_, '_> {
                 slots[slot].identity = Some(key);
                 flow.cache_keys.insert(key);
                 // #865 (§6.3d): the Future depends on what its packet holds beside it; a creation beside it is a
-                // piece of the admitted packet that only this dependency names.
+                // piece of the admitted packet that only this dependency names. The verifier's half of #871's
+                // fail-closed rule (`own::tests::asynchronous::a_future_cannot_outlive_a_creation_beside_it`).
                 slots[slot].requirements.extend(beside.iter().map(|site| creation(origin, *site)));
             } else if opaque {
                 let view = match origin {

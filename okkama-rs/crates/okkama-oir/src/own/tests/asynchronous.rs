@@ -1462,3 +1462,20 @@ fn a_builder_push_stores_a_fresh_future_and_aliases_a_bound_one() {
         assert_eq!(schedule.duties.last(), Some(&ScheduleDuty::Dynamic), "{name}");
     }
 }
+
+/// #865/#871 (OIR-2-async-remaining §6.3d), the verifier's half of the fail-closed rule, tested without own: a
+/// returned Future depends on what its packet holds beside it. In r1-make-escape, `make`'s `log` is a parameter bound
+/// in `S`, so it goes back to its binding and the Future may leave `SI`. Declared instead as a creation beside the
+/// Future (surgery on `make`'s relation), the piece stays in `SI`, which the Future leaves: main is refused where the
+/// Future is used after `SI` closes. The real fix of #871 must keep this green.
+#[test]
+fn a_future_cannot_outlive_a_creation_beside_it() {
+    let text = edit(&golden("r1-make-escape"), "beside=[parameter(0)]", "beside=[site(site=22, ty=Res)]");
+    let module = crate::text::parse(&text).unwrap();
+    let (main, _) = function(&module, "main");
+    let refused = rejections(&text).into_iter().any(|(rule, entity, message)| rule == RuleId::B31
+        && message == "use of a value whose stable dependency has been closed"
+        && matches!(entity, EntityLocation::Instruction { function, .. }
+            | EntityLocation::Terminator { function, .. } if function == main));
+    assert!(refused, "{:?}", rejections(&text));
+}
