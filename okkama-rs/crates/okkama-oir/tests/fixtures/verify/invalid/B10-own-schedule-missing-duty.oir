@@ -17,8 +17,12 @@ func @f() -> void summary(Mf) {
     service.schedule Inner owner SI, protocol Services, duties []
     key ka: key = service_of(value=%a, kind=cache)
     key kb: key = service_of(value=%b, kind=cache)
-    dependency da: dependency = key(ka)
-    dependency db: dependency = key(kb)
+    dependency dak864: dependency = key(ka)
+    dependency daf864: dependency = from_ssa(%x0)
+    dependency da: dependency = union([dak864, daf864])
+    dependency dbk864: dependency = key(kb)
+    dependency dbf864: dependency = from_ssa(%x1)
+    dependency db: dependency = union([dbk864, dbf864])
     selection s0: selection = union([])
 ^entry in S:
     %q: scope<S> = scope.begin S

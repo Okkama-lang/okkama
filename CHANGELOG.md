@@ -20,6 +20,24 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A function that returns a Future over its own parameter no longer destroys that parameter
+  first (#862, #864).** For example, `start(r is Res) is Future<int> { Feeder().feed(r); }`.
+  Champ destroyed `r` when `start` returned, and the Future later read it, yet Full
+  verification accepted the program. Changes:
+  - A binding, whether a parameter or a `let`, is never moved into a Future. The Future borrows
+    it and depends on it.
+  - A Future now carries the dependencies its `fut.new` names. An await's managed outcome
+    inherits them, and its deps say so; a plain outcome inherits nothing.
+  - A parameter that a returned Future depends on leaves beside the Future in the result
+    packet. The exit's selection names it (ruling (a)), and the caller destroys it at its own
+    close.
+  - The verifier refuses a result that depends on a parameter declared taken into the result
+    while the callee closes that parameter's part (V2).
+  - A split's ExternalDeps keeps the selected values' requirements as references.
+
+  Both the ticket's program and two Futures over one parameter now print Tomato's order under
+  Structural and Full verification. A Future over a local binding that is returned (#865)
+  stays refused until its ruling.
 - **The verifier checks a Future's deps against its inputs (#864, first part).** Nothing
   compared `fut.new`'s deps operand with its arguments, unlike a call, where B32 does. Now
   the operand's full deps must cover two things. First, the external keys of what each argument

@@ -1,7 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/async-never-awaited.oir.
-// future.never-awaited: a sync owner gains the cache-state token and settles it at its close
-// without a frame (D24.2: no settle waits).
 module async_never_awaited
 entry @main
 scope S0 action in @explode
@@ -42,6 +39,8 @@ func @main() -> int [entry] abi observation summary(M6) {
     boundary B0 lexical in S1
     key k0: key = service_of(value=%7, kind=cache)
     dependency d0: dependency = key(k0)
+    dependency d1: dependency = from_ssa(%5)
+    dependency d2: dependency = union([d0, d1])
     selection s0: selection = union([])
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1
@@ -50,7 +49,7 @@ func @main() -> int [entry] abi observation summary(M6) {
     %2: own = own.empty
     (%3: own, %4: own, %5: deps) = own.split %2, s0
     %6: own = own.join [%3, %4]
-    (%7: future<int> facts(managed(deps=d0)), %8: cache-state, %9: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@explode), result int, owner S1, binding b0
+    (%7: future<int> facts(managed(deps=d2)), %8: cache-state, %9: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@explode), result int, owner S1, binding b0
     %10: deps = deps.of %7
     %11: int = const 0
     %12: closed = scope.end %9, effects scope_effects(failures=[], suspends=false, cancel=false)

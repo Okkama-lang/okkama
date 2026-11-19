@@ -1,8 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/d857-slot-across-await.oir.
-// D26 (#857), a V2-shaped variant of the own golden async-plain-await: after the await, a second Future of S1 is
-// created in one branch. S1 is slotted, so both duties are slots, and the second slot's empty version lives across
-// the await from the begin: coro saves and resumes it like any value, and both closes settle both slots.
 module d857_slot_across_await
 entry @main
 scope S0 action in @work

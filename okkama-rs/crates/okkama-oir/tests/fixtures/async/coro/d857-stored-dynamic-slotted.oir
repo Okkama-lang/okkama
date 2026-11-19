@@ -1,10 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/d857-stored-dynamic-slotted.oir.
-// D26 (#857): own's output (the pipeline of 2026-11-17) for a Maker whose make stores a fresh Future in a Holder
-// (`Holder(f: Child(n: n).run())`), edited so that make first creates a second Future in one branch. make's scope
-// admits entries at run time (dynamic). It is slotted: the stored Future's slot is emptied after its absorb on the
-// store's normal edge and after the absorb on its failure edge (absorb_on_failure), the branch's slot merges at the
-// join, and every close settles both.
 module app v1.0.0
 requires core, async
 entry @main
@@ -248,11 +242,15 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
     key k0: key = service_of(value=%22, kind=cache)
     key k1: key = service_of(value=%15, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%33)
-    dependency d2: dependency = from_ssa(%46)
-    dependency d3: dependency = from_ssa(%58)
-    dependency d4: dependency = from_ssa(%58)
-    dependency d5: dependency = key(k1)
+    dependency d1: dependency = from_ssa(%21)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%33)
+    dependency d4: dependency = from_ssa(%46)
+    dependency d5: dependency = from_ssa(%58)
+    dependency d6: dependency = from_ssa(%58)
+    dependency d7: dependency = key(k1)
+    dependency d8: dependency = from_ssa(%14)
+    dependency d9: dependency = union([d7, d8])
     selection s0: selection = union([selection(%22)])
     selection s1: selection = admissible(s0)
     ^b0 in S2:
@@ -271,14 +269,14 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
     ^b3 in S2:
     %13: own = own.empty
     %14: deps = deps.of %10
-    (%15: future<int> facts(managed(deps=d5)), %16: cache-state, %17: scope<S2>) = fut.new %13, %14, %11, environment deferred(function=@app.Child.run#0, arguments=[%10]), result int, owner S2, slot %5
+    (%15: future<int> facts(managed(deps=d9)), %16: cache-state, %17: scope<S2>) = fut.new %13, %14, %11, environment deferred(function=@app.Child.run#0, arguments=[%10]), result int, owner S2, slot %5
     br ^b5(%17, %16)
     ^b4 in S2:
     br ^b5(%11, %5)
     ^b5(%18: scope<S2>, %19: cache-state) in S2:
     %20: own = own.empty
     %21: deps = deps.of %10
-    (%22: future<int> facts(managed(deps=d0)), %23: cache-state, %24: scope<S2>) = fut.new %20, %21, %18, environment deferred(function=@app.Child.run#0, arguments=[%10]), result int, owner S2, slot %4
+    (%22: future<int> facts(managed(deps=d2)), %23: cache-state, %24: scope<S2>) = fut.new %20, %21, %18, environment deferred(function=@app.Child.run#0, arguments=[%10]), result int, owner S2, slot %4
     %25: deps = deps.of %22
     invoke.own scope.split %24, s1
         normal ^b7($state, $selected, $external_deps, %22, %25)
@@ -286,7 +284,7 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
     ^b6(%26: failure, %27: scope<S2>) in S2:
     %28: failure = scope.unwind %27, %26, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %28
-    ^b7(%29: scope<S2>, %30: own, %31: deps, %32: future<int> facts(managed(deps=d1)), %33: deps) in S2:
+    ^b7(%29: scope<S2>, %30: own, %31: deps, %32: future<int> facts(managed(deps=d3)), %33: deps) in S2:
     %34: own = service.absorb %30, %23
     %35: cache-state = duty.empty owner S2
     %36: own = own.join [%34]
@@ -300,7 +298,7 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
     %42: scope<S2> = own.admit %37, %40
     %43: failure = scope.unwind %42, %38, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %43
-    ^b9(%44: app.Holder facts(managed(deps=d2)), %45: own, %46: deps, %47: scope<S2>) in S2:
+    ^b9(%44: app.Holder facts(managed(deps=d4)), %45: own, %46: deps, %47: scope<S2>) in S2:
     %48: scope<S2> = own.admit %47, %45
     %49: own = own.empty
     %50: pending = exit.prepare return %44, %49, deps(%46) at B1
@@ -310,10 +308,10 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
     ^b10(%51: failure, %52: scope<S2>) in S2:
     %53: failure = scope.unwind %52, %51, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %53
-    ^b11(%54: scope<S2>, %55: own, %56: deps, %57: app.Holder facts(managed(deps=d3)), %58: deps, %59: pending) in S2:
+    ^b11(%54: scope<S2>, %55: own, %56: deps, %57: app.Holder facts(managed(deps=d5)), %58: deps, %59: pending) in S2:
     %60: pending = exit.extend %59, %55
     (%61: closed, %62: pending) = scope.end %54, reserve %60, effects scope_effects(failures=[], suspends=false, cancel=false)
-    (%63: app.Holder facts(managed(deps=d4)), %64: own, %65: deps) = exit.commit %62, destination caller, result app.Holder
+    (%63: app.Holder facts(managed(deps=d6)), %64: own, %65: deps) = exit.commit %62, destination caller, result app.Holder
     ret %63, %64
     ^b12(%66: scope<S2>, %67: failure, %68: pending) in S2:
     %69: failure = scope.unwind %66, %67, reserve %68, effects scope_effects(failures=[], suspends=false, cancel=false)
@@ -322,19 +320,20 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
 
 func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M19) async-creation(M15) async-body(M19) {
     frame.layout {
-        slot 0: scope<S3> linear
-        slot 1: deps
-        slot 2: cache-state linear
-        slot 3: future<int>
-        slot 4: failure
-        slot 5: task-state linear
-        slot 6: receipt linear
+        slot 0: deps
+        slot 1: scope<S3> linear
+        slot 2: deps
+        slot 3: cache-state linear
+        slot 4: future<int>
+        slot 5: failure
+        slot 6: task-state linear
+        slot 7: receipt linear
     }
     continuation 0 start saves []
-    continuation 1 at ^b8 saves [0, 1, 2] operands [3]
-    continuation 2 at #22 saves [2] operands [0, 4, 5, 6]
+    continuation 1 at ^b8 saves [0, 1, 2, 3] operands [4]
+    continuation 2 at #22 saves [3] operands [1, 5, 6, 7]
     service.schedule Schedule0 owner S3, protocol P0, duties [%60, dynamic]
-    service.schedule Schedule0#1 owner S3, protocol P0, duties [%72, dynamic]
+    service.schedule Schedule0#1 owner S3, protocol P0, duties [%73, dynamic]
     binding b0 "h": app.Holder in S3
     boundary B0 lexical in S3
     key k0: key = service_of(value=%38, kind=cache)
@@ -342,7 +341,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M19)
     dependency d1: dependency = from_ssa(%23)
     dependency d2: dependency = from_ssa(%32)
     dependency d3: dependency = key(k0)
-    dependency d4: dependency = from_ssa(%50)
+    dependency d4: dependency = from_ssa(%36)
+    dependency d5: dependency = union([d3, d4])
+    dependency d6: dependency = from_ssa(%50)
     selection s0: selection = admissible(selection(%11))
     selection s1: selection = union([selection(%22)])
     selection s2: selection = admissible(s1)
@@ -387,9 +388,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M19)
     %33: own = own.join [%29]
     (%34: own, %35: own, %36: deps) = own.split %33, s3
     %37: own = own.join [%34, %35]
-    (%38: future<int> facts(managed(deps=d3)), %39: cache-state, %40: scope<S3>) = fut.new %37, %36, %28, environment deferred(function=@app.Holder.get#0, arguments=[%31]), result int, owner S3
+    (%38: future<int> facts(managed(deps=d5)), %39: cache-state, %40: scope<S3>) = fut.new %37, %36, %28, environment deferred(function=@app.Holder.get#0, arguments=[%31]), result int, owner S3
     %41: deps = deps.of %38
-    %42: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%40, mode=consume), frame_slot(slot=1, value=%41, mode=borrow), frame_slot(slot=2, value=%39, mode=consume)], continuation 1
+    %42: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%36, mode=borrow), frame_slot(slot=1, value=%40, mode=consume), frame_slot(slot=2, value=%41, mode=borrow), frame_slot(slot=3, value=%39, mode=consume)], continuation 1
     invoke.own await %38, result int
         normal ^b14($value, $deps)
         unwind ^b15($failure, $task, $receipt)
@@ -397,15 +398,15 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M19)
     %45: failure = scope.unwind %43, %44, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %1, failure(%45)
     ret
-    ^b10(%46: int, %47: deps, %48: future<int> facts(managed(deps=d4)), %49: scope<S3>, %50: deps) in S3:
+    ^b10(%46: int, %47: deps, %48: future<int> facts(managed(deps=d6)), %49: scope<S3>, %50: deps) in S3:
     %51: deps = deps.of %46
     invoke.own scope.end %49, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b12($closed, %46)
         unwind ^b13($closed, $failure)
     ^b11(%52: failure, %53: task-state, %54: receipt, %55: scope<S3>) in S3:
-    %56: frame<@main> = frame.save %76, slots [frame_slot(slot=2, value=%79, mode=consume)], continuation 2
+    %56: frame<@main> = frame.save %77, slots [frame_slot(slot=3, value=%81, mode=consume)], continuation 2
     [i22] (%57: scope<S3>, %58: failure) = await.unwind %55, %52, %53, %54, protocol P0
-    (%59: frame<@main>, %60: cache-state) = frame.resume %56, continuation 2, slots [saved_slot(slot=2, ty=cache-state, linear=true)]
+    (%59: frame<@main>, %60: cache-state) = frame.resume %56, continuation 2, slots [saved_slot(slot=3, ty=cache-state, linear=true)]
     %61: failure = scope.unwind %57, %58, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %59, failure(%61)
     ret
@@ -417,9 +418,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M19)
     fut.publish %69, failure(%66)
     ret
     ^b14(%67: int, %68: deps) in S3:
-    (%69: frame<@main>, %70: scope<S3>, %71: deps, %72: cache-state) = frame.resume %42, continuation 1, slots [saved_slot(slot=0, ty=scope<S3>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
-    br ^b10(%67, %68, %38, %70, %71)
-    ^b15(%73: failure, %74: task-state, %75: receipt) in S3:
-    (%76: frame<@main>, %77: scope<S3>, %78: deps, %79: cache-state) = frame.resume %42, continuation 1, slots [saved_slot(slot=0, ty=scope<S3>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
-    br ^b11(%73, %74, %75, %77)
+    (%69: frame<@main>, %70: deps, %71: scope<S3>, %72: deps, %73: cache-state) = frame.resume %42, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S3>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true)]
+    br ^b10(%67, %68, %38, %71, %72)
+    ^b15(%74: failure, %75: task-state, %76: receipt) in S3:
+    (%77: frame<@main>, %78: deps, %79: scope<S3>, %80: deps, %81: cache-state) = frame.resume %42, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S3>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true)]
+    br ^b11(%74, %75, %76, %79)
 }

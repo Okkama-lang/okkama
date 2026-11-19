@@ -654,6 +654,31 @@ fn edges(data: &Block) -> Vec<(BlockId, BTreeSet<ValueId>)> {
     edges
 }
 
+/// #864 (Fable's review): a value's facts are part of what it means, so the values they name are used wherever the
+/// value is: FromSsa and Retention leaves, through unions, other than the value itself. A Future's fact names its
+/// `fut.new` deps operand, which no operation uses after the creation; a suspension must save it.
+fn named_by_facts(body: &Body, uses: &mut Vec<ValueId>) {
+    let mut named = Vec::new();
+    for &value in uses.iter() {
+        let Ok(ValueData { facts: ValueFacts::Managed { deps }, .. }) = body.values.get(value) else { continue };
+        let mut pending = vec![*deps];
+        let mut seen = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match body.deps.get(id) {
+                Ok(DepExpr::FromSsa(leaf) | DepExpr::Retention { value: leaf, .. }) if *leaf != value => {
+                    named.push(*leaf);
+                }
+                Ok(DepExpr::Union(parts)) => pending.extend(parts.iter().copied()),
+                _ => {}
+            }
+        }
+    }
+    uses.extend(named);
+}
+
 /// Backward liveness of SSA values with the implicit uses of schedule duties.
 struct Liveness {
     live_in: BTreeMap<BlockId, BTreeSet<ValueId>>,
@@ -685,6 +710,7 @@ impl Liveness {
                 uses.extend(unwind.target.args.iter().copied());
             }
             uses.extend(implicit.get(&Site::Terminator(block)).into_iter().flatten().copied());
+            named_by_facts(body, &mut uses);
             uses.retain(|value| !frames.contains(value));
             let mut live: BTreeSet<ValueId> = uses.iter().copied().collect();
             let mut kill = BTreeSet::new();
@@ -698,6 +724,7 @@ impl Liveness {
                 let mut uses: Vec<ValueId> = cfg::operation_uses(&instruction.op, body).ok()?
                     .into_iter().map(|operand| operand.value).collect();
                 uses.extend(implicit.get(&Site::Instruction(inst)).into_iter().flatten().copied());
+                named_by_facts(body, &mut uses);
                 uses.retain(|value| !frames.contains(value));
                 live.extend(uses.iter().copied());
                 instruction_uses.insert(inst, uses);

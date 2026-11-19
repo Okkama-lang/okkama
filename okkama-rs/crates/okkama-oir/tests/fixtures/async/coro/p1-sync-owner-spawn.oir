@@ -180,8 +180,12 @@ func @app.Kick.start#0(%0: app.Kick facts(plain(certificate=closed_graph(ty=app.
     key k0: key = service_of(value=%10, kind=cache)
     key k1: key = service_of(value=%23, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%20)
-    dependency d2: dependency = key(k1)
+    dependency d1: dependency = from_ssa(%9)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%20)
+    dependency d4: dependency = key(k1)
+    dependency d5: dependency = from_ssa(%22)
+    dependency d6: dependency = union([d4, d5])
     ^b0 in S2:
     %2: scope<S2> = scope.begin S2
     %3: scope<S2> = own.accept %2, %1
@@ -193,7 +197,7 @@ func @app.Kick.start#0(%0: app.Kick facts(plain(certificate=closed_graph(ty=app.
     ^b2(%6: app.Work facts(plain(certificate=closed_graph(ty=app.Work))), %7: scope<S2>) in S2:
     %8: own = own.empty
     %9: deps = deps.of %6
-    (%10: future<int> facts(managed(deps=d0)), %11: cache-state, %12: scope<S2>) = fut.new %8, %9, %7, environment deferred(function=@app.Work.value#0, arguments=[%6]), result int, owner S2, binding b0
+    (%10: future<int> facts(managed(deps=d2)), %11: cache-state, %12: scope<S2>) = fut.new %8, %9, %7, environment deferred(function=@app.Work.value#0, arguments=[%6]), result int, owner S2, binding b0
     %13: deps = deps.of %10
     invoke.own call @app.Watcher.new#0()
         normal ^b4($value, %10, %12, %13)
@@ -201,10 +205,10 @@ func @app.Kick.start#0(%0: app.Kick facts(plain(certificate=closed_graph(ty=app.
     ^b3(%14: failure, %15: scope<S2>) in S2:
     %16: failure = scope.unwind %15, %14, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %16
-    ^b4(%17: app.Watcher facts(plain(certificate=closed_graph(ty=app.Watcher))), %18: future<int> facts(managed(deps=d1)), %19: scope<S2>, %20: deps) in S2:
+    ^b4(%17: app.Watcher facts(plain(certificate=closed_graph(ty=app.Watcher))), %18: future<int> facts(managed(deps=d3)), %19: scope<S2>, %20: deps) in S2:
     %21: own = own.empty
     %22: deps = deps.of %18
-    (%23: future<int> facts(managed(deps=d2)), %24: cache-state, %25: scope<S2>) = fut.new %21, %22, %19, environment deferred(function=@app.Watcher.run#0, arguments=[%17, %18]), result int, owner S2
+    (%23: future<int> facts(managed(deps=d6)), %24: cache-state, %25: scope<S2>) = fut.new %21, %22, %19, environment deferred(function=@app.Watcher.run#0, arguments=[%17, %18]), result int, owner S2
     %26: deps = deps.of %23
     (%27: cache-state, %28: task-state) = fut.spawn %23, state %24
     %29: int = const 0

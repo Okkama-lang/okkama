@@ -50,10 +50,12 @@ func @main() -> int [entry, async] abi observation summary(M9) async-creation(M7
     dependency d3: dependency = from_ssa(%26)
     dependency d4: dependency = from_ssa(%32)
     dependency d5: dependency = key(k0)
-    dependency d6: dependency = from_ssa(%38)
-    dependency d7: dependency = from_ssa(%44)
-    dependency d8: dependency = from_ssa(%50)
-    dependency d9: dependency = from_ssa(%56)
+    dependency d6: dependency = from_ssa(%5)
+    dependency d7: dependency = union([d5, d6])
+    dependency d8: dependency = from_ssa(%38)
+    dependency d9: dependency = from_ssa(%44)
+    dependency d10: dependency = from_ssa(%50)
+    dependency d11: dependency = from_ssa(%56)
     selection s0: selection = union([])
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1
@@ -62,7 +64,7 @@ func @main() -> int [entry, async] abi observation summary(M9) async-creation(M7
     %2: own = own.empty
     (%3: own, %4: own, %5: deps) = own.split %2, s0
     %6: own = own.join [%3, %4]
-    (%7: future<int> facts(managed(deps=d5)), %8: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@fail), result int, owner S1, binding b0
+    (%7: future<int> facts(managed(deps=d7)), %8: scope<S1>) = fut.new %6, %5, %1, environment deferred(function=@fail), result int, owner S1, binding b0
     %9: deps = deps.of %7
     br ^b2(%7, %9, %8)
     ^b2(%10: future<int> facts(managed(deps=d0)), %11: deps, %12: scope<S1>) in S2:
@@ -83,16 +85,16 @@ func @main() -> int [entry, async] abi observation summary(M9) async-creation(M7
     invoke.own await %31, result int
         normal ^b12($value, $deps, %31, %32, %33, %34)
         unwind ^b13($failure, $task, $receipt, %34)
-    ^b8(%35: int, %36: deps, %37: future<int> facts(managed(deps=d6)), %38: deps, %39: scope<S1>) in S2:
+    ^b8(%35: int, %36: deps, %37: future<int> facts(managed(deps=d8)), %38: deps, %39: scope<S1>) in S2:
     br ^b7(%37, %38, %35, %39)
-    ^b9(%40: failure, %41: task-state, %42: receipt, %43: future<int> facts(managed(deps=d7)), %44: deps, %45: scope<S1>) in S2:
+    ^b9(%40: failure, %41: task-state, %42: receipt, %43: future<int> facts(managed(deps=d9)), %44: deps, %45: scope<S1>) in S2:
     (%46: scope<S1>, %47: failure) = await.unwind %45, %40, %41, %42, protocol P0
     br ^b3(%43, %44, %47, %46)
-    ^b10(%48: Broken facts(plain(certificate=scalar)), %49: future<int> facts(managed(deps=d8)), %50: deps, %51: failure, %52: scope<S1>) in S1:
+    ^b10(%48: Broken facts(plain(certificate=scalar)), %49: future<int> facts(managed(deps=d10)), %50: deps, %51: failure, %52: scope<S1>) in S1:
     br ^b5(%49, %50, %51, %48, %52)
     ^b11 in S1:
     br ^b4(%15, %16)
-    ^b12(%53: int, %54: deps, %55: future<int> facts(managed(deps=d9)), %56: deps, %57: int, %58: scope<S1>) in S1:
+    ^b12(%53: int, %54: deps, %55: future<int> facts(managed(deps=d11)), %56: deps, %57: int, %58: scope<S1>) in S1:
     %59: int = int.add %57, %53
     invoke.own scope.end %58, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b14($closed, %59)

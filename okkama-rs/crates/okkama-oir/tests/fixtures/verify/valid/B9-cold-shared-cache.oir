@@ -26,7 +26,9 @@ func @view(%future: future<void>) -> R [extern "fixture.cache_view"] abi observa
 func @f() -> void [async] summary(Mf) {
     service.schedule Schedule0 owner S, protocol Services, duties [%future]
     key k0: key = service_of(value=%future, kind=cache)
-    dependency d0: dependency = key(k0)
+    dependency d0k864: dependency = key(k0)
+    dependency d0f864: dependency = from_ssa(%deps)
+    dependency d0: dependency = union([d0k864, d0f864])
     dependency dv: dependency = retention(value=%view, selection=selection(%view))
 ^entry in S:
     %q: scope<S> = scope.begin S

@@ -1,8 +1,4 @@
 oir 2 coro
-// #849: a Future created and awaited in a `map` body: `(0..2).map() -> index { await Now().named("x" + index.string()); }`.
-// The body scope S3 owns the duty. The builder's unwind cleanup made before the Future is not reused after it, so
-// the failure of `Now()` and the failure of the await close S3 on separate paths, each with or without the duty
-// on all of them; the builder lives across the await in the frame. Coro's output for ../own/d849-map-body-await.oir.
 module app v1.0.0
 requires core, async
 entry @main

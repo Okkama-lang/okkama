@@ -1,7 +1,4 @@
 oir 2 coro
-// #759: spawn in a `for` body: `for 1..=3 -> i { let f = spawn Job(n: i).run(); await f; }`. S2 owns the task
-// and cache duties of each iteration's Future and settles them, task first, at that iteration's close; the back
-// edge carries neither token. Coro's output for ../own/d759-loop-body-spawn.oir.
 module app v1.0.0
 requires core, async
 entry @main

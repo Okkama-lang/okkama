@@ -57,7 +57,12 @@ impl Driver<'_, '_> {
             // #863, #864 (PR-N2, OIR-2-async-remaining §6.3b-c): the Future depends on exactly the inputs its creation
             // summary calls managed, which the prologue gave their deps, and on a bare Future input; several are joined
             // and none is the empty `deps.join []`. A thunk never restructures its unaccepted entry packet.
-            let mut parts = managed.iter().map(|input| point.env.value(*input)?.deps
+            // The creation summary's managed set is the `may_own` test (`creation_summary`); own's `managed` also
+            // counts managed references, which the creation summary does not declare.
+            let owning = |original: &&ValueId| ty(original).is_ok_and(|ty| {
+                self.analysis.types.get(&ty).is_none_or(TypeClassification::may_own)
+            });
+            let mut parts = managed.iter().filter(owning).map(|input| point.env.value(*input)?.deps
                 .ok_or_else(|| flow_error("a managed thunk input has its deps"))).collect::<Result<Vec<_>, _>>()?;
             if let Some(future) = future_input {
                 let value = point.env.value(future)?.value;
@@ -71,31 +76,48 @@ impl Driver<'_, '_> {
                 point.result(SlotName::Value)?
             };
         } else if !managed.is_empty() {
-            // Only the managed inputs are offered: a Future input's cache is borrowed and no selection names it.
-            let (next, offered) = self.offered(point, &managed)?;
-            point = next;
+            // #862 (OIR-2-async-remaining §6.3c): a bound input (a parameter or a `let`) is never moved into another
+            // holder. The Future borrows it and depends on `deps.of` it; it leaves beside the Future through the
+            // exit (`extend`). Only the fresh managed inputs are offered; a Future input's cache is borrowed too.
+            let bound_values = self.bound_values();
+            let (bound, fresh): (Vec<_>, Vec<_>) = managed.iter().copied()
+                .partition(|original| bound_values.contains(original));
             let mut parts = vec![];
-            for original in &managed {
-                let value = point.env.value(*original)?.value;
-                parts.push(self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?);
-            }
-            let selection = self.body.selections.alloc(SelectionExpr::Union(parts)).map_err(arena)?;
-            point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet: offered, selection }))?;
-            let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-            let external = point.result(SlotName::ExternalDeps)?;
-            point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
-            packet = point.result(SlotName::Packet)?;
-            // #864: a borrowed Future input beside the managed ones adds its own deps, which no selection names.
-            deps = if let Some(future) = future_input {
-                let value = point.env.value(future)?.value;
-                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
-                let borrowed = point.result(SlotName::Value)?;
-                let deps = vec![external, borrowed];
-                point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps }))?;
-                point.result(SlotName::Value)?
+            if fresh.is_empty() {
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
+                packet = point.result(SlotName::Packet)?;
             } else {
-                external
+                let (next, offered) = self.offered(point, &fresh)?;
+                point = next;
+                let mut selected = vec![];
+                for original in &fresh {
+                    let value = point.env.value(*original)?.value;
+                    selected.push(self.body.selections.alloc(SelectionExpr::Value(value)).map_err(arena)?);
+                }
+                let selection = self.body.selections.alloc(SelectionExpr::Union(selected)).map_err(arena)?;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet: offered, selection }))?;
+                let halves = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
+                parts.push(point.result(SlotName::ExternalDeps)?);
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: halves }))?;
+                packet = point.result(SlotName::Packet)?;
+            }
+            // #864: a borrowed input, bound or a Future, adds its own deps, which no selection names.
+            for original in bound.iter().chain(future_input.iter()) {
+                let value = point.env.value(*original)?.value;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
+                parts.push(point.result(SlotName::Value)?);
+            }
+            deps = if let [one] = parts[..] {
+                one
+            } else {
+                point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps: parts }))?;
+                point.result(SlotName::Value)?
             };
+            if !bound.is_empty() {
+                let values = bound.iter().map(|input| point.env.value(*input).map(|latest| latest.value))
+                    .collect::<Result<_, _>>()?;
+                self.future_bound_inputs.insert(*original, values);
+            }
         } else {
             point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
             packet = point.result(SlotName::Packet)?;
@@ -333,6 +355,16 @@ impl Driver<'_, '_> {
     /// PR-B1 (#784): High Future → the bindings of its `bind`s and `rebind`s, for every Future
     /// value this function binds: one an async call creates here, or one admitted with a packet. An alias
     /// (`let g = f`) binds the same value again, so every binding is kept, not the last.
+    /// #862 (§6.3c, ruling (iii)): the High values a binding names, a `let` or a parameter (the entry block's
+    /// parameters, bound or not); a binding is never moved into another holder.
+    fn bound_values(&self) -> BTreeSet<ValueId> {
+        let parameters = self.high.blocks.get(self.high.entry).map(|block| block.params.clone()).unwrap_or_default();
+        self.high.insts.iter().filter_map(|(_, instruction)| match &instruction.op {
+            Operation::Lexical(LexicalOp::Bind { value, .. } | LexicalOp::Rebind { value, .. }) => Some(*value),
+            _ => None,
+        }).chain(parameters).collect()
+    }
+
     pub(super) fn bound_futures(&self) -> BTreeMap<ValueId, Vec<BindingId>> {
         let mut bindings: BTreeMap<ValueId, Vec<BindingId>> = BTreeMap::new();
         for (_, instruction) in self.high.insts.iter() {

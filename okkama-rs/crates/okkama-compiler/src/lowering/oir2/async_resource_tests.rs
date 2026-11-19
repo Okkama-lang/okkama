@@ -479,3 +479,47 @@ fn oir2_r6_a_borrowed_resource_cannot_reach_the_result() {
         && diagnostic.message == "body exports accepted inputs beyond its declared take retention");
     assert!(exported, "{report:?}");
 }
+
+/// #864, the requirements half of `fut.new`'s deps coverage (OIR-2-async-remaining §6.3c). `Factory.make` creates a
+/// cold Future of `read` over a fresh Receiver and a fresh Res, which both refer to the Atomic `log`. What they depend
+/// on through it has no key of theirs: a requirement, which the split's ExternalDeps names. A Future whose deps name
+/// nothing is refused.
+#[test]
+fn oir2_r3_a_future_names_the_requirements_of_its_inputs() {
+    let own = high_to_own(lower(&source(concat!(
+        "object Receiver { has name is string; has log is Atomic<string>; ",
+        "Receiver(name is string, log is Atomic<string>) { self.name = name; self.log = log; } ",
+        "async read(arg is Res) is string { name + arg.label(); } destroy { log.replace(log.value() + name); } } ",
+        "object Factory { Factory(); make(log is Atomic<string>) is Future<string> ",
+        "{ Receiver(\"R\", log).read(Res(\"A\", log)); } } ",
+        "async main() is int { let log = Atomic(\"\"); defer log.close(); (await Factory().make(log)).length(); }",
+    ))));
+    let make = own.functions.iter().find(|(_, function)| function.symbol == "app.Factory.make#0").unwrap().0;
+    let mut empty = own.clone();
+    let body = empty.functions.get_mut(make).unwrap().body.as_mut().unwrap();
+    let creation = body.insts.iter()
+        .find(|(_, inst)| matches!(inst.op, ir::Operation::Async(ir::AsyncOp::FutureNew { .. })))
+        .map(|(id, _)| id).expect("make's fut.new");
+    let template = body.insts.iter().find(|(_, inst)| {
+        matches!(inst.op, ir::Operation::Ownership(ir::OwnershipOp::Dependencies { .. }))
+    }).map(|(_, inst)| inst.clone()).expect("a deps.of");
+    let deps = body.values.get(template.results[0]).unwrap().clone();
+    let join = body.insts.alloc(template).unwrap();
+    let none = body.values.alloc(ir::ValueData { def: ir::Definition::InstResult { inst: join, index: 0 }, ..deps })
+        .unwrap();
+    let instruction = body.insts.get_mut(join).unwrap();
+    instruction.op = ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { deps: vec![] });
+    instruction.results = vec![none];
+    let ir::Operation::Async(ir::AsyncOp::FutureNew { deps: named, .. }) = &mut body.insts.get_mut(creation).unwrap().op
+    else { unreachable!() };
+    *named = none;
+    let (_, block) = body.blocks.iter_mut().find(|(_, block)| block.insts.contains(&creation)).unwrap();
+    let at = block.insts.iter().position(|inst| *inst == creation).unwrap();
+    block.insts.insert(at, join);
+    let verify = ir::verify::VerifyOptions { mode: ir::verify::VerifyMode::Full, ..Default::default() };
+    let catalog = super::native_summaries::P1NativeSummaries::for_module(&empty).unwrap();
+    let context = ir::verify::VerifyContext { text_locations: None, external_contracts: &catalog };
+    let report = ir::verify::verify_own_with(&empty, &verify, context).expect_err("a Future that names nothing");
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B32
+        && diagnostic.message == "fut.new deps omit part of a managed argument's full dependencies"), "{report:?}");
+}

@@ -211,9 +211,9 @@ fn an_edge_without_saved_values_resumes_in_its_own_successor() {
     // D20 form (a): the successor starts with the resume; no extra block is needed.
     let source = edited(PLAIN, "normal ^b2($value, $deps, %5, %6, %7)", "normal ^b2($value, $deps)");
     let source = edited(&source, "unwind ^b3($failure, $task, $receipt, %6)", "unwind ^b3($failure, $task, $receipt)");
-    let source = edited(&source, "    dependency d1: dependency = from_ssa(%12)\n", "");
+    let source = edited(&source, "    dependency d3: dependency = from_ssa(%12)\n", "");
     let source = edited(&source,
-        "^b2(%8: int, %9: deps, %10: future<int> facts(managed(deps=d1)), %11: scope<S1>, %12: deps) in S1:",
+        "^b2(%8: int, %9: deps, %10: future<int> facts(managed(deps=d3)), %11: scope<S1>, %12: deps) in S1:",
         "^b2(%8: int, %9: deps) in S1:");
     let source = edited(&source, "invoke.own scope.end %11,", "invoke.own scope.end %6,");
     let source = edited(&source, "^b3(%13: failure, %14: task-state, %15: receipt, %16: scope<S1>) in S1:",
@@ -251,8 +251,9 @@ fn a_value_returned_after_a_suspension_reads_its_resumed_version() {
         Operation::Async(AsyncOp::FrameSave { slots, continuation: 1, .. }) => Some(slots.len()),
         _ => None,
     }).collect();
-    // The scope state, the deps of the Future, the cache duty and the returned argument.
-    assert_eq!(saved, [4]);
+    // The scope state, the deps of the Future, the cache duty, the returned argument, and the deps operand of the
+    // Future's `fut.new`, which its fact names (#864).
+    assert_eq!(saved, [5]);
 }
 
 #[test]
@@ -880,4 +881,25 @@ fn a_creation_in_a_loop_of_its_owner_is_refused_by_occupancy() {
     let error = lower(&looped).unwrap_err();
     assert!(matches!(&error, CoroError::InvalidInput { message, .. }
         if message == "fut.new may fill a slot that still holds its earlier duty (D26 R-1)"), "{error:?}");
+}
+
+/// #864 (Fable's review): a Future's fact names the deps operand of its `fut.new`, so a suspension that holds the
+/// Future saves that deps value. The coro verifier derives this on its own: a `frame.save` without it is refused as an
+/// incomplete saved set.
+#[test]
+fn a_suspension_saves_what_a_live_futures_fact_names() {
+    let golden = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+    verify_coro_with(&parsed(golden), &options(), VerifyContext::default())
+        .unwrap_or_else(|report| panic!("{report:?}"));
+    let source = edited(golden, "frame_slot(slot=0, value=%6, mode=borrow), ", "");
+    let source = edited(&source, "continuation 1 at ^b1 saves [0, 1, 2, 3] operands [4]",
+        "continuation 1 at ^b1 saves [1, 2, 3] operands [4]");
+    let source = edited(&source, "(%35: frame<@main>, %36: deps, %37: scope<S1>", "(%35: frame<@main>, %37: scope<S1>");
+    let source = edited(&source, "(%43: frame<@main>, %44: deps, %45: scope<S1>", "(%43: frame<@main>, %45: scope<S1>");
+    let source = source.replace("continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1,",
+        "continuation 1, slots [saved_slot(slot=1,");
+    let report = verify_coro_with(&parsed(&source), &options(), VerifyContext::default())
+        .expect_err("the deps the Future's fact names is not saved");
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::CoroSavedSetIncomplete),
+        "{report:?}");
 }

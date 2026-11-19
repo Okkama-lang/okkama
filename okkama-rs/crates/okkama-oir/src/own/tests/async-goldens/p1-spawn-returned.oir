@@ -86,7 +86,9 @@ func @app.Starter.start#0(%0: app.Starter facts(plain(certificate=closed_graph(t
     boundary B1 lexical in S1
     key k0: key = service_of(value=%10, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%12)
+    dependency d1: dependency = from_ssa(%9)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%12)
     ^b0 in S1:
     %2: scope<S1> = scope.begin S1
     %3: scope<S1> = own.accept %2, %1
@@ -98,7 +100,7 @@ func @app.Starter.start#0(%0: app.Starter facts(plain(certificate=closed_graph(t
     ^b2(%6: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %7: scope<S1>) in S1:
     %8: own = own.empty
     %9: deps = deps.of %6
-    (%10: future<int> facts(managed(deps=d0)), %11: scope<S1>) = fut.new %8, %9, %7, environment deferred(function=@app.Job.run#0, arguments=[%6]), result int, owner S1
+    (%10: future<int> facts(managed(deps=d2)), %11: scope<S1>) = fut.new %8, %9, %7, environment deferred(function=@app.Job.run#0, arguments=[%6]), result int, owner S1
     %12: deps = deps.of %10
     %13: scope<S1> = fut.spawn %10, state %11
     %14: own = own.empty
@@ -107,7 +109,7 @@ func @app.Starter.start#0(%0: app.Starter facts(plain(certificate=closed_graph(t
     %18: own = own.empty
     %19: pending = exit.extend %17, %18
     (%20: closed, %21: pending) = scope.end %16, reserve %19, effects scope_effects(failures=[], suspends=false, cancel=false)
-    (%22: future<int> facts(managed(deps=d1)), %23: own, %24: deps) = exit.commit %21, destination caller, result future<int>
+    (%22: future<int> facts(managed(deps=d3)), %23: own, %24: deps) = exit.commit %21, destination caller, result future<int>
     ret %22, %23
     ^b3(%25: failure, %26: scope<S1>) in S1:
     %27: failure = scope.unwind %26, %25, effects scope_effects(failures=[], suspends=false, cancel=false)

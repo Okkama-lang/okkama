@@ -75,11 +75,15 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     dependency d1: dependency = from_ssa(%7)
     dependency d2: dependency = from_ssa(%12)
     dependency d3: dependency = key(k0)
-    dependency d4: dependency = from_ssa(%29)
-    dependency d5: dependency = key(k1)
-    dependency d6: dependency = from_ssa(%45)
-    dependency d7: dependency = from_ssa(%49)
-    dependency d8: dependency = from_ssa(%63)
+    dependency d4: dependency = from_ssa(%18)
+    dependency d5: dependency = union([d3, d4])
+    dependency d6: dependency = from_ssa(%29)
+    dependency d7: dependency = key(k1)
+    dependency d8: dependency = from_ssa(%34)
+    dependency d9: dependency = union([d7, d8])
+    dependency d10: dependency = from_ssa(%45)
+    dependency d11: dependency = from_ssa(%49)
+    dependency d12: dependency = from_ssa(%63)
     ^b0 in S1:
     %0: scope<S1> = scope.begin S1
     br ^b1(%0)
@@ -102,7 +106,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     %16: int = const 2
     %17: own = own.empty
     %18: deps = deps.of %14
-    (%19: future<int> facts(managed(deps=d3)), %20: scope<S1>) = fut.new %17, %18, %15, environment deferred(function=@app.Inner.run#0, arguments=[%14, %16]), result int, owner S1, binding b0
+    (%19: future<int> facts(managed(deps=d5)), %20: scope<S1>) = fut.new %17, %18, %15, environment deferred(function=@app.Inner.run#0, arguments=[%14, %16]), result int, owner S1, binding b0
     %21: deps = deps.of %19
     %22: bool = const true
     cond %22, ^b7, ^b8
@@ -114,11 +118,11 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     br ^b3(%19, %21, %20, %26)
     ^b8 in S1:
     br ^b2(%19, %21, %20)
-    ^b9(%27: app.Inner facts(plain(certificate=closed_graph(ty=app.Inner))), %28: future<int> facts(managed(deps=d4)), %29: deps, %30: scope<S1>, %31: scope<S2>) in S2:
+    ^b9(%27: app.Inner facts(plain(certificate=closed_graph(ty=app.Inner))), %28: future<int> facts(managed(deps=d6)), %29: deps, %30: scope<S1>, %31: scope<S2>) in S2:
     %32: int = const 1
     %33: own = own.empty
     %34: deps = deps.of %27
-    (%35: future<int> facts(managed(deps=d5)), %36: scope<S2>) = fut.new %33, %34, %31, environment deferred(function=@app.Inner.run#0, arguments=[%27, %32]), result int, owner S2, binding b1
+    (%35: future<int> facts(managed(deps=d9)), %36: scope<S2>) = fut.new %33, %34, %31, environment deferred(function=@app.Inner.run#0, arguments=[%27, %32]), result int, owner S2, binding b1
     %37: deps = deps.of %35
     invoke.own await %35, result int
         normal ^b11($value, $deps, %28, %29, %30, %35, %36, %37)
@@ -126,7 +130,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     ^b10(%38: failure, %39: scope<S1>, %40: scope<S2>) in S2:
     %41: failure = scope.unwind %40, %38, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b19
-    ^b11(%42: int, %43: deps, %44: future<int> facts(managed(deps=d6)), %45: deps, %46: scope<S1>, %47: future<int> facts(managed(deps=d7)), %48: scope<S2>, %49: deps) in S2:
+    ^b11(%42: int, %43: deps, %44: future<int> facts(managed(deps=d10)), %45: deps, %46: scope<S1>, %47: future<int> facts(managed(deps=d11)), %48: scope<S2>, %49: deps) in S2:
     %50: closed = scope.end %48, effects scope_effects(failures=[], suspends=false, cancel=false)
     br ^b13
     ^b12(%51: failure, %52: task-state, %53: receipt, %54: scope<S1>, %55: scope<S2>) in S2:
@@ -135,7 +139,7 @@ func @main() -> int [entry, async] abi observation summary(M11) async-creation(M
     br ^b18
     ^b13 in S1:
     br ^b4(%42, %44, %45, %46)
-    ^b14(%59: int, %60: deps, %61: int, %62: future<int> facts(managed(deps=d8)), %63: deps, %64: scope<S1>) in S1:
+    ^b14(%59: int, %60: deps, %61: int, %62: future<int> facts(managed(deps=d12)), %63: deps, %64: scope<S1>) in S1:
     %65: int = int.add %61, %59
     invoke.own scope.end %64, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b16($closed, %65)

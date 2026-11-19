@@ -132,12 +132,24 @@ impl Engine<'_, '_> {
             } else {
                 self.named_futures.get(holder) == Some(&true)
             };
-            if base.futures && related && piece.holder.is_some_and(|holder| self.future_origin(holder) && kept(&holder))
+            // §6.3c (Fable, case A): the clause is about a duty its creating scope still holds as its own (cache-owned
+            // provenance). A Future's entry that came back in a call's result packet (D25.1: the duty piece itself,
+            // with another provenance) moves with the value that reaches it, through the holder-graph branch below.
+            // What a Future's cache holds (another origin) stays with that Future as before.
+            let returned_entry = piece.holder == Some(piece.origin)
+                && piece.provenance & provenance_bit(AdmissionProvenance::CacheOwned) == 0;
+            if base.futures && related && !returned_entry
+                && piece.holder.is_some_and(|holder| self.future_origin(holder) && kept(&holder))
             {
                 rest.pieces.insert(piece.clone());
                 continue;
             }
-            if base.futures && related && eligible && !piece.channel && piece.holder.as_ref().is_some_and(reached) {
+            // §6.3c (Fable, the timeout-in-a-group case): the cache duty of a Future the selection names directly and
+            // no binding holds goes with the rest of its holder graph whatever its provenance, as `service.absorb`
+            // moves it in coro; the two profiles then agree on where the duty is.
+            let direct = piece.holder.is_some_and(|holder| self.named_futures.get(&holder) == Some(&false));
+            if base.futures && related && (eligible || direct) && !piece.channel
+                && piece.holder.as_ref().is_some_and(reached) {
                 let mut moved = piece.clone();
                 if *fresh {
                     moved.provenance &= FRESH;
@@ -150,6 +162,14 @@ impl Engine<'_, '_> {
             // absorbs nothing).
             if base.futures && related && piece.holder.is_some_and(|holder| holder != piece.origin)
                 && self.future_origin(piece.origin) {
+                rest.pieces.insert(piece.clone());
+                continue;
+            }
+            // §6.3c (Fable, KEEPER): a returned entry of a Future (its duty piece back from a result packet) is taken
+            // only by a futures selection. Any other selection names no value that can hold a Future, so the runtime's
+            // walk cannot meet one: the piece stays, silently. A duty its scope created (cache-owned) and what a cache
+            // holds (another origin) keep the check below (`B9-cold-shared-cache`).
+            if !base.futures && returned_entry {
                 rest.pieces.insert(piece.clone());
                 continue;
             }
@@ -371,8 +391,11 @@ impl Engine<'_, '_> {
                     if let Some(i) = slot_index(SlotName::ExternalDeps) {
                         let (keys, _) = self.selection(&before, *selection);
                         slots[i].refs = external_keys(keys, slots.iter().map(|slot| &slot.token));
-                        // #864: and what the selected values depend on without a key (their requirements).
-                        slots[i].requirements = self.selection_requirements(&before, *selection);
+                        // #864: and what the selected values depend on without a key (their requirements). A deps
+                        // value retains them as references, as `deps.of` does, so a fact that names it (`FromSsa`)
+                        // states them too.
+                        let requirements = self.selection_requirements(&before, *selection);
+                        slots[i].refs.extend(requirements);
                     }
                 }
                 TransferRule::Admit { state, packet, output, provenance } => {
@@ -814,6 +837,27 @@ impl Engine<'_, '_> {
             }
             retained.extend(deps);
         }
+        // #864 (OIR-2-async-remaining §6.3c, ruling (i)): an await's outcome inherits what the Future requires only
+        // when its type can hold a reference, since a body may return something that refers to a borrowed input. Its
+        // deps result then names those requirements too (`FromSsa` reads references), so own's facts for the outcome
+        // agree with the flow. A value of closed plain type depends on nothing.
+        let mut inherited_deps = BTreeSet::new();
+        if let Operation::Async(AsyncOp::Await { future, .. } | AsyncOp::AwaitShielded { future, .. }
+            | AsyncOp::AwaitTake { future, .. }) = op {
+            let index = future.as_u32() as usize;
+            let inherited: BTreeSet<_> = before.full_deps[index].difference(&before.refs[index]).copied().collect();
+            let value = schema.results.iter().position(|slot| slot.name == SlotName::Value);
+            let managed = value.is_some_and(|i| match schema.results[i].ty {
+                ResultType::Exact(ty) => self.managed.get(ty.as_u32() as usize).copied().unwrap_or(true),
+                _ => true,
+            });
+            if let Some(i) = value && !managed {
+                slots[i].requirements.retain(|key| !inherited.contains(key));
+            }
+            if managed {
+                inherited_deps = inherited;
+            }
+        }
         let call = super::super::summaries::call(op);
         if normal && let Some((call, receiver, _)) = call {
             self.call_results(call, receiver, origin, before, flow, schema, slots);
@@ -996,6 +1040,9 @@ impl Engine<'_, '_> {
             }
             if slot.refs.is_empty() && schema.results[i].name == SlotName::Deps {
                 slot.refs.extend(&retained);
+            }
+            if schema.results[i].name == SlotName::Deps {
+                slot.refs.extend(&inherited_deps);
             }
         }
     }

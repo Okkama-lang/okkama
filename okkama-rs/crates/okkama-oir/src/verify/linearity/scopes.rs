@@ -85,7 +85,11 @@ impl Engine<'_, '_> {
             if let Some(exit) = prepared
             && let Some(value) = exit.value {
                 let (keys, _) = self.selection(before, exit.selection);
-                if keys != before.refs[value.as_u32() as usize] {
+                // #862 (§6.3c, ruling (a)): a returned bare Future's selection may also name what it carries beside
+                // its references (`future_carried_keys`); every other value's selection is exactly its references.
+                let refs = &before.refs[value.as_u32() as usize];
+                let carried = self.future_carried_keys(before, value);
+                if !keys.is_superset(refs) || !keys.difference(refs).all(|key| carried.contains(key)) {
                     self.error(R::B101, "pending selection must describe the current value's exact retention");
                 }
             }

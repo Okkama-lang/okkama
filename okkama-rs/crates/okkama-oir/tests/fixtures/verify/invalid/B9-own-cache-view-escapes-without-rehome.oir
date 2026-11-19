@@ -143,7 +143,9 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     boundary B1 lexical in S4
     key k0: key = service_of(value=%10, kind=cache)
     dependency d0: dependency = from_ssa(%14)
-    dependency d1: dependency = key(k0)
+    dependency d1k864: dependency = key(k0)
+    dependency d1f864: dependency = from_ssa(%8)
+    dependency d1: dependency = union([d1k864, d1f864])
     dependency d2: dependency = from_ssa(%21)
     dependency d3: dependency = from_ssa(%17)
     dependency d4: dependency = from_ssa(%38)

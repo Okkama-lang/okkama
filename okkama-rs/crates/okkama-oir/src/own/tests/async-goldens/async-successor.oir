@@ -90,7 +90,9 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     boundary B0 lexical in S2
     key k0: key = service_of(value=%7, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%17)
+    dependency d1: dependency = from_ssa(%6)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%17)
     ^b0 in S2:
     %0: scope<S2> = scope.begin S2
     br ^b1(%0)
@@ -102,7 +104,7 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     ^b2(%3: app.Counter facts(plain(certificate=closed_graph(ty=app.Counter))), %4: scope<S2>) in S2:
     %5: own = own.empty
     %6: deps = deps.of %3
-    (%7: future<^app.Counter> facts(managed(deps=d0)), %8: scope<S2>) = fut.new %5, %6, %4, environment deferred(function=@app.Counter.bumped#0, arguments=[%3]), result ^app.Counter, owner S2
+    (%7: future<^app.Counter> facts(managed(deps=d2)), %8: scope<S2>) = fut.new %5, %6, %4, environment deferred(function=@app.Counter.bumped#0, arguments=[%3]), result ^app.Counter, owner S2
     %9: deps = deps.of %7
     invoke.own await %7, result ^app.Counter
         normal ^b4($value, $deps, %7, %8, %9)
@@ -110,7 +112,7 @@ func @main() -> int [entry, async] abi observation summary(M13) async-creation(M
     ^b3(%10: failure, %11: scope<S2>) in S2:
     %12: failure = scope.unwind %11, %10, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %12
-    ^b4(%13: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %14: deps, %15: future<^app.Counter> facts(managed(deps=d1)), %16: scope<S2>, %17: deps) in S2:
+    ^b4(%13: ^app.Counter facts(plain(certificate=closed_graph(ty=^app.Counter))), %14: deps, %15: future<^app.Counter> facts(managed(deps=d3)), %16: scope<S2>, %17: deps) in S2:
     %18: int = const 5
     invoke.own call @app.Counter.new#0(%18)
         normal ^b6($value, %13, %16)

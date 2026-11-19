@@ -1,8 +1,4 @@
 oir 2 coro
-// Coro golden of tests/fixtures/async/own/d857-shared-handler.oir.
-// D26 (#857), a V2-shaped variant of the own golden p1-spawn-detached without the spawn: a second call after
-// fut.new shares the failure handler of the call before it. The handler's close is reached with S1's duty and
-// without it; coro makes the duty a slot, and the handler settles the slot that the two edges merge.
 module d857_shared_handler
 requires core, async
 entry @main

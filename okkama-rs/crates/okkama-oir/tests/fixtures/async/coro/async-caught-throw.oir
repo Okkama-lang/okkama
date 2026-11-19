@@ -1,7 +1,4 @@
 oir 2 coro
-// Coro golden of src/own/tests/async-goldens/async-caught-throw.oir.
-// The body throws; its block unwind catches the throw inside the body, so only the failure after the
-// lexical unwind is published (C-2).
 module async_caught_throw
 entry @main
 
@@ -43,24 +40,27 @@ func @work(%0: frame<@work>) -> void [async] summary(M4) async-creation(M6) asyn
 
 func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) async-creation(M7) async-body(M9) {
     frame.layout {
-        slot 0: scope<S1> linear
-        slot 1: deps
-        slot 2: cache-state linear
-        slot 3: future<int>
-        slot 4: failure
-        slot 5: task-state linear
-        slot 6: receipt linear
+        slot 0: deps
+        slot 1: scope<S1> linear
+        slot 2: deps
+        slot 3: cache-state linear
+        slot 4: future<int>
+        slot 5: failure
+        slot 6: task-state linear
+        slot 7: receipt linear
     }
     continuation 0 start saves []
-    continuation 1 at ^b1 saves [0, 1, 2] operands [3]
-    continuation 2 at #10 saves [2] operands [0, 4, 5, 6]
+    continuation 1 at ^b1 saves [0, 1, 2, 3] operands [4]
+    continuation 2 at #10 saves [3] operands [1, 5, 6, 7]
     service.schedule Schedule0 owner S1, protocol P0, duties [%28]
-    service.schedule Schedule0#1 owner S1, protocol P0, duties [%40]
+    service.schedule Schedule0#1 owner S1, protocol P0, duties [%41]
     binding b0 "x": int in S1
     boundary B0 lexical in S1
     key k0: key = service_of(value=%9, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%18)
+    dependency d1: dependency = from_ssa(%7)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%18)
     selection s0: selection = union([])
     ^b0 in S1:
     %1: frame<@main> = frame.resume %0, continuation 0
@@ -70,21 +70,21 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %4: own = own.empty
     (%5: own, %6: own, %7: deps) = own.split %4, s0
     %8: own = own.join [%5, %6]
-    (%9: future<int> facts(managed(deps=d0)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@work), result int, owner S1
+    (%9: future<int> facts(managed(deps=d2)), %10: cache-state, %11: scope<S1>) = fut.new %8, %7, %3, environment deferred(function=@work), result int, owner S1
     %12: deps = deps.of %9
-    %13: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%11, mode=consume), frame_slot(slot=1, value=%12, mode=borrow), frame_slot(slot=2, value=%10, mode=consume)], continuation 1
+    %13: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%7, mode=borrow), frame_slot(slot=1, value=%11, mode=consume), frame_slot(slot=2, value=%12, mode=borrow), frame_slot(slot=3, value=%10, mode=consume)], continuation 1
     invoke.own await %9, result int
         normal ^b6($value, $deps)
         unwind ^b7($failure, $task, $receipt)
-    ^b2(%14: int, %15: deps, %16: future<int> facts(managed(deps=d1)), %17: scope<S1>, %18: deps) in S1:
+    ^b2(%14: int, %15: deps, %16: future<int> facts(managed(deps=d3)), %17: scope<S1>, %18: deps) in S1:
     %19: deps = deps.of %14
     invoke.own scope.end %17, effects scope_effects(failures=[], suspends=false, cancel=true)
         normal ^b4($closed, %14)
         unwind ^b5($closed, $failure)
     ^b3(%20: failure, %21: task-state, %22: receipt, %23: scope<S1>) in S1:
-    %24: frame<@main> = frame.save %44, slots [frame_slot(slot=2, value=%47, mode=consume)], continuation 2
+    %24: frame<@main> = frame.save %45, slots [frame_slot(slot=3, value=%49, mode=consume)], continuation 2
     [i10] (%25: scope<S1>, %26: failure) = await.unwind %23, %20, %21, %22, protocol P0
-    (%27: frame<@main>, %28: cache-state) = frame.resume %24, continuation 2, slots [saved_slot(slot=2, ty=cache-state, linear=true)]
+    (%27: frame<@main>, %28: cache-state) = frame.resume %24, continuation 2, slots [saved_slot(slot=3, ty=cache-state, linear=true)]
     %29: failure = scope.unwind %25, %26, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %27, failure(%29)
     ret
@@ -96,9 +96,9 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     fut.publish %37, failure(%34)
     ret
     ^b6(%35: int, %36: deps) in S1:
-    (%37: frame<@main>, %38: scope<S1>, %39: deps, %40: cache-state) = frame.resume %13, continuation 1, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
-    br ^b2(%35, %36, %9, %38, %39)
-    ^b7(%41: failure, %42: task-state, %43: receipt) in S1:
-    (%44: frame<@main>, %45: scope<S1>, %46: deps, %47: cache-state) = frame.resume %13, continuation 1, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
-    br ^b3(%41, %42, %43, %45)
+    (%37: frame<@main>, %38: deps, %39: scope<S1>, %40: deps, %41: cache-state) = frame.resume %13, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true)]
+    br ^b2(%35, %36, %9, %39, %40)
+    ^b7(%42: failure, %43: task-state, %44: receipt) in S1:
+    (%45: frame<@main>, %46: deps, %47: scope<S1>, %48: deps, %49: cache-state) = frame.resume %13, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true)]
+    br ^b3(%42, %43, %44, %47)
 }

@@ -104,7 +104,9 @@ func @closer(%0: own) -> own [defer(), async] abi explicit(input_packet=0, outpu
     service.schedule Schedule0 owner S3, protocol P0, duties [%9]
     key k0: key = service_of(value=%9, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%15)
+    dependency d1: dependency = from_ssa(%7)
+    dependency d2: dependency = union([d0, d1])
+    dependency d3: dependency = from_ssa(%15)
     selection s0: selection = union([])
     ^b0 in S3:
     %1: scope<S3> = scope.begin S3
@@ -114,12 +116,12 @@ func @closer(%0: own) -> own [defer(), async] abi explicit(input_packet=0, outpu
     %4: own = own.empty
     (%5: own, %6: own, %7: deps) = own.split %4, s0
     %8: own = own.join [%5, %6]
-    (%9: future<void> facts(managed(deps=d0)), %10: scope<S3>) = fut.new %8, %7, %3, environment deferred(function=@task), owner S3
+    (%9: future<void> facts(managed(deps=d2)), %10: scope<S3>) = fut.new %8, %7, %3, environment deferred(function=@task), owner S3
     %11: deps = deps.of %9
     invoke.own await %9
         normal ^b2($deps, %9, %10, %11)
         unwind ^b3($failure, $task, $receipt, %10)
-    ^b2(%12: deps, %13: future<void> facts(managed(deps=d1)), %14: scope<S3>, %15: deps) in S3:
+    ^b2(%12: deps, %13: future<void> facts(managed(deps=d3)), %14: scope<S3>, %15: deps) in S3:
     %16: closed = scope.end %14, effects scope_effects(failures=[], suspends=false, cancel=false)
     ret defer continue
     ^b3(%17: failure, %18: task-state, %19: receipt, %20: scope<S3>) in S3:

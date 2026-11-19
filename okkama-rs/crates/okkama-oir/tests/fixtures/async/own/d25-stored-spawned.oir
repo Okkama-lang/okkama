@@ -204,7 +204,9 @@ func @app.Maker.make#0(%0: app.Maker facts(plain(certificate=closed_graph(ty=app
     boundary B0 lexical in S2
     boundary B1 lexical in S2
     key k0: key = service_of(value=%12, kind=cache)
-    dependency d0: dependency = key(k0)
+    dependency d0k864: dependency = key(k0)
+    dependency d0f864: dependency = from_ssa(%11)
+    dependency d0: dependency = union([d0k864, d0f864])
     dependency d1: dependency = from_ssa(%23)
     dependency d2: dependency = from_ssa(%30)
     dependency d3: dependency = from_ssa(%42)
@@ -267,7 +269,9 @@ func @main() -> int [entry, async] abi observation summary(M19) async-creation(M
     dependency d0: dependency = from_ssa(%11)
     dependency d1: dependency = from_ssa(%21)
     dependency d2: dependency = from_ssa(%30)
-    dependency d3: dependency = key(k0)
+    dependency d3k864: dependency = key(k0)
+    dependency d3f864: dependency = from_ssa(%34)
+    dependency d3: dependency = union([d3k864, d3f864])
     dependency d4: dependency = from_ssa(%46)
     selection s0: selection = admissible(selection(%9))
     selection s1: selection = union([selection(%20)])
