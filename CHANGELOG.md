@@ -46,7 +46,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `SPB_STRUCTURE: unknown static packet inventory`. Changes:
   - The operand of `fut.new` is now `deps.of` of each input, combined with `deps.join`, and
     no packet is split. This also applies to a fresh input.
-  - The verifier subtracts from a Future's dependencies whatever its own inputs packet owns.
+  - An await's outcome does not inherit what the Future owns (its inputs). The body owns those inputs and
+    destroys them, and an outcome that refers to one takes it along.
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
