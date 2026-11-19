@@ -922,6 +922,42 @@ fn merge_envelope_cannot_omit_a_destroy_reached_through_a_field() {
     reject_message(&p, &catalog, "D18_EXECUTOR", "main close 0: merge envelope 1 omits destroy failures 8");
 }
 
+/// #875 (Fable): valued with a resource object no type of main reaches, whose destroy fails with 8. With
+/// `future_param`, main takes a bare Future: its entry packet can carry a Future main did not create, and settling it
+/// may release cold inputs that no type names, so main's merge closes, which declare `envelope`, see every destroy.
+/// (A main that loads with the Future also needs the dynamic step at its closes; the Champ cases cover that.)
+fn entry_future(future_param: bool, envelope: u32) -> (Program, Catalog) {
+    let (mut p, catalog) = fixture("valued");
+    p.objects.push(resource_object("Inner"));
+    p.functions.push(destroy_entry(1, 8));
+    let future = p.tables.future_results.len() as u32;
+    p.tables.future_results.push(Some(Type::Int));
+    let f = main(&mut p);
+    f.proofs.entry.as_mut().unwrap().failures = 15;
+    if future_param {
+        let param = new_register(f, Type::Future(future));
+        f.params.push(param);
+        f.blocks[0].params = f.params.clone();
+        refresh(f);
+    }
+    for declared in &mut f.proofs.envelopes {
+        declared.failures = envelope;
+    }
+    (p, catalog)
+}
+
+#[test]
+fn merge_envelope_cannot_omit_a_destroy_a_future_in_the_entry_may_run() {
+    let (p, catalog) = entry_future(true, 1);
+    reject_message(&p, &catalog, "D18_EXECUTOR", "main close 0: merge envelope 1 omits destroy failures 8");
+}
+
+#[test]
+fn merge_envelope_without_a_future_in_the_entry_does_not_see_an_unrelated_destroy() {
+    let (p, catalog) = entry_future(false, 1);
+    verify_load(&p, &catalog).unwrap();
+}
+
 /// fresh-call with a new resource object whose destroy fails with 8. With `callee_param` the callee takes
 /// such an object, so it can reach the caller only through the callee's result packet. The merge closes
 /// of both functions declare `envelope`.

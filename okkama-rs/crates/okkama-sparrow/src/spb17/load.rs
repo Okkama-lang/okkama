@@ -398,6 +398,13 @@ pub(super) fn visible_destroy_failures(p: &Program, f: &Function, close: u32,
         _ => false,
     });
     if empty_source && empty_reserve && !releases { return Ok(0); }
+    // #875 (Fable): a Future that arrives in the entry packet, bare or stored, was created elsewhere and comes with no
+    // relation; settling it releases cold inputs that no type of `f` names. Every destroy failure is visible, as for an
+    // external callee below. Own widens the envelopes of such a function by the same route.
+    if services::entry_carries_future(p, f) {
+        return Ok(p.functions.iter().filter_map(|function| function.proofs.entry.as_ref())
+            .filter(|entry| entry.destroy.is_some()).fold(0, |mask, entry| mask | entry.failures));
+    }
     // A scope can only acquire input obligations or packets produced by this activation's calls.
     // Reconstruct their descriptor closure; unrelated module destroys cannot enter this inventory.
     let mut functions = vec![f];

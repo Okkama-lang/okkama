@@ -26,6 +26,13 @@ pub struct ScopeFacts {
     pub empty_scope_eligible: bool,
 }
 
+impl ScopeFacts {
+    /// #875: the scope owns nothing and has nothing to block its elision, so its close settles nothing.
+    pub(super) fn is_empty(&self) -> bool {
+        self.potential_owned_types.is_empty() && self.blockers.is_empty()
+    }
+}
+
 fn add_type(
     scopes: &mut BTreeMap<ScopeId, ScopeFacts>,
     scope: ScopeId,
@@ -407,6 +414,7 @@ pub(super) fn analyze(
         }
     }
     let beside = universe.packet_types(module);
+    let destroys = universe.entry_future_failures();
     for (scope, facts) in &universe.inventories {
         budget.work(1)?;
         let mut facts = facts.clone();
@@ -433,6 +441,9 @@ pub(super) fn analyze(
         }
         let deferred = std::mem::replace(&mut facts.effects.suspends, suspends);
         let function = module.scopes.get(*scope).map_err(arena)?.function;
+        if universe.entry_futures.contains(&function) && !facts.is_empty() {
+            normal::failures(&mut facts.effects.failures, &destroys);
+        }
         let asynchronous = module.functions.get(function).map_err(arena)?.attrs.contains(&FunctionAttr::Async);
         if facts.blockers.contains(&ElisionBlocker::ServiceDuty) && facts.service_protocols.is_empty()
             && facts.potential_owned_types.iter().all(|ty| types[ty].service_types.is_empty()) {

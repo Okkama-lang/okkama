@@ -1117,6 +1117,55 @@ async main() is int {
 "#, "feed passed\ndestroy passed\nfed 1\nfeed relayed\ndestroy relayed\nfed 1\nmain end\n");
 }
 
+/// #875 (Fable): `drop` takes a `Holder` that stores a cold Future over a fresh `Res`, and drops it. The Future comes
+/// in the entry packet with no relation, so `drop`'s close may destroy the `Res` without a type that names it: it
+/// assumes every destroy failure, and the loader demands them. The destroy fails here; Champ stopped with "invalid
+/// machine outcome" and now reports the failure, as Tomato does.
+#[test]
+fn a_future_stored_in_an_entry_reports_its_input_failing_to_destroy() {
+    let source = ENTRY_FAILING
+        .replace("ENTRY", "object Holder { has f is Future<int>; Holder(:f); }
+object D { D(); drop(h is Holder) is int { Stdout().writeln(\"drop\"); 0; } }")
+        .replace("ARGUMENT", "Holder(f: U().use(Res(l: \"held\")))");
+    both_modes_fail(&source, "drop\ndestroy held\n", "Array index out of bounds");
+}
+
+/// #875: the same with a bare Future parameter of a synchronous function, whose caller offers the fresh Future.
+#[test]
+fn a_bare_future_in_an_entry_reports_its_input_failing_to_destroy() {
+    let source = ENTRY_FAILING
+        .replace("ENTRY", "object D { D(); drop(f is Future<int>) is int { Stdout().writeln(\"drop\"); 0; } }")
+        .replace("ARGUMENT", "U().use(Res(l: \"held\"))");
+    both_modes_fail(&source, "drop\ndestroy held\n", "Array index out of bounds");
+}
+
+/// #875: a program whose `Res` destroy fails, with `ENTRY` and `ARGUMENT` to fill in.
+const ENTRY_FAILING: &str = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has l is string;
+    Res(:l);
+    n() is int { l.length(); }
+    destroy { Stdout().writeln("destroy " + l); let xs = [1]; Stdout().writeln("bad " + xs[3].string()); }
+}
+object U { U(); async use(r is Res) is int { r.n(); } }
+ENTRY
+async main() is int {
+    let x = D().drop(ARGUMENT);
+    Stdout().writeln("dropped " + x.string());
+    0;
+}
+"#;
+
+fn both_modes_fail(source: &str, stdout: &str, failure: &str) {
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!(run.stdout, stdout, "{mode:?}");
+        let report = run.result.expect_err("a failure");
+        assert!(report.contains(failure), "{mode:?}: {report}");
+    }
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

@@ -128,11 +128,46 @@ pub(super) struct Universe {
     pub creations: BTreeMap<FuncId, usize>,
     /// Frozen tagged result equations, separate from the ordinary void ABI.
     replacements: BTreeMap<(FuncId, String), ResultRelation>,
+    /// #875 (Fable): the functions whose entry packet can carry a Future they neither created nor have a relation for
+    /// (`futures_in_entry`). Settling it may release cold inputs that no type names, so each scope of such a function
+    /// that owns anything assumes every destroy failure, and its summary declares them.
+    pub entry_futures: BTreeSet<FuncId>,
+    /// Every destroy entry the module's types reach: the destroys an entry Future's inputs may run.
+    destroys: BTreeSet<FuncId>,
 }
 
 struct BodyInference {
     summary: Summary,
     replacements: BTreeMap<String, ResultRelation>,
+}
+
+/// #875 (Fable): the functions whose entry packet can carry a Future: a language input whose graph reaches one, bare
+/// or stored. A bare Future input of an async body is borrowed (PR-N2), and a creation thunk forwards its entry whole
+/// to `fut.new`. The loader's `entry_carries_future` asks the same.
+pub(super) fn futures_in_entry(
+    module: &Module,
+    types: &BTreeMap<TypeId, TypeClassification>,
+) -> Result<BTreeSet<FuncId>, OwnError> {
+    let mut result = BTreeSet::new();
+    for (id, function) in module.functions.iter() {
+        let Some(body) = &function.body else { continue };
+        let thunk = function.attrs.iter().any(|attr| matches!(attr, FunctionAttr::Adapter { target }
+            if module.functions.get(*target).is_ok_and(|target| target.attrs.contains(&FunctionAttr::Async))));
+        if thunk {
+            continue;
+        }
+        let asynchronous = futures::is_async(module, id);
+        let entry = body.blocks.get(body.entry).map_err(arena)?;
+        let carries = entry.params.iter().any(|param| body.values.get(*param).is_ok_and(|value| {
+            !(asynchronous && futures::is_future(module, value.ty))
+                && types.get(&value.ty).is_some_and(|facts| facts.service_types.iter()
+                    .any(|ty| matches!(module.types.get(*ty), Ok(Type::Future(_)))))
+        }));
+        if carries {
+            result.insert(id);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) fn bottom(module: &Module, function: &Function) -> Summary {
@@ -286,6 +321,14 @@ impl Universe {
         }
         result
     }
+    /// #875 (Fable): the failures of every destroy entry, which a scope of an `entry_futures` function assumes.
+    pub(super) fn entry_future_failures(&self) -> Vec<FailureKind> {
+        let mut failures = vec![];
+        for destroy in &self.destroys {
+            normal::failures(&mut failures, &self.summary(*destroy).contract.failures);
+        }
+        failures
+    }
     pub fn protocol_summary(&self, protocol: ProtocolId) -> &Summary {
         &self.nodes[self.protocol_services[&protocol]].summary
     }
@@ -318,6 +361,8 @@ impl Universe {
             nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories, retained_roots,
             services: BTreeMap::new(), protocol_services: BTreeMap::new(), descriptors: BTreeMap::new(),
             creations: BTreeMap::new(), replacements: BTreeMap::new(),
+            entry_futures: futures_in_entry(module, types)?,
+            destroys: types.values().flat_map(|facts| facts.destroy_entries.iter().copied()).collect(),
         };
         let result_bound = module.functions.iter().map(|(_, function)| function.signature.results.len())
             .max().unwrap_or(0).saturating_add(16);
@@ -535,6 +580,9 @@ impl Universe {
         for (scope, facts) in &universe.inventories {
             let function = module.scopes.get(*scope).map_err(arena)?.function;
             let node = &mut universe.nodes[function.as_u32() as usize];
+            if universe.entry_futures.contains(&function) && !facts.is_empty() {
+                node.dependencies.extend(universe.destroys.iter().map(|destroy| destroy.as_u32() as usize));
+            }
             for ty in &facts.potential_owned_types {
                 for destroy in &types[ty].destroy_entries {
                     budget.work(1)?;
