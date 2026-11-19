@@ -53,8 +53,14 @@ impl Engine<'_, '_> {
                 taken.extend(self.summary_selection(flow, &arguments, selection));
             }
         }
+        // #865 (OIR-2-async-remaining §6.3d): a creation of this body that the relation declares beside the Future
+        // (a binding the Future borrows) leaves beside it too.
+        let local = summary.results.first().is_some_and(|relation| {
+            relation.beside.iter().any(|entry| matches!(entry, BesideEntry::Site { .. }))
+        });
         let index = value.as_u32() as usize;
-        flow.full_deps[index].difference(&flow.refs[index]).filter(|key| taken.contains(key)).copied().collect()
+        flow.full_deps[index].difference(&flow.refs[index]).filter(|key| taken.contains(key) || (local && matches!(key,
+            Origin::Instruction(..) | Origin::Invoke(..)))).copied().collect()
     }
 
     pub(super) fn call_entry(&mut self, op: &Operation, before: &Flow, _: &mut Flow) {
@@ -264,9 +270,12 @@ impl Engine<'_, '_> {
                 ResultType::FutureOf(_) => true,
                 _ => false,
             };
-            if future && summary.results.len() == 1 && !relation.opaque && let Some(&first) = relation.fresh.first() {
+            // #865 (OIR-2-async-remaining §6.3d): what the packet holds beside the Future is not its cache graph.
+            let beside = beside_sites(relation);
+            if future && summary.results.len() == 1 && !relation.opaque
+                && let Some(&first) = relation.fresh.iter().find(|site| !beside.contains(site)) {
                 let key = creation(origin, first);
-                held_sites.extend(relation.fresh.iter().map(|site| (*site, key)));
+                held_sites.extend(relation.fresh.iter().filter(|site| !beside.contains(site)).map(|site| (*site, key)));
             }
         }
         for (index, relation) in summary.results.iter().enumerate() {
@@ -281,7 +290,9 @@ impl Engine<'_, '_> {
             }
             // A declared opaque relation (an open callable) never identifies its
             // result with an input alias or a single fresh site (#569 O1).
-            let held = relation.fresh.first().and_then(|site| held_sites.get(site)).copied();
+            let beside = beside_sites(relation);
+            let held = relation.fresh.iter().find(|site| !beside.contains(site))
+                .and_then(|site| held_sites.get(site)).copied();
             let opaque = relation.opaque || relation.aliases.len() > 1 || summary.results.len() > 1
                 || relation.fresh.len() > 1;
             if let Some(key) = held {
@@ -290,6 +301,9 @@ impl Engine<'_, '_> {
                 slots[slot].contained = labels.clone();
                 slots[slot].identity = Some(key);
                 flow.cache_keys.insert(key);
+                // #865 (§6.3d): the Future depends on what its packet holds beside it; a creation beside it is a
+                // piece of the admitted packet that only this dependency names.
+                slots[slot].requirements.extend(beside.iter().map(|site| creation(origin, *site)));
             } else if opaque {
                 let view = match origin {
                     Origin::Instruction(inst, _) => Origin::ViewInstruction(inst, slot as u16),
@@ -752,6 +766,11 @@ impl Engine<'_, '_> {
             }
         }
         for (value, relation) in language.iter().zip(&summary.results) {
+            // #865 (OIR-2-async-remaining §6.3d): only a bare Future result has entries beside it.
+            if !relation.beside.is_empty()
+                && !matches!(super::super::later::value_type(self.module, self.body, *value), Some(Type::Future(_))) {
+                self.error(R::B51, "only a bare Future result declares entries beside it");
+            }
             if summary.entry_kind == EntryKind::CallBoundary {
                 let keys = flow.refs[value.as_u32() as usize].clone();
                 let labels = flow.contained[value.as_u32() as usize].clone();
@@ -964,4 +983,12 @@ fn retains_whole(retention: &SummarySelection, index: usize) -> bool {
         SummarySelection::Union(items) => items.iter().any(|item| retains_whole(item, index)),
         _ => false,
     }
+}
+
+/// #865 (OIR-2-async-remaining §6.3d): the fresh sites a relation declares beside its returned Future.
+fn beside_sites(relation: &ResultRelation) -> BTreeSet<CreationSiteId> {
+    relation.beside.iter().filter_map(|entry| match entry {
+        BesideEntry::Site { site, .. } => Some(*site),
+        BesideEntry::Parameter(_) => None,
+    }).collect()
 }

@@ -263,6 +263,10 @@ pub enum SummarySelection { Parameter(u16), Field { parameter: u16, field: Field
     Path { parameter: u16, fields: Vec<FieldRef> }, OwnerGraph(u16), Descriptor(u16), Union(Vec<SummarySelection>) }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransferDestination { None, Result, Scope(ScopeId), Protocol(ProtocolId), Cache, FailureContext }
+/// #865 (OIR-2-async-remaining §6.3d): something a returned bare Future's result packet holds beside the Future, which
+/// the Future's cache does not hold: a fresh creation of the callee with its type, or a taken parameter.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BesideEntry { Site { site: CreationSiteId, ty: TypeId }, Parameter(u16) }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResultRelation {
     pub fresh: Vec<CreationSiteId>,
@@ -274,6 +278,9 @@ pub struct ResultRelation {
     /// An opaque result never takes the identity of an input or a fresh site.
     pub opaque: bool,
     pub provenance: AdmissionProvenance,
+    /// #865 (§6.3d): for a bare Future result only, the entries of its result packet that the Future does not hold.
+    /// Every other fresh site and taken parameter of the relation is held by the Future's cache (D25.1).
+    pub beside: Vec<BesideEntry>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Summary {

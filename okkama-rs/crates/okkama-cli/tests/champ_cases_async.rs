@@ -1018,6 +1018,32 @@ async main() is int {{
     }
 }
 
+/// #865 (OIR-2-async-remaining §6.3d): a synchronous function returns a cold Future over its local binding. The
+/// binding stays beside the Future in the result packet, declared `beside` in the relation with its type; the caller
+/// admits it and destroys it at its own close. Tomato's output.
+#[test]
+fn a_returned_future_over_a_local_takes_the_local_back_beside_it() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has l is string;
+    Res(:l);
+    n() is int { l.length(); }
+    label() is string { l; }
+    destroy { Stdout().writeln("destroy " + l); }
+}
+object U { U(); async use(r is Res) is int { Stdout().writeln("use " + r.label()); r.n(); } }
+object Mk { Mk(); make() is Future<int> { let r = Res(l: "local"); U().use(r); } }
+async main() is int {
+    let f = Mk().make();
+    Stdout().writeln("made");
+    Stdout().writeln("got " + (await f).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "made\nuse local\ngot 5\nmain end\ndestroy local\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

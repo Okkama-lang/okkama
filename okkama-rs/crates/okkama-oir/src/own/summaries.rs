@@ -221,6 +221,33 @@ impl Universe {
     pub fn call_summary(&self, function: FuncId, site: Site) -> Option<&Summary> {
         self.calls.get(&(function, site)).map(|node| &self.nodes[*node].summary)
     }
+    /// #865 (OIR-2-async-remaining §6.3d): per scope, the types of what the returned Futures of its calls bring beside
+    /// them. The scope admits them with the Future's packet, so its close destroys them.
+    pub(super) fn beside_types(&self, module: &Module) -> BTreeMap<ScopeId, BTreeSet<TypeId>> {
+        let mut result: BTreeMap<ScopeId, BTreeSet<TypeId>> = BTreeMap::new();
+        for ((function, site), node) in &self.calls {
+            let types: Vec<_> = self.nodes[*node].summary.results.iter().flat_map(|relation| &relation.beside)
+                .filter_map(|entry| match entry {
+                    BesideEntry::Site { ty, .. } => Some(*ty),
+                    BesideEntry::Parameter(_) => None,
+                }).collect();
+            if types.is_empty() {
+                continue;
+            }
+            let Some(body) = module.functions.get(*function).ok().and_then(|function| function.body.as_ref()) else {
+                continue;
+            };
+            let block = match site {
+                Site::Terminator(block) => Some(*block),
+                Site::Instruction(inst) => body.blocks.iter().find(|(_, block)| block.insts.contains(inst))
+                    .map(|(id, _)| id),
+            };
+            if let Some(scope) = block.and_then(|block| body.blocks.get(block).ok()).map(|block| block.lexical_scope) {
+                result.entry(scope).or_default().extend(types);
+            }
+        }
+        result
+    }
     pub fn protocol_summary(&self, protocol: ProtocolId) -> &Summary {
         &self.nodes[self.protocol_services[&protocol]].summary
     }

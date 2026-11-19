@@ -51,6 +51,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function can return a Future over its local resource (#865).** Example:
+  `make() is Future<int> { let r = Res(…); U().use(r); }`. It stopped at load with
+  `D18_EXECUTOR`, and Full refused it with B101.
+
+  Following Fable's §6.3d, `r` is a binding. It stays beside the Future in the result packet,
+  and the caller destroys it at its own close, as Tomato does.
+  - A result relation gets a `beside` list: what a returned bare Future's packet holds without
+    the Future's cache holding it. An entry is a fresh site with its type, or a taken parameter.
+    Own infers the list from the bound inputs a creation borrows.
+  - The caller treats a beside entry as an ordinary piece of the admitted packet. The Future
+    depends on it, and the receiving scope's close envelope gets its destroy effects.
+  - The callee may carry a beside creation in the returned Future's exit selection.
+  - A `beside` entry on a result that is not a bare Future is refused.
+  - A caller that returns such a Future again has no name for what came beside it, so Full
+    refuses that (fail-closed).
 - **An async action can return the awaited outcome of a temporary Future (#867).** Examples:
   - `async relay() is Res { await Wrapper().wrap(Res(…)); }`;
   - the same through `let r = await …; r;`.

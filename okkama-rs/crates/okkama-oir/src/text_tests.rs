@@ -282,7 +282,8 @@ codec_samples!(FreshConvention => FreshConvention::Borrow);
 codec_samples!(ParameterEffect => ParameterEffect { convention: cs::<FreshConvention>(), retention: cs::<Option<SummarySelection>>(), deps: cs::<Vec<u16>>(), destination: cs::<TransferDestination>() });
 codec_samples!(SummarySelection => SummarySelection::Parameter(cs::<u16>()));
 codec_samples!(TransferDestination => TransferDestination::None);
-codec_samples!(ResultRelation => ResultRelation { fresh: cs::<Vec<CreationSiteId>>(), aliases: cs::<Vec<SummarySelection>>(), external_deps: cs::<Vec<u16>>(), opaque: cs::<bool>(), provenance: cs::<AdmissionProvenance>() });
+codec_samples!(ResultRelation => ResultRelation { fresh: cs::<Vec<CreationSiteId>>(), aliases: cs::<Vec<SummarySelection>>(), external_deps: cs::<Vec<u16>>(), opaque: cs::<bool>(), provenance: cs::<AdmissionProvenance>(), beside: cs::<Vec<BesideEntry>>() });
+codec_samples!(BesideEntry => BesideEntry::Parameter(cs::<u16>()));
 codec_samples!(Summary => Summary { entry_kind: cs::<EntryKind>(), parameters: cs::<Vec<ParameterEffect>>(), results: cs::<Vec<ResultRelation>>(), contract: cs::<CallContract>() });
 codec_samples!(CallContract => CallContract { results: cs::<Vec<TypeId>>(), failures: cs::<Vec<FailureKind>>(), suspends: cs::<bool>(), async_destroy: cs::<bool>(), publication: cs::<Publication>(), protocol: cs::<Option<ProtocolId>>() });
 codec_samples!(Publication => Publication::Atomic);
@@ -796,6 +797,12 @@ fn every_typed_payload_enum_branch_roundtrips() {
         SummarySelection::Union(cs::<Vec<SummarySelection>>())
     ];
     assert_eq!(cases.len(), SummarySelection::TEXT_VARIANTS.len(), "SummarySelection branch missing");
+    for value in cases { crate::text::payload_roundtrip(value); }
+    let cases = vec![
+        BesideEntry::Site { site: cs::<CreationSiteId>(), ty: cs::<TypeId>() },
+        BesideEntry::Parameter(cs::<u16>())
+    ];
+    assert_eq!(cases.len(), BesideEntry::TEXT_VARIANTS.len(), "BesideEntry branch missing");
     for value in cases { crate::text::payload_roundtrip(value); }
     let cases = vec![
         TransferDestination::None,

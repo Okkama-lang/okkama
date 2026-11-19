@@ -561,7 +561,7 @@ fn open_calls_require_the_registered_conservative_contract() {
     let (callable, mut identity) = module.types.iter()
         .find_map(|(ty, _)| catalogue.open_callable(ty).map(|summary| (ty, summary.clone()))).unwrap();
     // The hand-written identity Mopen: the result only aliases the argument.
-    identity.results[0] = ResultRelation {
+    identity.results[0] = ResultRelation { beside: vec![],
         fresh: vec![], aliases: vec![SummarySelection::Parameter(1)], external_deps: vec![1], opaque: false,
         provenance: AdmissionProvenance::UnboundResult,
     };

@@ -315,7 +315,7 @@ fn observation_borrowed_result_and_explicit_empty_native_transport() {
                 convention: FreshConvention::Borrow, retention: None, deps: vec![],
                 destination: TransferDestination::None,
             }] } else { vec![] },
-            results: vec![ResultRelation {
+            results: vec![ResultRelation { beside: vec![],
                 fresh: vec![], aliases: if observation { vec![SummarySelection::Parameter(0)] } else { vec![] },
                 external_deps: if observation { vec![0] } else { vec![] },
                 opaque: false,
