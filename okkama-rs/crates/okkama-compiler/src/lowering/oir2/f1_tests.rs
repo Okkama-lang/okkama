@@ -962,6 +962,56 @@ fn f1_only_a_future_result_declares_what_its_cache_holds() {
         && diagnostic.message == "only a bare Future result declares creations its cache holds"), "{report:?}");
 }
 
+/// #875 (Fable): `drop` (synchronous) is offered a fresh Future in its entry packet, which its root settles; `peek`
+/// (async) borrows its bare Future and is offered none (PR-N2).
+const ENTRY_FUTURE: &str = concat!(
+    "module app v1.0.0; ",
+    "import \"io/stdout\" take Stdout; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "object U { U(); async use(r is Res) is int { r.n(); } } ",
+    "object D { D(); drop(f is Future<int>) is int { 0; } async peek(f is Future<int>) is int { 1; } } ",
+    "async main() is int { let f = U().use(Res(l: \"bound\")); ",
+    "let a = D().drop(U().use(Res(l: \"fresh\"))); a + await D().peek(f); }",
+);
+
+/// The failures the closes of `function` declare, over every `own.scope_end` and `own.scope_unwind`.
+fn close_failures(module: &ir::Module, symbol: &str) -> Vec<ir::FailureKind> {
+    let body = function(module, symbol).1.body.as_ref().unwrap();
+    let terminators = body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+        ir::TermKind::InvokeOwn { op, .. } => Some(op.as_ref()),
+        _ => None,
+    });
+    body.insts.iter().map(|(_, instruction)| &instruction.op).chain(terminators).flat_map(|op| match op {
+        ir::Operation::Ownership(ir::OwnershipOp::ScopeEnd { effects, .. }
+            | ir::OwnershipOp::ScopeUnwind { effects, .. }) => effects.failures.clone(),
+        _ => vec![],
+    }).collect()
+}
+
+/// #875: a function whose entry can carry a Future it did not create may settle its cache, whose cold inputs no type
+/// names, so its closes and its summary assume every destroy failure. An async body that borrows a bare Future keeps
+/// its precise envelope.
+#[test]
+fn f1_only_an_entry_that_carries_a_future_assumes_every_destroy_failure() {
+    let (own, _) = super::own_case_tests::own_stage(ENTRY_FUTURE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let destroy = own.declarations.iter().find_map(|(_, declaration)| match &declaration.kind {
+        ir::DeclarationKind::Object { destroy: Some(destroy), .. } if declaration.name.ends_with("Res") => {
+            Some(*destroy)
+        }
+        _ => None,
+    }).expect("Res has a destroy");
+    let failures = &own.summaries.get(own.functions.get(destroy).unwrap().summary.unwrap()).unwrap().contract.failures;
+    assert!(!failures.is_empty(), "the destroy may fail");
+    let drop = close_failures(&own, "app.D.drop#0");
+    assert!(failures.iter().all(|kind| drop.contains(kind)), "drop: {drop:?} lacks {failures:?}");
+    let (_, function) = function(&own, "app.D.drop#0");
+    let declared = &own.summaries.get(function.summary.unwrap()).unwrap().contract.failures;
+    assert!(failures.iter().all(|kind| declared.contains(kind)), "drop's summary: {declared:?}");
+    let peek = close_failures(&own, "app.D.peek#1");
+    assert!(!failures.iter().all(|kind| peek.contains(kind)), "peek: {peek:?} has {failures:?}");
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",

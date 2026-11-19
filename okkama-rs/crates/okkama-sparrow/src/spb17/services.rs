@@ -76,6 +76,16 @@ pub fn identity_free(objects: &[Object], ty: Type) -> bool {
 /// object fields, variant cases, error cases, array and map elements, role implementations and any boxes. Unknown
 /// declarations can.
 pub fn reaches_holder(p: &Program, ty: Type) -> bool {
+    reaches(p, ty, true)
+}
+
+/// #875 (Fable): whether a value of `ty` can reach a Future, by the routes of [`reaches_holder`]. A FutureGroup does
+/// not count: its settle releases its members' outcomes, whose types the destroy closure reaches precisely.
+pub fn reaches_future(p: &Program, ty: Type) -> bool {
+    reaches(p, ty, false)
+}
+
+fn reaches(p: &Program, ty: Type, groups: bool) -> bool {
     let mut pending = vec![ty];
     let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
@@ -87,7 +97,10 @@ pub fn reaches_holder(p: &Program, ty: Type) -> bool {
             Type::Object(id) | Type::Successor(id) | Type::Variant(id) => {
                 let Some(object) = p.objects.get(id as usize) else { return true };
                 if super::drivers::group_specialization(&object.name) {
-                    return true;
+                    if groups {
+                        return true;
+                    }
+                    continue;
                 }
                 // PR-A: an Atomic over Futures borrows them; its value word holds no entry (ATOMIC_BORROW), as the
                 // ownership verifier's `holds_futures` reads a builtin Atomic.
@@ -346,6 +359,22 @@ pub(crate) fn entry_carries(p: &Program, f: &Function) -> bool {
     language_inputs(p, f).is_none_or(|inputs| inputs.into_iter().any(|ty| match ty {
         ProducedType::Value(Type::Future(_)) if asynchronous => false,
         ProducedType::Value(ty) => reaches_holder(p, ty),
+        _ => false,
+    }))
+}
+
+/// #875 (Fable): whether the entry packet of `f` can carry a Future that `f` neither created nor has a relation for: a
+/// language input that reaches one, bare or stored. Settling it may release cold inputs that no type of `f` names. A
+/// bare Future start value of an async body is borrowed (PR-N2), and a creation thunk forwards its entry whole. Own
+/// widens the envelopes of such a function by the same route.
+pub(crate) fn entry_carries_future(p: &Program, f: &Function) -> bool {
+    if forwarded_creation(p, f).is_some() {
+        return false;
+    }
+    let asynchronous = p.frame_layout(f).is_some();
+    language_inputs(p, f).is_none_or(|inputs| inputs.into_iter().any(|ty| match ty {
+        ProducedType::Value(Type::Future(_)) if asynchronous => false,
+        ProducedType::Value(ty) => reaches_future(p, ty),
         _ => false,
     }))
 }

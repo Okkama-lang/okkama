@@ -51,6 +51,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A Future that arrives in an entry packet no longer crashes Champ when its input fails to destroy (#875).**
+  A synchronous function given a cold Future over a resource, bare (`drop(f is Future<int>)`) or stored in an
+  aggregate (`drop(h is Holder)`), settles that Future's cache at its close. If the resource's destroy failed,
+  Champ stopped with "invalid machine outcome". Tomato reports the failure, and now Champ does too.
+  - Following Fable's ruling, the rule goes by route, not by type: a function whose entry packet can carry a Future
+    it neither created nor has a relation for assumes every destroy failure. Its scopes that own anything declare
+    them, and so does its summary.
+  - The loader demands the same by the same route (`entry_carries_future`). An async body's bare Future parameter
+    is borrowed (PR-N2), and a creation thunk forwards its entry, so neither widens.
+  - Not covered: a call that returns an aggregate storing a cold Future is refused at load (`D18_EXECUTOR`),
+    which is fail-closed (#876).
 - **A returned Future's relation types what its cache holds (#873).** A function that returned the Future of
   an async role slot over a fresh resource was refused by the loader (`D18_EXECUTOR`): the caller's close may
   settle that cache, but its envelope came from `Future<int>` and missed the resource's destroy failures.
@@ -62,8 +73,7 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - The verifier checks the entries at the exit, by type, against the pieces the Future holds. It refuses a
     `held` entry on any other result.
   - Not covered yet: a Future that reaches a callee inside its entry packet (a bare Future parameter, or an
-    aggregate that stores one) has no relation, and the callee's close may still miss what its cache destroys.
-    This is #875.
+    aggregate that stores one) has no relation; #875 covers it.
 - **A function can return a Future over its Future parameter (#866).** Example:
   `chain(f is Future<Res>) is Future<int> { U().take(f); }`. Full refused it with B31 and B94.
   - Following Fable's ruling, this is §6.3c for a parameter that happens to be a Future: `f`

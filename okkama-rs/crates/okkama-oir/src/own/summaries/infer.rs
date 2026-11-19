@@ -415,6 +415,10 @@ impl Universe {
             if module.scopes.get(*scope).map_err(arena)?.function != function {
                 continue;
             }
+            // #875 (Fable): a scope that may settle a Future from the entry packet may run any destroy.
+            if self.entry_futures.contains(&function) && !facts.is_empty() {
+                normal::failures(&mut summary.contract.failures, &self.entry_future_failures());
+            }
             for ty in &facts.potential_owned_types {
                 let effects = self.cleanup(module, &types[ty]);
                 normal::failures(&mut summary.contract.failures, &effects.failures);
