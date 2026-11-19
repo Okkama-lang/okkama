@@ -74,6 +74,20 @@ fn record_partition(function: FuncId, selection: SelectionId, rest: &Token, sele
 pub(crate) fn take_partitions() -> Vec<PartitionRecord> {
     PARTITIONS.with(|log| std::mem::take(&mut *log.borrow_mut()))
 }
+// Test hook (ruling #601 K2, #869): how many outcomes each `cleanup.next` of a close with a cancellation delivery was
+// given, in order, on this thread since the last call.
+#[cfg(test)]
+thread_local! {
+    static CANCEL_OUTCOMES: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+pub(super) fn record_cancel_outcomes(count: usize) {
+    CANCEL_OUTCOMES.with(|log| log.borrow_mut().push(count));
+}
+#[cfg(test)]
+pub(crate) fn take_cancel_outcomes() -> Vec<usize> {
+    CANCEL_OUTCOMES.with(|log| std::mem::take(&mut *log.borrow_mut()))
+}
 
 struct Engine<'m, 's> {
     module: &'m Module,

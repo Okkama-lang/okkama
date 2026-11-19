@@ -1102,7 +1102,12 @@ impl Engine<'_, '_> {
             self.error(R::B102, "runtime selector cannot replace a direct plan's finite order");
         }
         let index = cleanup.as_u32() as usize;
-        for (token, delivered) in self.cancel_outcomes(&token) {
+        let outcomes = self.cancel_outcomes(&token);
+        #[cfg(test)]
+        if token.cleanup.as_ref().is_some_and(|fact| fact.cancel_delivered) {
+            crate::verify::linearity::record_cancel_outcomes(outcomes.len());
+        }
+        for (token, delivered) in outcomes {
             let mut branch = flow.clone();
             if let Some(fact) = token.cleanup.as_ref().filter(|_| delivered) {
                 branch.active_failure = fact.failures;

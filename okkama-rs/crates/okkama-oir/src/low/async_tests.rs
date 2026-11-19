@@ -237,6 +237,20 @@ fn suspension_root_maps_survive_the_suspension() {
     assert!(found, "{:?}", rules(&output));
 }
 
+/// Ruling #601 K2 (#869, Fable's ruling (d)): `cleanup.deliver_cancel` delivers nothing, as `rt_cleanup_deliver_cancel`
+/// does: a cancellation still pending when the body has produced its result leaves the result as it is. So after it
+/// the verifier models one outcome of the second plan's selector, the kept one, never a delivered alternative that
+/// destroys the reserve.
+#[test]
+fn a_cancellation_delivery_leaves_one_outcome() {
+    let (name, coro, _) = GOLDENS[PLAIN];
+    crate::verify::take_cancel_outcomes();
+    let _ = lowered(name, coro);
+    let outcomes = crate::verify::take_cancel_outcomes();
+    assert!(!outcomes.is_empty(), "work's final close delivers a cancellation");
+    assert!(outcomes.iter().all(|count| *count == 1), "{outcomes:?}");
+}
+
 /// Champ draft 3 §5 with ruling #601 K2 (#869): the pending exit after `cleanup.deliver_cancel` is checked. Its
 /// delivery leaves the result as it is, so that exit is the only path; dropping the commit of `work` there leaves
 /// its reserve unconsumed.
