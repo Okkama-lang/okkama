@@ -251,8 +251,9 @@ fn a_value_returned_after_a_suspension_reads_its_resumed_version() {
         Operation::Async(AsyncOp::FrameSave { slots, continuation: 1, .. }) => Some(slots.len()),
         _ => None,
     }).collect();
-    // The scope state, the deps of the Future, the cache duty and the returned argument.
-    assert_eq!(saved, [4]);
+    // The scope state, the deps of the Future, the cache duty, the returned argument, and the deps operand of the
+    // Future's `fut.new`, which its fact names (#864).
+    assert_eq!(saved, [5]);
 }
 
 #[test]

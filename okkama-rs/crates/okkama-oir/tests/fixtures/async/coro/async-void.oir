@@ -46,26 +46,27 @@ func @note(%0: frame<@note>) -> void [async] summary(M4) async-creation(M6) asyn
 
 func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) async-creation(M7) async-body(M9) {
     frame.layout {
-        slot 0: scope<S1> linear
-        slot 1: deps
-        slot 2: cache-state linear
-        slot 3: future<void>
-        slot 4: cache-state linear
-        slot 5: failure
-        slot 6: task-state linear
-        slot 7: receipt linear
+        slot 0: deps
+        slot 1: scope<S1> linear
+        slot 2: deps
+        slot 3: cache-state linear
+        slot 4: future<void>
+        slot 5: cache-state linear
+        slot 6: failure
+        slot 7: task-state linear
+        slot 8: receipt linear
     }
     continuation 0 start saves []
-    continuation 1 at ^b1 saves [0, 1, 2] operands [3]
-    continuation 2 at ^b2 saves [0, 1, 2, 4] operands [3]
-    continuation 3 at #15 saves [2] operands [0, 5, 6, 7]
-    continuation 4 at ^b4 saves [0, 1, 2, 4] operands [3]
-    continuation 5 at #21 saves [2, 4] operands [0, 5, 6, 7]
-    continuation 6 at #28 saves [2, 4] operands [0, 5, 6, 7]
+    continuation 1 at ^b1 saves [0, 1, 2, 3] operands [4]
+    continuation 2 at ^b2 saves [0, 1, 2, 3, 5] operands [4]
+    continuation 3 at #15 saves [3] operands [1, 6, 7, 8]
+    continuation 4 at ^b4 saves [1, 0, 3, 5] operands [4]
+    continuation 5 at #21 saves [3, 5] operands [1, 6, 7, 8]
+    continuation 6 at #28 saves [3, 5] operands [1, 6, 7, 8]
     service.schedule Schedule0 owner S1, protocol P0, duties [%32]
     service.schedule Schedule0#1 owner S1, protocol P0, duties [%47, %48]
     service.schedule Schedule0#2 owner S1, protocol P0, duties [%64, %65]
-    service.schedule Schedule0#3 owner S1, protocol P0, duties [%102, %103]
+    service.schedule Schedule0#3 owner S1, protocol P0, duties [%106, %107]
     binding b0 "pending": future<void> in S1
     boundary B0 lexical in S1
     key k0: key = service_of(value=%7, kind=cache)
@@ -89,7 +90,7 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %6: deps = deps.of %4
     (%7: future<void> facts(managed(deps=d2)), %8: cache-state, %9: scope<S1>) = fut.new %5, %6, %3, environment deferred(function=@note, arguments=[%4]), owner S1
     %10: deps = deps.of %7
-    %11: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%9, mode=consume), frame_slot(slot=1, value=%10, mode=borrow), frame_slot(slot=2, value=%8, mode=consume)], continuation 1
+    %11: frame<@main> = frame.save %1, slots [frame_slot(slot=0, value=%6, mode=borrow), frame_slot(slot=1, value=%9, mode=consume), frame_slot(slot=2, value=%10, mode=borrow), frame_slot(slot=3, value=%8, mode=consume)], continuation 1
     invoke.own await %7
         normal ^b10($deps)
         unwind ^b11($failure, $task, $receipt)
@@ -99,26 +100,26 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
     %18: deps = deps.of %16
     (%19: future<void> facts(managed(deps=d6)), %20: cache-state, %21: scope<S1>) = fut.new %17, %18, %14, environment deferred(function=@note, arguments=[%16]), owner S1, binding b0
     %22: deps = deps.of %19
-    %23: frame<@main> = frame.save %73, slots [frame_slot(slot=0, value=%21, mode=consume), frame_slot(slot=1, value=%22, mode=borrow), frame_slot(slot=2, value=%76, mode=consume), frame_slot(slot=4, value=%20, mode=consume)], continuation 2
+    %23: frame<@main> = frame.save %73, slots [frame_slot(slot=0, value=%18, mode=borrow), frame_slot(slot=1, value=%21, mode=consume), frame_slot(slot=2, value=%22, mode=borrow), frame_slot(slot=3, value=%77, mode=consume), frame_slot(slot=5, value=%20, mode=consume)], continuation 2
     invoke.own await %19
         normal ^b12($deps)
         unwind ^b13($failure, $task, $receipt)
     ^b3(%24: failure, %25: task-state, %26: receipt, %27: scope<S1>) in S1:
-    %28: frame<@main> = frame.save %80, slots [frame_slot(slot=2, value=%83, mode=consume)], continuation 3
+    %28: frame<@main> = frame.save %81, slots [frame_slot(slot=3, value=%85, mode=consume)], continuation 3
     [i15] (%29: scope<S1>, %30: failure) = await.unwind %27, %24, %25, %26, protocol P0
-    (%31: frame<@main>, %32: cache-state) = frame.resume %28, continuation 3, slots [saved_slot(slot=2, ty=cache-state, linear=true)]
+    (%31: frame<@main>, %32: cache-state) = frame.resume %28, continuation 3, slots [saved_slot(slot=3, ty=cache-state, linear=true)]
     %33: failure = scope.unwind %29, %30, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %31, failure(%33)
     ret
     ^b4(%34: deps, %35: future<void> facts(managed(deps=d7)), %36: scope<S1>, %37: deps) in S1:
-    %38: frame<@main> = frame.save %85, slots [frame_slot(slot=0, value=%36, mode=consume), frame_slot(slot=1, value=%37, mode=borrow), frame_slot(slot=2, value=%88, mode=consume), frame_slot(slot=4, value=%89, mode=consume)], continuation 4
+    %38: frame<@main> = frame.save %87, slots [frame_slot(slot=1, value=%36, mode=consume), frame_slot(slot=0, value=%37, mode=borrow), frame_slot(slot=3, value=%91, mode=consume), frame_slot(slot=5, value=%92, mode=consume)], continuation 4
     invoke.own await %35
         normal ^b14($deps)
         unwind ^b15($failure, $task, $receipt)
     ^b5(%39: failure, %40: task-state, %41: receipt, %42: scope<S1>) in S1:
-    %43: frame<@main> = frame.save %93, slots [frame_slot(slot=2, value=%96, mode=consume), frame_slot(slot=4, value=%97, mode=consume)], continuation 5
+    %43: frame<@main> = frame.save %96, slots [frame_slot(slot=3, value=%100, mode=consume), frame_slot(slot=5, value=%101, mode=consume)], continuation 5
     [i21] (%44: scope<S1>, %45: failure) = await.unwind %42, %39, %40, %41, protocol P0
-    (%46: frame<@main>, %47: cache-state, %48: cache-state) = frame.resume %43, continuation 5, slots [saved_slot(slot=2, ty=cache-state, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
+    (%46: frame<@main>, %47: cache-state, %48: cache-state) = frame.resume %43, continuation 5, slots [saved_slot(slot=3, ty=cache-state, linear=true), saved_slot(slot=5, ty=cache-state, linear=true)]
     %49: failure = scope.unwind %44, %45, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %46, failure(%49)
     ret
@@ -129,35 +130,35 @@ func @main(%0: frame<@main>) -> void [entry, async] abi observation summary(M9) 
         normal ^b8($closed, %54)
         unwind ^b9($closed, $failure)
     ^b7(%56: failure, %57: task-state, %58: receipt, %59: scope<S1>) in S1:
-    %60: frame<@main> = frame.save %107, slots [frame_slot(slot=2, value=%110, mode=consume), frame_slot(slot=4, value=%111, mode=consume)], continuation 6
+    %60: frame<@main> = frame.save %111, slots [frame_slot(slot=3, value=%114, mode=consume), frame_slot(slot=5, value=%115, mode=consume)], continuation 6
     [i28] (%61: scope<S1>, %62: failure) = await.unwind %59, %56, %57, %58, protocol P0
-    (%63: frame<@main>, %64: cache-state, %65: cache-state) = frame.resume %60, continuation 6, slots [saved_slot(slot=2, ty=cache-state, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
+    (%63: frame<@main>, %64: cache-state, %65: cache-state) = frame.resume %60, continuation 6, slots [saved_slot(slot=3, ty=cache-state, linear=true), saved_slot(slot=5, ty=cache-state, linear=true)]
     %66: failure = scope.unwind %61, %62, effects scope_effects(failures=[], suspends=false, cancel=false)
     fut.publish %63, failure(%66)
     ret
     ^b8(%67: closed, %68: int) in S1:
     %69: own = own.empty
-    fut.publish %99, success(value=%68, packet=%69, deps=%55)
+    fut.publish %103, success(value=%68, packet=%69, deps=%55)
     ret
     ^b9(%70: closed, %71: failure) in S1:
-    fut.publish %99, failure(%71)
+    fut.publish %103, failure(%71)
     ret
     ^b10(%72: deps) in S1:
-    (%73: frame<@main>, %74: scope<S1>, %75: deps, %76: cache-state) = frame.resume %11, continuation 1, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
-    br ^b2(%72, %7, %74, %75)
-    ^b11(%77: failure, %78: task-state, %79: receipt) in S1:
-    (%80: frame<@main>, %81: scope<S1>, %82: deps, %83: cache-state) = frame.resume %11, continuation 1, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true)]
-    br ^b3(%77, %78, %79, %81)
-    ^b12(%84: deps) in S1:
-    (%85: frame<@main>, %86: scope<S1>, %87: deps, %88: cache-state, %89: cache-state) = frame.resume %23, continuation 2, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
-    br ^b4(%84, %19, %86, %87)
-    ^b13(%90: failure, %91: task-state, %92: receipt) in S1:
-    (%93: frame<@main>, %94: scope<S1>, %95: deps, %96: cache-state, %97: cache-state) = frame.resume %23, continuation 2, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
-    br ^b5(%90, %91, %92, %94)
-    ^b14(%98: deps) in S1:
-    (%99: frame<@main>, %100: scope<S1>, %101: deps, %102: cache-state, %103: cache-state) = frame.resume %38, continuation 4, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
-    br ^b6(%98, %35, %100, %101)
-    ^b15(%104: failure, %105: task-state, %106: receipt) in S1:
-    (%107: frame<@main>, %108: scope<S1>, %109: deps, %110: cache-state, %111: cache-state) = frame.resume %38, continuation 4, slots [saved_slot(slot=0, ty=scope<S1>, linear=true), saved_slot(slot=1, ty=deps), saved_slot(slot=2, ty=cache-state, linear=true), saved_slot(slot=4, ty=cache-state, linear=true)]
-    br ^b7(%104, %105, %106, %108)
+    (%73: frame<@main>, %74: deps, %75: scope<S1>, %76: deps, %77: cache-state) = frame.resume %11, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true)]
+    br ^b2(%72, %7, %75, %76)
+    ^b11(%78: failure, %79: task-state, %80: receipt) in S1:
+    (%81: frame<@main>, %82: deps, %83: scope<S1>, %84: deps, %85: cache-state) = frame.resume %11, continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true)]
+    br ^b3(%78, %79, %80, %83)
+    ^b12(%86: deps) in S1:
+    (%87: frame<@main>, %88: deps, %89: scope<S1>, %90: deps, %91: cache-state, %92: cache-state) = frame.resume %23, continuation 2, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true), saved_slot(slot=5, ty=cache-state, linear=true)]
+    br ^b4(%86, %19, %89, %90)
+    ^b13(%93: failure, %94: task-state, %95: receipt) in S1:
+    (%96: frame<@main>, %97: deps, %98: scope<S1>, %99: deps, %100: cache-state, %101: cache-state) = frame.resume %23, continuation 2, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true), saved_slot(slot=5, ty=cache-state, linear=true)]
+    br ^b5(%93, %94, %95, %98)
+    ^b14(%102: deps) in S1:
+    (%103: frame<@main>, %104: scope<S1>, %105: deps, %106: cache-state, %107: cache-state) = frame.resume %38, continuation 4, slots [saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=0, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true), saved_slot(slot=5, ty=cache-state, linear=true)]
+    br ^b6(%102, %35, %104, %105)
+    ^b15(%108: failure, %109: task-state, %110: receipt) in S1:
+    (%111: frame<@main>, %112: scope<S1>, %113: deps, %114: cache-state, %115: cache-state) = frame.resume %38, continuation 4, slots [saved_slot(slot=1, ty=scope<S1>, linear=true), saved_slot(slot=0, ty=deps), saved_slot(slot=3, ty=cache-state, linear=true), saved_slot(slot=5, ty=cache-state, linear=true)]
+    br ^b7(%108, %109, %110, %112)
 }

@@ -33,6 +33,34 @@ pub(super) fn terminator_uses(
     Ok(uses)
 }
 
+/// #864: the values a used value's facts name. A Future's fact names the deps operand of its `fut.new`, which no
+/// operation uses after the creation; it lives while the Future does, so a suspension saves it and the Future's
+/// resumed version names the restored one.
+fn fact_values(body: &Body, value: ValueId, out: &mut Vec<ValueId>) {
+    let Ok(ValueData { facts: ValueFacts::Managed { deps }, .. }) = body.values.get(value) else { return };
+    let mut pending = vec![*deps];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match body.deps.get(id) {
+            Ok(DepExpr::FromSsa(used) | DepExpr::Retention { value: used, .. }) if *used != value => out.push(*used),
+            Ok(DepExpr::Union(parts)) => pending.extend(parts.iter().copied()),
+            _ => {}
+        }
+    }
+}
+
+/// `uses` with the values their facts name (`fact_values`).
+fn with_fact_values(body: &Body, uses: &mut Vec<ValueId>) {
+    let mut named = Vec::new();
+    for value in uses.iter() {
+        fact_values(body, *value, &mut named);
+    }
+    uses.extend(named);
+}
+
 fn traversal(error: cfg::TraversalError) -> CoroError {
     CoroError::InvalidInput { function: None, message: error.to_string() }
 }
@@ -61,6 +89,7 @@ impl Liveness {
             let index = block.as_u32() as usize;
             let mut uses = terminator_uses(module, block, &data.term, body)?;
             uses.extend(implicit.get(&Site::Terminator(block)).into_iter().flatten().copied());
+            with_fact_values(body, &mut uses);
             uses.retain(|value| !ignored(*value));
             let mut live: BTreeSet<ValueId> = uses.iter().copied().collect();
             terminators[index] = uses;
@@ -72,6 +101,7 @@ impl Liveness {
                 }
                 let mut uses = operation_uses(&instruction.op, body)?;
                 uses.extend(implicit.get(&Site::Instruction(inst)).into_iter().flatten().copied());
+                with_fact_values(body, &mut uses);
                 uses.retain(|value| !ignored(*value));
                 live.extend(uses.iter().copied());
                 instruction_uses.insert(inst, uses);
