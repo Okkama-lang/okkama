@@ -786,8 +786,9 @@ fn f1_only_a_future_result_has_entries_beside_it() {
 fn f1_a_future_with_a_local_beside_it_is_not_returned_further() {
     let source = LOCAL_BESIDE.replace("async main() is int { let f = Mk().make(); await f; }",
         "object P { P(); pass() is Future<int> { Mk().make(); } } async main() is int { await P().pass(); }");
-    let error = super::own_case_tests::own_stage(&source, None, ir::verify::VerifyMode::Full).err()
-        .expect("Full refuses the second return");
+    let Err(error) = super::own_case_tests::own_stage(&source, None, ir::verify::VerifyMode::Full) else {
+        panic!("Full refuses the second return");
+    };
     // The returned Future depends on the `Res` beside it, which `pass` closes.
     assert!(error.contains("B31 use of a value whose stable dependency has been closed at app.P.pass#0"), "{error}");
 }
