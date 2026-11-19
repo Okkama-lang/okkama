@@ -968,8 +968,14 @@ object Res {
     label() is string { name; }
     destroy { Stdout().writeln("destroy " + name); }
 }
-object M { M(); make() is Res { let a = Res(name: "local"); Stdout().writeln("have " + a.label()); Res(name: "made"); } }
-object A { A(); async make() is Res { let a = Res(name: "alocal"); Stdout().writeln("have " + a.label()); Res(name: "amade"); } }
+object M {
+    M();
+    make() is Res { let a = Res(name: "local"); Stdout().writeln("have " + a.label()); Res(name: "made"); }
+}
+object A {
+    A();
+    async make() is Res { let a = Res(name: "alocal"); Stdout().writeln("have " + a.label()); Res(name: "amade"); }
+}
 async main() is int {
     let r = M().make();
     Stdout().writeln("got " + r.label());
@@ -978,7 +984,8 @@ async main() is int {
     Stdout().writeln("main end");
     0;
 }
-"#, "have local\ndestroy local\ngot made\nhave alocal\ndestroy alocal\ngot amade\nmain end\ndestroy amade\ndestroy made\n");
+"#, "have local\ndestroy local\ngot made\nhave alocal\ndestroy alocal\ngot amade\nmain end\n\
+    destroy amade\ndestroy made\n");
 }
 
 /// #851 with #849: a `map` over an array whose body awaits a resource.
