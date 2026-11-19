@@ -1044,6 +1044,27 @@ async main() is int {
 "#, "made\nuse local\ngot 5\nmain end\ndestroy local\n");
 }
 
+/// #866 (PR-B2, OIR-2 §10.2): a synchronous function returns a cold Future over a Future it borrows. A creation
+/// borrows a bare Future argument, so the returned Future depends on `g`, which main keeps; `chain` declares that
+/// dependency and takes nothing. Tomato's output.
+#[test]
+fn a_returned_future_over_a_borrowed_future_depends_on_it() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object M { M(); async make(l is string) is Res { Stdout().writeln("make " + l); Res(l: l); } }
+object U { U(); async take(f is Future<Res>) is int { (await f).n(); } }
+object C { C(); chain(f is Future<Res>) is Future<int> { U().take(f); } }
+async main() is int {
+    let g = M().make("x");
+    let h = C().chain(g);
+    Stdout().writeln("got " + (await h).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make x\ngot 1\nmain end\ndestroy x\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

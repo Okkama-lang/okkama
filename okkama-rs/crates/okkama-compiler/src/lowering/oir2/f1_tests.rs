@@ -895,3 +895,41 @@ fn f1_a_thunk_input_travels_with_the_future_it_is_passed_on_with() {
     super::own_case_tests::own_stage(source, None, ir::verify::VerifyMode::Full)
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// #866 (PR-B2, OIR-2 §10.2): `chain` returns a Future of `take(f)` over its borrowed Future argument `f`.
+const CHAIN: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object M { M(); async make(l is string) is Res { Res(l: l); } } ",
+    "object U { U(); async take(f is Future<Res>) is int { (await f).n(); } } ",
+    "object C { C(); chain(f is Future<Res>) is Future<int> { U().take(f); } } ",
+    "async main() is int { let g = M().make(\"x\"); let h = C().chain(g); await h; }",
+);
+
+/// #866: a creation borrows a bare Future argument, so `chain` borrows `f` and its Future depends on it: the summary
+/// declares `f` borrowed and the result's external dependency on it, and Full accepts the Future outliving `chain`.
+#[test]
+fn f1_a_future_over_a_borrowed_future_declares_its_dependency() {
+    let (own, _) = super::own_case_tests::own_stage(CHAIN, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, chain) = function(&own, "app.C.chain#0");
+    let summary = own.summaries.get(chain.summary.unwrap()).unwrap();
+    assert_eq!(summary.parameters[1].convention, ir::FreshConvention::Borrow, "{summary:?}");
+    assert_eq!(summary.results[0].external_deps, [1], "{summary:?}");
+    assert!(summary.results[0].aliases.is_empty(), "{summary:?}");
+}
+
+/// #866: the dependency is what lets the Future leave `chain`; without it, the result depends on an input its
+/// relation does not declare.
+#[test]
+fn f1_a_future_over_a_borrowed_future_must_declare_it() {
+    let (own, _) = super::own_case_tests::own_stage(CHAIN, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, chain) = function(&own, "app.C.chain#0");
+    let summary = chain.summary.unwrap();
+    let mut cut = own.clone();
+    cut.summaries.get_mut(summary).unwrap().results[0].external_deps.clear();
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
+        && diagnostic.message == "body returns an alias/dependency absent from its declared summary"), "{report:?}");
+}

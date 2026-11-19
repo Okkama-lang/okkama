@@ -642,7 +642,7 @@ impl Engine<'_, '_> {
                 if !matches!(piece.origin, Origin::Input(_)) {
                     return self.may_alias(flow, piece.origin, *key);
                 }
-                if self.obligation_free(*key) {
+                if self.obligation_free(*key) || self.borrowed_parameter(*key) {
                     return false;
                 }
                 piece.predicates.iter().all(|(filter, included)| {
@@ -650,6 +650,25 @@ impl Engine<'_, '_> {
                 })
             })
         })
+    }
+    /// #866 (PR-B2, OIR-2 §10.2): the key of a bare Future parameter the summary declares borrowed. The caller keeps
+    /// it and its cache, so the accepted input packet holds nothing of it, and closing that packet ends nothing that
+    /// depends on it: a Future that borrows a bare Future argument outlives the callee.
+    pub(super) fn borrowed_parameter(&self, key: Origin) -> bool {
+        let Origin::External(value) = key else { return false };
+        let Some(summary) = self.declaration.summary.and_then(|id| self.module.summaries.get(id).ok()) else {
+            return false;
+        };
+        let arguments: Vec<_> = self.entry_values().into_iter().filter(|v| {
+            self.body.values.get(*v).ok().and_then(|v| self.module.types.get(v.ty).ok())
+                .is_some_and(|ty| !matches!(ty, Type::Service(_) | Type::Descriptor))
+        }).collect();
+        // Only a bare Future (PR-B2): a borrow of another parameter still ends with the call (B7.3). And only in a
+        // synchronous call boundary: an async body's parameters live in its frame, whose close does end them (B9.4).
+        let asynchronous = self.frame_body() || self.declaration.attrs.contains(&FunctionAttr::Async);
+        !asynchronous && matches!(super::super::later::value_type(self.module, self.body, value), Some(Type::Future(_)))
+            && arguments.iter().position(|argument| *argument == value).and_then(|index| summary.parameters.get(index))
+                .is_some_and(|effect| effect.convention == FreshConvention::Borrow)
     }
     /// #700, #731 (OIR-2 §3.2, §7.2, §10.2; P2.4 §4.8): a key that names a value holding no obligation: an
     /// entry value or a field whose type holds none (a builtin capability such as Atomic, an object holding

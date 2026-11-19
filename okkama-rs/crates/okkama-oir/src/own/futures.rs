@@ -140,10 +140,21 @@ pub(super) fn creation_summary(
     let future = future_type(module, outcome(module, function)?)?;
     let mut managed = vec![];
     let mut parameters = vec![];
+    let mut borrowed_futures = vec![];
     for (index, ty) in language(module, &function.signature.params).into_iter().enumerate() {
         let index = u16::try_from(index)
             .map_err(|_| budget.fail(OwnDiagnosticKind::IncompatibleSignature, "too many language parameters"))?;
-        if types.get(&ty).is_none_or(TypeClassification::may_own) {
+        // #866 (PR-B2, OIR-2 §10.2): a creation borrows a bare Future argument; the Future it creates depends on that
+        // Future's cache and holds nothing of it.
+        if is_future(module, ty) {
+            borrowed_futures.push(index);
+            parameters.push(ParameterEffect {
+                convention: FreshConvention::Borrow,
+                retention: None,
+                deps: vec![index],
+                destination: TransferDestination::None,
+            });
+        } else if types.get(&ty).is_none_or(TypeClassification::may_own) {
             managed.push(index);
             parameters.push(ParameterEffect {
                 convention: FreshConvention::Take,
@@ -163,7 +174,7 @@ pub(super) fn creation_summary(
     let result = ResultRelation { beside: vec![],
         fresh: vec![],
         aliases: managed.iter().map(|index| SummarySelection::Parameter(*index)).collect(),
-        external_deps: managed,
+        external_deps: managed.into_iter().chain(borrowed_futures).collect(),
         opaque: false,
         provenance: AdmissionProvenance::UnboundResult,
     };
