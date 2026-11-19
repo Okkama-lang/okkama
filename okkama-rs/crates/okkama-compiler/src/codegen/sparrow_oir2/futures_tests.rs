@@ -151,14 +151,15 @@ fn v7_frame_layout_is_the_d21_layout_with_site_pcs() {
     assert_eq!(work.continuations, [continuation(None, &[0, 1], &[])]);
     let main = function(&p, "main");
     let layout = &p.tables.frames[1];
-    assert_eq!(layout.slots, [service(K::ScopeState), service(K::Deps), service(K::CacheState), value(FUTURE_INT),
-        value(s::Type::Failure), service(K::TaskState), service(K::Receipt)]);
+    // #864: the first slot is the deps operand of the Future's fut.new, which its fact names.
+    assert_eq!(layout.slots, [service(K::Deps), service(K::ScopeState), service(K::Deps), service(K::CacheState),
+        value(FUTURE_INT), value(s::Type::Failure), service(K::TaskState), service(K::Receipt)]);
     let [(awaited, ..)] = sites(main, O::Await)[..] else { panic!("one await") };
     let [(adapter, ..)] = sites(main, O::AwaitUnwind)[..] else { panic!("one await.unwind") };
     assert_eq!(layout.continuations, [
         continuation(None, &[], &[]),
-        continuation(Some(awaited), &[0, 1, 2], &[3]),
-        continuation(Some(adapter), &[2], &[0, 4, 5, 6]),
+        continuation(Some(awaited), &[0, 1, 2, 3], &[4]),
+        continuation(Some(adapter), &[3], &[1, 5, 6, 7]),
     ], "each continuation's site is the pc of its suspending operation");
 }
 

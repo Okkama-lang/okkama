@@ -57,7 +57,12 @@ impl Driver<'_, '_> {
             // #863, #864 (PR-N2, OIR-2-async-remaining §6.3b-c): the Future depends on exactly the inputs its creation
             // summary calls managed, which the prologue gave their deps, and on a bare Future input; several are joined
             // and none is the empty `deps.join []`. A thunk never restructures its unaccepted entry packet.
-            let mut parts = managed.iter().map(|input| point.env.value(*input)?.deps
+            // The creation summary's managed set is the `may_own` test (`creation_summary`); own's `managed` also
+            // counts managed references, which the creation summary does not declare.
+            let owning = |original: &&ValueId| ty(original).is_ok_and(|ty| {
+                self.analysis.types.get(&ty).is_none_or(TypeClassification::may_own)
+            });
+            let mut parts = managed.iter().filter(owning).map(|input| point.env.value(*input)?.deps
                 .ok_or_else(|| flow_error("a managed thunk input has its deps"))).collect::<Result<Vec<_>, _>>()?;
             if let Some(future) = future_input {
                 let value = point.env.value(future)?.value;

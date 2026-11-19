@@ -882,3 +882,24 @@ fn a_creation_in_a_loop_of_its_owner_is_refused_by_occupancy() {
     assert!(matches!(&error, CoroError::InvalidInput { message, .. }
         if message == "fut.new may fill a slot that still holds its earlier duty (D26 R-1)"), "{error:?}");
 }
+
+/// #864 (Fable's review): a Future's fact names the deps operand of its `fut.new`, so a suspension that holds the
+/// Future saves that deps value. The coro verifier derives this on its own: a `frame.save` without it is refused as an
+/// incomplete saved set.
+#[test]
+fn a_suspension_saves_what_a_live_futures_fact_names() {
+    let golden = include_str!("../../tests/fixtures/async/coro/async-plain-await.oir");
+    verify_coro_with(&parsed(golden), &options(), VerifyContext::default())
+        .unwrap_or_else(|report| panic!("{report:?}"));
+    let source = edited(golden, "frame_slot(slot=0, value=%6, mode=borrow), ", "");
+    let source = edited(&source, "continuation 1 at ^b1 saves [0, 1, 2, 3] operands [4]",
+        "continuation 1 at ^b1 saves [1, 2, 3] operands [4]");
+    let source = edited(&source, "(%35: frame<@main>, %36: deps, %37: scope<S1>", "(%35: frame<@main>, %37: scope<S1>");
+    let source = edited(&source, "(%43: frame<@main>, %44: deps, %45: scope<S1>", "(%43: frame<@main>, %45: scope<S1>");
+    let source = source.replace("continuation 1, slots [saved_slot(slot=0, ty=deps), saved_slot(slot=1,",
+        "continuation 1, slots [saved_slot(slot=1,");
+    let report = verify_coro_with(&parsed(&source), &options(), VerifyContext::default())
+        .expect_err("the deps the Future's fact names is not saved");
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::CoroSavedSetIncomplete),
+        "{report:?}");
+}

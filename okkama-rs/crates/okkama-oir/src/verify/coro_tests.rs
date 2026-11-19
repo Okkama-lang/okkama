@@ -172,14 +172,14 @@ fn d21_bodies_keep_their_language_signature_in_continuation_zero() {
 fn b95_variants_report_their_stable_codes() {
     let cases = [
         // D21: the save lists its slots in another order than the declared saved set.
-        (PLAIN, "continuation 1 at ^b1 saves [0, 1, 2]", "continuation 1 at ^b1 saves [1, 0, 2]",
+        (PLAIN, "continuation 1 at ^b1 saves [0, 1, 2, 3]", "continuation 1 at ^b1 saves [1, 0, 2, 3]",
             RuleId::CoroLayoutTypeMismatch),
         // D21: the declared saved set of continuation 2 omits the slot that its save fills.
-        (PLAIN, "    continuation 2 at #10 saves [2] operands [0, 4, 5, 6]\n",
-            "    continuation 2 at #10 saves [] operands [0, 4, 5, 6]\n", RuleId::CoroLayoutTypeMismatch),
+        (PLAIN, "    continuation 2 at #10 saves [3] operands [1, 5, 6, 7]\n",
+            "    continuation 2 at #10 saves [] operands [1, 5, 6, 7]\n", RuleId::CoroLayoutTypeMismatch),
         // A read of a saved value at an instruction after its resume.
-        (REPEATED, "    br ^b4(%64, %65, %67, %14, %68, %69)",
-            "    %dup: int = int.add %12, %12\n    br ^b4(%64, %65, %67, %14, %68, %69)", RuleId::CoroReadAfterSave),
+        (REPEATED, "    br ^b4(%66, %67, %69, %14, %70, %71)",
+            "    %dup: int = int.add %12, %12\n    br ^b4(%66, %67, %69, %14, %70, %71)", RuleId::CoroReadAfterSave),
     ];
     for (source, from, to, rule) in cases {
         let rules = full(&edited(source, from, to));
@@ -220,14 +220,14 @@ fn the_duties_of_a_suspending_close_are_its_tail_operand_slots() {
 
 #[test]
 fn a_duty_left_running_across_await_unwind_is_an_incomplete_saved_set() {
-    let source = edited(PLAIN, "    continuation 2 at #10 saves [2] operands [0, 4, 5, 6]\n",
-        "    continuation 2 at #10 saves [] operands [0, 4, 5, 6]\n");
-    let source = edited(&source, "frame.save %42, slots [frame_slot(slot=2, value=%45, mode=consume)], continuation 2",
-        "frame.save %42, continuation 2");
+    let source = edited(PLAIN, "    continuation 2 at #10 saves [3] operands [1, 5, 6, 7]\n",
+        "    continuation 2 at #10 saves [] operands [1, 5, 6, 7]\n");
+    let source = edited(&source, "frame.save %43, slots [frame_slot(slot=3, value=%47, mode=consume)], continuation 2",
+        "frame.save %43, continuation 2");
     let resume = concat!("(%25: frame<@main>, %26: cache-state) = frame.resume %22, continuation 2, ",
-        "slots [saved_slot(slot=2, ty=cache-state, linear=true)]");
+        "slots [saved_slot(slot=3, ty=cache-state, linear=true)]");
     let source = edited(&source, resume, "%25: frame<@main> = frame.resume %22, continuation 2");
-    let source = edited(&source, "duties [%26]", "duties [%45]");
+    let source = edited(&source, "duties [%26]", "duties [%47]");
     assert_eq!(full(&source), [RuleId::CoroSavedSetIncomplete]);
 }
 
