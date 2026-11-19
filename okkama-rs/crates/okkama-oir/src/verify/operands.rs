@@ -898,7 +898,6 @@ impl Checker<'_, '_> {
                     "deps.of cannot anchor a linear packet");
             }
             OwnershipOp::DepsJoin { deps } => {
-                self.require(!deps.is_empty(), "deps.join joins at least one deps value");
                 for &value in deps { self.service(value, ServiceType::Deps)?; }
             }
             OwnershipOp::Empty {} | OwnershipOp::ScopeBegin { .. } => {}

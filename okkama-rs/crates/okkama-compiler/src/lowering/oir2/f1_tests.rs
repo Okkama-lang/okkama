@@ -579,3 +579,51 @@ fn f1_a_creation_thunk_does_not_split_its_entry() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
         && diagnostic.message == "callee must accept fresh inputs before evaluating its body"), "{report:?}");
 }
+
+/// #864, the counterpart of B32 at a call: `fut.new`'s deps cover the full deps of every argument its target's creation
+/// summary takes. A two-input thunk whose Future names the deps of its first input only is refused.
+#[test]
+fn f1_a_future_names_the_deps_of_every_managed_argument() {
+    let (own, _) = super::own_case_tests::own_stage(PAIRING, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let thunk = witness(&own, "P", 0);
+    let (join, creation) = thunk_join(&own, thunk);
+    let mut one = own.clone();
+    let body = one.functions.get_mut(thunk).unwrap().body.as_mut().unwrap();
+    let ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { deps }) = &body.insts.get(join).unwrap().op else {
+        unreachable!()
+    };
+    let first = deps[0];
+    let creation = &mut body.insts.get_mut(creation).unwrap().op;
+    let ir::Operation::Async(ir::AsyncOp::FutureNew { deps: named, .. }) = creation else { unreachable!() };
+    *named = first;
+    let report = full_report(&one);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B32
+        && diagnostic.message == "fut.new deps omit part of a managed argument's full dependencies"), "{report:?}");
+}
+
+/// #864 (ruling (ii), OIR-2-async-remaining §6.3c): a creation thunk's Future depends on exactly the inputs its
+/// target's creation summary calls managed. `Net.load` takes only plain inputs, so the thunk names the empty
+/// `deps.join []`, not the deps of its receiver, whose witness entry declares it managed for transport.
+#[test]
+fn f1_a_thunk_over_plain_inputs_names_no_deps() {
+    let (own, _) = super::own_case_tests::own_stage(BOUND, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let load = |target: &ir::FuncId| own.functions.get(*target).unwrap().symbol == "app.Net.load#0";
+    let thunks: Vec<_> = own.functions.iter().filter(|(_, function)| function.attrs.iter().any(|attr| {
+        matches!(attr, ir::FunctionAttr::Adapter { target } if load(target))
+    })).collect();
+    assert!(!thunks.is_empty(), "the witness thunks of Net.load");
+    for (_, function) in thunks {
+        let body = function.body.as_ref().unwrap();
+        let named = body.insts.iter().find_map(|(_, inst)| match inst.op {
+            ir::Operation::Async(ir::AsyncOp::FutureNew { deps, .. }) => Some(deps),
+            _ => None,
+        }).expect("the thunk's fut.new");
+        let ir::Definition::InstResult { inst, .. } = body.values.get(named).unwrap().def else {
+            panic!("{}: the deps are an instruction's", function.symbol)
+        };
+        assert!(matches!(&body.insts.get(inst).unwrap().op,
+            ir::Operation::Ownership(ir::OwnershipOp::DepsJoin { deps }) if deps.is_empty()), "{}", function.symbol);
+    }
+}

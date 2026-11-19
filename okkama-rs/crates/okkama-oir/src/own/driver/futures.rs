@@ -54,24 +54,21 @@ impl Driver<'_, '_> {
                 return Err(flow_error("a creation thunk's fut.new takes its one entry packet (PR-N2)"));
             };
             packet = entry;
-            deps = match managed.as_slice() {
-                [] => {
-                    let argument = future_input.or_else(|| originals.first().copied())
-                        .ok_or_else(|| flow_error("a creation thunk has a parameter"))?;
-                    let value = point.env.value(argument)?.value;
-                    point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
-                    point.result(SlotName::Value)?
-                }
-                [input] => point.env.value(*input)?.deps
-                    .ok_or_else(|| flow_error("a managed thunk input has its deps"))?,
-                // #863 (PR-N2, third amendment): several managed inputs give the union of their deps; a thunk never
-                // restructures its unaccepted entry packet.
-                inputs => {
-                    let deps = inputs.iter().map(|input| point.env.value(*input)?.deps
-                        .ok_or_else(|| flow_error("a managed thunk input has its deps"))).collect::<Result<_, _>>()?;
-                    point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps }))?;
-                    point.result(SlotName::Value)?
-                }
+            // #863, #864 (PR-N2, OIR-2-async-remaining §6.3b-c): the Future depends on exactly the inputs its creation
+            // summary calls managed, which the prologue gave their deps, and on a bare Future input; several are joined
+            // and none is the empty `deps.join []`. A thunk never restructures its unaccepted entry packet.
+            let mut parts = managed.iter().map(|input| point.env.value(*input)?.deps
+                .ok_or_else(|| flow_error("a managed thunk input has its deps"))).collect::<Result<Vec<_>, _>>()?;
+            if let Some(future) = future_input {
+                let value = point.env.value(future)?.value;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
+                parts.push(point.result(SlotName::Value)?);
+            }
+            deps = if let [one] = parts[..] {
+                one
+            } else {
+                point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps: parts }))?;
+                point.result(SlotName::Value)?
             };
         } else if !managed.is_empty() {
             // Only the managed inputs are offered: a Future input's cache is borrowed and no selection names it.
@@ -85,9 +82,20 @@ impl Driver<'_, '_> {
             let selection = self.body.selections.alloc(SelectionExpr::Union(parts)).map_err(arena)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Split { packet: offered, selection }))?;
             let parts = vec![point.result(SlotName::Rest)?, point.result(SlotName::Selected)?];
-            deps = point.result(SlotName::ExternalDeps)?;
+            let external = point.result(SlotName::ExternalDeps)?;
             point = self.emit(point, Operation::Ownership(OwnershipOp::Join { packets: parts }))?;
             packet = point.result(SlotName::Packet)?;
+            // #864: a borrowed Future input beside the managed ones adds its own deps, which no selection names.
+            deps = if let Some(future) = future_input {
+                let value = point.env.value(future)?.value;
+                point = self.emit(point, Operation::Ownership(OwnershipOp::Dependencies { value }))?;
+                let borrowed = point.result(SlotName::Value)?;
+                let deps = vec![external, borrowed];
+                point = self.emit(point, Operation::Ownership(OwnershipOp::DepsJoin { deps }))?;
+                point.result(SlotName::Value)?
+            } else {
+                external
+            };
         } else {
             point = self.emit(point, Operation::Ownership(OwnershipOp::Empty {}))?;
             packet = point.result(SlotName::Packet)?;

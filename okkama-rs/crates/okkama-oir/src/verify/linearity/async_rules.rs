@@ -641,7 +641,32 @@ impl Engine<'_, '_> {
                     slot.token = Token { private: true, scope: Some(*owner), ..Token::default() };
                 }
             }
-            AsyncOp::FutureNew { packet, owner_state, environment, slot: empty, .. } => {
+            AsyncOp::FutureNew { packet, deps, owner_state, environment, slot: empty, .. } => {
+                // #864, the counterpart of B32 at a call (`call_deps`): `fut.new`'s deps (their full deps) cover the
+                // external keys of what each environment argument its target's creation summary takes, and a bare
+                // Future argument, refers to beside what its inputs packet owns (the split's `external_keys`), and
+                // those arguments' requirements, which have no key (Fable, §6.3c).
+                if let FutureEnvironment::Deferred { function, arguments, .. }
+                    | FutureEnvironment::External { function, arguments, .. } = environment
+                    && let Some(creation) = self.module.functions.get(*function).ok()
+                        .and_then(|target| target.async_creation_summary)
+                        .and_then(|id| self.module.summaries.get(id).ok()) {
+                    let supplied = &before.full_deps[deps.as_u32() as usize];
+                    let managed: Vec<_> = arguments.iter().enumerate().filter(|(index, value)| {
+                        creation.parameters.get(*index).is_some_and(|effect| effect.convention == FreshConvention::Take)
+                            || matches!(super::super::later::value_type(self.module, self.body, **value),
+                                Some(Type::Future(_)))
+                    }).map(|(_, value)| value.as_u32() as usize).collect();
+                    let keys = managed.iter().flat_map(|index| before.refs[*index].iter().copied()).collect();
+                    let mut required = super::packets::external_keys(keys, [&before.tokens[packet.as_u32() as usize]]);
+                    required.extend(managed.iter().flat_map(|index| {
+                        before.full_deps[*index].difference(&before.refs[*index]).copied()
+                    }));
+                    let omitted = !required.is_subset(supplied);
+                    if omitted {
+                        self.error(R::B32, "fut.new deps omit part of a managed argument's full dependencies");
+                    }
+                }
                 if let Some(empty) = empty {
                     let scope = before.tokens[owner_state.as_u32() as usize].scope;
                     self.fills_empty_slot(before, *empty, scope, false);
