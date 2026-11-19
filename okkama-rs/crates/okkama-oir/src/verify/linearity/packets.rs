@@ -845,14 +845,18 @@ impl Engine<'_, '_> {
         // deps result then names those requirements too (`FromSsa` reads references), so own's facts for the outcome
         // agree with the flow. A value of closed plain type depends on nothing. #862 (ruling (b)): it does not
         // inherit what the Future owns, the inputs its holder graph holds: the body owns them and destroys them at its
-        // end, and an outcome that refers to one takes it along in the outcome packet.
+        // end, and an outcome that refers to one takes it along in the outcome packet. Pinned by #867's taken outcomes
+        // (`a_taken_outcome_leaves_its_function_owned`).
         let mut inherited_deps = BTreeSet::new();
         if let Operation::Async(AsyncOp::Await { future, .. } | AsyncOp::AwaitShielded { future, .. }
             | AsyncOp::AwaitTake { future, .. }) = op {
             let index = future.as_u32() as usize;
             let identity = before.identities[index];
+            // The holder graph is in a live carrier, or saved in a frame slot across the suspension (coro).
             let owned: BTreeSet<_> = identity.map(|identity| {
-                before.tokens.iter().flat_map(|token| token.pieces.iter())
+                let saved = before.frames.values().flat_map(|layout| layout.values())
+                    .flat_map(|slot| slot.token.pieces.iter());
+                before.tokens.iter().flat_map(|token| token.pieces.iter()).chain(saved)
                     .filter(|piece| piece.holder == Some(identity) && piece.origin != identity)
                     .map(|piece| piece.origin).collect()
             }).unwrap_or_default();

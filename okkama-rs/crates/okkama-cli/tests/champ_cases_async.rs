@@ -988,6 +988,36 @@ async main() is int {
     destroy amade\ndestroy made\n");
 }
 
+/// #867 (Fable): an outcome taken from a temporary Future is owned by the awaiting scope, not a view of the cache, so
+/// it leaves the function without a rehome and its unique-cache proof holds. It does not inherit what the Future
+/// owned (the fresh input, destroyed by the body). Both forms, the await as the result and through a binding; Tomato's
+/// output.
+#[test]
+fn a_taken_outcome_leaves_its_function_owned() {
+    for relay in [
+        "async relay() is Res { await Wrapper().wrap(Res(name: \"in\")); }",
+        "async relay() is Res { let r = await Wrapper().wrap(Res(name: \"in\")); r; }",
+    ] {
+        both_modes(&format!(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {{
+    has name is string;
+    Res(:name);
+    label() is string {{ name; }}
+    destroy {{ Stdout().writeln("destroy " + name); }}
+}}
+object Wrapper {{ Wrapper(); async wrap(r is Res) is Res {{ Res(name: "wrapped " + r.label()); }} }}
+object Relay {{ Relay(); {relay} }}
+async main() is int {{
+    let r = await Relay().relay();
+    Stdout().writeln("got " + r.label());
+    Stdout().writeln("main end");
+    0;
+}}
+"#), "destroy in\ngot wrapped in\nmain end\ndestroy wrapped in\n");
+    }
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

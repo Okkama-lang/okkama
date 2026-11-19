@@ -469,6 +469,12 @@ impl Driver<'_, '_> {
             if !self.flow.value_shapes.get(&future).is_some_and(|shape| duties.contains(shape)) {
                 continue;
             }
+            // #867 (Fable): a temporary Future has no use but its take (§10.3). The take moved its outcome out of the
+            // cache into the awaiting scope, so an escaping outcome is no view of the cache and needs no rehome; its
+            // unique-cache proof says the cache is never published (B92).
+            if self.temporaries.contains(&future) {
+                continue;
+            }
             let value = match point.env.values.get(&future) {
                 Some(latest) => latest.value,
                 None => *self.definitions.get(&future)
