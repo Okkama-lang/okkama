@@ -38,6 +38,18 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   Both the ticket's program and two Futures over one parameter now print Tomato's order under
   Structural and Full verification. A Future over a local binding that is returned (#865)
   stays refused until its ruling.
+- **A direct creation after a call that returned a Future no longer stops at load (#862,
+  ruling (b)).** Example: `await Feeder().feed(Res(name: "direct"))` after
+  `let f = Starter().start(…)`, and also after an async role call. The returned duty made
+  `main`'s inventory unknown. The `own.split` that `create_future` made of the offered
+  packet only to compute its deps then stopped at
+  `SPB_STRUCTURE: unknown static packet inventory`. Changes:
+  - The operand of `fut.new` is now `deps.of` of each input, combined with `deps.join`, and
+    no packet is split. This also applies to a fresh input.
+  - The verifier subtracts from a Future's dependencies whatever its own inputs packet owns.
+  - Two more partition fixes from the review (#862):
+    - a selection that names a Future no longer moves a bound duty;
+    - only an admissible selection leaves a returned Future entry behind without a check.
 - **The verifier checks a Future's deps against its inputs (#864, first part).** Nothing
   compared `fut.new`'s deps operand with its arguments, unlike a call, where B32 does. Now
   the operand's full deps must cover two things. First, the external keys of what each argument

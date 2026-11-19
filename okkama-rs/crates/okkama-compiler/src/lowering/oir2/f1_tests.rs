@@ -694,3 +694,32 @@ fn f1_a_returned_future_takes_back_the_parameter_it_depends_on() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
         && diagnostic.message == "a parameter declared taken into the result stays in the callee"), "{report:?}");
 }
+
+/// A synchronous function that returns a Future created over a fresh resource (#862, ruling (b) of §6.3c).
+const FRESH_RETURN: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object Feeder { Feeder(); async feed(r is Res) is int { r.n(); } } ",
+    "object Maker { Maker(); start() is Future<int> { Feeder().feed(Res(l: \"made\")); } } ",
+    "async main() is int { await Maker().start(); }",
+);
+
+/// Ruling (b) of §6.3c (#862): `create_future` never splits a packet; a fresh input's `deps.of` names its own
+/// identity, and the verifier subtracts what the Future's inputs packet owns. So a returned Future over a fresh
+/// resource depends on nothing its function did not receive: the result relation of `start` declares no external
+/// dependency, and Full accepts it. Without the subtraction the Future would seem to depend on the fresh creation,
+/// which the relation cannot declare.
+#[test]
+fn f1_a_returned_future_over_a_fresh_input_declares_no_dependency_on_it() {
+    let (own, _) = super::own_case_tests::own_stage(FRESH_RETURN, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, start) = function(&own, "app.Maker.start#0");
+    let summary = own.summaries.get(start.summary.unwrap()).unwrap();
+    let [relation] = summary.results.as_slice() else { panic!("{summary:?}") };
+    assert!(relation.external_deps.is_empty(), "{relation:?}");
+    let body = start.body.as_ref().unwrap();
+    let splits = body.insts.iter().filter(|(_, instruction)| {
+        matches!(instruction.op, ir::Operation::Ownership(ir::OwnershipOp::Split { .. }))
+    }).count();
+    assert_eq!(splits, 0, "create_future restructures no packet");
+}

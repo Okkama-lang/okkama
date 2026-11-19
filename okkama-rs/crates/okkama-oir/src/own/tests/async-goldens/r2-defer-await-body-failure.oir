@@ -101,33 +101,31 @@ func @task(%0: own) -> own [async] abi explicit(input_packet=0, output_packet=0)
 }
 
 func @closer(%0: own) -> own [defer(), async] abi explicit(input_packet=0, output_packet=0) summary(M8) {
-    service.schedule Schedule0 owner S3, protocol P0, duties [%9]
-    key k0: key = service_of(value=%9, kind=cache)
+    service.schedule Schedule0 owner S3, protocol P0, duties [%6]
+    key k0: key = service_of(value=%6, kind=cache)
     dependency d0: dependency = key(k0)
-    dependency d1: dependency = from_ssa(%7)
+    dependency d1: dependency = from_ssa(%5)
     dependency d2: dependency = union([d0, d1])
-    dependency d3: dependency = from_ssa(%15)
-    selection s0: selection = union([])
+    dependency d3: dependency = from_ssa(%12)
     ^b0 in S3:
     %1: scope<S3> = scope.begin S3
     %2: scope<S3> = own.accept %1, %0
     br ^b1(%2)
     ^b1(%3: scope<S3>) in S3:
     %4: own = own.empty
-    (%5: own, %6: own, %7: deps) = own.split %4, s0
-    %8: own = own.join [%5, %6]
-    (%9: future<void> facts(managed(deps=d2)), %10: scope<S3>) = fut.new %8, %7, %3, environment deferred(function=@task), owner S3
-    %11: deps = deps.of %9
-    invoke.own await %9
-        normal ^b2($deps, %9, %10, %11)
-        unwind ^b3($failure, $task, $receipt, %10)
-    ^b2(%12: deps, %13: future<void> facts(managed(deps=d3)), %14: scope<S3>, %15: deps) in S3:
-    %16: closed = scope.end %14, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %5: deps = deps.join
+    (%6: future<void> facts(managed(deps=d2)), %7: scope<S3>) = fut.new %4, %5, %3, environment deferred(function=@task), owner S3
+    %8: deps = deps.of %6
+    invoke.own await %6
+        normal ^b2($deps, %6, %7, %8)
+        unwind ^b3($failure, $task, $receipt, %7)
+    ^b2(%9: deps, %10: future<void> facts(managed(deps=d3)), %11: scope<S3>, %12: deps) in S3:
+    %13: closed = scope.end %11, effects scope_effects(failures=[], suspends=false, cancel=false)
     ret defer continue
-    ^b3(%17: failure, %18: task-state, %19: receipt, %20: scope<S3>) in S3:
-    (%21: scope<S3>, %22: failure) = await.unwind %20, %17, %18, %19, protocol P0
-    %23: failure = scope.unwind %21, %22, effects scope_effects(failures=[], suspends=false, cancel=false)
-    raise %23
+    ^b3(%14: failure, %15: task-state, %16: receipt, %17: scope<S3>) in S3:
+    (%18: scope<S3>, %19: failure) = await.unwind %17, %14, %15, %16, protocol P0
+    %20: failure = scope.unwind %18, %19, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %20
 }
 
 func @risky() -> void abi observation summary(M15) {

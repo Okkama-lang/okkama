@@ -355,8 +355,8 @@ fn a_future_keeps_the_cleanup_effects_of_its_outcome() {
         call_contract(failures=[thrown], publication=atomic)\n\
         func @destroy(%self: Res) -> void [extern \"fixture.destroy\", destroy Res] summary(Md);\n\
         scope S0 action in @explode\n");
-    let source = edited(&source, "(%7: future<int> facts(managed(deps=d2))",
-        "(%7: future<Res> facts(managed(deps=d2))");
+    let source = edited(&source, "(%4: future<int> facts(managed(deps=d2))",
+        "(%4: future<Res> facts(managed(deps=d2))");
     let source = edited(&source, "environment deferred(function=@explode), result int, owner S1",
         "environment deferred(function=@explode), result Res, owner S1");
     let output = lower_cleanup(parsed(&source), &LowOptions::default()).unwrap();

@@ -484,7 +484,7 @@ fn edit(text: &str, from: &str, to: &str) -> String {
     text.replacen(from, to, 1)
 }
 
-const COLD_REHOME: &str = "(%46: scope<S4>, %47: pending) = cache.rehome %42, %45, future %41, target S3, protocol P0";
+const COLD_REHOME: &str = "(%43: scope<S4>, %44: pending) = cache.rehome %39, %42, future %38, target S3, protocol P0";
 
 /// C-4, ruling of #601 R1: the target of a rehome is a live scope that encloses the duty's owner, or the caller.
 #[test]
@@ -504,7 +504,7 @@ fn r1_a_rehome_names_the_destination_of_its_exit() {
     let caller = edit(&valid, COLD_REHOME, &COLD_REHOME.replace("target S3", "target caller"));
     assert!(rejected_by(&caller, RuleId::B94, message), "{:?}", rejections(&caller));
     let make = golden("r1-make-escape");
-    let returned = "cache.rehome %49, %52, future %48, target caller, protocol P0";
+    let returned = "cache.rehome %47, %50, future %46, target caller, protocol P0";
     assert!(make.contains(returned));
     // make's own scope is no destination of its return.
     let own = edit(&make, returned, &returned.replace("target caller", "target S3"));
@@ -518,11 +518,11 @@ fn r1_a_rehome_names_the_destination_of_its_exit() {
 fn r1_a_rehome_moves_a_duty_its_state_holds() {
     let valid = golden("r1-cold-escape");
     let again = |target: &str| {
-        let second = format!("{COLD_REHOME}\n    (%90: scope<S4>, %91: pending) = cache.rehome %46, %47, future %41, \
+        let second = format!("{COLD_REHOME}\n    (%90: scope<S4>, %91: pending) = cache.rehome %43, %44, future %38, \
             target {target}, protocol P0");
         let text = edit(&valid, COLD_REHOME, &second);
-        let text = edit(&text, "%49: pending = exit.extend %47, %48", "%49: pending = exit.extend %91, %48");
-        edit(&text, "scope.end %46, reserve %49", "scope.end %90, reserve %49")
+        let text = edit(&text, "%46: pending = exit.extend %44, %45", "%46: pending = exit.extend %91, %45");
+        edit(&text, "scope.end %43, reserve %46", "scope.end %90, reserve %46")
     };
     let twice = again("S3");
     let absent = "cache.rehome names a Future whose cache duty its scope state does not hold";
@@ -665,7 +665,7 @@ fn r1_a_loop_exit_rehomes_into_the_scope_where_it_lands() {
     assert!(commits.contains(&ExitDestination::Scope(root)), "{commits:?}");
     // A loop exit's rehome that names a scope other than the landing one is refused where the packet lands.
     let golden = golden("r1-loop-escape");
-    let rehome = "future %78, target S4, protocol P0";
+    let rehome = "future %75, target S4, protocol P0";
     let elsewhere = edit(&golden, rehome, &rehome.replace("target S4", "target S3"));
     let message = "committed packet must be admitted into its declared destination";
     assert!(rejected_by(&elsewhere, RuleId::B101, message), "{:?}", rejections(&elsewhere));

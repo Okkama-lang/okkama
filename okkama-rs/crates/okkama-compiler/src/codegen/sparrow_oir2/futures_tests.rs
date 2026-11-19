@@ -276,9 +276,9 @@ fn v7_publish_success_with_and_without_value_and_failure() {
 /// never-awaited's sync main with a cancellation request and both observations of its Future.
 fn observed() -> o::Module {
     let text = source("async-never-awaited");
-    let anchor = "    [i5] %10: deps = deps.of %7\n";
+    let anchor = "    [i4] %7: deps = deps.of %4\n";
     assert!(text.contains(anchor));
-    let observations = "    %90: bool = fut.done %7\n    fut.cancel %7\n    %91: bool = fut.cancelled %7\n";
+    let observations = "    %90: bool = fut.done %4\n    fut.cancel %4\n    %91: bool = fut.cancelled %4\n";
     o::text::parse(&text.replace(anchor, &format!("{anchor}{observations}"))).unwrap()
 }
 
