@@ -33,14 +33,14 @@ func @work(%0: frame<@work>) -> void [async] summary(M4) async-creation(M6) asyn
     %9: deps = deps.of %6
     %10: pending = exit.prepare return %6, %8, deps(%9) at B1
     invoke.own scope.end %7, reserve %10, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %6)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%11: closed, %12: pending, %13: int) in S0:
-    (%14: int, %15: own, %16: deps) = exit.commit %12, destination caller, result int
-    fut.publish %1, success(value=%14, packet=%15, deps=%16)
+    ^b2(%11: closed, %12: pending) in S0:
+    (%13: int, %14: own, %15: deps) = exit.commit %12, destination caller, result int
+    fut.publish %1, success(value=%13, packet=%14, deps=%15)
     ret
-    ^b3(%17: closed, %18: failure) in S0:
-    fut.publish %1, failure(%18)
+    ^b3(%16: closed, %17: failure) in S0:
+    fut.publish %1, failure(%17)
     ret
 }
 

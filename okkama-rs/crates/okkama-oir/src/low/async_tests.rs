@@ -237,15 +237,30 @@ fn suspension_root_maps_survive_the_suspension() {
     assert!(found, "{:?}", rules(&output));
 }
 
-/// Champ draft 3 §5: a delivery is conditional, so the pending exit after it is checked as well as the Cancelled
-/// failure. Dropping the commit of `work` on the not-delivered path leaves its reserve unconsumed.
+/// Ruling #601 K2 (#869, Fable's ruling (d)): `cleanup.deliver_cancel` delivers nothing, as `rt_cleanup_deliver_cancel`
+/// does: a cancellation still pending when the body has produced its result leaves the result as it is. So after it
+/// the verifier models one outcome of the second plan's selector, the kept one, never a delivered alternative that
+/// destroys the reserve.
+#[test]
+fn a_cancellation_delivery_leaves_one_outcome() {
+    let (name, coro, _) = GOLDENS[PLAIN];
+    crate::verify::take_cancel_outcomes();
+    let _ = lowered(name, coro);
+    let outcomes = crate::verify::take_cancel_outcomes();
+    assert!(!outcomes.is_empty(), "work's final close delivers a cancellation");
+    assert!(outcomes.iter().all(|count| *count == 1), "{outcomes:?}");
+}
+
+/// Champ draft 3 §5 with ruling #601 K2 (#869): the pending exit after `cleanup.deliver_cancel` is checked. Its
+/// delivery leaves the result as it is, so that exit is the only path; dropping the commit of `work` there leaves
+/// its reserve unconsumed.
 #[test]
 fn the_pending_exit_after_a_conditional_delivery_is_checked() {
     let (_, coro, _) = GOLDENS[PLAIN];
-    let commit = "    (%15: int, %16: own, %17: deps) = exit.commit %13, destination caller, result int\n    \
-        fut.publish %1, success(value=%15, packet=%16, deps=%17)\n";
-    let dropped = edited(coro, commit, "    %16: own = own.empty\n    %17: deps = deps.of %14\n    \
-        fut.publish %1, success(value=%14, packet=%16, deps=%17)\n");
+    let commit = "    (%14: int, %15: own, %16: deps) = exit.commit %13, destination caller, result int\n    \
+        fut.publish %1, success(value=%14, packet=%15, deps=%16)\n";
+    let dropped = edited(coro, commit, "    %14: int = const 0\n    %15: own = own.empty\n    \
+        %16: deps = deps.of %14\n    fut.publish %1, success(value=%14, packet=%15, deps=%16)\n");
     let output = lower_cleanup(parsed(&dropped), &LowOptions::default()).unwrap();
     let work = function_id(&output, "work");
     let body = output.functions.get(work).unwrap().body.as_ref().unwrap();
@@ -361,53 +376,6 @@ fn a_future_keeps_the_cleanup_effects_of_its_outcome() {
         "environment deferred(function=@explode), result Res, owner S1");
     let output = lower_cleanup(parsed(&source), &LowOptions::default()).unwrap();
     assert!(rules(&output).contains(&RuleId::B104), "{:?}", rules(&output));
-}
-
-/// Champ draft 3 §5: the selector of the second plan decides an open delivery; a finish reached without it would
-/// dispatch only one of the two outcomes.
-#[test]
-fn an_open_delivery_is_decided_before_finish() {
-    let (name, coro, _) = GOLDENS[PLAIN];
-    let mut output = lowered(name, coro);
-    let body = function_mut(&mut output, "work");
-    let (deliver_block, planned) = body.blocks.iter().find_map(|(id, block)| {
-        let delivers = block.insts.iter().any(|inst| matches!(body.insts.get(*inst).unwrap().op,
-            Operation::Cleanup(CleanupOp::DeliverCancel { .. })));
-        let planned = body.insts.get(*block.insts.last()?).unwrap().results.first().copied();
-        delivers.then_some((id, planned?))
-    }).unwrap();
-    let finish_block = body.blocks.iter().find_map(|(id, block)| {
-        let inst = *block.insts.first()?;
-        matches!(body.insts.get(inst).unwrap().op, Operation::Cleanup(CleanupOp::Finish { .. })).then_some(id)
-    }).unwrap();
-    let TermKind::Br(Target { block: next, .. }) = body.blocks.get(deliver_block).unwrap().term.kind else {
-        panic!("the delivery block enters the selector of the second plan");
-    };
-    body.blocks.get_mut(deliver_block).unwrap().term.kind = TermKind::Br(Target {
-        block: finish_block, args: vec![planned],
-    });
-    // The selector of the second plan is unreachable now; S3 wants it as empty tombstones.
-    let TermKind::CleanupNext { selected, .. } = body.blocks.get(next).unwrap().term.kind.clone() else {
-        panic!("the second plan has a selector");
-    };
-    let TermKind::FailureDispatch { some, .. } = body.blocks.get(selected.block).unwrap().term.kind.clone() else {
-        panic!("its destroy dispatches the failure");
-    };
-    for block in [next, selected.block, some.block] {
-        let data = body.blocks.get_mut(block).unwrap();
-        data.insts.clear();
-        data.params.clear();
-        data.term.kind = TermKind::Unreachable;
-    }
-    // The old root maps name the removed values; `rebuild_roots` computes them again.
-    body.cleanup.roots = Arena::new();
-    compact::compact(body).unwrap();
-    let finish = body.blocks.get(finish_block).unwrap().insts[0];
-    rebuild_roots(&mut output, "work");
-    let work = function_id(&output, "work");
-    let found = diagnostics(&output).into_iter().any(|diagnostic| diagnostic.rule == RuleId::B105
-        && diagnostic.primary.entity == EntityLocation::Instruction { function: work, instruction: finish });
-    assert!(found, "{:?}", diagnostics(&output));
 }
 
 /// C-3 (#695): a settle step never takes the task or the receipt of an await unwind edge; those reach only

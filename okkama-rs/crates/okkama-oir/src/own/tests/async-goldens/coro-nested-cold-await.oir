@@ -32,13 +32,13 @@ func @inner(%0: int; %1: own) -> (int, own) [async] abi explicit(input_packet=1,
     %7: deps = deps.of %4
     %8: pending = exit.prepare return %4, %6, deps(%7) at B1
     invoke.own scope.end %5, reserve %8, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %4)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%9: closed, %10: pending, %11: int) in S0:
-    (%12: int, %13: own, %14: deps) = exit.commit %10, destination caller, result int
-    ret %12, %13
-    ^b3(%15: closed, %16: failure) in S0:
-    raise %16
+    ^b2(%9: closed, %10: pending) in S0:
+    (%11: int, %12: own, %13: deps) = exit.commit %10, destination caller, result int
+    ret %11, %12
+    ^b3(%14: closed, %15: failure) in S0:
+    raise %15
 }
 
 func @outer(%0: int; %1: own) -> (int, own) [async] abi explicit(input_packet=1, output_packet=1) summary(M7) async-creation(M10) async-body(M7) {
@@ -67,17 +67,17 @@ func @outer(%0: int; %1: own) -> (int, own) [async] abi explicit(input_packet=1,
     %17: deps = deps.of %11
     %18: pending = exit.prepare return %11, %16, deps(%17) at B1
     invoke.own scope.end %14, reserve %18, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b4($closed, $pending, %11)
+        normal ^b4($closed, $pending)
         unwind ^b5($closed, $failure)
     ^b3(%19: failure, %20: task-state, %21: receipt, %22: scope<S1>) in S1:
     (%23: scope<S1>, %24: failure) = await.unwind %22, %19, %20, %21, protocol P0
     %25: failure = scope.unwind %23, %24, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %25
-    ^b4(%26: closed, %27: pending, %28: int) in S1:
-    (%29: int, %30: own, %31: deps) = exit.commit %27, destination caller, result int
-    ret %29, %30
-    ^b5(%32: closed, %33: failure) in S1:
-    raise %33
+    ^b4(%26: closed, %27: pending) in S1:
+    (%28: int, %29: own, %30: deps) = exit.commit %27, destination caller, result int
+    ret %28, %29
+    ^b5(%31: closed, %32: failure) in S1:
+    raise %32
 }
 
 func @main() -> int [entry, async] abi observation summary(M13) async-creation(M11) async-body(M13) {

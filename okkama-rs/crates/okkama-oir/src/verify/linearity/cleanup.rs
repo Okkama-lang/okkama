@@ -544,10 +544,12 @@ impl Engine<'_, '_> {
         }
     }
 
-    /// Champ draft 3 §5: in a D21 body `cleanup.deliver_cancel` delivers only a cancellation that was
-    /// requested and not yet delivered, and only without a primary failure. It runs once, after the plan has
-    /// drained (OIR-2 §9.3 step 6), so the executed prefix stays executed; a second plan then closes the
-    /// reserve if the cancellation was delivered. The next selector forks into both outcomes.
+    /// Champ draft 3 §5: in a D21 body `cleanup.deliver_cancel` runs once, after the plan has drained (OIR-2 §9.3
+    /// step 6), so the executed prefix stays executed; a second plan follows. #869 (Fable, ruling (d)): the step
+    /// delivers nothing (ruling #601 K2, Tomato parity; `rt_cleanup_deliver_cancel`): a cancellation still pending
+    /// when the body has produced its result leaves the result as it is and stays requested, so the second plan
+    /// finds no aborted reserve. Only that outcome is modelled: the reserve goes to the commit. #727 removes the
+    /// step.
     fn conditional_cancel(&mut self, token: &Token, fact: &mut CleanupFact) {
         if fact.phase != 2 || !token.pieces.is_empty() || fact.awaiting_failure || fact.cancel_delivered {
             self.error(R::B105, "cancellation is delivered once, after the plan has drained");
@@ -555,14 +557,6 @@ impl Engine<'_, '_> {
         fact.cancel_delivered = true;
         fact.phase = 1;
         fact.plan = None;
-        if fact.failures == 0 {
-            // A primary failure keeps priority; without one the delivery is decided at run time.
-            fact.cancel_open = true;
-            fact.failure_origin = match self.state.location {
-                L::Instruction { instruction, .. } => Some(Origin::ViewInstruction(instruction, u16::MAX)),
-                _ => None,
-            };
-        }
     }
 
     /// The two outcomes of an open cancellation delivery: not delivered, with the reserve still reserved for
@@ -1108,7 +1102,12 @@ impl Engine<'_, '_> {
             self.error(R::B102, "runtime selector cannot replace a direct plan's finite order");
         }
         let index = cleanup.as_u32() as usize;
-        for (token, delivered) in self.cancel_outcomes(&token) {
+        let outcomes = self.cancel_outcomes(&token);
+        #[cfg(test)]
+        if token.cleanup.as_ref().is_some_and(|fact| fact.cancel_delivered) {
+            crate::verify::linearity::record_cancel_outcomes(outcomes.len());
+        }
+        for (token, delivered) in outcomes {
             let mut branch = flow.clone();
             if let Some(fact) = token.cleanup.as_ref().filter(|_| delivered) {
                 branch.active_failure = fact.failures;

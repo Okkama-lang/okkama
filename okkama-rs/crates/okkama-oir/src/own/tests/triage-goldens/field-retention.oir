@@ -12,18 +12,11 @@ object Res {
 scope S0 action in @destroy_child
 scope S1 action in @destroy_res
 scope S2 action in @next
-summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
-summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
-summary M2 call-boundary parameters [parameter_effect(convention=take, retention=some(field(parameter=0,
-    field=field_ref(declaration=Res, index=0))), destination=result)] results
-    [result_relation(aliases=[field(parameter=0, field=field_ref(declaration=Res, index=0))],
-    provenance=unbound_result)] contract call_contract(results=[Child], failures=[program], publication=atomic)
-summary M3 observation parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
-summary M4 observation parameters [parameter_effect(convention=borrow, destination=none)] contract
-    call_contract(publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=take, retention=some(field(parameter=0, field=field_ref(declaration=Res, index=0))), destination=result)] results [result_relation(aliases=[field(parameter=0, field=field_ref(declaration=Res, index=0))], provenance=unbound_result)] contract call_contract(results=[Child], failures=[program], publication=atomic)
+summary M3 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M4 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
 
 func @destroy_child(%0: Child facts(managed(deps=d1))) -> void [destroy Child] abi observation summary(M3) {
     dependency d0: dependency = from_ssa(%3)
@@ -45,15 +38,14 @@ func @destroy_res(%0: Res facts(managed(deps=d1))) -> void [destroy Res] abi obs
     ret
 }
 
-func @next(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (Child, own) [method Res] abi
-    explicit(input_packet=2, output_packet=1) summary(M2) {
+func @next(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (Child, own) [method Res] abi explicit(input_packet=2, output_packet=1) summary(M2) {
     boundary B0 lexical in S2
     boundary B1 lexical in S2
     dependency d0: dependency = from_ssa(%6)
     dependency d1: dependency = from_ssa(%1)
     dependency d2: dependency = retention(value=%8, selection=selection(%8))
     dependency d3: dependency = from_ssa(%16)
-    dependency d4: dependency = from_ssa(%16)
+    dependency d4: dependency = from_ssa(%23)
     ^b0 in S2:
     %3: scope<S2> = scope.begin S2
     %4: scope<S2> = own.accept %3, %2
@@ -68,8 +60,7 @@ func @next(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (Child, own) [
         unwind ^b3($state, $failure, %11)
     ^b2(%12: scope<S2>, %13: own, %14: deps, %15: Child facts(managed(deps=d3)), %16: deps, %17: pending) in S2:
     %18: pending = exit.extend %17, %13
-    (%19: closed, %20: pending) = scope.end %12, reserve %18, effects scope_effects(failures=[], suspends=false,
-        cancel=false)
+    (%19: closed, %20: pending) = scope.end %12, reserve %18, effects scope_effects(failures=[], suspends=false, cancel=false)
     (%21: Child facts(managed(deps=d4)), %22: own, %23: deps) = exit.commit %20, destination caller, result Child
     ret %21, %22
     ^b3(%24: scope<S2>, %25: failure, %26: pending) in S2:

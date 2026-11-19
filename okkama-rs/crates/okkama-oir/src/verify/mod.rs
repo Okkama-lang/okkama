@@ -22,6 +22,8 @@ mod low_roots;
 mod linearity;
 #[cfg(test)]
 pub(crate) use linearity::take_partitions;
+#[cfg(test)]
+pub(crate) use linearity::take_cancel_outcomes;
 // Instantiate the same transfers over two domains so the oracle cannot drift.
 #[cfg(any(test, feature = "verifier-differential"))]
 #[allow(clippy::duplicate_mod)]

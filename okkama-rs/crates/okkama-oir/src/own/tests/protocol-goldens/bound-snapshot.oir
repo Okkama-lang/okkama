@@ -9,23 +9,13 @@ scope S1 action in @make
 scope S2 action in @f
 scope S3 action in @read
 scope S4 action in @read.__own_entry_1
-summary M0 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] contract call_contract(publication=atomic)
-summary M1 call-boundary results [result_relation(fresh=[0],
-        provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
-summary M2 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        failures=[program], publication=atomic)
-summary M4 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M5 call-boundary parameters [parameter_effect(convention=borrow,
-        destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int],
-        publication=atomic)
-summary M6 observation parameters [parameter_effect(convention=borrow,
-        destination=none)] contract call_contract(publication=atomic)
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
+summary M1 call-boundary results [result_relation(fresh=[0], provenance=unbound_result)] contract call_contract(results=[R], failures=[program], publication=atomic)
+summary M2 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], publication=atomic)
+summary M6 observation parameters [parameter_effect(convention=borrow, destination=none)] contract call_contract(publication=atomic)
 
 func @destroy(%0: R facts(managed(deps=d1))) -> void [destroy R] abi observation summary(M6) {
     dependency d0: dependency = from_ssa(%3)
@@ -44,7 +34,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -68,8 +58,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     raise %16
     ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
     %23: pending = exit.extend %22, %18
-    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false,
-        cancel=false)
+    (%24: closed, %25: pending) = scope.end %17, reserve %23, effects scope_effects(failures=[], suspends=false, cancel=false)
     (%26: R facts(managed(deps=d3)), %27: own, %28: deps) = exit.commit %25, destination caller, result R
     ret %26, %27
     ^b5(%29: scope<S1>, %30: failure, %31: pending) in S1:
@@ -77,8 +66,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     raise %32
 }
 
-func @read(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method R] abi explicit(input_packet=2,
-        output_packet=1) summary(M2) {
+func @read(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method R] abi explicit(input_packet=2, output_packet=1) summary(M2) {
     boundary B0 lexical in S3
     dependency d0: dependency = from_ssa(%6)
     dependency d1: dependency = from_ssa(%1)
@@ -122,8 +110,7 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     %12: failure = scope.unwind %11, %10, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %12
     ^b4(%13: scope<S2>, %14: own, %15: deps, %16: R facts(managed(deps=d1)), %17: deps) in S2:
-    %18: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%16, packet=%14),
-        state=%13, original_scope=S2)
+    %18: scope<S2> = own.bind binding elaborated_binding(binding=b0, resource=resource_value(value=%16, packet=%14), state=%13, original_scope=S2)
     %19: own = own.empty
     (%20: fn() -> int facts(managed(deps=d1)), %21: own) = fn.bind %16, @read.__own_entry_1, ty fn() -> int, packet %19
     %22: deps = deps.of %20
@@ -135,8 +122,7 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     ^b5(%25: scope<S2>, %26: failure) in S2:
     %27: failure = scope.unwind %25, %26, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %27
-    ^b6(%28: R facts(managed(deps=d3)), %29: own, %30: deps, %31: fn() -> int facts(managed(deps=d2)), %32: deps,
-        %33: scope<S2>) in S2:
+    ^b6(%28: R facts(managed(deps=d3)), %29: own, %30: deps, %31: fn() -> int facts(managed(deps=d2)), %32: deps, %33: scope<S2>) in S2:
     %34: scope<S2> = own.admit %33, %29
     invoke.own scope.split %34, s1
         normal ^b8($state, $selected, $external_deps, %28, %30, %31, %32)
@@ -144,10 +130,8 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     ^b7(%35: failure, %36: scope<S2>) in S2:
     %37: failure = scope.unwind %36, %35, effects scope_effects(failures=[], suspends=false, cancel=false)
     raise %37
-    ^b8(%38: scope<S2>, %39: own, %40: deps, %41: R facts(managed(deps=d5)), %42: deps,
-        %43: fn() -> int facts(managed(deps=d4)), %44: deps) in S2:
-    %45: scope<S2> = own.rebind binding elaborated_binding(binding=b0, resource=resource_value(value=%41, packet=%39),
-        state=%38, original_scope=S2)
+    ^b8(%38: scope<S2>, %39: own, %40: deps, %41: R facts(managed(deps=d5)), %42: deps, %43: fn() -> int facts(managed(deps=d4)), %44: deps) in S2:
+    %45: scope<S2> = own.rebind binding elaborated_binding(binding=b0, resource=resource_value(value=%41, packet=%39), state=%38, original_scope=S2)
     %46: own = own.empty
     (%47: int, %48: own, %49: deps) = fn.call %43(; %46) deps [%44] summary(M5)
     %50: scope<S2> = own.admit %45, %48
@@ -159,8 +143,7 @@ func @f(%0: own) -> (int, own) abi explicit(input_packet=0, output_packet=1) sum
     raise %55
 }
 
-func @read.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method
-        R] abi explicit(input_packet=2, output_packet=1) summary(M4) {
+func @read.__own_entry_1(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method R] abi explicit(input_packet=2, output_packet=1) summary(M4) {
     boundary B0 lexical in S4
     dependency d0: dependency = from_ssa(%6)
     dependency d1: dependency = from_ssa(%1)

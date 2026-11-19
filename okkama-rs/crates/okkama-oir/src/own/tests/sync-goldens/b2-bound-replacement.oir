@@ -32,7 +32,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -70,7 +70,7 @@ func @replace(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> own [defer(re
     dependency d0: dependency = from_ssa(%6)
     dependency d1: dependency = from_ssa(%1)
     dependency d2: dependency = from_ssa(%14)
-    dependency d3: dependency = from_ssa(%14)
+    dependency d3: dependency = from_ssa(%21)
     ^b0 in S3:
     %3: scope<S3> = scope.begin S3
     %4: scope<S3> = own.accept %3, %2
@@ -118,22 +118,21 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     dependency d20: dependency = from_ssa(%115)
     dependency d21: dependency = from_ssa(%113)
     dependency d22: dependency = from_ssa(%121)
-    dependency d23: dependency = from_ssa(%126)
-    dependency d24: dependency = from_ssa(%126)
-    dependency d25: dependency = from_ssa(%136)
-    dependency d26: dependency = from_ssa(%142)
-    dependency d27: dependency = from_ssa(%148)
-    dependency d28: dependency = from_ssa(%155)
-    dependency d29: dependency = from_ssa(%152)
-    dependency d30: dependency = from_ssa(%161)
-    dependency d31: dependency = from_ssa(%168)
-    dependency d32: dependency = from_ssa(%174)
-    dependency d33: dependency = from_ssa(%180)
-    dependency d34: dependency = from_ssa(%186)
-    dependency d35: dependency = from_ssa(%193)
-    dependency d36: dependency = from_ssa(%190)
-    dependency d37: dependency = from_ssa(%199)
-    dependency d38: dependency = from_ssa(%206)
+    dependency d23: dependency = from_ssa(%127)
+    dependency d24: dependency = from_ssa(%134)
+    dependency d25: dependency = from_ssa(%140)
+    dependency d26: dependency = from_ssa(%146)
+    dependency d27: dependency = from_ssa(%153)
+    dependency d28: dependency = from_ssa(%150)
+    dependency d29: dependency = from_ssa(%159)
+    dependency d30: dependency = from_ssa(%166)
+    dependency d31: dependency = from_ssa(%172)
+    dependency d32: dependency = from_ssa(%178)
+    dependency d33: dependency = from_ssa(%184)
+    dependency d34: dependency = from_ssa(%191)
+    dependency d35: dependency = from_ssa(%188)
+    dependency d36: dependency = from_ssa(%197)
+    dependency d37: dependency = from_ssa(%204)
     selection s0: selection = admissible(selection(%10))
     selection s1: selection = union([selection(%49)])
     selection s2: selection = admissible(s1)
@@ -216,66 +215,66 @@ func @f(%0: own) -> (R, own) abi explicit(input_packet=0, output_packet=1) summa
     ^b18(%108: scope<S2>, %109: own, %110: deps, %111: pending, %112: R facts(managed(deps=d21)), %113: deps, %114: R facts(managed(deps=d20)), %115: deps) in S2:
     %116: pending = exit.extend %111, %109
     invoke.own scope.end %108, reserve %116, effects scope_effects(failures=[program], suspends=false, cancel=false)
-        normal ^b20($closed, $pending, %114, %115)
+        normal ^b20($closed, $pending)
         unwind ^b21($closed, $failure)
     ^b19(%117: scope<S2>, %118: failure, %119: pending, %120: R facts(managed(deps=d22)), %121: deps) in S2:
     %122: failure = scope.unwind %117, %118, reserve %119, effects scope_effects(failures=[program], suspends=false, cancel=false)
     raise %122
-    ^b20(%123: closed, %124: pending, %125: R facts(managed(deps=d23)), %126: deps) in S2:
-    (%127: R facts(managed(deps=d24)), %128: own, %129: deps) = exit.commit %124, destination caller, result R
-    ret %127, %128
-    ^b21(%130: closed, %131: failure) in S2:
-    raise %131
+    ^b20(%123: closed, %124: pending) in S2:
+    (%125: R facts(managed(deps=d23)), %126: own, %127: deps) = exit.commit %124, destination caller, result R
+    ret %125, %126
+    ^b21(%128: closed, %129: failure) in S2:
+    raise %129
     ^b22 in S2:
     invoke.own scope.split %60, s4
         normal ^b23($state, $selected, $external_deps, %58, %59, %62)
         unwind ^b24($state, $failure, %58, %59, %62)
-    ^b23(%132: scope<S2>, %133: own, %134: deps, %135: R facts(managed(deps=d25)), %136: deps, %137: failure) in S2:
-    %138: own = own.join [%133]
-    invoke.defer @replace(consume %58; %138) deps [%59] summary(M2)
-        continue ^b25(%132, %135, %136, %137)
-        replace return ^b26($value, $packet, $deps, %132, %135, %136, %137)
-        unwind ^b27($failure, %132, %135, %136, %137)
-    ^b24(%139: scope<S2>, %140: failure, %141: R facts(managed(deps=d26)), %142: deps, %143: failure) in S2:
-    %144: failure = fail.secondary %143, %140
-    %145: failure = scope.unwind %139, %144, effects scope_effects(failures=[program], suspends=false, cancel=false)
-    raise %145
-    ^b25(%146: scope<S2>, %147: R facts(managed(deps=d27)), %148: deps, %149: failure) in S2:
-    br ^b28(%146, %149, %147, %148)
-    ^b26(%150: R facts(managed(deps=d29)), %151: own, %152: deps, %153: scope<S2>, %154: R facts(managed(deps=d28)), %155: deps, %156: failure) in S2:
-    %157: scope<S2> = own.accept %153, %151
-    br ^b28(%157, %156, %154, %155)
-    ^b27(%158: failure, %159: scope<S2>, %160: R facts(managed(deps=d30)), %161: deps, %162: failure) in S2:
-    %163: failure = fail.secondary %162, %158
-    %164: failure = scope.unwind %159, %163, effects scope_effects(failures=[program], suspends=false, cancel=false)
-    raise %164
-    ^b28(%165: scope<S2>, %166: failure, %167: R facts(managed(deps=d31)), %168: deps) in S2:
-    %169: failure = scope.unwind %165, %166, effects scope_effects(failures=[program], suspends=false, cancel=false)
-    raise %169
+    ^b23(%130: scope<S2>, %131: own, %132: deps, %133: R facts(managed(deps=d24)), %134: deps, %135: failure) in S2:
+    %136: own = own.join [%131]
+    invoke.defer @replace(consume %58; %136) deps [%59] summary(M2)
+        continue ^b25(%130, %133, %134, %135)
+        replace return ^b26($value, $packet, $deps, %130, %133, %134, %135)
+        unwind ^b27($failure, %130, %133, %134, %135)
+    ^b24(%137: scope<S2>, %138: failure, %139: R facts(managed(deps=d25)), %140: deps, %141: failure) in S2:
+    %142: failure = fail.secondary %141, %138
+    %143: failure = scope.unwind %137, %142, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %143
+    ^b25(%144: scope<S2>, %145: R facts(managed(deps=d26)), %146: deps, %147: failure) in S2:
+    br ^b28(%144, %147, %145, %146)
+    ^b26(%148: R facts(managed(deps=d28)), %149: own, %150: deps, %151: scope<S2>, %152: R facts(managed(deps=d27)), %153: deps, %154: failure) in S2:
+    %155: scope<S2> = own.accept %151, %149
+    br ^b28(%155, %154, %152, %153)
+    ^b27(%156: failure, %157: scope<S2>, %158: R facts(managed(deps=d29)), %159: deps, %160: failure) in S2:
+    %161: failure = fail.secondary %160, %156
+    %162: failure = scope.unwind %157, %161, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %162
+    ^b28(%163: scope<S2>, %164: failure, %165: R facts(managed(deps=d30)), %166: deps) in S2:
+    %167: failure = scope.unwind %163, %164, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %167
     ^b29 in S2:
     invoke.own scope.split %41, s6
         normal ^b30($state, $selected, $external_deps, %39, %40, %43)
         unwind ^b31($state, $failure, %39, %40, %43)
-    ^b30(%170: scope<S2>, %171: own, %172: deps, %173: R facts(managed(deps=d32)), %174: deps, %175: failure) in S2:
-    %176: own = own.join [%171]
-    invoke.defer @replace(consume %39; %176) deps [%40] summary(M2)
-        continue ^b32(%170, %173, %174, %175)
-        replace return ^b33($value, $packet, $deps, %170, %173, %174, %175)
-        unwind ^b34($failure, %170, %173, %174, %175)
-    ^b31(%177: scope<S2>, %178: failure, %179: R facts(managed(deps=d33)), %180: deps, %181: failure) in S2:
-    %182: failure = fail.secondary %181, %178
-    %183: failure = scope.unwind %177, %182, effects scope_effects(failures=[program], suspends=false, cancel=false)
-    raise %183
-    ^b32(%184: scope<S2>, %185: R facts(managed(deps=d34)), %186: deps, %187: failure) in S2:
-    br ^b35(%184, %187, %185, %186)
-    ^b33(%188: R facts(managed(deps=d36)), %189: own, %190: deps, %191: scope<S2>, %192: R facts(managed(deps=d35)), %193: deps, %194: failure) in S2:
-    %195: scope<S2> = own.accept %191, %189
-    br ^b35(%195, %194, %192, %193)
-    ^b34(%196: failure, %197: scope<S2>, %198: R facts(managed(deps=d37)), %199: deps, %200: failure) in S2:
-    %201: failure = fail.secondary %200, %196
-    %202: failure = scope.unwind %197, %201, effects scope_effects(failures=[program], suspends=false, cancel=false)
-    raise %202
-    ^b35(%203: scope<S2>, %204: failure, %205: R facts(managed(deps=d38)), %206: deps) in S2:
-    %207: failure = scope.unwind %203, %204, effects scope_effects(failures=[program], suspends=false, cancel=false)
-    raise %207
+    ^b30(%168: scope<S2>, %169: own, %170: deps, %171: R facts(managed(deps=d31)), %172: deps, %173: failure) in S2:
+    %174: own = own.join [%169]
+    invoke.defer @replace(consume %39; %174) deps [%40] summary(M2)
+        continue ^b32(%168, %171, %172, %173)
+        replace return ^b33($value, $packet, $deps, %168, %171, %172, %173)
+        unwind ^b34($failure, %168, %171, %172, %173)
+    ^b31(%175: scope<S2>, %176: failure, %177: R facts(managed(deps=d32)), %178: deps, %179: failure) in S2:
+    %180: failure = fail.secondary %179, %176
+    %181: failure = scope.unwind %175, %180, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %181
+    ^b32(%182: scope<S2>, %183: R facts(managed(deps=d33)), %184: deps, %185: failure) in S2:
+    br ^b35(%182, %185, %183, %184)
+    ^b33(%186: R facts(managed(deps=d35)), %187: own, %188: deps, %189: scope<S2>, %190: R facts(managed(deps=d34)), %191: deps, %192: failure) in S2:
+    %193: scope<S2> = own.accept %189, %187
+    br ^b35(%193, %192, %190, %191)
+    ^b34(%194: failure, %195: scope<S2>, %196: R facts(managed(deps=d36)), %197: deps, %198: failure) in S2:
+    %199: failure = fail.secondary %198, %194
+    %200: failure = scope.unwind %195, %199, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %200
+    ^b35(%201: scope<S2>, %202: failure, %203: R facts(managed(deps=d37)), %204: deps) in S2:
+    %205: failure = scope.unwind %201, %202, effects scope_effects(failures=[program], suspends=false, cancel=false)
+    raise %205
 }

@@ -47,7 +47,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -200,8 +200,7 @@ func @f(%0: frame<@f>) -> void [async] summary(M10) async-creation(M12) async-bo
     dependency d5: dependency = from_ssa(%47)
     dependency d6: dependency = from_ssa(%53)
     dependency d7: dependency = from_ssa(%64)
-    dependency d8: dependency = from_ssa(%74)
-    dependency d9: dependency = from_ssa(%74)
+    dependency d8: dependency = from_ssa(%75)
     selection s0: selection = admissible(selection(%17))
     selection s1: selection = admissible(selection(%35))
     ^b0 in S4:
@@ -265,28 +264,28 @@ func @f(%0: frame<@f>) -> void [async] summary(M10) async-creation(M12) async-bo
         unwind ^b15($state, $failure, %55)
     ^b13(%56: failure, %57: scope<S4>, %58: pending) in S4:
     %59: failure = scope.unwind %57, %56, reserve %58, effects scope_effects(failures=[thrown, program, panic, native], suspends=false, cancel=false)
-    fut.publish %86, failure(%59)
+    fut.publish %84, failure(%59)
     ret
     ^b14(%60: scope<S4>, %61: own, %62: deps, %63: R facts(managed(deps=d7)), %64: deps, %65: pending) in S4:
     %66: pending = exit.extend %65, %61
     invoke.own scope.end %60, reserve %66, effects scope_effects(failures=[thrown, program, panic, native], suspends=false, cancel=true)
-        normal ^b16($closed, $pending, %63, %64)
+        normal ^b16($closed, $pending)
         unwind ^b17($closed, $failure)
     ^b15(%67: scope<S4>, %68: failure, %69: pending) in S4:
     %70: failure = scope.unwind %67, %68, reserve %69, effects scope_effects(failures=[thrown, program, panic, native], suspends=false, cancel=false)
-    fut.publish %80, failure(%70)
+    fut.publish %78, failure(%70)
     ret
-    ^b16(%71: closed, %72: pending, %73: R facts(managed(deps=d8)), %74: deps) in S4:
-    (%75: R facts(managed(deps=d9)), %76: own, %77: deps) = exit.commit %72, destination caller, result R
-    fut.publish %80, success(value=%75, packet=%76, deps=%77)
+    ^b16(%71: closed, %72: pending) in S4:
+    (%73: R facts(managed(deps=d8)), %74: own, %75: deps) = exit.commit %72, destination caller, result R
+    fut.publish %78, success(value=%73, packet=%74, deps=%75)
     ret
-    ^b17(%78: closed, %79: failure) in S4:
-    fut.publish %80, failure(%79)
+    ^b17(%76: closed, %77: failure) in S4:
+    fut.publish %78, failure(%77)
     ret
     ^b18 in S4:
-    (%80: frame<@f>, %81: R facts(managed(deps=d1)), %82: deps, %83: scope<S4>, %84: pending) = frame.resume %16, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=pending, linear=true)]
-    br ^b12(%81, %82, %83, %84)
-    ^b19(%85: failure) in S4:
-    (%86: frame<@f>, %87: R facts(managed(deps=d1)), %88: deps, %89: scope<S4>, %90: pending) = frame.resume %16, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=pending, linear=true)]
-    br ^b13(%85, %89, %90)
+    (%78: frame<@f>, %79: R facts(managed(deps=d1)), %80: deps, %81: scope<S4>, %82: pending) = frame.resume %16, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=pending, linear=true)]
+    br ^b12(%79, %80, %81, %82)
+    ^b19(%83: failure) in S4:
+    (%84: frame<@f>, %85: R facts(managed(deps=d1)), %86: deps, %87: scope<S4>, %88: pending) = frame.resume %16, continuation 1, slots [saved_slot(slot=1, ty=R), saved_slot(slot=2, ty=deps), saved_slot(slot=3, ty=scope<S4>, linear=true), saved_slot(slot=4, ty=pending, linear=true)]
+    br ^b13(%83, %87, %88)
 }

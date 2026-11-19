@@ -42,7 +42,7 @@ func @res(%0: own) -> (Res, own) [ctor Res] abi explicit(input_packet=0, output_
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -89,13 +89,13 @@ func @read(%0: Res facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [as
     %10: deps = deps.of %8
     %11: pending = exit.prepare return %8, %9, deps(%10) at B1
     invoke.own scope.end %7, reserve %11, effects scope_effects(failures=[], suspends=false, cancel=true)
-        normal ^b2($closed, $pending, %8)
+        normal ^b2($closed, $pending)
         unwind ^b3($closed, $failure)
-    ^b2(%12: closed, %13: pending, %14: int) in S2:
-    (%15: int, %16: own, %17: deps) = exit.commit %13, destination caller, result int
-    ret %15, %16
-    ^b3(%18: closed, %19: failure) in S2:
-    raise %19
+    ^b2(%12: closed, %13: pending) in S2:
+    (%14: int, %15: own, %16: deps) = exit.commit %13, destination caller, result int
+    ret %14, %15
+    ^b3(%17: closed, %18: failure) in S2:
+    raise %18
 }
 
 func @main() -> int [entry, async] abi observation summary(M12) async-creation(M9) async-body(M12) {
@@ -112,7 +112,7 @@ func @main() -> int [entry, async] abi observation summary(M12) async-creation(M
     dependency d4: dependency = key(k0)
     dependency d5: dependency = from_ssa(%37)
     dependency d6: dependency = union([d4, d5])
-    dependency d7: dependency = from_ssa(%40)
+    dependency d7: dependency = from_ssa(%57)
     dependency d8: dependency = from_ssa(%63)
     dependency d9: dependency = from_ssa(%71)
     selection s0: selection = union([selection(%9)])

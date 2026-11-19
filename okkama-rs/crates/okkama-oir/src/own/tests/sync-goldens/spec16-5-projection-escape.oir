@@ -33,7 +33,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%21)
+    dependency d3: dependency = from_ssa(%28)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -72,7 +72,7 @@ func @f(%0: Holder facts(managed(deps=d1)); %1: deps, %2: own) -> (R, own) [meth
     dependency d1: dependency = from_ssa(%1)
     dependency d2: dependency = retention(value=%8, selection=selection(%8))
     dependency d3: dependency = from_ssa(%16)
-    dependency d4: dependency = from_ssa(%16)
+    dependency d4: dependency = from_ssa(%23)
     ^b0 in S2:
     %3: scope<S2> = scope.begin S2
     %4: scope<S2> = own.accept %3, %2

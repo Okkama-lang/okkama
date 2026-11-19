@@ -612,8 +612,11 @@ impl Engine<'_, '_> {
             }
             let slots = self.operation(id, &inst.op, &contract.normal, Outcome::Normal,
                 Origin::Instruction(instruction, 0), &mut flow);
+            // As the compact domain does (#869): every result is defined before any fact is checked.
             for (value, slot) in inst.results.iter().copied().zip(slots) {
                 self.define(&mut flow, value, slot);
+            }
+            for value in inst.results.iter().copied() {
                 let expected = flow.full_deps[value.as_u32() as usize].clone();
                 self.check_deps(&mut flow, value, &expected);
             }

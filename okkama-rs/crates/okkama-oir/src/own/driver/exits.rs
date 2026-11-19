@@ -175,8 +175,9 @@ impl Driver<'_, '_> {
         result: Option<TypeId>,
     ) -> Result<Landing, OwnError> {
         let pending = point.env.cleanup.pending.ok_or_else(|| flow_error("commit has no reserve"))?;
-        let latest = point.env.cleanup.replacement.or(point.env.cleanup.wanted
-            .map(|original| point.env.value(original)).transpose()?);
+        // #869: the committed value's deps are the commit's own deps result (the default fact), except for a
+        // defer's replacement, which states its own.
+        let latest = point.env.cleanup.replacement;
         let recipes = if let Some(latest) = latest {
             if let Some(deps) = latest.deps {
                 let recipe = self.body.deps.alloc(DepExpr::FromSsa(deps)).map_err(arena)?;

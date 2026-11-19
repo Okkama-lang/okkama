@@ -565,7 +565,7 @@ fn an_async_successor_body_is_checked_against_its_language_signature() {
     // publication is a failure exit, which may drop a successor (main's failing `Counter(n: 5)`).
     assert_eq!(full(SUCCESSOR), []);
     // T5: the body publishes an int, so its language signature no longer returns the successor type.
-    let other = edited(SUCCESSOR, "fut.publish %1, success(value=%25,", "fut.publish %1, success(value=%11,");
+    let other = edited(SUCCESSOR, "fut.publish %1, success(value=%24,", "fut.publish %1, success(value=%11,");
     let rules = full(&other);
     assert!(rules.contains(&RuleId::T5), "{rules:?}");
     // B8.2: main's success exit leaves the awaited successor unused.

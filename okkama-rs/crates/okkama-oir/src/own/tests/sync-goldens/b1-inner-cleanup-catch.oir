@@ -40,8 +40,7 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     dependency d0: dependency = key(k0)
     dependency d1: dependency = union([d0])
     dependency d2: dependency = from_ssa(%21)
-    dependency d3: dependency = from_ssa(%31)
-    dependency d4: dependency = from_ssa(%31)
+    dependency d3: dependency = from_ssa(%32)
     ^b0 in S1:
     %1: scope<S1> = scope.begin S1
     %2: scope<S1> = own.accept %1, %0
@@ -66,16 +65,16 @@ func @make(%0: own) -> (R, own) [ctor R] abi explicit(input_packet=0, output_pac
     ^b4(%17: scope<S1>, %18: own, %19: deps, %20: R facts(managed(deps=d2)), %21: deps, %22: pending) in S1:
     %23: pending = exit.extend %22, %18
     invoke.own scope.end %17, reserve %23, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
-        normal ^b6($closed, $pending, %20, %21)
+        normal ^b6($closed, $pending)
         unwind ^b7($closed, $failure)
     ^b5(%24: scope<S1>, %25: failure, %26: pending) in S1:
     %27: failure = scope.unwind %24, %25, reserve %26, effects scope_effects(failures=[thrown], suspends=false, cancel=false)
     raise %27
-    ^b6(%28: closed, %29: pending, %30: R facts(managed(deps=d3)), %31: deps) in S1:
-    (%32: R facts(managed(deps=d4)), %33: own, %34: deps) = exit.commit %29, destination caller, result R
-    ret %32, %33
-    ^b7(%35: closed, %36: failure) in S1:
-    raise %36
+    ^b6(%28: closed, %29: pending) in S1:
+    (%30: R facts(managed(deps=d3)), %31: own, %32: deps) = exit.commit %29, destination caller, result R
+    ret %30, %31
+    ^b7(%33: closed, %34: failure) in S1:
+    raise %34
 }
 
 func @read(%0: R facts(managed(deps=d1)); %1: deps, %2: own) -> (int, own) [method R] abi explicit(input_packet=2, output_packet=1) summary(M2) {

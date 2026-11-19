@@ -74,6 +74,20 @@ fn record_partition(function: FuncId, selection: SelectionId, rest: &Token, sele
 pub(crate) fn take_partitions() -> Vec<PartitionRecord> {
     PARTITIONS.with(|log| std::mem::take(&mut *log.borrow_mut()))
 }
+// Test hook (ruling #601 K2, #869): how many outcomes each `cleanup.next` of a close with a cancellation delivery was
+// given, in order, on this thread since the last call.
+#[cfg(test)]
+thread_local! {
+    static CANCEL_OUTCOMES: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+pub(super) fn record_cancel_outcomes(count: usize) {
+    CANCEL_OUTCOMES.with(|log| log.borrow_mut().push(count));
+}
+#[cfg(test)]
+pub(crate) fn take_cancel_outcomes() -> Vec<usize> {
+    CANCEL_OUTCOMES.with(|log| std::mem::take(&mut *log.borrow_mut()))
+}
 
 struct Engine<'m, 's> {
     module: &'m Module,
@@ -726,8 +740,12 @@ impl Engine<'_, '_> {
             }
             let slots = self.operation(id, &inst.op, &contract.normal, Outcome::Normal,
                 Origin::Instruction(instruction, 0), &mut flow);
+            // Every result is defined before any fact is checked: a value's fact may name a sibling result, as
+            // `exit.commit`'s value names its deps result (#869).
             for (value, slot) in inst.results.iter().copied().zip(slots) {
                 self.define(&mut flow, value, slot);
+            }
+            for value in inst.results.iter().copied() {
                 let expected = flow.full_deps[value.as_u32() as usize].clone();
                 self.check_deps(&mut flow, value, &expected);
             }

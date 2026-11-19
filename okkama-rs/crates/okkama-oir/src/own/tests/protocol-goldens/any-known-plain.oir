@@ -1,10 +1,8 @@
 oir 2 own
 module opaque_plain
 scope S0 action in @f
-summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[any],
-        publication=atomic)
-summary M1 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[any],
-        publication=atomic)
+summary M0 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[any], publication=atomic)
+summary M1 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[any], publication=atomic)
 
 func @f() -> any abi observation summary(M1) {
     boundary B0 lexical in S0
