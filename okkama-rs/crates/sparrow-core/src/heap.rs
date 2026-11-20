@@ -79,12 +79,9 @@ pub const IDENTITY: u64 = 1 << 27;
 /// An in-object identity whose cache was rehomed (#528): `Identity::cache_rehomed` for identities kept in the
 /// object rather than in the map.
 pub const REHOMED: u64 = 1 << 28;
-/// An object whose descriptor carries inline identity words but whose identity lives in the map (#528 packed:
-/// its serial did not fit).
-pub const SPILLED: u64 = 1 << 29;
-/// #528 prototype: the hidden identity words of an object with a destroy. Two (+16 bytes: serial, owner) or,
-/// built with `--cfg okkama_identity_packed`, one (+8: serial and a region id packed).
-pub const IDENTITY_WORDS: usize = if cfg!(okkama_identity_packed) { 1 } else { 2 };
+/// The hidden identity words of an object with a destroy of its own (#528, owner's choice 2026-11-20: +16 bytes):
+/// the serial, then the owner (0 free, 1 dead, otherwise the owning region's address).
+pub const IDENTITY_WORDS: usize = 2;
 /// Arrays shorter than this are copied by `replaced`, as before.
 pub const TRIE_MIN: usize = 64;
 const TRIE_BITS: u32 = 5;

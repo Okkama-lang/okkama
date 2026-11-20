@@ -31,6 +31,10 @@ the session's memory; older rulings live in the commits and tickets named.
 - **2026-11-20. More code runs on Champ in the Wave CI (#894).** This covers t/, bench/micro (moved from
   okkama-docs; results stay there), examples/, and examples/bible (a copy of the Bible branch's examples). On
   Sparrow a failure fails the job; on Champ failures are only reported.
+- **2026-11-20. Resource identity lives in the object (#528, owner's choice: +16 bytes).** An object whose
+  descriptor has a destroy of its own (and is not builtin) carries serial and owner in two hidden words after its
+  fields; `Heap::object_words` is the one size rule for heap and JIT. Frames and destroy-less carriers keep the
+  identity map. The +8 packed layout was measured and rejected (a region-id table costs back the speed).
 - **2026-11-20. Conformance on Champ uses the `gate` profile** (#894 context, wave/76).
 - **2026-11-20. The Full verifier is not optimized further.** It stays a CI gate. If it hits its limits, raise
   the limits first (#887).
