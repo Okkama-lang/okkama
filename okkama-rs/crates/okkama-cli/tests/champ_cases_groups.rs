@@ -864,3 +864,83 @@ async main() is int {
 }
 "#, "helper end unrelated\ndestroy unrelated\nafter go\na reads shared\nb reads shared\nmain end\ndestroy shared\n");
 }
+
+/// #882 (Fable's direction on #881): `f` detaches at the inner block's close and borrows `r`, which belongs to `go`'s
+/// scope. The detach registers `f` as a borrower of that scope, whose close then walks it and keeps `r` for the root
+/// instead of destroying it while `f` runs. Before, Champ (and Tomato, a separate defect of the reference) printed
+/// `destroy x` before `read x`.
+#[test]
+fn an_inner_detach_borrows_a_resource_of_the_enclosing_scope() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Reader {
+    Reader();
+    async read(r is Res, gate is Event) is string {
+        await gate.wait();
+        Stdout().writeln("read " + r.label());
+        r.label();
+    }
+}
+object Helper {
+    Helper();
+    async go(group is FutureGroup<string>, gate is Event) is void {
+        let r = Res(name: "x");
+        {
+            let f = Reader().read(r, gate);
+            group.start(f);
+            Stdout().writeln("inner end");
+        }
+        Stdout().writeln("helper end");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let group is FutureGroup<string> = FutureGroup();
+    await Helper().go(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#, "inner end\nhelper end\nread x\nmain end\ndestroy x\n");
+}
+
+/// #882: a temporary Future started in the caller's group leaves `lend` for the group's owner at `start`; it borrows
+/// `lamp`, so `lend`'s close walks it and keeps `lamp` for the root. Before, `off: lent` came before `reads lent`.
+#[test]
+fn a_temporary_member_of_another_owner_borrows_a_resource_of_its_starter() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Lamp { has name is string; Lamp(:name); label() is string { name; } destroy { Stdout().writeln("off: " + name); } }
+object Reader {
+    Reader();
+    async later(l is Lamp, gate is Event) is string {
+        await gate.wait();
+        Stdout().writeln("reads " + l.label());
+        l.label();
+    }
+}
+object Lender {
+    Lender();
+    async lend(group is FutureGroup<string>, gate is Event) is void {
+        let lamp = Lamp(name: "lent");
+        group.start(Reader().later(lamp, gate));
+        Stdout().writeln("lend end");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let group is FutureGroup<string> = FutureGroup();
+    await Lender().lend(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#, "lend end\nreads lent\nmain end\noff: lent\n");
+}

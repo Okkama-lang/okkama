@@ -20,6 +20,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A Future that leaves an inner scope or its starter no longer reads a destroyed resource of an enclosing scope
+  (#882, Champ).** Example: `{ let f = Reader().read(r, gate); group.start(f); }` with `r` from the enclosing
+  scope, or a temporary `group.start(Reader().later(lamp, gate))`. #881 kept only what the closing owner owned, so
+  the enclosing scope destroyed `r` while `f` still ran. Changes:
+  - A Future detached at a close, or started into the group of another owner, is registered as a borrower of
+    every other open owner whose identities it reaches.
+  - That owner's close walks its borrowers like its own detached Futures, and keeps what they reach for the root,
+    which closes it at shutdown.
+
+  Tomato still destroys first; that is a separate defect of the reference.
 - **A function that returns a Future over its own parameter no longer destroys that parameter
   first (#862, #864).** For example, `start(r is Res) is Future<int> { Feeder().feed(r); }`.
   Champ destroyed `r` when `start` returned, and the Future later read it, yet Full

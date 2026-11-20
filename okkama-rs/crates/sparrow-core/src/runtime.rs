@@ -295,6 +295,11 @@ impl Runtime {
         let kept: &[Word] = &self.champ.kept;
         #[cfg(not(feature = "champ-abi"))]
         let kept: &[Word] = &[];
+        // #882: the detached Futures registered as borrowers of open owners, until those owners close.
+        #[cfg(feature = "champ-abi")]
+        let borrowers: Vec<Word> = self.champ.borrowers.values().flatten().copied().collect();
+        #[cfg(not(feature = "champ-abi"))]
+        let borrowers: Vec<Word> = Vec::new();
         self.heap.collect_with(|visit| {
             // A group's tasks are kept only while the group is reachable some
             // other way (#503); running and parked tasks are roots of their own.
@@ -310,7 +315,7 @@ impl Runtime {
                 visit(word, repr);
             }
             visit(ctx.failure, Repr::Ref);
-            for &record in kept {
+            for &record in kept.iter().chain(&borrowers) {
                 visit(record, Repr::Ref);
             }
             let tasks = ready.iter().chain(spawned).chain(running);

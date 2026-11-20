@@ -120,6 +120,9 @@ pub(crate) struct State {
     pub(crate) kept: Vec<Word>,
     /// The identities of `kept`: a direct plan of the close they left skips them.
     pub(crate) kept_identities: std::collections::BTreeSet<Word>,
+    /// #882: the running Futures, detached at an inner close, that reach identities of another still-open owner,
+    /// by that owner's id. Its close walks them as its own detached Futures; the collector traces them.
+    pub(crate) borrowers: std::collections::BTreeMap<u64, Vec<Word>>,
     #[cfg(test)]
     pub(crate) future_events: Vec<futures::FutureEvent>,
     /// The receipts `await.unwind` consumed, with the function of the frame that consumed each.
