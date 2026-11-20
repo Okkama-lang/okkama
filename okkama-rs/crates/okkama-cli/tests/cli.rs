@@ -432,6 +432,30 @@ fn uncaught_failure_prints_place_and_call_stack() {
     assert_eq!(stderr(&output), "RuntimeError: Array index out of bounds\n");
 }
 
+/// #797 (language spec 9.5): a program failure passes every catch, also when a driver raises it and it reaches
+/// the caller through `await`.
+#[test]
+fn a_drivers_program_failure_passes_a_catch_of_error() {
+    let source = b"module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nimport \"runtime/time\" take sleep_nanoseconds;\n\
+        async main() is int {\n    let r = try { await sleep_nanoseconds(\"01\"); \"none\"; } catch e is Error { e.text(); };\n\
+        Stdout().writeln(\"caught \" + r);\n    0;\n}\n";
+    let std = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let mut child = okkama()
+        .args(["run", "-"])
+        .env("OKKAMA_STDLIB_DIR", std)
+        .env("OKKAMA_TRACE", "off")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(source).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(stderr(&output), "RuntimeError: Wait duration must be a canonical non-negative integer\n");
+}
+
 #[test]
 fn build_has_no_target_selection() {
     // One engine, one target (owner, 2026-11-20): `--target` and `--backend` are unknown options, and a failed
