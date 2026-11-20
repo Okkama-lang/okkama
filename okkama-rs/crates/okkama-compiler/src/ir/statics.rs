@@ -69,8 +69,14 @@ fn definition(function: &Function, value: ValueId) -> Option<(usize, usize)> {
     })
 }
 
-/// The region a value is tracked or adopted into, when that is its only region use.
+/// The region a value is adopted into (its binding owns it), when that is its only region use. A value only tracked
+/// is a temporary a callee may still adopt (a fresh argument is owned by the action it is passed to): not static.
 fn region_of(function: &Function, value: ValueId) -> Option<ValueId> {
+    let adopted = function.blocks.iter().flat_map(|block| &block.insts)
+        .any(|inst| matches!(&inst.kind, InstKind::RegionAdopt { value: v, .. } if *v == value));
+    if !adopted {
+        return None;
+    }
     let mut region = None;
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         match &inst.kind {

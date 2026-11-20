@@ -632,3 +632,25 @@ fn a_static_resource_sharing_its_region_closes_after_its_newer_neighbours() {
     // order again (log 4343), the catch sees 9.
     support::assert_value(&module, "404393");
 }
+
+/// A fresh argument belongs to the action it is passed to and dies when that action returns (Bible 11), so a
+/// temporary the caller only tracks is never static: the callee must still be able to adopt it.
+#[test]
+fn a_fresh_argument_dies_when_the_action_it_was_passed_to_returns() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Desk {
+            Desk();
+            adopt(vault is Vault) is int { vault.balance(); }
+        }
+        object Probe {
+            Probe();
+            run(log is Log) is int {
+                let balance = Desk().adopt(Vault(log: log, id: 3));
+                balance * 10 + log.value();
+            }
+        }
+        main() is int { Probe().run(Log(n: Atomic(0))); }
+    "#));
+    // The vault is destroyed when `adopt` returns, before `run` reads the log: 2·10 + 3.
+    support::assert_value(&module, "23");
+}
