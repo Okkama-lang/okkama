@@ -1387,6 +1387,31 @@ async main() is int {
 "#, "make x\ngot 1\nmain end\ndestroy x\n");
 }
 
+/// #871 (§6.3c): `pass(r)` returns the Future `start(r)` returns, beside which `r` comes back; `r` is `pass`'s own
+/// parameter, so `pass` carries it beside the Future too, and main destroys it at its close. Structural destroyed it at
+/// `pass`'s close before the Future read it. Tomato's output.
+#[test]
+fn a_beside_parameter_is_returned_a_second_time() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Feeder { Feeder(); async feed(r is Res) is int { Stdout().writeln("feed " + r.label()); 1; } }
+object Starter { Starter(); start(r is Res) is Future<int> { Feeder().feed(r); } }
+object Passer { Passer(); pass(r is Res) is Future<int> { Starter().start(r); } }
+async main() is int {
+    let f = Passer().pass(Res(name: "on"));
+    Stdout().writeln("fed " + (await f).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "feed on\nfed 1\nmain end\ndestroy on\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

@@ -165,12 +165,32 @@ impl Driver<'_, '_> {
             && let Some((site, receiver)) = crate::own::summaries::call(&instruction.op) {
             let here = self.body.blocks.get(point.block).map_err(arena)?.lexical_scope;
             let arguments: Vec<_> = receiver.iter().chain(&site.args).map(|argument| argument.value).collect();
-            let owners = entries.iter().map(|entry| match entry {
-                BesideEntry::Parameter(parameter) => arguments.get(usize::from(*parameter))
-                    .and_then(|argument| self.binding_scope(*argument)).unwrap_or(here),
-                BesideEntry::Site { .. } => here,
-            }).collect();
-            self.futures_with_beside.insert(*result, owners);
+            let parameters = self.high.blocks.get(self.high.entry).map(|entry| entry.params.clone())
+                .unwrap_or_default();
+            let mut owners = BTreeSet::new();
+            for entry in &entries {
+                match entry {
+                    // #871 (§6.3c, the model the owner kept with #868): a beside parameter whose actual is this
+                    // function's own parameter has a name here, so a Future returned further carries it beside it,
+                    // as a creation over a bound parameter does (#862): the exit names it.
+                    BesideEntry::Parameter(parameter) if arguments.get(usize::from(*parameter))
+                        .is_some_and(|argument| parameters.contains(argument)) => {
+                        let argument = arguments[usize::from(*parameter)];
+                        let value = point.env.value(argument)?.value;
+                        self.future_bound_inputs.entry(*result).or_default().push(value);
+                    }
+                    BesideEntry::Parameter(parameter) => {
+                        owners.insert(arguments.get(usize::from(*parameter))
+                            .and_then(|argument| self.binding_scope(*argument)).unwrap_or(here));
+                    }
+                    BesideEntry::Site { .. } => {
+                        owners.insert(here);
+                    }
+                }
+            }
+            if !owners.is_empty() {
+                self.futures_with_beside.insert(*result, owners);
+            }
         }
         self.emit_call(point, instruction, op)
     }
