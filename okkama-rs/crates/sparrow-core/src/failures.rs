@@ -89,6 +89,9 @@ pub struct Resources {
     pub(crate) root: Option<Word>,
     /// The root closer is running: what still runs then has nowhere further to go.
     root_closing: bool,
+    /// #845: driver frames whose private region also holds their inputs (fresh Futures a collector's sequence
+    /// made); taking such a frame's outcome releases only the outcome's package.
+    inputs: HashSet<Word>,
     /// Containers whose walk found no free identity (#9), with `serial` at
     /// that moment: every identity they reach is at most that old. Freeing
     /// an identity no newer than `summarized` drops them all.
@@ -198,6 +201,7 @@ impl Resources {
             self.summaries.remove(object);
             self.origins.remove(object);
             self.structure.remove(object);
+            self.inputs.remove(object);
         }
     }
 }
@@ -408,11 +412,35 @@ impl Runtime {
         if roots.is_empty() {
             return;
         }
-        let owned = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
-        crate::tasks::set(frame, crate::tasks::OWNED, owned);
+        let owned = self.frame_region(frame);
         for value in roots {
             self.region_add(owned, value, true);
         }
+    }
+
+    /// A frame's private region, made on first use.
+    fn frame_region(&mut self, frame: Word) -> Word {
+        let owned = crate::tasks::get(frame, crate::tasks::OWNED);
+        if owned != UNBOUND {
+            return owned;
+        }
+        let owned = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        crate::tasks::set(frame, crate::tasks::OWNED, owned);
+        owned
+    }
+
+    /// #845: a driver takes `input`, a fresh Future it made itself (a collector's sequence `item`): the driver's
+    /// private region owns it until the driver closes, so its outcome is released with the driver's owner.
+    pub(crate) fn driver_input(&mut self, frame: Word, input: Word) {
+        if !self.resources.enabled || heap::kind(self.heap.header_of(input)) != heap::FRAME
+            || self.owner_of(input) != Some(Owner::Free)
+        {
+            return;
+        }
+        let owned = self.frame_region(frame);
+        self.set_owner(input, Owner::Region(owned));
+        self.region_push(owned, input);
+        self.resources.inputs.insert(frame);
     }
 
     /// Group registration admits fresh Futures without taking external owners.
@@ -458,6 +486,24 @@ impl Runtime {
     pub(crate) fn take_outcome(&mut self, frame: Word) {
         let owned = crate::tasks::get(frame, crate::tasks::OWNED);
         if owned == UNBOUND {
+            return;
+        }
+        if self.resources.inputs.contains(&frame) {
+            // #845: the inputs stay with the driver; only the outcome's package goes to the taker.
+            let roots = match crate::tasks::get(frame, crate::tasks::STATE) {
+                crate::tasks::DONE => {
+                    let repr = self.heap.layouts().frames[self.function_of(frame)][1];
+                    repr.pointer(crate::tasks::get(frame, crate::tasks::RESULT)).into_iter().collect()
+                }
+                _ => self.failure_payloads(crate::tasks::get(frame, crate::tasks::FAILURE)),
+            };
+            for object in self.resource_graph(&roots, Some(owned)) {
+                if self.owner_of(object) == Some(Owner::Region(owned)) {
+                    self.set_owner(object, Owner::Free);
+                    let serial = self.serial_of(object);
+                    self.freed(serial);
+                }
+            }
             return;
         }
         for index in 0..self.region_len(owned) {

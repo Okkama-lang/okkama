@@ -102,5 +102,6 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 8. #529: JIT fast paths for region adds and per-instance identities, inherited summaries. ownership.ok on the host
    21.7 → 9.5 ms (plain twin 4.0). Owner 2026-11-20: ownership is solved; continue 0.6.0 in my own order.
    Merged (bdf7cb4a0); #526 closed as not needed.
-9. #817: the root region and root closer for Futures that outlive their owners (wave/90). Next: Tomato bugs #845,
-   #797, #769, #587, #846, then #907, #910, #912, #913.
+9. #817: the root region and root closer for Futures that outlive their owners (wave/90).
+10. #845: driver inputs (collector sequences' fresh Futures). Next: #797, #769, #587, #846, then #907, #910, #912,
+   #913.

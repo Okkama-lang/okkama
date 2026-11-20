@@ -874,6 +874,7 @@ fn collect_start(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: us
         let Some(item) = call_role(ctx, runtime, sequence, role, item_slot, &[position]) else {
             return Some(call_failed(ctx).map_or(Stop, Failed));
         };
+        runtime.driver_input(frame, item);
         collection(runtime, frame).entries.push(item);
     }
     None

@@ -448,3 +448,64 @@ async main() is int {
     assert_eq!(output, "owner closes\nmake late done\ndestroy late done\nafter late done\n\
         after late running, active 2\nend\ndestroy late running\ndestroy late body\n");
 }
+
+
+/// #845: the Futures a collector's own sequence makes (`item`) belong to the collector's driver; their outcomes are
+/// destroyed once, newest first, when the scope awaiting the collector ends.
+#[test]
+fn futures_a_collectors_sequence_makes_close_with_the_awaiting_scope() {
+    let output = stdout_of("sequence-futures", r#"module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/collect" take Raced;
+import "collections/sequence" take Sequencing, EmptySequence;
+import "collections/iteration" take Cursor;
+
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+
+object Maker {
+    Maker();
+    async make(name is string) is Res {
+        Stdout().writeln("make " + name);
+        Res(name: name);
+    }
+}
+
+object Made does Cursor<Future<Res>> {
+    has at is int;
+    has count is int;
+    Made(:at, :count);
+    available() is bool { at < count; }
+    item() is Future<Res> { Maker().make("m" + at.string()); }
+    successor() is Cursor<Future<Res>> { Made(at: at + 1, count: count); }
+}
+
+object Making does Sequencing<Future<Res>> {
+    has count is int;
+    Making(:count);
+    cursor() is Cursor<Future<Res>> { Made(at: 0, count: count); }
+    size() is int { count; }
+    item(index is int) is Future<Res> {
+        Stdout().writeln("item " + index.string());
+        Maker().make("m" + index.string());
+    }
+    first() is Future<Res> { Maker().make("first"); }
+    last() is Future<Res> { Maker().make("last"); }
+}
+
+async main() is int {
+    {
+        let won = await Raced(origins: Making(count: 2)).winner();
+        Stdout().writeln("won " + won.label());
+    }
+    Stdout().writeln("after");
+    0;
+}
+"#);
+    assert_eq!(output, "item 0\nitem 1\nmake m0\nmake m1\nwon m0\ndestroy m1\ndestroy m0\nafter\n");
+}
