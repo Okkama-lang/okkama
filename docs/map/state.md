@@ -107,3 +107,10 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
    group handoff on the region runtime (large).
 11. #907 (late edges), #912 (devtrace by site), #910 (linearity checker + an exit_scopes fix it found): wave/92.
 12. #552: big async bodies keep their registers in their frame (fixture 2.8 s → 0.22 s).
+13. Night of 2026-11-20/21: statics reach factories, async bodies and shared regions (oldest member); JIT
+    numbers inline identities and destroys static resources directly; lazy regions (#530). 11-ownership on the
+    host: 9.5 → 7.5 ms. Closed as checked or done: #482, #523–#529, #531–#533, #537, #540, #552, #797, #817,
+    #845, #907, #910, #912, #913.
+14. Waiting for the owner: #587 (drivers and channel handoff, comment of 2026-11-20), #769 and #846 (std
+    contracts), #790 (language), #538 (GC floor numbers). Big designs still open: #588 (REPL), #453, #457,
+    #541.
