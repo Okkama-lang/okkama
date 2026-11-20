@@ -20,6 +20,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **coro no longer spends its budget on several loops that each suspend (#806).** The reaching-version fixed point
+  of SSA repair oscillated (`join` is not monotone), so a `main` with three suspending loops ended at
+  `coro: LimitExceeded("steps")`. A block that has merged now keeps its merge until the trivial merges are removed,
+  and the program prints Tomato's output (also under GC stress). The coro budget per module rises from 10 000 000
+  to 100 000 000 steps: repair scans a body once per value saved across a suspension, and the SQLite programs'
+  module needs about 15 000 000. Full on the loops program ends at its step limit (#887).
 - **A defer that reads only `self` survives a caught failure on Champ (#798).** Example: std's `QueryRows.next`,
   `defer busy.replace(false)` with a `try` around `await origin.row()`. Closing the `try` scope on the failure path
   kept only what the catch handler reads, so `self` was dropped and `own` stopped at "missing incoming SSA slot".

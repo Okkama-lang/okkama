@@ -903,3 +903,14 @@ fn a_suspension_saves_what_a_live_futures_fact_names() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == RuleId::CoroSavedSetIncomplete),
         "{report:?}");
 }
+
+/// #806: own's output of three loops that each suspend (a Future awaited after `next`/`last`, a spawn, a temporary
+/// awaited). The reaching-version fixed point of the frame token oscillated and spent coro's whole budget
+/// (10 000 000 steps); with merges that stay merged until the trivial ones are removed it repairs in a small one.
+#[test]
+fn three_loops_that_each_suspend_repair_within_a_small_budget() {
+    let source = include_str!("fixtures/d806-three-suspending-loops.oir");
+    // The natives of the fixture's `Stdout` need the compiler's external contracts to verify; the Champ case
+    // `three_loops_that_each_suspend_run` verifies this output on the real pipeline.
+    lower_coro(parsed(source), &CoroOptions { max_steps: 100_000 }).unwrap_or_else(|error| panic!("{error}"));
+}

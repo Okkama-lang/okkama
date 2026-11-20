@@ -1489,3 +1489,40 @@ async main() is int {
         assert_eq!((run.stdout.as_str(), run.result), ("7 idle\n0 idle\n7 idle\n", Ok(0)), "{mode:?}");
     }
 }
+
+/// #806: three loops that each suspend (a Future awaited after `next` and `last`, a spawn, a temporary awaited).
+/// coro's reaching-version fixed point for the frame token oscillated and spent its whole step budget. Tomato's
+/// output. Structural only: Full ends Incomplete at its step limit on this program (#887).
+#[test]
+fn three_loops_that_each_suspend_run() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Job {
+    has n is int;
+    Job(:n);
+    async run() is int { Stdout().writeln("job " + n.string()); n; }
+}
+async main() is int {
+    for 1..=4 -> i {
+        next if i == 2;
+        let f = Job(n: i).run();
+        last if i == 4;
+        Stdout().writeln("got " + (await f).string());
+    }
+    for 1..=2 -> k {
+        let t = spawn Job(n: 10 + k).run();
+        Stdout().writeln("spawned " + k.string());
+    }
+    for 1..=2 -> k {
+        Stdout().writeln("temp " + (await Job(n: 20 + k).run()).string());
+    }
+    Stdout().writeln("main");
+    0;
+}
+"#;
+    let run = run_source_with(source, okkama_compiler::oir2::VerifyMode::Structural)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let expected = "job 1\ngot 1\njob 3\ngot 3\njob 11\nspawned 1\njob 12\nspawned 2\njob 21\ntemp 21\n\
+        job 22\ntemp 22\nmain\n";
+    assert_eq!((run.stdout.as_str(), run.result), (expected, Ok(0)));
+}
