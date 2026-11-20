@@ -131,3 +131,94 @@ fn a_resource_nested_two_objects_deep_is_found_through_both() {
     // Alive inside run (2·10 + 0), closed when run's scope ends (log 4).
     support::assert_value(&module, "204");
 }
+
+#[test]
+fn indexed_containers_reclaimed_and_reallocated_never_lend_their_index_to_a_new_container() {
+    // #906: many rounds build and drop arrays of records (one with a vault) and transfer each through a call,
+    // which walks it through its structure index; every vault closes exactly once.
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Shelf {
+            has records is @Record;
+            Shelf(:records);
+            total() is int { records.reduce(0) -> sum, record { sum + record.total(); }; }
+        }
+        object Maker {
+            Maker();
+            shelf(log is Log, round is int) is Shelf {
+                let records = (0..64).map() -> i {
+                    let ledger is Ledger = if i == round % 64 { Vault(log: log, id: 1); } else { Account(); };
+                    Record(ledger: ledger);
+                };
+                Shelf(records: records);
+            }
+        }
+        object Probe {
+            Probe();
+            round(log is Log, round is int) is int { Maker().shelf(log, round).total(); }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let sum = (0..400).reduce(0) -> sum, round { sum + Probe().round(log, round); };
+            // Each round: 63 accounts (1) and a vault (2) = 65; every vault closes exactly once (a digit 1 each).
+            let ones = (0..400).reduce(0) -> digits, round { digits * 10 + 1; };
+            if log.value() == ones { sum; } else { -1; }
+        }
+    "#));
+    support::assert_value(&module, "26000");
+}
+
+#[test]
+fn the_ownership_benchmark_shape_repeated_keeps_its_result_and_closes_every_vault_once() {
+    // #906: 11-ownership's shape (records behind role fields, shelves of slices built by reduce, a view per
+    // round over both), repeated: the same result every time and every vault closed exactly once. (The
+    // reclaimed-index invariant itself is the unit test `structure_tests` in sparrow-core.)
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object View {
+            has records is @Record;
+            has shelves is %int:@Record;
+            has at is int;
+            View(:records, :shelves, :at);
+            total() is int {
+                let shelf = shelves[at % shelves.size()] else records;
+                records[at].total() + shelf[at % shelf.size()].total();
+            }
+        }
+        object Store {
+            has records is @Record;
+            has shelves is %int:@Record;
+            Store(log is Log, racks is int) {
+                let all = (0..racks * 20).map() -> i {
+                    let ledger is Ledger = if i % 200 == 0 { Vault(log: log, id: 1); } else { Account(); };
+                    Record(ledger: ledger);
+                };
+                let first is %int:@Record = [0: all.slice(0, 20)];
+                records = all;
+                shelves = (1..racks).reduce(first) -> found, shelf {
+                    found + [shelf: all.slice(shelf * 20, shelf * 20 + 20)];
+                };
+            }
+            sum(log is Log, rounds is int) is int {
+                (0..rounds).reduce(0) -> sum, round {
+                    let fee = Vault(log: log, id: 1);
+                    let view = View(records: records, shelves: shelves, at: (round * 7919) % records.size());
+                    sum + view.total() + fee.balance();
+                };
+            }
+        }
+        object Probe {
+            Probe();
+            once(log is Log) is int { Store(log, 100).sum(log, 30); }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let sums = (0..12).map() -> repeat { Probe().once(log); };
+            let first = sums[0];
+            let same = sums.reduce(true) -> all, sum { all && sum == first; };
+            // Per repetition 10 store vaults and 30 fees close: 40 digits 1, 480 in all.
+            let ones = (0..480).reduce(0) -> digits, round { digits * 10 + 1; };
+            if same && log.value() == ones { first; } else { -1; }
+        }
+    "#));
+    let value = support::value(&module);
+    assert_ne!(value, "-1", "a result changed between repetitions or a vault did not close exactly once");
+}

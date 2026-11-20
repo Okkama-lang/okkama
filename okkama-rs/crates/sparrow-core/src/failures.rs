@@ -49,6 +49,10 @@ pub struct Resources {
     /// an identity no newer than `summarized` drops them all.
     summaries: HashMap<Word, u64>,
     summarized: u64,
+    /// Tweed #906: per immutable container (array version, closure, map, box), the children that may hold an
+    /// identity, found once. Structure, not ownership: it never goes stale, since the container never changes
+    /// and an object that is not an identity never becomes one (#905). Dropped when the container is reclaimed.
+    structure: HashMap<Word, Box<[(Word, Repr)]>>,
     /// `SPARROW_TRACE_DESTROY=FILE`: one line per destroyed identity, type and
     /// creation serial, the oracle for static ownership (#555).
     trace: Option<std::fs::File>,
@@ -144,6 +148,7 @@ impl Resources {
         for object in released {
             self.identities.remove(object);
             self.summaries.remove(object);
+            self.structure.remove(object);
         }
     }
 }
@@ -465,28 +470,43 @@ impl Runtime {
                     }
                     continue;
                 }
+                _ if self.resources.structure.contains_key(&object) => {
+                    okkama_devtrace::count!("runtime", "structure index used");
+                    pending.extend(self.resources.structure[&object].iter().rev().copied());
+                }
                 heap::ARRAY => {
                     let repr = Repr::from_bits((header >> 9) & 3);
                     let elements = self.heap.elements(object);
-                    pending.extend(elements.iter().rev().map(|&e| (e, repr)));
+                    // A buffer's slots past its frontier are still written: no index for it.
+                    if header & heap::BUFFER != 0 {
+                        pending.extend(elements.iter().rev().map(|&e| (e, repr)));
+                    } else {
+                        let children = elements.iter().map(|&e| (e, repr));
+                        let index = self.structure_of(children);
+                        pending.extend(index.iter().rev().copied());
+                        self.remember_structure(object, index);
+                    }
                 }
                 heap::CLOSURE => {
                     let layout = &self.heap.layouts().closures[heap::payload(header) as usize];
-                    for (index, &field) in layout.iter().enumerate().rev() {
-                        pending.push((self.heap.field(object, index), field));
-                    }
+                    let children = layout.iter().enumerate().map(|(index, &field)| (self.heap.field(object, index), field));
+                    let index = self.structure_of(children.collect::<Vec<_>>().into_iter());
+                    pending.extend(index.iter().rev().copied());
+                    self.remember_structure(object, index);
                 }
                 _ => {
-                    if let Some(map) = self.heap.payload::<crate::ops::MapValue>(object) {
-                        let values: Vec<Word> = map.entries.values().map(|(_, v)| *v).collect();
-                        pending.extend(values.into_iter().rev().map(|v| (v, map.value)));
+                    let children: Vec<(Word, Repr)> = if let Some(map) = self.heap.payload::<crate::ops::MapValue>(object) {
+                        map.entries.values().map(|(_, v)| (*v, map.value)).collect()
                     } else if let Some(boxed) = self.heap.payload::<crate::ops::AnyBox>(object) {
-                        pending.push((boxed.value, boxed.repr));
+                        vec![(boxed.value, boxed.repr)]
                     } else {
                         // Other payloads (region entries, waiters) change in
                         // place: never summarized.
                         continue;
-                    }
+                    };
+                    let index = self.structure_of(children.into_iter());
+                    pending.extend(index.iter().rev().copied());
+                    self.remember_structure(object, index);
                 }
             }
             open.push(Walked { container: object, base, steps, events });
@@ -534,6 +554,31 @@ impl Runtime {
             self.heap.summarized(container, false);
         }
         self.resources.summarized = 0;
+    }
+
+    /// Keep a container's index until the collector reclaims the container (`forget`): a watched address
+    /// reports its release, so a reused address never inherits an old index.
+    fn remember_structure(&mut self, container: Word, index: Box<[(Word, Repr)]>) {
+        self.resources.structure.insert(container, index);
+        self.heap.watch(container);
+    }
+
+    /// Tweed #906: the children of an immutable container that may hold an identity, in order. A leaf (a scalar, a
+    /// string, an object that is not an identity, a container whose index is empty) is left out for good.
+    fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> Box<[(Word, Repr)]> {
+        okkama_devtrace::count!("runtime", "structure index built");
+        children.filter(|&(word, repr)| {
+            let Some(pointer) = repr.pointer(word) else { return false };
+            let header = self.heap.header_of(pointer);
+            match heap::kind(header) {
+                heap::OBJECT => self.resources.flags[heap::payload(header) as usize]
+                    && self.resources.identities.contains_key(&pointer),
+                heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
+                    && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
+                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                _ => false,
+            }
+        }).collect()
     }
 
     /// Can `value` reach a free identity? False is certain (the common case:
@@ -1441,5 +1486,50 @@ mod cause_stack_tests {
         assert_eq!(runtime.failure_link(fresh, caught, false), caught);
         assert_eq!(runtime.failure_link(fresh, caught, true), fresh);
         assert_eq!(runtime.failure(fresh).unwrap().secondary, [caught]);
+    }
+}
+
+#[cfg(test)]
+mod structure_tests {
+    use super::*;
+
+    fn runtime() -> Runtime {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
+             function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
+             0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
+        ).unwrap();
+        let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        runtime.resources.enabled = true;
+        runtime
+    }
+
+    /// Tweed #906: a container's index is dropped when the collector reclaims the container, so a container
+    /// later allocated at the same address never walks the old one's children.
+    #[test]
+    fn a_reclaimed_container_takes_its_structure_index_with_it() {
+        let mut runtime = runtime();
+        let text = runtime.heap.allocate_text("element");
+        let array = runtime.heap.allocate_array(Repr::Ref, &[text, text]);
+        runtime.resource_graph(&[array], None);
+        assert!(runtime.resources.structure.contains_key(&array), "the walk indexes the array");
+        runtime.heap.collect(|_| {});
+        let released = runtime.heap.take_released();
+        runtime.resources.forget(&released);
+        assert!(!runtime.resources.structure.contains_key(&array), "the reclaimed array's index is gone");
+    }
+
+    /// The index keeps only children that may hold an identity: strings and scalars are left out.
+    #[test]
+    fn an_index_leaves_out_children_that_can_hold_no_identity() {
+        let mut runtime = runtime();
+        let text = runtime.heap.allocate_text("element");
+        let inner = runtime.heap.allocate_array(Repr::Ref, &[text]);
+        let outer = runtime.heap.allocate_array(Repr::Ref, &[text, inner]);
+        runtime.resource_graph(&[outer], None);
+        assert_eq!(runtime.resources.structure[&inner].len(), 0);
+        // The inner array was indexed (empty) in the same walk, after the outer index was built from what was
+        // known then: the outer one keeps it (unknown at that moment), never the string.
+        assert_eq!(&*runtime.resources.structure[&outer], &[(inner, Repr::Ref)]);
     }
 }

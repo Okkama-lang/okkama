@@ -8,6 +8,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Tweed: a resource walk goes through a container's structure index (#906).**
+  - **The index.** An immutable container (array version, closure, persistent map, box) keeps the children
+    that may hold an identity. It is found once and dropped when the collector reclaims the container.
+  - **No more resets.** Objects that are not identities stay leaves (#905), so the index is structure, not
+    ownership, and never goes stale. The ownership summary, by contrast, is reset whenever an old identity
+    becomes free.
+  - **Not indexed:** buffers past their frontier and mutable payloads.
+  - **11-ownership:** walk steps 1.7M → 111k, 29 → 26 ms on the host. Most of the remaining tax is rebuilding
+    the indexes of the intermediate maps of a `reduce` accumulator. Region tracking of those versions is
+    phase 2 (#909).
 - **Tweed, step 1: an object is tracked per instance, not per type (#905).** Tomato gave a resource identity
   to every object whose *type* could reach a `destroy`. On 11-ownership that is all 100 000 `Record`s, through
   a `Ledger`-role field that one implementation, `Vault`, closes. An object without a destroy of its own is
