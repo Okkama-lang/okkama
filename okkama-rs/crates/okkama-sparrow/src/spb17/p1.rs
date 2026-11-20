@@ -385,6 +385,20 @@ fn handle_prefix(module: &str) -> String {
     format!("{}.", module.replace('/', "."))
 }
 
+/// A table handle names a handle object of the operation's module or, when that module declares none by the name
+/// (#824: `@DbCellState` of `runtime/db` in `runtime/database`'s natives), the only runtime module's one. Tomato
+/// matches a table handle by its name alone.
+fn table_handle(name: &str, prefix: &str, handles: &BTreeMap<String, u32>) -> Option<u32> {
+    if let Some(&id) = handles.get(&format!("{prefix}{name}")) {
+        return Some(id);
+    }
+    let mut runtime = handles.iter().filter(|(handle, _)| handle.strip_prefix("runtime.")
+        .and_then(|rest| rest.rsplit_once('.')).is_some_and(|(module, last)| !module.contains('.') && last == name));
+    match (runtime.next(), runtime.next()) {
+        (Some((_, &id)), None) => Some(id),
+        _ => None,
+    }
+}
 /// The SPB 17 type of a table type; handles name a handle object of the operation's module.
 fn abi_type(ty: &abi::Type, prefix: &str, handles: &BTreeMap<String, u32>) -> Option<Type> {
     Some(match ty {
@@ -395,7 +409,7 @@ fn abi_type(ty: &abi::Type, prefix: &str, handles: &BTreeMap<String, u32>) -> Op
         abi::Type::Byte => Type::Byte,
         abi::Type::Char => Type::Char,
         abi::Type::Str => Type::Str,
-        abi::Type::Handle(name) => Type::Handle(*handles.get(&format!("{prefix}{name}"))?),
+        abi::Type::Handle(name) => Type::Handle(table_handle(name, prefix, handles)?),
         abi::Type::Array(item) if **item == abi::Type::Byte => Type::Bytes,
         abi::Type::Array(item) => {
             let leaf = match abi_type(item, prefix, handles)? {
@@ -480,5 +494,24 @@ fn entry(name: &str, registers: Vec<Type>, results: Vec<Type>, owned: bool, fail
             entry: Some(EntryContract { external: Some(name.into()), failures, ..EntryContract::default() }),
             ..FunctionProofs::default()
         },
+    }
+}
+
+#[cfg(test)]
+mod table_handle_tests {
+    use super::*;
+
+    /// #824: the operation's module first, else the only runtime module's handle of the name.
+    #[test]
+    fn a_table_handle_resolves_in_its_module_then_in_the_only_runtime_module() {
+        let handles: BTreeMap<String, u32> = [("runtime.db.DbCellState", 0), ("runtime.database.SqliteState", 1),
+            ("runtime.json.NodeState", 2), ("runtime.tree.NodeState", 3), ("runtime.tree.SqliteState", 4),
+            ("app.Local", 5)].into_iter().map(|(name, id)| (name.to_owned(), id)).collect();
+        let prefix = handle_prefix("runtime/database");
+        assert_eq!(table_handle("SqliteState", &prefix, &handles), Some(1));
+        assert_eq!(table_handle("DbCellState", &prefix, &handles), Some(0));
+        assert_eq!(table_handle("NodeState", &prefix, &handles), None, "two runtime modules declare it");
+        assert_eq!(table_handle("Local", &prefix, &handles), None, "not a runtime module's handle");
+        assert_eq!(table_handle("Missing", &prefix, &handles), None);
     }
 }

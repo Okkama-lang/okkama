@@ -505,9 +505,28 @@ fn abi_type(module: &ir::Module, id: ir::TypeId, expected: &okkama_sparrow::abi:
         (ir::Type::Map(key, value), A::Map(expected_key, expected_value)) => {
             abi_type(module, *key, expected_key, prefix) && abi_type(module, *value, expected_value, prefix)
         }
-        (ir::Type::Handle(decl), A::Handle(name)) => own_handle(module, *decl, prefix).as_deref() == Some(*name),
+        (ir::Type::Handle(decl), A::Handle(name)) => own_handle(module, *decl, prefix).as_deref() == Some(*name)
+            || runtime_handle(module, *decl, name, prefix),
         _ => false,
     }
+}
+
+/// #824: a table handle the native's module does not declare names the only runtime module's handle of that name
+/// (`@DbCellState` of `runtime/db` in `runtime/database`'s natives), as the SPB 17 loader resolves it.
+fn runtime_handle(module: &ir::Module, decl: ir::DeclId, name: &str, prefix: &str) -> bool {
+    let declares = |id: ir::DeclId| module.declarations.get(id).ok().and_then(|declaration| {
+        let (owner, last) = declaration.name.strip_prefix("runtime.")?.rsplit_once('.')?;
+        let valid = matches!(declaration.kind, ir::DeclarationKind::Handle) && declaration.type_params.is_empty()
+            && !owner.contains('.') && last == name;
+        valid.then(|| declaration.name.clone())
+    });
+    let Some(full) = declares(decl) else {
+        return false;
+    };
+    let own = format!("{prefix}{name}");
+    full != own && !module.declarations.iter().any(|(_, declaration)| declaration.name == own
+        && matches!(declaration.kind, ir::DeclarationKind::Handle))
+        && module.declarations.iter().filter(|(id, _)| declares(*id).is_some()).count() == 1
 }
 
 fn adapter_type(module: &ir::Module, id: ir::TypeId, prefix: &str) -> bool {

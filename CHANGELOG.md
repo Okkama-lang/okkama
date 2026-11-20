@@ -20,6 +20,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **SQLite programs get past the native signatures and the timeout helpers on Champ (#824).**
+  - `runtime/database`'s natives take `@DbCellState`, which `runtime/db` declares. The compiler and the SPB 17
+    loader now resolve a table handle in the native's own module first, then as the only runtime module's handle
+    of that name, as Tomato matches it by name.
+  - A timeout over a clock role that no object implements (std's `SqliteConnection.backup`) synthesizes
+    unreachable helpers, as an ordinary role call does (#757). Before, its empty dispatch stopped `own`.
+  - The next blocker of the L11 SQLite cases is #798. Full still rejects the uninhabited clock role (#885).
 - **A Future that leaves an inner scope or its starter no longer reads a destroyed resource of an enclosing scope
   (#882, Champ).** Example: `{ let f = Reader().read(r, gate); group.start(f); }` with `r` from the enclosing
   scope, or a temporary `group.start(Reader().later(lamp, gate))`. #881 kept only what the closing owner owned, so

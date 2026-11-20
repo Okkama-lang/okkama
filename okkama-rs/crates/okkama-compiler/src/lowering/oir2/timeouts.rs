@@ -170,6 +170,11 @@ fn role_slot(declarations: &Declarations, clock: ir::TypeId, method: &str, name:
 /// A synchronous function of `params` that calls `target` with them and returns its one result.
 fn helper(declarations: &mut Declarations, symbol: String, params: Vec<ir::TypeId>, result: ir::TypeId,
     target: Target) -> Result<ir::FuncId> {
+    // #824: a clock role no object witnesses has no value (`role.wrap` needs a witness), so the helper is never
+    // called; its slot call joins an empty set of implementations, as an ordinary role call does (#757).
+    let uninhabited = matches!(target, Target::Role { .. })
+        && !declarations.builder.module().declarations.iter().any(|(_, declaration)| matches!(&declaration.kind,
+            ir::DeclarationKind::Object { witnesses, .. } if witnesses.iter().any(|witness| witness.role == params[0])));
     let signature = ir::Signature { params, results: vec![result], ownership_abi: ir::OwnershipAbi::Unelaborated };
     let function = declarations.builder.declare_function(ir::Function {
         symbol, signature, attrs: vec![], type_params: vec![],
@@ -180,6 +185,12 @@ fn helper(declarations: &mut Declarations, symbol: String, params: Vec<ir::TypeI
     })?;
     let mut builder = declarations.builder.function_builder(function, root)?;
     let entry = builder.entry();
+    if uninhabited {
+        builder.terminate(ir::TermKind::Unreachable)?;
+        let body = builder.finish()?;
+        declarations.builder.define_function(function, body)?;
+        return Ok(function);
+    }
     let failure_ty = builder.intern_type(ir::Type::Service(ir::ServiceType::Failure))?;
     let failure = builder.create_block(root, &[ir::ParamSpec::new(failure_ty)])?;
     builder.switch_to(failure)?;

@@ -321,3 +321,34 @@ async main() is int {
 }
 "#, "make x\ngot x\ndestroy x\n");
 }
+
+/// #824: a `Before` over a clock role that no object implements, in a method of a used object that is never called
+/// (std's `SqliteConnection.backup` in every SQLite program). The timeout driver's helpers call the role's slots;
+/// with no implementation the role has no value, so they are unreachable, as an ordinary role call is (#757).
+/// Before, the helper's empty dispatch stopped `own` at an unregistered open callable. Structural only: Full still
+/// rejects a value of a role without implementations (#885).
+#[test]
+fn a_timeout_over_a_clock_role_without_implementations_compiles() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/timeout" take Before;
+import "time/clock" take Timing;
+import "time/duration" take Duration;
+object Waiter {
+    Waiter();
+    label() is string { "waiter"; }
+    async slow() is int { 1; }
+    async bounded(clock is Timing, limit is Duration) is int {
+        let deadline = clock.monotonic_instant().plus(limit);
+        let bounded is Before<int> = Before(origin: self.slow(), deadline: deadline, clock: clock);
+        await bounded.outcome();
+    }
+}
+async main() is int {
+    Stdout().writeln(Waiter().label());
+    0;
+}
+"#;
+    let run = run_source_with(source, VerifyMode::Structural).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("waiter\n", Ok(0)));
+}
