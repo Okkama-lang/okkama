@@ -112,17 +112,18 @@ impl<T> Builder<T> {
 /// The incoming edge arguments of the blocks an inventory asks for (#687), each found once per inventory. A block is
 /// found by one scan of the terminators that clones only the edges into it (#889: a close's inventory asks for the
 /// few blocks on its state's chain, and cleanup expansion proves one close after another on a changing body).
+/// The edges into one block: each source with its argument list.
+type IncomingEdges = Vec<(BlockId, Vec<EdgeArg>)>;
 struct Edges {
     /// Per asked block: its incoming edges, or `None` when an unsupported terminator or a block unwind enters it
     /// (no finite inventory there).
-    into: BTreeMap<BlockId, Option<Vec<(BlockId, Vec<EdgeArg>)>>>,
+    into: BTreeMap<BlockId, Option<IncomingEdges>>,
 }
 impl Edges {
     fn new(_body: &Body, _budget: &mut Budget<'_>) -> Result<Self, LowError> {
         Ok(Self { into: BTreeMap::new() })
     }
-    fn scan(body: &Body, block: BlockId, budget: &mut Budget<'_>)
-        -> Result<Option<Vec<(BlockId, Vec<EdgeArg>)>>, LowError>
+    fn scan(body: &Body, block: BlockId, budget: &mut Budget<'_>) -> Result<Option<IncomingEdges>, LowError>
     {
         let mut edges = vec![];
         for (id, data) in body.blocks.iter() {
@@ -530,10 +531,17 @@ pub(super) fn type_ofs(body: &Body, budget: &mut Budget<'_>) -> Result<Vec<InstI
         .map(|(id, _)| id).collect())
 }
 
+/// What every proof of one body reads: the fresh summaries and the body's `type.of` instructions (#889).
+pub(super) struct ProofContext<'a> {
+    pub fresh: &'a FreshSummaries,
+    pub type_ofs: &'a [InstId],
+}
+
 pub(super) fn prove(
     module: &Module, body: &Body, state: ValueId, pending: Option<ValueId>, close: &CleanupClose,
-    fresh: &FreshSummaries, type_ofs: &[InstId], budget: &mut Budget<'_>,
+    context: &ProofContext<'_>, budget: &mut Budget<'_>,
 ) -> Result<Option<CleanupOrderProof>, LowError> {
+    let (fresh, type_ofs) = (context.fresh, context.type_ofs);
     let reserve_empty = match pending {
         None => true,
         Some(value) => pending_empty(body, value, budget)?,
@@ -670,7 +678,8 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
             if !source_matches {
                 return Err(LowError::InvalidOutput("plan has the wrong owner or packet source".into()));
             }
-            let reconstructed = prove(module, body, *state, *pending, close, &fresh, &type_ofs, budget)?;
+            let context = ProofContext { fresh: &fresh, type_ofs: &type_ofs };
+            let reconstructed = prove(module, body, *state, *pending, close, &context, budget)?;
             if reconstructed.as_ref() != Some(proof) {
                 return Err(LowError::InvalidOutput(
                     "direct order, active inventory, suffix or B2 evidence invalid".into(),

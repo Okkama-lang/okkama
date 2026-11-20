@@ -294,8 +294,9 @@ pub(super) fn expand(
         let direct = if assigned.is_some_and(|item| item.dynamic) {
             None
         } else {
-            plans::prove(module, body, close.state, close.pending, body.cleanup.closes.get(close_id)?, fresh,
-                &type_ofs, budget)?
+            let context = plans::ProofContext { fresh, type_ofs: &type_ofs };
+            let closing = body.cleanup.closes.get(close_id)?;
+            plans::prove(module, body, close.state, close.pending, closing, &context, budget)?
         }.map(|proof| body.cleanup.proofs.alloc(proof)).transpose()?;
         let plan = body.cleanup.plans.alloc(CleanupPlan { close: close_id, sources: sources.clone(), direct })?;
         let begin = CleanupOp::Begin {
