@@ -810,9 +810,17 @@ fn dev_ir(stage: &'static str, module: &ir::Module) {
     let mut instructions = 0u64;
     let mut regions: std::collections::BTreeMap<&'static str, u64> = Default::default();
     for function in &module.functions {
+        let mut ops = 0u64;
         for block in &function.blocks {
             instructions += block.insts.len() as u64;
             for inst in &block.insts {
+                if matches!(inst.kind, ir::InstKind::ResourcePin { .. } | ir::InstKind::ResourceLeave { .. }
+                    | ir::InstKind::ResourceUnwind { .. })
+                {
+                    *regions.entry("resource (static)").or_default() += 1;
+                    ops += 1;
+                    continue;
+                }
                 let kind = match &inst.kind {
                     ir::InstKind::RegionEnter => "region.enter",
                     ir::InstKind::RegionAdopt { .. } => "region.adopt",
@@ -824,7 +832,12 @@ fn dev_ir(stage: &'static str, module: &ir::Module) {
                     _ => continue,
                 };
                 *regions.entry(kind).or_default() += 1;
+                ops += 1;
             }
+        }
+        // #912: region and static-resource operations per function.
+        if ops > 0 && GATE.on_for(&function.symbol) {
+            okkama_devtrace::count("lower", &format!("{stage}: ownership ops in {}", function.symbol), ops);
         }
         if GATE.dumps_for(&function.symbol) {
             okkama_devtrace::dump(stage, &function.symbol, &ir::print::function_text(module, function));

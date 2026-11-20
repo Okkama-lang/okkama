@@ -1855,3 +1855,31 @@ fn lint_reports_errors_in_test_blocks_and_fakes() {
     let text = stdout(&output);
     assert!(text.contains("error: Field \"shelf\" cannot hold a Cell"), "{text}");
 }
+
+/// #912: `OKKAMA_DEV=runtime,lower` answers which site requests identities and how often, which site adds to
+/// regions, and how many ownership operations each function has after the IR passes.
+#[test]
+fn devtrace_counts_ownership_by_site_and_function() {
+    let source = b"module app v1.0.0;\nobject Res { has n is int; Res(:n); read() is int { n; } destroy { } }\n\
+        object Maker { Maker(); make(i is int) is int { let r = Res(n: i); r.read(); } }\n\
+        main() is int { Maker().make(1) + Maker().make(2) - 3; }\n";
+    let out = std::env::temp_dir().join(format!("okkama-dev-{}", std::process::id()));
+    let mut child = okkama()
+        .args(["run", "-"])
+        .env("OKKAMA_DEV", "runtime,lower")
+        .env("OKKAMA_DEV_OUT", &out)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(source).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary = std::fs::read_to_string(out.join("summary.txt")).unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+    let count = |name: &str| summary.lines().find(|line| line.trim_start().starts_with(name))
+        .and_then(|line| line.split_whitespace().last()).and_then(|n| n.parse::<u64>().ok());
+    assert_eq!(count("identity requested at Res.new#0:"), Some(2), "{summary}");
+    assert!(count("ir after passes: ownership ops in Maker.make").is_some_and(|n| n > 0), "{summary}");
+}

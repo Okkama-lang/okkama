@@ -1560,6 +1560,15 @@ pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const 
     }
 }
 
+/// #912: one execution of an instrumented site (`OKKAMA_DEV=runtime`): identity requests and region adds by place.
+#[inline(never)]
+pub extern "C" fn rt_dev_site(ctx_ptr: *mut Ctx, kind: u64, function: u64, pc: u64) {
+    let (_, runtime) = unsafe { parts(ctx_ptr) };
+    let what = if kind == 0 { "identity requested at" } else { "region add at" };
+    let symbol = &runtime.loaded.program.functions[function as usize].symbol;
+    okkama_devtrace::count!("runtime", format!("{what} {symbol}:{pc}"));
+}
+
 /// #909 2b: pin a static resource.
 #[inline(never)]
 pub extern "C" fn rt_resource_pin(ctx_ptr: *mut Ctx, object: Word) {

@@ -127,6 +127,7 @@ helpers! {
     region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64); [];
     region_leave = crate::failures::rt_region_leave as (ctx, region: Word, keep: *const Word, count: u64); [Allocates, Collects, Reenters, Fails];
     resource_pin = crate::failures::rt_resource_pin as (ctx, object: Word); [];
+    dev_site = crate::failures::rt_dev_site as (ctx, kind: u64, function: u64, pc: u64); [];
     resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
     builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
     builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
@@ -2052,6 +2053,7 @@ impl Emitter<'_, '_> {
                 }
                 let (region, value) = (self.get(region), self.word(register));
                 let own = self.iconst(i64::from(matches!(instruction, I::RegionAdopt { .. })));
+                self.dev_site(1);
                 if self.plain {
                     self.helper(|h| h.region_add, &[ctx, region, value, own]);
                 } else {
@@ -2578,6 +2580,18 @@ impl Emitter<'_, '_> {
 
 
 
+    /// #912: with `OKKAMA_DEV=runtime`, count this site's executions (0: an identity is requested, 1: a region
+    /// add). Nothing is emitted otherwise, and never in a release build.
+    fn dev_site(&mut self, kind: u64) {
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+        if !GATE.on() {
+            return;
+        }
+        let ctx = self.ctx();
+        let (kind, function, pc) = (self.iconst(kind as i64), self.iconst(self.function as i64), self.iconst(self.pc as i64));
+        self.helper(|h| h.dev_site, &[ctx, kind, function, pc]);
+    }
+
     /// The words of a new object (#528: the heap adds its identity words).
     fn object_words(&self, descriptor: usize, fields: usize) -> usize {
         self.heap.object_words(descriptor as u32, fields)
@@ -2665,6 +2679,8 @@ impl Emitter<'_, '_> {
         if !resources.enabled || !resources.flags[descriptor] {
             return;
         }
+        self.dev_site(0);
+        let resources = &self.resources;
         let layout = self.heap.layouts().objects[descriptor].clone();
         // #529: an object without its own destroy gets an identity only when a field reaches one
         // (`Runtime::created_built`); with few fields that is decided here, without the call.
