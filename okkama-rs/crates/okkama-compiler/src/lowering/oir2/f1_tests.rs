@@ -946,9 +946,9 @@ fn f1_what_a_returned_future_holds_matches_its_relation() {
     }
 }
 
-/// #873: a `held` entry belongs to a bare Future result only.
+/// #873, #876: a `held` entry belongs to a result that can hold a Future, bare or stored; an `int` cannot.
 #[test]
-fn f1_only_a_future_result_declares_what_its_cache_holds() {
+fn f1_only_a_result_that_can_hold_a_future_declares_what_a_cache_holds() {
     let (own, _) = super::own_case_tests::own_stage(HELD, None, ir::verify::VerifyMode::Full)
         .unwrap_or_else(|error| panic!("{error}"));
     let (_, n) = function(&own, "app.Res.n#0");
@@ -959,7 +959,8 @@ fn f1_only_a_future_result_declares_what_its_cache_holds() {
         .push(ir::HeldSite { site: ir::CreationSiteId::from_u32(0), ty: res });
     let report = full_report(&cut);
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B51
-        && diagnostic.message == "only a bare Future result declares creations its cache holds"), "{report:?}");
+        && diagnostic.message == "only a result that can hold a Future declares creations a cache holds"),
+        "{report:?}");
 }
 
 /// #875 (Fable): `drop` (synchronous) is offered a fresh Future in its entry packet, which its root settles; `peek`
@@ -1089,6 +1090,55 @@ fn f1_an_explicit_selection_through_an_outcome_view_is_refused() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B91
         && diagnostic.message == "scope/packet selection cannot extract a private protocol holder graph"),
         "{report:?}");
+}
+
+/// #876 (Fable): `make` returns a `Box` that stores a cold Future over a fresh `Res`; `relay` returns that `Box`
+/// further.
+const STORED_FUTURE: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object U { U(); async use(r is Res) is int { r.n(); } } ",
+    "object Box { has f is Future<int>; Box(:f); } ",
+    "object Mk { Mk(); make() is Box { Box(f: U().use(Res(l: \"boxed\"))); } } ",
+    "object Other { Other(); relay() is Box { Mk().make(); } } ",
+    "async main() is int { let b = Other().relay(); 0; }",
+);
+
+/// #876: a result that stores a Future declares, by type, what that Future's cache holds, as a bare Future's does
+/// (#873); `relay` brings it through the one site of its call. Full accepts both exits.
+#[test]
+fn f1_a_returned_value_types_what_its_futures_hold() {
+    let (own, _) = super::own_case_tests::own_stage(STORED_FUTURE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let res = function(&own, "app.Res.new#0").1.signature.results[0];
+    for symbol in ["app.Mk.make#0", "app.Other.relay#0"] {
+        let (_, relation) = relation_of(&own, symbol);
+        let [held] = relation.held.as_slice() else { panic!("{symbol}: {relation:?}") };
+        assert_eq!(held.ty, res, "{symbol}: {relation:?}");
+    }
+}
+
+/// #876: the declared types are checked at the exit against what the result's caches hold: none declared, or another
+/// type, is refused.
+#[test]
+fn f1_what_a_returned_value_s_futures_hold_matches_its_relation() {
+    let (own, _) = super::own_case_tests::own_stage(STORED_FUTURE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let message = "a returned value's caches hold creations other than its relation declares";
+    let other = function(&own, "app.U.new#0").1.signature.results[0];
+    for symbol in ["app.Mk.make#0", "app.Other.relay#0"] {
+        let (summary, _) = relation_of(&own, symbol);
+        let mut cleared = own.clone();
+        cleared.summaries.get_mut(summary).unwrap().results[0].held.clear();
+        let report = full_report(&cleared);
+        assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51 && d.message == message),
+            "{symbol}: {report:?}");
+        let mut retyped = own.clone();
+        retyped.summaries.get_mut(summary).unwrap().results[0].held[0].ty = other;
+        let report = full_report(&retyped);
+        assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51 && d.message == message),
+            "{symbol}: {report:?}");
+    }
 }
 
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.

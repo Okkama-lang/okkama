@@ -51,6 +51,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function can return an object that stores a cold Future (#876).** Example:
+  `make() is Box { Box(f: U().use(Res(l: "boxed"))); }`. The loader refused the caller (`D18_EXECUTOR`): its close
+  may settle the Future's cache, but the envelope came from `Box` alone.
+  - Following Fable's ruling, the `held` entries of #873 describe the caches reachable from any result that can
+    hold a Future, not only a bare Future's. The admitting scope counts their types.
+  - The verifier checks them at the exit, by type, against what the result's caches hold.
+  - Found along the way, both refused before this change too: returning a call's fresh aggregate fails
+    `FRESH_ORIGIN` (#879), and storing a Future returned by a call into a returned object fails `SPB_REHOME` (#880).
 - **A function can bind the outcome of a bound Future and return it (#870).** Example:
   `let f = Wrapper().wrap(…); let r = await f; r;`. Full refused it with B91.
   - Following Fable's analysis, a shared await's outcome stays in the Future's cache, and the value is a view that

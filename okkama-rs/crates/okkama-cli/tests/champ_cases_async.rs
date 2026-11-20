@@ -1261,6 +1261,40 @@ async main() is int {
 "#, "boxed wrapped in\nagain wrapped in\ndestroy wrapped in\ngot fresh\nmain end\ndestroy fresh\n");
 }
 
+/// #876 (Fable): `make` returns a `Box` that stores a cold Future over a fresh `Res`. The relation types what that
+/// Future's cache holds, so main's close, which may settle it, counts the `Res` destroy among its failures; without
+/// that the loader refused main (D18_EXECUTOR). Tomato's output.
+#[test]
+fn a_returned_value_brings_the_types_its_futures_hold() {
+    both_modes(&STORED_FUTURE.replace("DESTROY", ""), "made\ndestroy boxed\n");
+}
+
+/// #876: the same with a failing destroy, reported as on Tomato.
+#[test]
+fn a_returned_value_reports_its_futures_input_failing_to_destroy() {
+    let source = STORED_FUTURE.replace("DESTROY", " let xs = [1]; Stdout().writeln(\"bad \" + xs[3].string());");
+    both_modes_fail(&source, "made\ndestroy boxed\n", "Array index out of bounds");
+}
+
+/// #876: a `Box` over a cold Future over a fresh `Res`, returned by `make`; `DESTROY` ends the `Res` destroy.
+const STORED_FUTURE: &str = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has l is string;
+    Res(:l);
+    n() is int { l.length(); }
+    destroy { Stdout().writeln("destroy " + l);DESTROY }
+}
+object U { U(); async use(r is Res) is int { r.n(); } }
+object Box { has f is Future<int>; Box(:f); }
+object Mk { Mk(); make() is Box { Box(f: U().use(Res(l: "boxed"))); } }
+async main() is int {
+    let b = Mk().make();
+    Stdout().writeln("made");
+    0;
+}
+"#;
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

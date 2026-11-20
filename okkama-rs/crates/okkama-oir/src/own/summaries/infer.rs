@@ -385,10 +385,14 @@ impl Universe {
         // whole instead: an over-approximation, so no dependency is lost.
         // An async body's summary describes its Future's outcome, and coro gives the body a frame for parameters
         // (OIR-2 §12): PR-P declarations are a synchronous call boundary's, so an async body keeps none.
-        // #865 (§6.3d): only a bare Future result has entries beside it, and (#873) creations its cache holds.
+        // #865 (§6.3d): only a bare Future result has entries beside it. #873, #876 (Fable): a result that can hold
+        // a Future, bare or stored, declares the creations its caches hold, so its caller's envelope counts them.
         for (result, ty) in summary.results.iter_mut().zip(summary.contract.results.clone()) {
-            if futures::is_async(module, function) || !futures::is_future(module, ty) {
+            let asynchronous = futures::is_async(module, function);
+            if asynchronous || !futures::is_future(module, ty) {
                 result.beside.clear();
+            }
+            if asynchronous || !crate::verify::holds_futures(module, ty) {
                 result.held.clear();
             }
         }
