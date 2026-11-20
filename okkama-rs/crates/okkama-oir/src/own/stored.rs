@@ -13,15 +13,39 @@ use super::*;
 use crate::coro::graph;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The rehomes of Futures created here that a store precedes on every path are removed: their state and reserve
-/// results read the operands they would have continued. Returns how many were removed.
+/// Where a Future's duty enters its owner state: a `fut.new` here, or the start of the normal block of a call that
+/// returned the Future (#880: its entry arrives with the call's result packet, D25.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    Created(InstId),
+    Returned(BlockId),
+}
+
+/// The rehomes of Futures created here, or returned to here by a call, that a store precedes on every path are
+/// removed: their state and reserve results read the operands they would have continued. Returns how many were
+/// removed.
 pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<usize, OwnError> {
     let mut created = BTreeMap::new();
     for (inst, instruction) in body.insts.iter() {
         if let Operation::Async(AsyncOp::FutureNew { owner, binding, .. }) = instruction.op
             && let Some(&future) = instruction.results.first()
         {
-            created.insert(future, (owner, inst, binding.is_some()));
+            created.insert(future, (owner, Source::Created(inst), binding.is_some()));
+        }
+    }
+    // #880 (Fable): a Future a call returned arrives as an admitted entry of the call's scope, and a store moves it
+    // into the holder's packet as it moves a created one. A binding of it is a split and a bind (PR-B1), not a store.
+    for (_, block) in body.blocks.iter() {
+        let TermKind::InvokeOwn { op, normal, .. } = &block.term.kind else { continue };
+        let Operation::Call(call) = op.as_ref() else { continue };
+        let target = body.blocks.get(normal.block).map_err(arena)?;
+        for (param, argument) in target.params.iter().zip(&normal.args) {
+            let EdgeArg::Produced(result) = argument else { continue };
+            let ty = body.values.get(*param).map_err(arena)?.ty;
+            if super::futures::is_future(module, ty)
+                && !super::futures::borrowed_result(module, call, usize::from(result.slot)) {
+                created.insert(*param, (target.lexical_scope, Source::Returned(normal.block), false));
+            }
         }
     }
     if created.is_empty() {
@@ -35,7 +59,11 @@ pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<us
         let Operation::Ownership(OwnershipOp::ScopeSplit { state, selection }) = **op else { continue };
         let owner = scope_of(module, body, state)?;
         for value in named(body, selection)? {
-            let Some(future) = origin(body, value, &predecessors)? else { continue };
+            let Some(future) = origin(body, value, &predecessors, &created)? else { continue };
+            if matches!(created.get(&future), Some((_, Source::Returned(_), _)))
+                && binds(body, normal.block)? {
+                continue;
+            }
             if created.get(&future).is_some_and(|(scope, _, _)| *scope == owner) {
                 // PR-B1 (#784): a store takes a fresh temporary only. Own never names a bound Future in a split, so
                 // such a split is a defect of the driver, not a store.
@@ -58,7 +86,7 @@ pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<us
                 continue;
             };
             let owner = scope_of(module, body, state)?;
-            if let Some(future) = origin(body, future, &predecessors)?
+            if let Some(future) = origin(body, future, &predecessors, &created)?
                 && created.get(&future).is_some_and(|(scope, _, _)| *scope == owner)
                 && stores.contains_key(&future)
             {
@@ -70,8 +98,8 @@ pub(super) fn drop_stored_rehomes(module: &Module, body: &mut Body) -> Result<us
     for &(inst, future) in &rehomes {
         let kills: BTreeSet<InstId> = rehomes.iter().filter(|(other, value)| *value == future && *other != inst)
             .map(|(other, _)| *other).collect();
-        let definition = created[&future].1;
-        match held_before(body, &predecessors, definition, &stores[&future], &kills, inst)? {
+        let source = created[&future].1;
+        match held_before(body, &predecessors, source, &stores[&future], &kills, inst)? {
             (true, _) => {}
             (false, false) => dropped.push(inst),
             (false, true) => {
@@ -135,13 +163,30 @@ fn named(body: &Body, selection: SelectionId) -> Result<Vec<ValueId>, OwnError> 
     Ok(values)
 }
 
-/// The instruction result `value` stands for through block parameters, if every edge passes the same one.
-fn origin(body: &Body, value: ValueId, predecessors: &[Vec<BlockId>]) -> Result<Option<ValueId>, OwnError> {
+/// Whether a split's normal block binds what it selected: the split and bind of an admitted Future's binding (PR-B1).
+fn binds(body: &Body, block: BlockId) -> Result<bool, OwnError> {
+    Ok(body.blocks.get(block).map_err(arena)?.insts.iter().any(|inst| body.insts.get(*inst).is_ok_and(|instruction| {
+        matches!(instruction.op, Operation::Ownership(OwnershipOp::Bind { .. } | OwnershipOp::Rebind { .. }))
+    })))
+}
+
+/// The instruction result, or the returned Future of `roots`, that `value` stands for through block parameters, if
+/// every edge passes the same one.
+fn origin<T>(body: &Body, value: ValueId, predecessors: &[Vec<BlockId>], roots: &BTreeMap<ValueId, T>)
+    -> Result<Option<ValueId>, OwnError>
+{
     let mut pending = vec![value];
     let mut seen = BTreeSet::new();
     let mut found = None;
     while let Some(value) = pending.pop() {
         if !seen.insert(value) {
+            continue;
+        }
+        if roots.contains_key(&value) {
+            if found.is_some_and(|previous| previous != value) {
+                return Ok(None);
+            }
+            found = Some(value);
             continue;
         }
         match body.values.get(value).map_err(arena)?.def {
@@ -165,21 +210,26 @@ fn origin(body: &Body, value: ValueId, predecessors: &[Vec<BlockId>]) -> Result<
     Ok(found)
 }
 
-/// Whether the duty created by `definition` is still in its owner state just before `at`, on every path and on
-/// some path. A store kills it at the start of its split's normal block; an instruction of `kills` kills it there.
-fn held_before(body: &Body, predecessors: &[Vec<BlockId>], definition: InstId, stores: &BTreeSet<BlockId>,
+/// Whether the duty that enters at `source` is still in its owner state just before `at`, on every path and on some
+/// path. A returned Future's duty enters at the start of its call's normal block; a store kills it at the start of
+/// its split's normal block; an instruction of `kills` kills it there.
+fn held_before(body: &Body, predecessors: &[Vec<BlockId>], source: Source, stores: &BTreeSet<BlockId>,
     kills: &BTreeSet<InstId>, at: InstId) -> Result<(bool, bool), OwnError>
 {
     let blocks: Vec<_> = body.blocks.iter().map(|(id, block)| (id, block.insts.clone())).collect();
     // A block's effect on the duty: `Some(true)` when its last event creates it, `Some(false)` when that event
     // takes it, `None` when the entry state passes through.
     let effect = |id: BlockId, insts: &[InstId], until: Option<InstId>| -> Option<bool> {
-        let mut effect = stores.contains(&id).then_some(false);
+        let mut effect = if stores.contains(&id) {
+            Some(false)
+        } else {
+            (source == Source::Returned(id)).then_some(true)
+        };
         for inst in insts {
             if Some(*inst) == until {
                 break;
             }
-            if *inst == definition {
+            if source == Source::Created(*inst) {
                 effect = Some(true);
             } else if kills.contains(inst) {
                 effect = Some(false);
@@ -258,6 +308,34 @@ mod tests {
         let (result, left) = dropped(|text| text.replacen(", owner S2, binding b1", ", owner S2", 1)
             .replacen(FIRST_STORE, NAMES_C, 1));
         assert_eq!((result.unwrap(), left), (1, 0));
+    }
+
+    /// `wrap` of a d880 fixture, and the result of `drop_stored_rehomes` on it.
+    fn dropped_in_wrap(text: &str) -> (Result<usize, OwnError>, usize) {
+        let module = crate::text::parse(text).unwrap();
+        let (_, wrap) = module.functions.iter().find(|(_, function)| function.symbol == "app.Mk.wrap#0").unwrap();
+        let mut body = wrap.body.clone().unwrap();
+        let result = drop_stored_rehomes(&module, &mut body);
+        let left = body.blocks.iter().flat_map(|(_, block)| block.insts.iter())
+            .filter(|inst| matches!(body.insts.get(**inst).unwrap().op, Operation::Async(AsyncOp::CacheRehome { .. })))
+            .count();
+        (result, left)
+    }
+
+    /// #880 (Fable): a Future a call returned arrives as an admitted entry; a store moves it into the holder's packet
+    /// as it moves a created one, so the rehome the store precedes is dropped (D25.2 revision).
+    #[test]
+    fn a_stored_returned_future_loses_its_rehome() {
+        let (result, left) = dropped_in_wrap(include_str!("../../tests/fixtures/async/own/d880-stored-returned.oir"));
+        assert_eq!((result.unwrap(), left), (1, 0));
+    }
+
+    /// #880: the binding of a returned Future is a split and a bind (PR-B1), not a store; the Box borrows the bound
+    /// Future, which leaves by its rehome.
+    #[test]
+    fn a_bound_returned_future_keeps_its_rehome() {
+        let (result, left) = dropped_in_wrap(include_str!("../../tests/fixtures/async/own/d880-bound-returned.oir"));
+        assert_eq!((result.unwrap(), left), (0, 1));
     }
 
     /// PR-B1: own never names a bound Future in a split. A split that does is a defect of the driver, never a store:

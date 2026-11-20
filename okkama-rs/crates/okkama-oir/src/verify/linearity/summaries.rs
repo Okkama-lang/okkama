@@ -185,6 +185,10 @@ impl Engine<'_, '_> {
     /// brings its value's type. A piece of a call's fresh family brings what the callee's relation declares held at
     /// its site, which the callee's exit checked. The Future's own identity brings only that, or nothing when this
     /// body created it: the inputs of `fut.new` are pieces of their own. `None` when nothing accounts for the piece.
+    ///
+    /// #876: a caller names a family's identity by its first fresh site, which need not be the Future's own (in a
+    /// callee that creates a `Res` before the Future, it is the `Res`'s). The piece at the Future's own site then has
+    /// neither a value nor a held entry, and brings no types: that is not a missing case.
     fn held_piece_types(&self, flow: &Flow, piece: &Piece, future: Origin) -> Option<Vec<TypeId>> {
         if piece.origin != future && let Some((_, data)) = self.body.values.iter()
             .find(|(id, _)| flow.identities[id.as_u32() as usize] == Some(piece.origin)) {

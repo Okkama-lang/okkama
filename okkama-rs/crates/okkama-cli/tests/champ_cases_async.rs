@@ -1295,6 +1295,32 @@ async main() is int {
 }
 "#;
 
+/// #880 (Fable): `pass` returns a cold Future over a fresh `Res`, which `stored` stores in the `Box` it returns. The
+/// store moves the Future's entry into the `Box`'s packet (D25.2 revision), so own emits no rehome for it at the exit;
+/// the loader refused the one it did (SPB_REHOME). `bound` binds the Future first: the `Box` borrows it, and it leaves
+/// by its rehome. Tomato's output.
+#[test]
+fn a_returned_future_stored_in_a_returned_object_leaves_with_it() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object U { U(); async use(r is Res) is int { r.n(); } }
+object P { P(); pass(l is string) is Future<int> { U().use(Res(l: l)); } }
+object Box { has f is Future<int>; Box(:f); }
+object Mk {
+    Mk();
+    stored() is Box { Box(f: P().pass("stored")); }
+    bound() is Box { let g = P().pass("bound"); Box(f: g); }
+}
+async main() is int {
+    let a = Mk().stored();
+    let b = Mk().bound();
+    Stdout().writeln("made");
+    0;
+}
+"#, "made\ndestroy bound\ndestroy stored\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

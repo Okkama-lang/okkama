@@ -51,6 +51,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A Future returned by a call can be stored in an object the function returns (#880).** Example:
+  `wrap() is Box { Box(f: P().pass("x")); }`. The loader refused it (`SPB_REHOME`): own stored the Future in the
+  `Box`, which moves its entry into the `Box`'s packet, and then still rehomed it at the exit.
+  - Following Fable's analysis, own drops the rehome of a stored Future that a call returned, as it already did for
+    one created here (D25.2 revision). A bound Future is borrowed by the object and keeps its rehome (PR-B1).
 - **A function can return an object that stores a cold Future (#876).** Example:
   `make() is Box { Box(f: U().use(Res(l: "boxed"))); }`. The loader refused the caller (`D18_EXECUTOR`): its close
   may settle the Future's cache, but the envelope came from `Box` alone.
