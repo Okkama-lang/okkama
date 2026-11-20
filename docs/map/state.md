@@ -6,8 +6,8 @@ Last update: 2026-11-20, after wave/78. The working branch of 0.6.0 is `release/
 
 | Worktree | Branch | What | Status |
 |---|---|---|---|
-| w4 | release/0.6.0 | merge point (fa45220ba = wave/78) | merges only after a green Wave CI |
-| dev | feature/devtrace | okkama-devtrace (wave/79) and these maps | CI pending |
+| w4 | release/0.6.0 | merge point (902eb0ef7 = wave/79) | merges only after a green Wave CI |
+| dev | feature/911-ci (was feature/devtrace, merged as wave/79 = 902eb0ef7) | Tweed work | — |
 | sch | feature/847-schedule | **parked** fix for SPB_SCHEDULE: an offered binding with service entries makes its owner dynamic (4a6c0faee) | no test; frozen pending the ownership decision |
 | cp | feature/754-cancel-docs | old | unknown: check before use |
 | r060 | wave/18 | old | unknown: check before use |
@@ -111,10 +111,9 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 
 ## Next
 
-1. Merge wave/79 (devtrace + maps) after a green CI.
-2. #911 step 1: drop the Champ jobs from the Wave CI (saves CI time).
-3. #912 is done in part: lowering and IR passes, identities by type.
-4. #905 step 1 is done: per-instance identity for destroy-less objects (11-ownership 84 → 27 ms on the host).
-   Next is #906: arrays and containers get the same per-instance answer. The remaining 1.7M walk steps go
-   through the records array.
-5. Container measurement with #908 (a Linux build of the tree).
+1. #911 step 1 (this wave/80): the Wave CI runs only the Tomato pipeline. Gone: the champ, oir and
+   differential parts, the champ-abi clippy, conformance on Champ, the Champ blockers and corpora on Champ.
+2. #908: the container benchmark gate (Linux build of the tree against CPython 3.13).
+3. #909, phase 2: elide region tracking of values that do not escape (a reduce accumulator's versions), plus
+   the remaining region-add calls.
+4. #914: a temporary child in a group reads a lent resource after its destroy (Tomato bug).

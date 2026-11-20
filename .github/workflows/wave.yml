@@ -1,9 +1,9 @@
-# Heavy runs of the 0.6.0 Rebuild on GitHub's runners instead of the owner's
+# Heavy runs of 0.6.0 (Tweed) on GitHub's runners instead of the owner's
 # machine (LLM-GUIDE §1.1): the crate suites of a wave branch, conformance and
-# more corpora (t/, micro programs, examples) on Tomato and Champ, with the
-# ranking of Champ's blockers. Run it by pushing a branch named wave/<name> at
-# the commit to test (both suites), or, once this file is on the default
-# branch, by dispatch:
+# more corpora (t/, micro programs, examples, the Bible's examples) on the
+# Tomato pipeline. Run it by pushing a branch named wave/<name> at the commit
+# to test (both suites), or, once this file is on the default branch, by
+# dispatch:
 #   gh workflow run wave.yml -f ref=<branch> -f suites=tests|conformance|both
 name: Wave
 
@@ -34,7 +34,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [oir, compiler, sparrow, champ, cli, clippy, differential-oir, differential-compiler]
+        # Tweed (owner, 2026-11-20): Champ, OIR-2 and its verifier differential are retired (#911).
+        part: [compiler, sparrow, cli, clippy]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -58,30 +59,13 @@ jobs:
           cargo fetch --locked
           gate="--profile gate --locked"
           case "${{ matrix.part }}" in
-            oir) cargo test $gate -p okkama-oir ;;
             compiler) cargo test $gate -p okkama-compiler --lib ;;
             sparrow)
               cargo test $gate -p okkama-sparrow
               cargo test $gate -p sparrow-core --lib ;;
-            champ)
-              cargo test $gate -p sparrow-core --features champ-abi --lib champ
-              # p1_pipeline and every champ_* end-to-end file; the full
-              # ownership gate test is a known red until the verifier
-              # completes on P1, so it is skipped here.
-              args="--test p1_pipeline"
-              for file in crates/okkama-cli/tests/champ_*.rs; do
-                [ -e "$file" ] && args="$args --test $(basename "$file" .rs)"
-              done
-              cargo test $gate -p okkama-cli --features champ-abi $args -- --skip p1_pipeline_full_ownership_gate ;;
             cli) cargo test $gate -p okkama-cli ;;
             clippy)
-              cargo clippy $gate --workspace --all-targets -- -D warnings
-              cargo clippy $gate -p okkama-cli -p sparrow-core -p okkama-sparrow --features champ-abi \
-                --all-targets -- -D warnings ;;
-            # The #634 differential in two parallel parts, on the gate profile like the other parts.
-            differential-oir|differential-compiler)
-              part="${{ matrix.part }}"
-              OKKAMA_DIFFERENTIAL_CARGO="$gate" tools/verifier-differential.sh "${part#differential-}" ;;
+              cargo clippy $gate --workspace --all-targets -- -D warnings ;;
           esac
 
   conformance:
@@ -90,7 +74,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [sparrow, champ]
+        engine: [sparrow]
     # SQLite 3.41+ for std db/sqlite.
     runs-on: ubuntu-24.04
     steps:
@@ -114,7 +98,6 @@ jobs:
         working-directory: conformance
         run: |
           adapter=adapters/rust/adapter.json
-          [ "${{ matrix.engine }}" = champ ] && adapter=adapters/rust/adapter-champ.json
           # Failing cases are data here; a missing results.jsonl is the failure.
           CARGO_NET_OFFLINE=true ./ocs run --adapter "$adapter" --profile full-release -j 4 --quiet \
             --out "$GITHUB_WORKSPACE/out/${{ matrix.engine }}" || true
@@ -125,18 +108,12 @@ jobs:
           path: out/${{ matrix.engine }}/
       # More code on the binary conformance built (#894, owner 2026-11-20): the t/ suite (#245, ~50k
       # generated checks), the micro-benchmark programs against their oracles (bench/micro, no timing),
-      # examples/ and the Bible's examples. On Sparrow a failure fails the job; on Champ failures are
-      # data, ranked in the summary.
+      # examples/ and the Bible's examples; a failure fails the job.
       - name: Corpora
         run: |
           mkdir -p out/corpora
-          if [ "${{ matrix.engine }}" = champ ]; then
-            bin=conformance/adapters/rust/.target/engine-champ/gate/okkama
-            t="--configs champ --champ-okkama $bin"; pipeline="--pipeline oir2"; export OKKAMA_PIPELINE=oir2
-          else
-            bin=conformance/adapters/rust/.target/debug/okkama
-            t="--configs sparrow --okkama $bin"; pipeline=""
-          fi
+          bin=conformance/adapters/rust/.target/debug/okkama
+          t="--configs sparrow --okkama $bin"; pipeline=""
           status=0
           run() {
             name=$1; shift
@@ -153,7 +130,7 @@ jobs:
           run micro python3 bench/micro/check.py --okkama $bin $pipeline --jobs 4
           run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
           run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
-          [ "${{ matrix.engine }}" = champ ] || exit $status
+          exit $status
       - uses: actions/upload-artifact@v5
         if: always()
         with:
@@ -169,27 +146,3 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       # docs/map/files.md and rules.md are generated from the code (owner, 2026-11-20): regenerate and commit.
       - run: python3 tools/map/gen.py --check
-
-  blockers:
-    name: Champ blockers
-    needs: conformance
-    if: always() && inputs.suites != 'tests'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/download-artifact@v5
-        with:
-          path: out
-      - name: Rank
-        run: |
-          python3 conformance/tools/champ_blockers.py out/conformance-champ \
-            --baseline out/conformance-sparrow --json out/blockers.json | tee out/blockers.txt
-          head -25 out/blockers.txt >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v5
-        with:
-          name: champ-blockers
-          path: |
-            out/blockers.json
-            out/blockers.txt
