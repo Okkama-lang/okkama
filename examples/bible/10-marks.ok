@@ -1,0 +1,19 @@
+module bible/marks v1.0.0;
+
+// try? turns a thrown error into Maybe.none; try! turns it into a panic.
+import "io/stdout" take Stdout;
+import "strings/parse" take Number;
+
+main() is int {
+    let out = Stdout();
+    let port = try? Number("8080").int() else 80;
+    let fallback = try? Number("http").int() else 80;
+    out.writeln(port.string() + " " + fallback.string());
+    let parsed = try? Number("12").int();
+    out.writeln(parsed ?? .some(n): "some " + n.string() !! .none: "none");
+    let sure = try! Number("42").int();
+    out.writeln(sure.string());
+    let broken = try! Number("forty-two").int();
+    out.writeln(broken.string());
+    0;
+}

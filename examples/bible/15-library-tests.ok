@@ -1,0 +1,69 @@
+module bible/library v1.0.0;
+
+import "async/atomic" take Atomic;
+
+// A role ships its own fake. Tests use the fake; production code only ever
+// sees the role.
+enum Refused is Error = (because(reason is string));
+
+role Books {
+    remember(id is int, title is string) is void;
+    title(id is int) is string;
+    has(id is int) is bool;
+
+    fake {
+        has shelf is Atomic<%int:string> = Atomic([:]);
+        remember(id is int, title is string) is void { shelf.replace(shelf.value() + [id: title]); }
+        title(id is int) is string { shelf.value()[id]; }
+        has(id is int) is bool { shelf.value().has(id); }
+    }
+}
+
+role Door {
+    opened() is ^Door;
+    open() is bool;
+
+    fake {
+        has times is int = 0;
+        opened() is ^Door { ^times = times + 1; }
+        open() is bool { times > 0; }
+    }
+}
+
+object Library {
+    has books is Books;
+    Library(:books);
+
+    shelve(id is int, title is string) is string {
+        confirm id > 0 else throw Refused.because("non-positive id");
+        confirm !books.has(id) else throw Refused.because("id " + id.string() + " is taken");
+        books.remember(id, title);
+        books.title(id);
+    }
+
+    test "a shelved title can be read back" {
+        let books = Books.fake();
+        test.is(Library(books: books).shelve(7, "Dune"), "Dune");
+        test.ok(books.has(7));
+    }
+}
+
+test "a bad id is refused" {
+    let refused = test.throws(Refused) { Library(books: Books.fake()).shelve(0, "x"); };
+    test.is(refused, Refused.because("non-positive id"));
+}
+
+test "an id cannot be shelved twice" {
+    let library = Library(books: Books.fake());
+    library.shelve(3, "Emma");
+    let refused = test.throws(Refused) { library.shelve(3, "Persuasion"); };
+    test.is(refused, Refused.because("id 3 is taken"));
+}
+
+test "a fake keeps its state through successors" {
+    let door is Door = Door.fake();
+    test.ok(!door.open());
+    test.ok(door.opened().open());
+}
+
+main() is int { 0; }

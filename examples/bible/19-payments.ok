@@ -1,0 +1,18 @@
+module bible/payments v1.0.0;
+
+// Callers hold a Payment; CardPayment and its stages stay in the module.
+import "io/stdout" take Stdout;
+import "billing/payments" take Payments, Payment;
+
+object Receipt {
+    Receipt();
+    line(payment is Payment) is string { payment.id() + " " + payment.amount().string() + " " + payment.state(); }
+}
+
+main() is int {
+    let opened = Payments().open("p-1", 1250);
+    let done is Payment = opened.authorized();
+    Stdout().writeln(Receipt().line(opened));
+    Stdout().writeln(Receipt().line(done));
+    0;
+}

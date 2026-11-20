@@ -1,0 +1,1 @@
+14-async-shape-rejected.ok:11:8: semantic error: Action "rate" on object "Fixed" must match async shape for role "Rates"

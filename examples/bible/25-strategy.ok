@@ -1,0 +1,63 @@
+module bible/strategy v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Player {
+    has name is string;
+    has score is int;
+    has seconds is int;
+
+    Player(:name, :score, :seconds);
+
+    name() is string { name; }
+    score() is int { score; }
+    seconds() is int { seconds; }
+}
+
+// A named policy that several places use, and that tests replace, is a role.
+role Ranking {
+    better(a is Player, b is Player) is bool;
+}
+
+object ByScore does Ranking {
+    ByScore();
+
+    better(a is Player, b is Player) is bool {
+        a.score() > b.score();
+    }
+}
+
+object Board {
+    has players is @Player;
+    has ranking is Ranking;
+
+    Board(:players, :ranking);
+
+    leader() is string {
+        players.reduce(players.first()) -> best, player {
+            if ranking.better(player, best) { player; } else { best; }
+        }.name();
+    }
+
+    // A one-off question, asked once by one caller, takes an action value.
+    first(where is (Player) is bool) is string {
+        let found = players.filter() -> player { where(player); };
+        if found.size() > 0 { found.first().name(); } else { "nobody"; }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let board = Board(
+        players: [
+            Player(name: "ada", score: 90, seconds: 41),
+            Player(name: "alan", score: 95, seconds: 58),
+            Player(name: "grace", score: 95, seconds: 37),
+        ],
+        ranking: ByScore(),
+    );
+    out.writeln("leader: " + board.leader());
+    out.writeln("under 40 s: " + board.first((player is Player) is bool { player.seconds() < 40; }));
+    out.writeln("over 100: " + board.first((player is Player) is bool { player.score() > 100; }));
+    0;
+}

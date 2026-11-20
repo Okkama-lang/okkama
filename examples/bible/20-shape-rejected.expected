@@ -1,0 +1,1 @@
+20-shape-rejected.ok:7:8: semantic error: Action "load" on object "Memory" must match async shape for role "Store"

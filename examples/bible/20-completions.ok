@@ -1,0 +1,39 @@
+module bible/completions v1.0.0;
+
+// FutureCompletions hands the futures back in the order they finish, not
+// the order they were given.
+import "async/collect" take FutureCompletions, NoFutures;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object Gate {
+    has event is Event;
+    Gate(:event);
+    async named(name is string) is string {
+        await event.wait();
+        name;
+    }
+}
+
+object Now {
+    Now();
+    async named(name is string) is string { name; }
+}
+
+async main() is int {
+    let out = Stdout();
+    let first = Event();
+    let second = Event();
+    let futures is @Future<string> = [Gate(event: second).named("slow"), Now().named("quick"),
+        Gate(event: first).named("middle")];
+    let completions is FutureCompletions<string> = FutureCompletions(origins: futures);
+    out.writeln("remaining " + completions.remaining_count().string());
+    first.set();
+    out.writeln(await (await completions.completion()));
+    out.writeln(await (await completions.completion()));
+    second.set();
+    out.writeln(await (await completions.completion()));
+    out.writeln("remaining " + completions.remaining_count().string());
+    out.writeln(try { await (await completions.completion()); } catch e is NoFutures { "none left"; });
+    0;
+}

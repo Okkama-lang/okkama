@@ -1,0 +1,30 @@
+module bible/presence v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A PATCH request distinguishes three intents for a field:
+// set it (some), clear it (none), or leave it alone (missing).
+object NicknamePatch {
+    has nickname is Presence<string>;
+    NicknamePatch(:nickname);
+
+    applied(current is string) is string {
+        nickname
+            ?? .some(value): value
+            !! .none: ""
+            !! .missing: current;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let patches is @NicknamePatch = [
+        NicknamePatch(nickname: Presence.some("ace")),
+        NicknamePatch(nickname: Presence<string>.none),
+        NicknamePatch(nickname: Presence<string>.missing)
+    ];
+    for patches -> patch {
+        out.writeln("[" + patch.applied("old") + "]");
+    }
+    0;
+}

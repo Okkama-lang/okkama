@@ -1,0 +1,74 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (overdrawn(balance is rat, wanted is rat), unknown(name is string));
+
+// Rules one to three: hidden state, a guarded constructor, change as a new object.
+object Account {
+    has name is string;
+    has balance is rat;
+    Account(:name, :balance) {
+        confirm balance >= 0.rat() else throw Refused.overdrawn(balance, 0.rat());
+    }
+    owner() is string { name; }
+    amount() is rat { balance; }
+    withdrawn(sum is rat) is ^Account {
+        confirm sum <= balance else throw Refused.overdrawn(balance, sum);
+        ^balance = balance - sum;
+    }
+    deposited(sum is rat) is ^Account { ^balance = balance + sum; }
+}
+
+// Rule seven: callers depend on a role, not on a class.
+role Accounts {
+    find(name is string) is Maybe<Account>;
+}
+
+object Branch does Accounts {
+    has accounts is %string:Account;
+    Branch(:accounts);
+    find(name is string) is Maybe<Account> {
+        if accounts.has(name) { Maybe.some(accounts[name]); } else { Maybe.none; }
+    }
+}
+
+// Rule nine: a resource is destroyed when the scope that made it ends.
+object Session {
+    has teller is string;
+    Session(:teller) { Stdout().writeln("session of " + teller + " opened"); }
+    destroy { Stdout().writeln("session of " + teller + " closed"); }
+}
+
+// Rule ten: a teller uses only the bank it was given.
+object Teller {
+    has bank is Accounts;
+    Teller(:bank);
+
+    // Rule four: absence is a Maybe, and a missing account becomes a typed error here.
+    transfer(from is string, to is string, sum is rat) is string {
+        let session = Session(teller: "ada");
+        let payer = bank.find(from) else throw Refused.unknown(from);
+        let payee = bank.find(to) else throw Refused.unknown(to);
+        let paid = payer.withdrawn(sum);
+        let received = payee.deposited(sum);
+        paid.owner() + " " + paid.amount().string() + ", " + received.owner() + " " + received.amount().string();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let bank is Accounts = Branch(accounts: ["kim": Account(name: "kim", balance: 100.rat()),
+                                             "lee": Account(name: "lee", balance: 5.rat())]);
+    let teller = Teller(bank: bank);
+    // Rule six: a third of a hundred is exact.
+    out.writeln(teller.transfer("kim", "lee", 100.rat() / 3.rat()));
+    // Rule eight: a refused transfer is a typed error the caller handles.
+    let refused = try { teller.transfer("lee", "kim", 50.rat()); }
+        catch Refused.overdrawn(balance, wanted) { "refused: " + wanted.string() + " > " + balance.string(); };
+    out.writeln(refused);
+    let unknown = try { teller.transfer("kim", "max", 1.rat()); }
+        catch Refused.unknown(name) { "refused: no account " + name; };
+    out.writeln(unknown);
+    0;
+}

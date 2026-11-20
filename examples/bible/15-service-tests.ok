@@ -1,0 +1,76 @@
+module bible/reminders v1.0.0;
+
+import "async/atomic" take Atomic;
+
+enum Unsaved is Error = (full(limit is int));
+
+// The clock and the store are roles; each ships the fake its tests need.
+role Clock {
+    // Minutes since midnight.
+    minute() is int;
+
+    fake {
+        minute() is int { 600; }
+    }
+}
+
+role Store {
+    save(at is int, text is string) is void;
+    texts(until is int) is @string;
+
+    fake {
+        has items is Atomic<%int:string> = Atomic([:]);
+        save(at is int, text is string) is void {
+            confirm items.value().size() < 3 else throw Unsaved.full(3);
+            items.replace(items.value() + [at: text]);
+        }
+        texts(until is int) is @string {
+            let saved = items.value();
+            saved.keys().filter() -> at { at <= until; }.map() -> at { saved[at] else ""; };
+        }
+    }
+}
+
+object Reminders {
+    has clock is Clock;
+    has store is Store;
+    Reminders(:clock, :store);
+
+    remind(after is int, text is string) is int {
+        let at = clock.minute() + after;
+        store.save(at, text);
+        at;
+    }
+
+    due() is @string {
+        store.texts(clock.minute());
+    }
+}
+
+test "a reminder for later is not due yet" {
+    let reminders = Reminders(clock: Clock.fake(), store: Store.fake());
+    test.is(reminders.remind(30, "call the plumber"), 630);
+    test.is(reminders.due(), []);
+}
+
+test "past and present reminders are due, in time order" {
+    let store = Store.fake();
+    store.save(590, "water the plants");
+    store.save(540, "take the pills");
+    let reminders = Reminders(clock: Clock.fake(), store: store);
+    reminders.remind(0, "leave for work");
+    test.is(reminders.due(), ["take the pills", "water the plants", "leave for work"]);
+}
+
+test "a full store refuses the fourth reminder and keeps the first three" {
+    let store = Store.fake();
+    let reminders = Reminders(clock: Clock.fake(), store: store);
+    for 1..=3 -> n {
+        reminders.remind(-n, "task " + n.string());
+    }
+    let refused = test.throws(Unsaved) { reminders.remind(-9, "one too many"); };
+    test.is(refused, Unsaved.full(3));
+    test.is(reminders.due().size(), 3);
+}
+
+main() is int { 0; }

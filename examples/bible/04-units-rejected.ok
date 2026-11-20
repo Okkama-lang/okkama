@@ -1,0 +1,20 @@
+module app v1.0.0;
+
+object NewtonSeconds {
+    has amount is rat;
+    NewtonSeconds(:amount);
+    plus(other is NewtonSeconds) is NewtonSeconds { NewtonSeconds(amount: amount + other.size()); }
+    size() is rat { amount; }
+}
+
+object PoundSeconds {
+    has amount is rat;
+    PoundSeconds(:amount);
+}
+
+main() is int {
+    let start = NewtonSeconds(amount: 0.rat());
+    // Same shape, different meaning: the compiler does not accept one for the other.
+    let total = start.plus(PoundSeconds(amount: 12.rat()));
+    0;
+}

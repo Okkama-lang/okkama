@@ -1,0 +1,13 @@
+module bible/fake_production v1.0.0;
+
+role Clock {
+    now() is int;
+    fake {
+        now() is int { 1700000000; }
+    }
+}
+
+main() is int {
+    Clock.fake().now();
+    0;
+}

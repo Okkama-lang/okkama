@@ -1,0 +1,11 @@
+module bible/replacement v1.0.0;
+
+object Counter {
+    has count is int = 0;
+    Counter();
+    reset() is ^Counter {
+        Counter();
+    }
+}
+
+main() is int { 0; }

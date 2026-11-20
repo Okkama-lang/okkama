@@ -1,0 +1,40 @@
+module bible/decorators v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A price is anything that can say how many cents it is.
+role Price {
+    cents() is int;
+}
+
+object Listed does Price {
+    has amount is int;
+    Listed(amount is int) { self.amount = amount; }
+    cents() is int { amount; }
+}
+
+// Decorators: each wraps another Price and adds one rule.
+object Discounted does Price {
+    has origin is Price;
+    has percent is int;
+    Discounted(:origin, :percent);
+    cents() is int { origin.cents() - int(origin.cents() * percent / 100); }
+}
+
+object Taxed does Price {
+    has origin is Price;
+    has percent is int;
+    Taxed(:origin, :percent);
+    cents() is int { origin.cents() + int(origin.cents() * percent / 100); }
+}
+
+main() is int {
+    let out = Stdout();
+    let book is Price = Listed(2000);
+    let sale is Price = Discounted(origin: book, percent: 10);
+    let checkout is Price = Taxed(origin: sale, percent: 20);
+    out.writeln("listed:   " + book.cents().string());
+    out.writeln("on sale:  " + sale.cents().string());
+    out.writeln("checkout: " + checkout.cents().string());
+    0;
+}

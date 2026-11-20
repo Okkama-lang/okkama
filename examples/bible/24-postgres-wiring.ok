@@ -1,0 +1,25 @@
+module bible/notes_postgres v1.0.0;
+
+// The service over PostgreSQL, wired but not started: the routes are built,
+// no connection is opened until a request needs one.
+import "io/stdout" take Stdout;
+import "db/pool" take DbPool, PoolOptions;
+import "db/postgres" take PostgresDatabase, PostgresConnector;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration;
+import "notes/api" take NotesService, NotesApi;
+import "notes/postgres" take PostgresStore;
+
+main() is int {
+    let pool = DbPool(
+        origin: PostgresConnector(PostgresDatabase(url: "postgresql://notes@127.0.0.1:5432/notes")),
+        options: PoolOptions(minimum: 0, maximum: 8, idle_timeout: Duration(minutes: 5),
+            lifetime: Duration(minutes: 30), acquisition_timeout: Duration(seconds: 5)),
+        clock: SystemClock(),
+    );
+    defer pool.close();
+    let service = NotesService(api: NotesApi(store: PostgresStore(pool: pool)));
+    let routes = service.routes();
+    Stdout().writeln("wired");
+    0;
+}

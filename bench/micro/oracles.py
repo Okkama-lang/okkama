@@ -1,0 +1,67 @@
+"""Independent mathematical/content oracles; never learn expected output from a VM."""
+import base64
+import hashlib
+import json
+from functools import lru_cache
+
+
+def rem(a, b):
+    # Okkama integer remainder follows truncation toward zero.
+    return a % b if a >= 0 else -((-a) % b)
+
+
+def contribution(name, i):
+    if name in {'baseline','constructor-generic','destroy','defer','async-await','spawn','channel','cancel','cancel-async-cleanup','event-wake','map-bigint-key','map-long-key','map-replace','map-empty','rat-add','rat-int-round-trip','json-parse','map-plus','array-plus','map-literal','map-literal-8','map-literal-12'}: return i % 7
+    if name=='baseline-async':return i%7
+    if name in {'defer-observed','destroy-observed'}:return i%7+1
+    if name=='array-literal': return (i+i%3)%7
+    if name=='array-index': return (i%8+1)%7
+    if name=='array-minus': return (2+(i%5!=2))%7
+    if name=='byte': return ((i%256)|3)%7
+    if name in {'closure-create','constructor','map-miss'}:return (i+1)%7
+    if name in {'closure-call','successor','loop-last'}:return (i+3)%7
+    if name in {'constructor-defaults','reduce-build'}:return (i+8)%7
+    if name=='compare':return 1 if i<1000 and i!=500 else 2
+    if name=='event-many-waiters':return sum((i+k)%7 for k in range(8))
+    if name=='filter-map':return (10+(2*i if i>1 else 0))%7
+    if name=='float':return (3*i)%7
+    if name in {'for-loop','method-call'}:return i%7
+    if name=='int-big':return ((2*(9223372036854775807+i))%1000)%7
+    if name=='int-small':return rem(i*3+i%5-7,7)
+    if name=='map-index':return (i+2)%7
+    if name=='map-int-literal':return (i+(2 if i in (2,3) else 3))%7
+    if name=='map-keys':return 2
+    if name=='map-merge-overlap':return (i+3)%7
+    if name=='map-reduce':return (i+66)%7
+    if name=='match':return (0 if i%3==0 else i if i%3==1 else i+1)%7
+    if name=='rat-big':return ((3*(10**30+i))//7)%7
+    if name=='rat-compare':return 1 if 3*i<1000 else 2
+    if name=='rat-div':return (3*i//2)%7
+    if name=='rat':return ((154*i+66)//21)%7
+    if name=='rat-mod':return 3 if i%2 else 0
+    if name=='rat-mul':return (2*i//3)%7
+    if name=='rat-neg':return rem(-i,7)
+    if name=='rat-new':return (i//7)%7
+    if name=='recursion':return (i+16)%7
+    if name=='role-call':return 2 if i%2==0 else 5
+    if name=='string-concat':return (2+len(str(i)))%7
+    if name=='string-length':return (10+i)%7
+    if name=='string-slice':return (10-i%5)%7
+    if name=='try-catch':return (1 if i%2 else i)%7
+    if name=='base64-encode':return base64.b64encode(bytes([i%256,102,111,111,98,97,114,33]))[0]%7
+    if name=='hex-encode':return ord(bytes([i%256,1,2,3,250,251,252,253]).hex()[0])%7
+    if name=='int-parse':return (i%100000)%7
+    if name=='json-round-trip':return len(json.dumps({'id':i,'tags':['a','b']},separators=(',',':')))%7
+    if name=='regex-first-match':return len(str(i))%7
+    if name=='sha256':return hashlib.sha256(bytes([i%256,1,2,3,4,5,6,7])).digest()[0]%7
+    if name=='sorted':return min(5,3,i%9,1)%7
+    if name=='string-replace':return (12+len(str(i)))%7
+    if name=='string-split':return 4
+    if name=='utf8-encode':return (13+len(str(i)))%7
+    raise ValueError('No independent oracle: '+name)
+
+
+@lru_cache(maxsize=512)
+def expected(name,n):
+    if n<0:raise ValueError('negative iteration count')
+    return sum(contribution(name,i) for i in range(n))

@@ -30,6 +30,8 @@ examples = sorted(
     os.path.join(folder, name)
     for root in roots
     for folder, _, names in os.walk(root)
+    # The Bible's examples have their own format and runner (bible/check.py).
+    if os.path.relpath(folder, HERE).split(os.sep)[0] != "bible"
     for name in names
     if name.endswith(".ok") and os.path.exists(os.path.join(folder, name[:-3] + ".expected"))
 )

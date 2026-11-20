@@ -1,0 +1,54 @@
+module bible/kahan v1.0.0;
+
+// Floating point in practice: a long sum, kept naively, with Kahan's
+// compensation and exactly; and a quadratic whose small root cancels.
+import "io/stdout" take Stdout;
+
+// Kahan's compensated sum: `lost` keeps the low-order part that each
+// addition rounds away, and the next addition puts it back.
+object Compensated {
+    has sum is float;
+    has lost is float;
+    Compensated(:sum, :lost);
+
+    added(x is float) is Compensated {
+        let y = x - lost;
+        let t = sum + y;
+        Compensated(sum: t, lost: (t - sum) - y);
+    }
+
+    value() is float { sum; }
+}
+
+// The roots of x² + b·x + c with b < 0.
+object Quadratic {
+    has b is float;
+    has c is float;
+    Quadratic(:b, :c);
+
+    // The textbook formula for the small root subtracts two nearly equal numbers.
+    naive() is float {
+        (-b - (b * b - 4.0 * c).sqrt()) / 2.0;
+    }
+
+    // The large root has no cancellation; the small one is c divided by it.
+    stable() is float {
+        let large = (-b + (b * b - 4.0 * c).sqrt()) / 2.0;
+        c / large;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let naive = (1..=100000).reduce(0.0) -> sum, k { sum + 0.1; };
+    let compensated = (1..=100000).reduce(Compensated(sum: 0.0, lost: 0.0)) -> sum, k { sum.added(0.1); };
+    let exact = (1..=100000).reduce(0.rat()) -> sum, k { sum + 1 / 10; };
+    out.writeln("naive:       " + naive.string());
+    out.writeln("compensated: " + compensated.value().string());
+    out.writeln("exact:       " + exact.string());
+    out.writeln("1 + 1e-15 - 1 = " + ((1.0 + 0.000000000000001) - 1.0).string());
+    let roots = Quadratic(b: -100000000.0, c: 1.0);
+    out.writeln("small root, naive:  " + roots.naive().string());
+    out.writeln("small root, stable: " + roots.stable().string());
+    0;
+}

@@ -1,0 +1,39 @@
+module bible/refusals v1.0.0;
+
+// Pattern: the module names its refusals in one Error enum and checks them
+// with confirm at the boundary; a caller catches only what it can answer.
+import "io/stdout" take Stdout;
+
+enum Refusal is Error = (non_positive(amount is int), insufficient(balance is int, amount is int));
+
+object Account {
+    has balance is int;
+    Account(:balance);
+
+    withdrawn(amount is int) is ^Account {
+        confirm amount > 0 else throw Refusal.non_positive(amount);
+        confirm amount <= balance else throw Refusal.insufficient(balance, amount);
+        ^balance = balance - amount;
+    }
+
+    shown() is string { "balance " + balance.string(); }
+}
+
+object Teller {
+    has account is Account;
+    Teller(:account);
+
+    answer(amount is int) is string {
+        let reply = try { account.withdrawn(amount).shown(); } catch e is Refusal { "refused: " + e.text(); };
+        reply;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let teller = Teller(account: Account(balance: 100));
+    for [30, 0, 150] -> amount {
+        out.writeln(amount.string() + " -> " + teller.answer(amount));
+    }
+    0;
+}

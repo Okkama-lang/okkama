@@ -1,0 +1,43 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "unicode/normalization" take Normalized, NormalizationForm;
+import "unicode/character" take UnicodeCharacter, UnicodeCategory;
+
+// A URL slug: lower-case ASCII letters and digits, words joined by "-".
+object Slug {
+    has title is string;
+    Slug(:title);
+
+    string() is string {
+        // The sharp s has no decomposition; spelling it "ss" is a decision, so it is written down.
+        let spelled = title.lower().replace("ß", "ss");
+        // NFKD splits "è" into "e" and a combining accent, and the ligature "ﬁ" into "f" and "i".
+        let decomposed = Normalized(origin: spelled, form: NormalizationForm.nfkd).string();
+        let kept = decomposed.characters().map() -> c {
+            if self.word_character(c) {
+                c.string();
+            } else if UnicodeCharacter(c).category() == UnicodeCategory.nonspacing_mark {
+                "";
+            } else {
+                " ";
+            }
+        };
+        let words = kept.join("").split(" ").filter() -> word { !word.empty(); };
+        words.join("-");
+    }
+
+    hidden word_character(c is char) is bool {
+        let n = c.code();
+        (n >= 97 && n <= 122) || (n >= 48 && n <= 57);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let titles = ["Crème brûlée, at home", "  Ten   Things!  ", "Straße 42", "Ärger über Öl", "ﬁve ﬁsh", "日本語"];
+    for titles -> title {
+        out.writeln("[" + Slug(title: title).string() + "]");
+    }
+    0;
+}

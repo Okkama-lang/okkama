@@ -1,0 +1,15 @@
+module bible/missing v1.0.0;
+
+enum Stage = (draft, paid(amount is int), cancelled(reason is string));
+
+object Report {
+    Report();
+    text(stage is Stage) is string {
+        match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid(amount) { "paid " + amount.string(); }
+        }
+    }
+}
+
+main() is int { 0; }

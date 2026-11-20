@@ -1,0 +1,44 @@
+module bible/decorators v1.0.0;
+
+// Composition through a role: each decorator does the role it wraps, holds
+// another implementation of it, and adds one behaviour.
+import "io/stdout" take Stdout;
+
+role Pricing {
+    price(item is string) is int;
+}
+
+object Catalog does Pricing {
+    has prices is %string:int;
+    Catalog(:prices);
+    price(item is string) is int { prices[item] else 0; }
+}
+
+object Discounted does Pricing {
+    has origin is Pricing;
+    has percent is int;
+    Discounted(:origin, :percent);
+    price(item is string) is int {
+        let full = origin.price(item);
+        full - (full * percent / 100).int();
+    }
+}
+
+object Rounded does Pricing {
+    has origin is Pricing;
+    Rounded(:origin);
+    price(item is string) is int {
+        let exact = origin.price(item);
+        exact - exact % 10;
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let base = Catalog(prices: ["tea": 345, "cake": 520]);
+    let sale is Pricing = Rounded(origin: Discounted(origin: base, percent: 15));
+    for ["tea", "cake", "soup"] -> item {
+        out.writeln(item + ": " + base.price(item).string() + " -> " + sale.price(item).string());
+    }
+    0;
+}

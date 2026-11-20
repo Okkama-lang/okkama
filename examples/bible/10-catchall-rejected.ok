@@ -1,0 +1,9 @@
+module bible/catch_all v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let text = try { "ok"; } catch e { "anything"; };
+    Stdout().writeln(text);
+    0;
+}

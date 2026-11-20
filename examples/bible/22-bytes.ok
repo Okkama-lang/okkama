@@ -1,0 +1,22 @@
+module bible/bytes v1.0.0;
+
+// A digest is a value of an ordered byte history: hashing in pieces gives the
+// digest of the whole. Encodings carry bytes as text and back.
+import "digest/sha2" take Sha256;
+import "encoding/base64" take Base64Encoded, Base64Decoded;
+import "encoding/hex" take HexEncoded;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Sha256("hello world").hex());
+    let whole = Sha256("abc").hex();
+    let pieces = Sha256().state("ab").state([99.byte()]).hex();
+    out.writeln("pieces give the whole: " + (whole == pieces).string());
+    let data = Utf8Encoded("Okkama!").bytes();
+    let carried = Base64Encoded(origin: data).string();
+    out.writeln("base64 " + carried + ", hex " + HexEncoded(origin: data).string());
+    out.writeln("back: " + Utf8Decoded(Base64Decoded(origin: carried).bytes()).string());
+    0;
+}

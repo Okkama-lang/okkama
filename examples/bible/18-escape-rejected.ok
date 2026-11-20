@@ -1,0 +1,9 @@
+module bible/escape v1.0.0;
+
+main() is int {
+    for 0..10 -> i {
+        let check = () is void { last if i == 3; };
+        check();
+    }
+    0;
+}

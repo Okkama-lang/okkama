@@ -1,0 +1,31 @@
+module bible/absence v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Unknown is Error = (fruit(name is string));
+
+object Shop {
+    has prices is %string:int;
+    Shop(:prices);
+
+    // A missing key is not a hidden null: the shop says what it means.
+    price(name is string) is int {
+        confirm prices.has(name) else throw Unknown.fruit(name);
+        prices[name];
+    }
+
+    // Absence as a value the caller must open.
+    maybe(name is string) is Maybe<int> {
+        try? self.price(name);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let shop = Shop(prices: ["apple": 120, "pear": 140]);
+    out.writeln("pear: " + shop.price("pear").string());
+    out.writeln("fig, or 0: " + (shop.maybe("fig") else 0).string());
+    let answer = try { shop.price("fig").string(); } catch Unknown.fruit(name) { "no " + name; };
+    out.writeln(answer);
+    0;
+}

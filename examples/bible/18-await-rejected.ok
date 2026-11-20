@@ -1,0 +1,12 @@
+module bible/closure_await_rejected v1.0.0;
+
+object Source {
+    Source();
+    async value() is int { 1; }
+}
+
+async main() is int {
+    let source = Source();
+    let read = () is int { await source.value(); };
+    read();
+}

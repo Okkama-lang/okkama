@@ -1,0 +1,17 @@
+module bible/exact v1.0.0;
+
+import "compare" take Comparing, Order;
+
+object Least<T: Comparing<T>> {
+    has first is T;
+    has rest is @T;
+    Least(first is T, rest is ...T) {
+        self.first = first;
+        self.rest = rest...;
+    }
+}
+
+main() is int {
+    let least = Least(1, 2.0);
+    0;
+}

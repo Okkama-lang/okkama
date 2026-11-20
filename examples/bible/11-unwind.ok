@@ -1,0 +1,45 @@
+module bible/unwind v1.0.0;
+
+// On a failure the same cleanup runs: the try body's resources are closed
+// before a catch clause is chosen. A constructor that fails cleans what it
+// opened, and its unfinished object is never destroyed.
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (refused(name is string));
+
+object Handle {
+    has name is string;
+    Handle(:name) { Stdout().writeln("open " + name); }
+    destroy { Stdout().writeln("close " + name); }
+}
+
+object Session {
+    has input is Handle;
+    has output is Handle;
+    Session(name is string, allowed is bool) {
+        input = Handle(name: name + ".in");
+        confirm allowed else throw Refused.refused(name);
+        output = Handle(name: name + ".out");
+    }
+    destroy { Stdout().writeln("end session"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let result = try {
+        let first = Handle(name: "first");
+        defer out.writeln("defer in try");
+        throw Refused.refused("body");
+        "unreachable";
+    }
+    catch Refused.refused(name) {
+        "caught " + name;
+    };
+    out.writeln(result);
+    out.writeln(try { Session("s1", false); "made"; } catch e is Refused { "session refused: " + e.text(); });
+    {
+        let ok = Session("s2", true);
+        out.writeln("session open");
+    }
+    0;
+}

@@ -1,0 +1,7 @@
+module bible/presence_else v1.0.0;
+
+main() is int {
+    let nickname is Presence<string> = Presence<string>.missing;
+    let shown = nickname else "anonymous";
+    0;
+}

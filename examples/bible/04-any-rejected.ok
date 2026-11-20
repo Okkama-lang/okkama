@@ -1,0 +1,7 @@
+module bible/opaque v1.0.0;
+
+main() is int {
+    let value is any = 42;
+    let larger = value + 1;
+    0;
+}

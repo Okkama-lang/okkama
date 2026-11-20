@@ -1,0 +1,26 @@
+module bible/panic v1.0.0;
+
+// A panic is not an error value: no catch clause sees it, and the run ends
+// with exit status 1 after cleanup.
+import "io/stdout" take Stdout;
+
+enum Rejected is Error = (rejected);
+
+object Account {
+    has balance is int;
+    Account(:balance);
+    withdraw(amount is int) is Account {
+        confirm amount > 0 else throw Rejected.rejected;
+        confirm amount <= balance else panic "Withdrawal checked above, still overdrawn";
+        Account(balance: balance - amount);
+    }
+    left() is int { balance; }
+}
+
+main() is int {
+    let out = Stdout();
+    let account = Account(balance: 50);
+    out.writeln(try { account.withdraw(0).left().string(); } catch e is Rejected { "rejected: " + e.text(); });
+    out.writeln(try { account.withdraw(80).left().string(); } catch e is Error { "never printed"; });
+    0;
+}

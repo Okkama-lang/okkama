@@ -1,0 +1,11 @@
+module trade/orders v1.0.0;
+
+import "parties" take Buyer, Purchase;
+
+object Order does Purchase {
+    has buyer is Buyer;
+    has cents is int;
+    Order(:buyer, :cents);
+    total() is int { cents; }
+    line() is string { buyer.name() + " pays " + cents.string(); }
+}

@@ -1,0 +1,9 @@
+module bible/std_path v1.0.0;
+
+// A standard-library declaration named in place: no import line.
+main() is int {
+    let out = std.io.stdout.Stdout();
+    let order = std.compare.Order.less;
+    out.writeln("order: " + std.runtime.debug.data_dump(order));
+    0;
+}

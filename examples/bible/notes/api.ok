@@ -1,0 +1,168 @@
+module notes/api v1.0.0;
+
+// A small JSON API for notes: list, show, create, remove.
+import "async/atomic" take Atomic;
+import "json" take Json, JsonField;
+import "http/message" take Responding;
+import "web/request" take WebRequest;
+import "http/status" take Status;
+import "web/reply" take JsonReply, CreatedReply, NoContentReply;
+import "web/exception" take Exception, ProblemReply;
+import "web/routing" take WebRoutes, Scope, Resource, Get, Post, Delete, ExceptionScope;
+
+object Note {
+    has id is int;
+    has title is string;
+
+    Note(:id, :title);
+
+    id() is int { id; }
+    title() is string { title; }
+
+    json() is Json {
+        Json(JsonField("id", id), JsonField("title", title));
+    }
+}
+
+// What a store refuses. The store knows the rule; the service knows the status.
+enum StoreRefusal is Error = (duplicate(title is string));
+
+// Where notes live. The API sees a role; memory and a database are two doers.
+role NoteStore {
+    // Up to count notes with identifiers above id, in identifier order.
+    async after(id is int, count is int) is @Note;
+    async find(id is int) is Maybe<Note>;
+    // A new note; StoreRefusal.duplicate if the title is taken.
+    async added(title is string) is Note;
+    async removed(id is int) is bool;
+}
+
+// Everything the store holds, as one value: replaced whole, never edited.
+object Shelf {
+    has upcoming is int = 1;
+    has notes is %int:Note = [:];
+
+    Shelf(:upcoming, :notes);
+
+    upcoming() is int { upcoming; }
+    notes() is %int:Note { notes; }
+}
+
+object MemoryStore does NoteStore {
+    has shelf is Atomic<Shelf>;
+
+    MemoryStore() {
+        shelf = Atomic(Shelf());
+    }
+
+    async after(id is int, count is int) is @Note {
+        shelf.value().notes().values().filter() -> note { note.id() > id; }.take(count);
+    }
+
+    async find(id is int) is Maybe<Note> {
+        let notes = shelf.value().notes();
+        if notes.has(id) { Maybe.some(notes[id]); } else { Maybe.none; }
+    }
+
+    // Read, decide, publish only if nobody published in between.
+    async added(title is string) is Note {
+        loop {
+            let current = shelf.value();
+            let taken = current.notes().values().filter() -> note { note.title() == title; };
+            confirm taken.size() == 0 else throw StoreRefusal.duplicate(title);
+            let note = Note(id: current.upcoming(), title: title);
+            let revised = Shelf(upcoming: current.upcoming() + 1, notes: current.notes() + [note.id(): note]);
+            if shelf.compare_and_replace(expected: current, revised: revised) {
+                last note;
+            }
+        };
+    }
+
+    async removed(id is int) is bool {
+        loop {
+            let current = shelf.value();
+            if !current.notes().has(id) {
+                last false;
+            }
+            let revised = Shelf(upcoming: current.upcoming(), notes: current.notes() - [id: current.notes()[id]]);
+            if shelf.compare_and_replace(expected: current, revised: revised) {
+                last true;
+            }
+        };
+    }
+}
+
+object NotesApi {
+    has store is NoteStore;
+
+    NotesApi(:store);
+
+    // One page: ?after=<id>&limit=<n>, and where the next page starts.
+    async list(request is WebRequest) is Responding {
+        let after = request.query().maybe("after").int() else 0;
+        let limit = request.query().maybe("limit").int() else 20;
+        confirm limit >= 1 && limit <= 100 else throw Exception.status(400, "limit must be from 1 to 100");
+        let found = await store.after(after, limit + 1);
+        let shown = found.take(limit);
+        let items = JsonField("items", Json(items: shown.map() -> note { note.json(); }));
+        if found.size() > limit {
+            let onward = "/api/notes?after=" + shown[limit - 1].id().string() + "&limit=" + limit.string();
+            JsonReply(value: Json(items, JsonField("next", onward)));
+        } else {
+            JsonReply(value: Json(items));
+        }
+    }
+
+    async show(request is WebRequest) is Responding {
+        let id = request.path().int("id");
+        match await store.find(id) {
+            case Maybe.some(note) { JsonReply(value: note.json()); }
+            case Maybe.none { throw Exception.status(404, "no note " + id.string()); }
+        };
+    }
+
+    async add(request is WebRequest) is Responding {
+        let body = await request.json(4096);
+        let title = body.text("title").trim();
+        confirm !title.empty() else throw Exception.status(422, "title is empty");
+        let note = await store.added(title);
+        CreatedReply(location: "/api/notes/" + note.id().string(), value: note.json());
+    }
+
+    async remove(request is WebRequest) is Responding {
+        let id = request.path().int("id");
+        confirm await store.removed(id) else throw Exception.status(404, "no note " + id.string());
+        NoContentReply();
+    }
+}
+
+// Turns the store's refusals into statuses; any other error passes outwards.
+object StoreRefusals does ExceptionScope {
+    StoreRefusals();
+
+    async scoped(request is WebRequest, endpoint is async (WebRequest) is Responding) is Responding {
+        let reply is Responding = try {
+            await endpoint(request);
+        }
+        catch StoreRefusal.duplicate(title) {
+            ProblemReply(status: Status.conflict, detail: "a note titled '" + title + "' exists");
+        };
+        reply;
+    }
+}
+
+// The route table: one place that says which URL reaches which action.
+object NotesService {
+    has api is NotesApi;
+
+    NotesService(:api);
+
+    routes() is WebRoutes {
+        WebRoutes(
+            Scope("/api", StoreRefusals(),
+                Resource("/notes", Get(api.list), Post(api.add)),
+                Resource("/notes/:id", Get(api.show), Delete(api.remove)),
+            ),
+        );
+    }
+}

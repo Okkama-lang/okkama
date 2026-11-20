@@ -1,0 +1,16 @@
+module bible/tail v1.0.0;
+
+enum Priority = (low, normal, urgent);
+
+object Queue {
+    Queue();
+
+    weight(priority is Priority) is int {
+        match priority {
+            case Priority.low { 1; }
+            case Priority.normal { 2; }
+        }
+    }
+}
+
+main() is int { 0; }

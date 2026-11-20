@@ -1,0 +1,5 @@
+module bible/recursive v1.0.0;
+
+enum Tree = (leaf, node(left is Tree, value is int, right is Tree));
+
+main() is int { 0; }

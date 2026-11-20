@@ -1,0 +1,4 @@
+09-if-rejected.ok:5:31: syntax error at ";": If expression requires else branch.
+  |
+5 |     let code = if ready { 0; };
+  |                               ^

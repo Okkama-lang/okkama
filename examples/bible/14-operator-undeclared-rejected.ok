@@ -1,0 +1,13 @@
+module bible/undeclared v1.0.0;
+
+object Weight {
+    has grams is int;
+    Weight(:grams);
+    grams() is int { grams; }
+    plus(other is Weight) is Weight { Weight(grams: grams + other.grams()); }
+}
+
+main() is int {
+    let both = Weight(grams: 300) + Weight(grams: 200);
+    0;
+}

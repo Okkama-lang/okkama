@@ -1,0 +1,24 @@
+module bible/invariant v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum InvalidPercent is Error = (out_of_range(value is int));
+
+// The constructor is the only place a Percent can come from,
+// so every Percent in the program is between 0 and 100.
+object Percent {
+    has value is int;
+    Percent(value is int) {
+        confirm value >= 0 && value <= 100 else throw InvalidPercent.out_of_range(value);
+        self.value = value;
+    }
+    of(amount is int) is int { int(amount * value / 100); }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Percent(15).of(2000).string());
+    let refused = try { Percent(150).of(2000).string(); } catch InvalidPercent.out_of_range(value) { "refused " + value.string(); };
+    out.writeln(refused);
+    0;
+}

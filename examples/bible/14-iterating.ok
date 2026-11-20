@@ -1,0 +1,53 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "collections/iteration" take Cursor, Iterating, IterationEnded;
+
+// A collection of your own: the days of a month that fall on a weekday.
+object Weekdays does Iterating<int> {
+    has days is int;
+    has first is int;    // 0 = Monday, ... 6 = Sunday, for day 1
+    Weekdays(:days, :first);
+    cursor() is Cursor<int> { WeekdayCursor(days: days, first: first, day: 1).settled(); }
+}
+
+// A cursor is a value: successor() returns the next position and leaves this one as it was.
+object WeekdayCursor does Cursor<int> {
+    has days is int;
+    has first is int;
+    has day is int;
+    WeekdayCursor(:days, :first, :day);
+
+    // Skip forward to the first weekday at or after this day.
+    settled() is WeekdayCursor {
+        if day <= days && (first + day - 1) % 7 >= 5 {
+            WeekdayCursor(days: days, first: first, day: day + 1).settled();
+        } else {
+            self;
+        }
+    }
+    available() is bool { day <= days; }
+    item() is int {
+        confirm day <= days else throw IterationEnded.ended;
+        day;
+    }
+    successor() is Cursor<int> { WeekdayCursor(days: days, first: first, day: day + 1).settled(); }
+}
+
+main() is int {
+    let out = Stdout();
+    // A month of 30 days whose first day is a Saturday.
+    let month = Weekdays(days: 30, first: 5);
+    // for, map, filter and reduce accept it like an array.
+    let first_week = month.filter() -> d { d <= 7; };
+    out.writeln(first_week.map() -> d { d.string(); }.join(" "));
+    out.writeln(month.reduce(0) -> count, d { count + 1; }.string() + " working days");
+    for month -> d {
+        last if d > 4;
+        out.writeln("day " + d.string());
+    }
+    // Two walks over one collection never interfere: each starts its own cursor.
+    let start = month.cursor();
+    out.writeln(start.item().string() + " " + start.successor().item().string() + " " + start.item().string());
+    0;
+}

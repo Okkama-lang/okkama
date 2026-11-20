@@ -1,0 +1,28 @@
+module bible/narrowing v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Account { label() is string; balance() is int; }
+role Labelled { label() is string; }
+
+object Wallet does Account, Labelled {
+    has owner is string;
+    has cents is int;
+    Wallet(:owner, :cents);
+    label() is string { owner; }
+    balance() is int { cents; }
+}
+
+object Printer {
+    Printer();
+    print(item is Labelled) is string { "[" + item.label() + "]"; }
+}
+
+main() is int {
+    let out = Stdout();
+    let account is Account = Wallet(owner: "Ada", cents: 250);
+    out.writeln(Printer().print(account));
+    let tag is Labelled = account;
+    out.writeln(tag.label());
+    0;
+}

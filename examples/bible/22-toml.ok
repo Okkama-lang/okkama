@@ -1,0 +1,23 @@
+module bible/toml v1.0.0;
+
+// A configuration file read the way json is read: by name, with the type
+// asked for at the point of use, and absence decided where it is allowed.
+import "toml/parse" take ParsedToml, InvalidToml;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let config = ParsedToml("title = \"shop\"\n" +
+        "[server]\nhost = \"0.0.0.0\"\nport = 8080\n" +
+        "[[mirror]]\nurl = \"https://a.example\"\nweight = 3\n" +
+        "[[mirror]]\nurl = \"https://b.example\"\n").root();
+    let server = config.get("server");
+    out.writeln(config.text("title") + " on " + server.text("host") + ":" + server.int("port").string());
+    out.writeln("debug: " + (config.maybe("debug").boolean() else false).string());
+    for config.tables("mirror") -> mirror {
+        out.writeln(mirror.text("url") + " weight " + (mirror.maybe("weight").int() else 1).string());
+    }
+    out.writeln(try { ParsedToml("port = 80\nport = 81\n").root().int("port").string(); }
+        catch e is InvalidToml { "refused: " + e.text(); });
+    0;
+}

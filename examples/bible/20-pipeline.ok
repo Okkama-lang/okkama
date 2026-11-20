@@ -1,0 +1,69 @@
+module bible/pipeline v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Sending, Receiving, ChannelClosed;
+
+object Source {
+    has output is Sending<int>;
+
+    Source(:output);
+
+    async run() is int {
+        defer output.close();
+        for 1..=5 -> n {
+            await output.send(n);
+            Stdout().writeln("source: sent " + n.string());
+        }
+        5;
+    }
+}
+
+object Square {
+    has input is Receiving<int>;
+    has output is Sending<int>;
+
+    Square(:input, :output);
+
+    async run() is int {
+        defer output.close();
+        loop {
+            let n = try {
+                await input.item();
+            }
+            catch e is ChannelClosed {
+                last;
+            };
+            await output.send(n * n);
+        }
+        0;
+    }
+}
+
+object Total {
+    has input is Receiving<int>;
+
+    Total(:input);
+
+    async sum(acc is int) is int {
+        let n = try {
+            await input.item();
+        }
+        catch e is ChannelClosed {
+            return acc;
+        };
+        Stdout().writeln("total: got " + n.string());
+        await self.sum(acc + n);
+    }
+}
+
+async main() is int {
+    let numbers is Channel<int> = Channel(capacity: 1);
+    let squares is Channel<int> = Channel(capacity: 1);
+    let source = spawn Source(output: numbers.sending()).run();
+    let square = spawn Square(input: numbers.receiving(), output: squares.sending()).run();
+    let total = await Total(input: squares.receiving()).sum(0);
+    await source;
+    await square;
+    Stdout().writeln("sum of squares: " + total.string());
+    0;
+}

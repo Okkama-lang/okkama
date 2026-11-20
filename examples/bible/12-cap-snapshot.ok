@@ -1,0 +1,27 @@
+module bible/cap_snapshot v1.0.0;
+
+// A cap stays bound to the version of the object it was taken from; a
+// successor has caps of its own.
+import "io/stdout" take Stdout;
+
+object Order {
+    has number is int;
+    has paid is bool = false;
+    Order(:number);
+
+    settled() is ^Order { ^paid = true; }
+
+    cap Status {
+        line is string { "#" + number.string() + (if paid { " paid"; } else { " open"; }); }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = Order(number: 7);
+    let before = order::Status;
+    let after = order.settled();
+    out.writeln(before::line);
+    out.writeln(after::Status::line);
+    0;
+}

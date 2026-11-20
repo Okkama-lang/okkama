@@ -1,0 +1,5 @@
+=== RUN   a greeting reads the store
+--- PASS: a greeting reads the store
+=== RUN   two greetings run side by side
+--- PASS: two greetings run side by side
+PASS

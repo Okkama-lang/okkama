@@ -1,0 +1,48 @@
+module bible/identity v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Echo<T> {
+    echo(value is T) is T;
+}
+
+object Loud does Echo<string> {
+    Loud();
+    echo(value is string) is string { value.upper() + "!"; }
+}
+
+object Same<T> does Echo<T> {
+    Same();
+    echo(value is T) is T { value; }
+}
+
+object Bucket<T> {
+    has values is @T;
+    Bucket(:values);
+    size() is int { values.size(); }
+    plus(value is T) is Bucket<T> { Bucket(values: values + [value]); }
+}
+
+enum Slot<T> = (vacant, full(item is T));
+
+object Slots {
+    Slots();
+    total(slots is @Slot<int>) is int {
+        slots.reduce(0) -> sum, slot { sum + match slot { case Slot.full(item) { item; } case Slot.vacant { 0; } }; };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    // Same() has no argument to infer from: the target Echo<string> supplies T.
+    let echoes is @Echo<string> = [Loud(), Same()];
+    out.writeln(echoes.map() -> echo { echo.echo("hi"); }.join(" "));
+    let numbers is Echo<int> = Same();
+    out.writeln(numbers.echo(7).string());
+    // An empty array is no evidence; the declared type is.
+    let empty is Bucket<int> = Bucket(values: []);
+    out.writeln(empty.plus(5).plus(6).size().string());
+    let slots = [Slot.full(3), Slot<int>.vacant, Slot.full(4)];
+    out.writeln(Slots().total(slots).string());
+    0;
+}

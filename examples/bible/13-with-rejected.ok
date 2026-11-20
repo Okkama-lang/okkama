@@ -1,0 +1,9 @@
+module bible/setter v1.0.0;
+
+object Tab {
+    has limit is int;
+    Tab(:limit);
+    with_limit(limit is int) is ^Tab { ^limit = limit; }
+}
+
+main() is int { 0; }

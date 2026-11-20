@@ -1,0 +1,28 @@
+module bible/zones v1.0.0;
+
+// Time zones from the bundled IANA database, never from the host: one call
+// placed in Kostanay and read in three other cities, a wall time that a
+// clock change skips, and the database version the answers depend on.
+import "io/stdout" take Stdout;
+import "time/zone" take Zone, ZonedDateTime, MissingLocalTime, TimeZoneDatabaseVersion;
+import "time/iso" take IsoText;
+
+main() is int {
+    let out = Stdout();
+    let home = Zone("Asia/Qostanay");
+    let call = home.instant(IsoText("2026-12-01T19:00:00").local_date_time());
+    out.writeln("the call, UTC:    " + call.string());
+    for ["America/New_York", "Europe/Berlin", "Asia/Tokyo"] -> name {
+        let there = ZonedDateTime(instant: call, zone: Zone(name));
+        out.writeln(name + ": " + there.local_datetime().string() + " " + there.abbreviation());
+    }
+    let skipped = try {
+        Zone("America/New_York").instant(IsoText("2026-03-08T02:30:00").local_date_time()).string();
+    }
+    catch e is MissingLocalTime {
+        "2026-03-08 02:30 in New York: " + e.text();
+    };
+    out.writeln(skipped);
+    out.writeln("tzdata " + TimeZoneDatabaseVersion().string());
+    0;
+}

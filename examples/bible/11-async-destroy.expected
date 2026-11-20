@@ -1,0 +1,4 @@
+send hello
+flush c1
+closed after 1 flush
+talked

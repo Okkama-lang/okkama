@@ -1,0 +1,6 @@
+naive:       10000.000000018848
+compensated: 10000
+exact:       10000
+1 + 1e-15 - 1 = 1.1102230246251565e-15
+small root, naive:  7.450580596923828e-09
+small root, stable: 1e-08

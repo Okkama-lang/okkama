@@ -1,0 +1,8 @@
+fetch: attempt 1
+fetch: attempt 2
+fetch: attempt 3
+main: 200 OK
+fetch: attempt 1
+fetch: attempt 2
+fetch: attempt 3
+main: gave up

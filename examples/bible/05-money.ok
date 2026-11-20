@@ -1,0 +1,30 @@
+module bible/money v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Split a bill of 100.00 between three people, exactly.
+object Bill {
+    has cents is int;
+    Bill(cents is int) { self.cents = cents; }
+
+    // Each share is a rational number of cents; nothing is lost yet.
+    share(people is int) is rat { cents / people; }
+
+    // Rounding is a decision: everyone pays the truncated share and the
+    // first person pays what is left over.
+    shares(people is int) is @int {
+        let each = int(self.share(people));
+        let rest = cents - each * people;
+        (0..people).map() -> index { if index == 0 { each + rest; } else { each; } };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let bill = Bill(10000);
+    out.writeln("exact share: " + bill.share(3).string() + " cents");
+    let parts = bill.shares(3);
+    out.writeln("paid: " + parts.map() -> part { part.string(); }.join(" + ")
+        + " = " + parts.reduce(0) -> sum, part { sum + part; }.string());
+    0;
+}

@@ -1,0 +1,35 @@
+module bible/properties v1.0.0;
+
+// A property states a claim about every input; the library generates
+// inputs from a seed and shrinks the first counterexample.
+
+import "testing/generation" take IntegerGeneration;
+import "testing/property" take Property;
+
+object Cents {
+    has total is int;
+    Cents(:total);
+    digit() is int { (total / 100).int(); }
+    rest() is int { total - self.digit() * 100; }
+}
+
+test "digit and rest rebuild the amount" {
+    let property is Property<int> = Property(
+        IntegerGeneration(-100000, 100001), 42, 200, 1000, 64,
+        (value is int) is bool {
+            let cents = Cents(total: value);
+            cents.digit() * 100 + cents.rest() == value;
+        },
+    );
+    property.check();
+}
+
+test "rest is never negative" {
+    let property is Property<int> = Property(
+        IntegerGeneration(-100000, 100001), 42, 200, 1000, 64,
+        (value is int) is bool { Cents(total: value).rest() >= 0; },
+    );
+    property.check();
+}
+
+main() is int { 0; }

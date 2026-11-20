@@ -1,0 +1,5 @@
+USD 325
+EUR 200
+0 3
+true
+InvalidCash.negative(-50)

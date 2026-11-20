@@ -1,0 +1,71 @@
+module bible/tally_output v1.0.0;
+
+import "io/stdout" take Stdout;
+import "os/environment" take Environment;
+import "terminal/capability" take DetectedTerminalCapabilities, ColorPolicy, TerminalColorDepth;
+import "terminal/style" take TextStyle, StyledText, DefaultColor, TextAttribute;
+import "json" take Json, JsonField;
+
+// What the tool found, rendered for people or for programs.
+object Report {
+    has lines is int;
+    has words is int;
+    has top is @string;
+
+    Report(:lines, :words, :top);
+
+    text(depth is TerminalColorDepth) is @string {
+        let bold = TextStyle(foreground: DefaultColor(), background: DefaultColor(), attributes: [TextAttribute.bold]);
+        let header = lines.string() + " lines, " + words.string() + " words";
+        [StyledText(origin: header, style: bold).rendered(depth)] + top;
+    }
+
+    json() is string {
+        let words_json = top.map() -> word { Json(word); };
+        Json(JsonField("lines", lines), JsonField("words", words), JsonField("top", Json(items: words_json))).string();
+    }
+}
+
+// Colours are decided once, from the facts a real run reads: whether the
+// output is a terminal, the environment (NO_COLOR, TERM) and a policy.
+object Display {
+    has depth is TerminalColorDepth;
+
+    Display(terminal is bool, environment is Environment) {
+        let detected = DetectedTerminalCapabilities(
+            input: false,
+            output: terminal,
+            native_depth: TerminalColorDepth.basic,
+            columns: 80,
+            rows: 24,
+            environment: environment,
+            policy: ColorPolicy.automatic,
+        );
+        depth = detected.capabilities()::Support::colors;
+    }
+
+    depth() is TerminalColorDepth { depth; }
+
+    named() is string {
+        match depth {
+            case TerminalColorDepth.disabled { "no colour"; }
+            case TerminalColorDepth.basic { "8 colours"; }
+            case TerminalColorDepth.indexed { "256 colours"; }
+            case TerminalColorDepth.true_color { "true colour"; }
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let report = Report(lines: 2, words: 12, top: ["the", "on"]);
+    let piped = Display(terminal: false, environment: Environment(values: [:]));
+    let muted = Display(terminal: true, environment: Environment(values: ["NO_COLOR": "1"]));
+    let shown = Display(terminal: true, environment: Environment(values: ["TERM": "xterm"]));
+    for [piped, muted, shown] -> display {
+        let first = report.text(display.depth()).first().replace("\u{1b}", "ESC");
+        out.writeln(display.named() + ": " + first);
+    }
+    out.writeln(report.json());
+    0;
+}

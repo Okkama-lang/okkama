@@ -1,0 +1,8 @@
+module bank/money v2.0.0;
+
+// The same name and the same field as shop/money, in another module.
+object Money {
+    has cents is int;
+    Money(:cents);
+    cents() is int { cents; }
+}

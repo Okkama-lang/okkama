@@ -1,0 +1,51 @@
+module bible/pipeline v1.0.0;
+
+// Pattern: each change of state is a successor, so every stage of a
+// pipeline is a value that can be kept, compared and reused.
+import "io/stdout" take Stdout;
+
+enum OrderError is Error = (closed, empty);
+
+object Order {
+    has lines is int = 0;
+    has total is int = 0;
+    has percent is int = 0;
+    has open is bool = true;
+    Order();
+
+    added(price is int) is ^Order {
+        confirm open else throw OrderError.closed;
+        ^lines = lines + 1;
+        ^total = total + price;
+    }
+
+    discounted(by is int) is ^Order {
+        confirm open else throw OrderError.closed;
+        ^percent = by;
+    }
+
+    closed() is ^Order {
+        confirm lines > 0 else throw OrderError.empty;
+        ^open = false;
+    }
+
+    due() is int { total - (total * percent / 100).int(); }
+
+    summary() is string {
+        lines.string() + " lines, due " + self.due().string() + (if open { ", open"; } else { ", closed"; });
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let empty = Order();
+    let basket = empty.added(300).added(200);
+    let offer = basket.discounted(10);
+    let paid = offer.closed();
+    for [empty, basket, offer, paid] -> stage {
+        out.writeln(stage.summary());
+    }
+    let late = try { paid.added(50).summary(); } catch e is OrderError { e.text(); };
+    out.writeln(late);
+    0;
+}

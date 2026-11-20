@@ -1,0 +1,22 @@
+module bible/handle v1.0.0;
+
+import "io/stdout" take Stdout;
+import "encoding/utf" take Utf8Encoded;
+import "runtime/fs" take open, write, close, path_encode;
+
+main() is int {
+    let out = Stdout();
+    // write 2 | create 4 | truncate 8, mode 0644
+    let handle = open(path_encode("21-handle.txt"), 14, 420);
+    out.writeln("wrote " + write(handle, Utf8Encoded("hello\n").bytes()).string() + " bytes");
+    out.writeln("closed: " + close(handle).string());
+    out.writeln("closed again: " + close(handle).string());
+    let late = try {
+        write(handle, Utf8Encoded("late\n").bytes()).string();
+    }
+    catch failure is NativeFailure {
+        failure.code();
+    };
+    out.writeln("write after close: " + late);
+    0;
+}

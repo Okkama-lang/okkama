@@ -1,0 +1,25 @@
+module bible/tasks v1.0.0;
+
+// A failure crosses await unchanged: the awaiting task catches it by type.
+import "io/stdout" take Stdout;
+
+enum FetchError is Error = (timeout(host is string), refused(host is string));
+
+object Fetcher {
+    has host is string;
+    Fetcher(:host);
+    async body() is string {
+        if host == "slow.example" { throw FetchError.timeout(host); }
+        "page from " + host;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let fast = spawn Fetcher(host: "fast.example").body();
+    let slow = spawn Fetcher(host: "slow.example").body();
+    out.writeln(await fast);
+    let text = try { await slow; } catch FetchError.timeout(host) { "gave up on " + host; };
+    out.writeln(text);
+    0;
+}

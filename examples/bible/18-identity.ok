@@ -1,0 +1,20 @@
+module bible/closure_identity v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Maker {
+    Maker();
+    adder(amount is int) is (int) is int { (value is int) is int { value + amount; }; }
+}
+
+main() is int {
+    let maker = Maker();
+    let one = maker.adder(1);
+    let alias = one;
+    let another_one = maker.adder(1);
+    let literal = (value is int) is int { value + 1; };
+    let twin = (value is int) is int { value + 1; };
+    Stdout().writeln((one == alias).string() + " " + (one == another_one).string() + " " +
+        (literal == twin).string() + " " + (Maker() == Maker()).string());
+    0;
+}

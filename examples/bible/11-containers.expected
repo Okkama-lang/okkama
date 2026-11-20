@@ -1,0 +1,10 @@
+open db
+open cache
+using cache
+close cache
+close db
+map released
+open socket
+hello from socket
+close socket
+closure released

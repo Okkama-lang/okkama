@@ -1,0 +1,35 @@
+module bible/escape v1.0.0;
+
+// A constructor may hand its unfinished `self` to a collaborator. This is the
+// only way two immutable objects can refer to each other.
+import "io/stdout" take Stdout;
+
+object Leaf {
+    has up is Tree;
+    Leaf(:up);
+    describe() is string { "leaf of " + up.name(); }
+}
+
+object Tree {
+    has name is string;
+    has leaf is Maybe<Leaf>;
+
+    Tree(name is string) {
+        self.name = name;
+        leaf = Maybe.some(Leaf(up: self));
+    }
+
+    name() is string { name; }
+    describe() is string {
+        match leaf {
+            case Maybe.some(l) { name + " has a " + l.describe(); }
+            case Maybe.none { name; }
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Tree("oak").describe());
+    0;
+}

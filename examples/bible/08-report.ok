@@ -1,0 +1,56 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Sale {
+    has customer is string;
+    has month is int;
+    has cents is int;
+    Sale(:customer, :month, :cents);
+    buyer() is string { customer; }
+    period() is int { month; }
+    amount() is int { cents; }
+}
+
+// A value object: its fields are scalars, so it can key a map.
+object Bucket {
+    has city is string;
+    has month is int;
+    Bucket(:city, :month);
+    shown() is string { city + "/" + month.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let sales = [
+        Sale(customer: "ada", month: 2, cents: 1200),
+        Sale(customer: "bob", month: 1, cents: 300),
+        Sale(customer: "ada", month: 1, cents: 450),
+        Sale(customer: "cy", month: 2, cents: 990),
+        Sale(customer: "bob", month: 2, cents: 700)
+    ];
+    let cities = ["ada": "Oslo", "bob": "Lima"];
+
+    // Group: each customer's sales, in the order they arrived.
+    let nobody is %string:@Sale = [:];
+    let by_customer = sales.reduce(nobody) -> groups, sale {
+        let earlier = groups[sale.buyer()] else [];
+        groups + [sale.buyer(): earlier + [sale]];
+    };
+    for by_customer.keys() -> name {
+        let mine = by_customer[name];
+        let total = mine.reduce(0) -> sum, sale { sum + sale.amount(); };
+        out.writeln(name + "  sales " + mine.size().string() + "  total " + total.string());
+    }
+
+    // Join with the cities and re-key by (city, month); a customer without a city goes to "?".
+    let nothing is %Bucket:int = [:];
+    let by_bucket = sales.reduce(nothing) -> totals, sale {
+        let key = Bucket(city: cities[sale.buyer()] else "?", month: sale.period());
+        totals + [key: (totals[key] else 0) + sale.amount()];
+    };
+    for by_bucket.keys() -> key {
+        out.writeln(key.shown() + " " + by_bucket[key].string());
+    }
+    0;
+}

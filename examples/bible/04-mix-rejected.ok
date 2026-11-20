@@ -1,0 +1,11 @@
+module bible/mix v1.0.0;
+
+// An int and a float never meet in an operator; the program converts one.
+import "io/stdout" take Stdout;
+
+main() is int {
+    let items = 3;
+    let price = 2.5;
+    Stdout().writeln((items * price).string());
+    0;
+}

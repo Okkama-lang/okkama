@@ -1,0 +1,51 @@
+module bible/tally_tests v1.0.0;
+
+import "fs/error" take FileError;
+import "tally/tool" take Tool, Sources;
+
+// Prepared text instead of the disk and the terminal.
+object Given does Sources {
+    has files is %string:@string;
+    has typed is @string;
+
+    Given(:files, :typed);
+
+    file(path is string) is @string {
+        confirm files.has(path) else throw FileError.not_found(path);
+        files[path];
+    }
+
+    input() is @string { typed; }
+}
+
+test "files are read in order and counted together" {
+    let sources = Given(files: ["a": ["red blue"], "b": ["blue"]], typed: []);
+    let outcome = Tool().outcome(["a", "b"], sources);
+    test.is(outcome.code(), 0);
+    test.is(outcome.out(), ["2 lines, 3 words, 2 distinct", "2 blue", "1 red"]);
+}
+
+test "no file means the standard input" {
+    let sources = Given(files: [:], typed: ["one two", "two"]);
+    let outcome = Tool().outcome(["-n", "1"], sources);
+    test.is(outcome.out(), ["2 lines, 3 words, 2 distinct", "2 two"]);
+}
+
+test "a missing file is an error with status 1" {
+    let outcome = Tool().outcome(["nowhere"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 1);
+    test.is(outcome.err(), ["tally: FileError.not_found(\"nowhere\")"]);
+    test.is(outcome.out(), []);
+}
+
+test "a bad argument is a usage error with status 2" {
+    let outcome = Tool().outcome(["--top", "many"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 2);
+    test.is(outcome.err().size(), 2);
+}
+
+test "help goes to the standard output with status 0" {
+    let outcome = Tool().outcome(["--help"], Given(files: [:], typed: []));
+    test.is(outcome.code(), 0);
+    test.is(outcome.out().first().starts_with("Usage:"), true);
+}

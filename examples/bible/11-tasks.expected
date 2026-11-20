@@ -1,0 +1,9 @@
+open w1.scratch
+close w1.scratch
+counted 10
+open w2.tmp
+open w2
+close w2.tmp
+awaited w2
+close w2
+end

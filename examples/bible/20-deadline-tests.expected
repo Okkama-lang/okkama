@@ -1,0 +1,3 @@
+=== RUN   a courier that never answers times out after thirty seconds
+--- PASS: a courier that never answers times out after thirty seconds
+PASS

@@ -1,0 +1,27 @@
+module bible/cap_outside v1.0.0;
+
+// A cap declared beside its object, in the object's module: the body names
+// the owner's fields through the owner type. A generic owner's cap takes the
+// owner's type arguments.
+import "io/stdout" take Stdout;
+
+object Box<T> {
+    has item is T;
+    has label is string;
+    Box(:item, :label);
+}
+
+cap Box::Tag {
+    text is string { "[" + Box::label + "]"; }
+}
+
+object Shelf {
+    Shelf();
+    show(tag is Box<int>::Tag) is string { tag::text; }
+}
+
+main() is int {
+    let box = Box(item: 42, label: "answer");
+    Stdout().writeln(Shelf().show(box::Tag));
+    0;
+}

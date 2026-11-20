@@ -1,0 +1,1 @@
+11-async-owner-rejected.ok:11:26: semantic error: Connection has an async destroy; own it in an async action

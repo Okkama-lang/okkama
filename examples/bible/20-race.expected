@@ -1,0 +1,10 @@
+fast
+waiter 1 ends
+winner 2
+broken 1
+ok
+first success 3
+broken 1
+broken 2
+first failure: broken
+no futures

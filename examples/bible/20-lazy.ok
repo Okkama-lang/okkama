@@ -1,0 +1,25 @@
+module bible/lazy v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Oven {
+    has name is string;
+
+    Oven(name is string) {
+        self.name = name;
+    }
+
+    async baked() is string {
+        Stdout().writeln("baking " + name);
+        name + " bread";
+    }
+}
+
+async main() is int {
+    let pending = Oven("rye").baked();
+    Stdout().writeln("ordered; done: " + pending.done().string());
+    let first = await pending;
+    let second = await pending;
+    Stdout().writeln(first + ", " + second + "; done: " + pending.done().string());
+    0;
+}

@@ -1,0 +1,3 @@
+port 9090 from environment
+host localhost, debug false
+INFO shop.auth: login {"user":"ann","password":"[redacted]"}

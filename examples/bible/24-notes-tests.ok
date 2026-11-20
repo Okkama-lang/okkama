@@ -1,0 +1,104 @@
+module bible/notes_tests v1.0.0;
+
+import "json" take Json, JsonField;
+import "http/body" take JsonBody;
+import "async/collect" take AllFutures;
+import "web/testing" take WebTestClient;
+import "notes/api" take NotesService, NotesApi, MemoryStore;
+
+object Fresh {
+    Fresh();
+
+    client() is WebTestClient {
+        WebTestClient(NotesService(api: NotesApi(store: MemoryStore())).routes());
+    }
+}
+
+async test "a created note can be listed and read" {
+    let client = Fresh().client();
+    let created = await client.post("/api/notes", JsonBody(Json(JsonField("title", "buy tea"))));
+    test.is(created::Head::code, 201);
+    let page = await client.get("/api/notes/1");
+    test.is(page::Head::code, 200);
+    test.is((await page.json()).text("title"), "buy tea");
+    let all = await client.get("/api/notes");
+    test.is((await all.json()).get("items").size(), 1);
+}
+
+async test "a missing note is a 404 problem" {
+    let page = await Fresh().client().get("/api/notes/9");
+    test.is(page::Head::code, 404);
+    test.is((await page.json()).text("detail"), "no note 9");
+}
+
+async test "an empty title is refused with 422" {
+    let reply = await Fresh().client().post("/api/notes", JsonBody(Json(JsonField("title", "  "))));
+    test.is(reply::Head::code, 422);
+}
+
+async test "a removed note is gone" {
+    let client = Fresh().client();
+    await client.post("/api/notes", JsonBody(Json(JsonField("title", "call Ada"))));
+    test.is((await client.delete("/api/notes/1"))::Head::code, 204);
+    test.is((await client.get("/api/notes/1"))::Head::code, 404);
+    test.is((await client.delete("/api/notes/1"))::Head::code, 404);
+}
+
+async test "a non-number id is a 400" {
+    test.is((await Fresh().client().get("/api/notes/seven"))::Head::code, 400);
+}
+
+async test "a page links to the next one until the end" {
+    let client = Fresh().client();
+    for ["tea", "milk", "bread", "eggs", "salt"] -> title {
+        await client.post("/api/notes", JsonBody(Json(JsonField("title", title))));
+    }
+    let first = await (await client.get("/api/notes?limit=2")).json();
+    test.is(first.get("items").size(), 2);
+    test.is(first.text("next"), "/api/notes?after=2&limit=2");
+    let second = await (await client.get(first.text("next"))).json();
+    test.is(second.get("items").at(0).text("title"), "bread");
+    let third = await (await client.get(second.text("next"))).json();
+    test.is(third.get("items").size(), 1);
+    test.is(third.has("next"), false);
+}
+
+async test "a limit out of range is a 400" {
+    test.is((await Fresh().client().get("/api/notes?limit=0"))::Head::code, 400);
+    test.is((await Fresh().client().get("/api/notes?limit=many"))::Head::code, 400);
+}
+
+async test "a taken title is a 409 problem" {
+    let client = Fresh().client();
+    await client.post("/api/notes", JsonBody(Json(JsonField("title", "buy tea"))));
+    let again = await client.post("/api/notes", JsonBody(Json(JsonField("title", "buy tea"))));
+    test.is(again::Head::code, 409);
+    test.is((await again.json()).text("detail"), "a note titled 'buy tea' exists");
+}
+
+// One client creating one note, as a task of its own.
+object Poster {
+    has client is WebTestClient;
+    has title is string;
+
+    Poster(:client, :title);
+
+    async run() is int {
+        let reply = await client.post("/api/notes", JsonBody(Json(JsonField("title", title))));
+        reply::Head::code;
+    }
+}
+
+async test "concurrent creations all land, each with its own id" {
+    let client = Fresh().client();
+    let posting is @Future<int> = [
+        spawn Poster(client: client, title: "one").run(),
+        spawn Poster(client: client, title: "two").run(),
+        spawn Poster(client: client, title: "three").run(),
+        spawn Poster(client: client, title: "four").run(),
+    ];
+    await AllFutures(origins: posting).results();
+    let page = await (await client.get("/api/notes")).json();
+    let ids = page.get("items").items().map() -> item { item.int("id"); };
+    test.is(ids, [1, 2, 3, 4]);
+}

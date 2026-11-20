@@ -1,0 +1,66 @@
+module bible/tidy v1.0.0;
+
+import "io/stdout" take Stdout;
+import "fs/path" take Path;
+import "fs/file" take File, FileMode;
+import "fs/entry" take FileEntry;
+import "fs/directory" take Directory;
+import "fs/temp" take TemporaryDirectory;
+
+// What tidying one file would do: a value, decided before anything is written.
+object Change {
+    has path is Path;
+    has before is @string;
+    has after is @string;
+
+    Change(:path, :before, :after);
+
+    // How many lines differ.
+    edits() is int {
+        (0..before.size()).filter() -> index { before[index] != after[index]; }.size();
+    }
+
+    path() is Path { path; }
+    after() is @string { after; }
+}
+
+object Tidy {
+    Tidy();
+
+    // The decision: trailing spaces removed from every line.
+    planned(path is Path) is Change {
+        let file = File(path: path);
+        defer file.close();
+        let before = file.text().lines();
+        Change(path: path, before: before, after: before.map() -> line { line.trim_end(); });
+    }
+
+    // Doing it safely: write a sibling file, then move it over the original
+    // in one step. A failure before the move leaves the original whole.
+    applied(change is Change) is void {
+        let sibling = Path(change.path().string() + ".tidy");
+        let file = File(path: sibling, mode: FileMode.writing);
+        for change.after() -> line { file.text().writeln(line); }
+        file.close();
+        FileEntry(sibling).move(destination: change.path(), overwrite: true);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let scratch = TemporaryDirectory(parent: Directory(Path(".")), prefix: "tidy-");
+    defer scratch.close();
+    let notes = scratch.path().child("notes.txt");
+    let seed = File(path: notes, mode: FileMode.writing);
+    seed.text().writeln("buy milk   ");
+    seed.text().writeln("call Ada");
+    seed.text().writeln("fix the gate  ");
+    seed.close();
+
+    let tidy = Tidy();
+    let change = tidy.planned(notes);
+    out.writeln("--dry-run: would change " + change.edits().string() + " of 3 lines");
+    tidy.applied(change);
+    out.writeln("after: " + tidy.planned(notes).edits().string() + " lines to change");
+    0;
+}

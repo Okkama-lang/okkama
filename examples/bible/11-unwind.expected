@@ -1,0 +1,13 @@
+open first
+defer in try
+close first
+caught body
+open s1.in
+close s1.in
+session refused: Refused.refused("s1")
+open s2.in
+open s2.out
+session open
+end session
+close s2.out
+close s2.in

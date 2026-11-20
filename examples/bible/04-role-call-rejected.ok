@@ -1,0 +1,21 @@
+module bible/rolecall v1.0.0;
+
+// A role reference offers the role's actions and nothing else.
+import "io/stdout" take Stdout;
+
+role Shape {
+    area() is int;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is int { side * side; }
+    side() is int { side; }
+}
+
+main() is int {
+    let shape is Shape = Square(side: 3);
+    Stdout().writeln(shape.side().string());
+    0;
+}

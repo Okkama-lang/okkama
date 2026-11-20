@@ -1,0 +1,1 @@
+12-cap-compare-rejected.ok:12:8: semantic error: Cannot compare Point::Shown and Point::Shown

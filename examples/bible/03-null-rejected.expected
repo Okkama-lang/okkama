@@ -1,0 +1,4 @@
+03-null-rejected.ok:3:16: syntax error at "null": Null/none/nil values are not part of Okkama v1.0 syntax.
+  |
+3 |     let name = null;
+  |                ^^^^

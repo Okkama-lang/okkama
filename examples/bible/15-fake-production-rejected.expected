@@ -1,0 +1,1 @@
+15-fake-production-rejected.ok:11:5: semantic error: Clock.fake() is available only in test mode
