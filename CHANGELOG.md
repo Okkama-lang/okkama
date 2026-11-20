@@ -25,6 +25,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   field not yet initialized. Objects are immutable, so a leaf stays a leaf.
   - **11-ownership:** 84 ms → 27 ms (host, gate build; Python 30 ms). 99 900 identities are skipped, region
     closes drop from 100k to 503, and walk steps from 2.9M to 1.7M.
+  - **Scope of the rule.** It applies only to objects the program builds (`obj.new`, `obj.next`,
+    `variant.new`) whose type is not a builtin, has no destroy and no `once let` slot. Runtime objects such as
+    groups and driver results, whose contents arrive later, stay per type. In the first version the Wave CI
+    caught a FutureGroup judged a leaf: the Bible's 20-keeps never closed its lent lamp.
   - **Tests:** behaviour tests with a mutation check (`tests/tweed_ownership.rs`).
 - **Development instrumentation across the pipeline and the runtime (owner, 2026-11-20).** The new crate
   `okkama-devtrace` adds events, counters, timers and dumps, switched on by `OKKAMA_DEV` (categories, function

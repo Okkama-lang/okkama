@@ -222,3 +222,56 @@ fn the_ownership_benchmark_shape_repeated_keeps_its_result_and_closes_every_vaul
     let value = support::value(&module);
     assert_ne!(value, "-1", "a result changed between repetitions or a vault did not close exactly once");
 }
+
+#[test]
+fn a_resource_borrowed_by_a_child_in_the_callers_group_closes_once_at_the_end() {
+    // #905 regression (the Bible's 20-keeps): a FutureGroup is a runtime object whose members arrive after it is
+    // made, so it is tracked per type and never judged a leaf at creation; the lent lamp still closes, once, at
+    // the program's end. Run through the binary: the close comes after main returns.
+    let program = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Lamp {
+    has name is string;
+    Lamp(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("off: " + name); }
+}
+object Reader {
+    Reader();
+    async later(lamp is Lamp, gate is Event) is int { await gate.wait(); Stdout().writeln("reads " + lamp.label()); 1; }
+}
+object Desk {
+    Desk();
+    async lend(group is FutureGroup<int>, gate is Event) is void {
+        let lamp = Lamp(name: "lent");
+        let child = Reader().later(lamp, gate);
+        group.start(child);
+        Stdout().writeln("lend ends");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let group is FutureGroup<int> = FutureGroup();
+    await Desk().lend(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main ends");
+    0;
+}
+"#;
+    let dir = std::env::temp_dir().join(format!("tweed-keeps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("keeps.ok");
+    std::fs::write(&file, program).unwrap();
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
+        .args(["run", "--engine", "sparrow", file.to_str().unwrap()])
+        .env("OKKAMA_STDLIB_DIR", std)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "lend ends\nreads lent\nmain ends\noff: lent\n",
+        "stderr: {}", String::from_utf8_lossy(&output.stderr));
+}

@@ -323,13 +323,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/champ/streams.rs` 144 — FutureCompletions on Champ (#810 G1 step 4, ruling Q4 of the steps 3–4 review). The stream Tomato keeps in
 - `sparrow-core/src/champ/testing.rs` 247 — The test profile on Champ (§14, OIR-2 §7.4): assertions, the test intrinsics and the runner.
 
-## sparrow — 68 files, 35125 lines
+## sparrow — 68 files, 35211 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1128 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/failures.rs` 1225 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 1311 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/heap.rs` 2132 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 1082 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and

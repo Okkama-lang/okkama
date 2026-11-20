@@ -38,8 +38,11 @@ pub struct Resources {
     pub enabled: bool,
     /// Per descriptor: can it reach a destroy-bearing identity?
     pub flags: Vec<bool>,
-    /// Per descriptor: does it declare a destroy of its own? (#905)
-    destroys: Vec<bool>,
+    /// Per descriptor (#905): may a program-built instance (`obj.new`, `obj.next`, `variant.new`) be a leaf when
+    /// its fields reach no identity? Not with a destroy of its own, a builtin (a runtime cell that changes in
+    /// place) or a `once let` slot (filled after construction).
+    #[cfg_attr(feature = "champ-abi", allow(dead_code))]
+    leaf_capable: Vec<bool>,
     serial: u64,
     identities: HashMap<Word, Identity>,
     /// Work list, visited set and open containers of `resource_graph`, reused.
@@ -137,7 +140,8 @@ impl Resources {
             // region (#601 Q1 audit).
             enabled: !cfg!(feature = "champ-abi") && program.objects.iter().any(|o| o.destroy.is_some()),
             flags: descriptor_flags(program),
-            destroys: program.objects.iter().map(|object| object.destroy.is_some()).collect(),
+            leaf_capable: program.objects.iter().map(|object| object.destroy.is_none() && !object.builtin
+                && !object.fields.iter().any(|(name, _)| name.starts_with("$once"))).collect(),
             trace: std::env::var_os("SPARROW_TRACE_DESTROY")
                 .and_then(|path| std::fs::OpenOptions::new().create(true).append(true).open(path).ok()),
             ..Self::default()
@@ -236,19 +240,8 @@ impl Runtime {
     /// A new object of `descriptor` gets a resource identity if it can matter.
     #[cfg(not(feature = "champ-abi"))]
     pub fn created(&mut self, descriptor: usize, object: Word) {
-        if !(self.resources.enabled && self.resources.flags[descriptor]) {
-            return;
-        }
-        // Tweed #905: whether an object matters is decided per instance, not per type. An object without a destroy
-        // of its own is an identity only so that walks descend into it; one whose fields, as built, reach no
-        // identity is a leaf for its whole life (objects are immutable). A field not yet initialized (escaped
-        // construction, `obj.init`) or a container keeps the old answer.
-        if !self.resources.destroys[descriptor] && !self.fields_may_reach_identity(descriptor, object) {
-            okkama_devtrace::count!("runtime", "identity skipped: fields reach none");
-            return;
-        }
         let resources = &mut self.resources;
-        {
+        if resources.enabled && resources.flags[descriptor] {
             resources.serial += 1;
             resources.identities.insert(object, Identity { serial: resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
             self.heap.watch(object);
@@ -273,6 +266,23 @@ impl Runtime {
                 _ => false,
             }
         })
+    }
+
+    /// An object the program built (`obj.new`, `obj.next`, `variant.new`: machine code's `rt_created`). Tweed #905:
+    /// whether it matters is decided per instance, not per type. An object without a destroy of its own is an
+    /// identity only so that walks descend into it; one whose fields, as built, reach no identity is a leaf for
+    /// its whole life, since its fields never change. A field not yet initialized (escaped construction,
+    /// `obj.init`) or a container keeps the old answer; so do builtins and `once` slots (`leaf_capable`), and
+    /// objects the runtime makes (groups, driver results), which go through [`Runtime::created`].
+    #[cfg(not(feature = "champ-abi"))]
+    pub fn created_built(&mut self, descriptor: usize, object: Word) {
+        if self.resources.enabled && self.resources.flags[descriptor] && self.resources.leaf_capable[descriptor]
+            && !self.fields_may_reach_identity(descriptor, object)
+        {
+            okkama_devtrace::count!("runtime", "identity skipped: fields reach none");
+            return;
+        }
+        self.created(descriptor, object);
     }
 
     /// Legacy allocation hooks must not commit incomplete Champ construction.
@@ -1244,6 +1254,9 @@ pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
     runtime.count(|r| format!("resource {}", r.loaded.program.objects[descriptor as usize].name));
     okkama_devtrace::count!("runtime", format!("identity requested: {}",
         runtime.loaded.program.objects[descriptor as usize].name));
+    #[cfg(not(feature = "champ-abi"))]
+    runtime.created_built(descriptor as usize, object);
+    #[cfg(feature = "champ-abi")]
     runtime.created(descriptor as usize, object);
 }
 
