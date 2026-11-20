@@ -529,6 +529,7 @@ impl Runtime {
         if serial > self.resources.summarized {
             return;
         }
+        okkama_devtrace::count!("runtime", "summaries dropped (freed)", self.resources.summaries.len());
         for (container, _) in self.resources.summaries.drain() {
             self.heap.summarized(container, false);
         }
@@ -711,6 +712,7 @@ impl Runtime {
         // Tracking (not owning) skips what the region already holds; adopting
         // must still take ownership of tracked objects.
         let known = if own { None } else { Some(region) };
+        okkama_devtrace::count!("runtime", "walk from: region add");
         for object in self.resource_graph_into(&[value], None, known) {
             if own || self.resources.identities[&object].cache_rehomed {
                 self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
@@ -723,6 +725,7 @@ impl Runtime {
         if self.region_len(from) == 0 {
             return;
         }
+        okkama_devtrace::count!("runtime", "walk from: region transfer");
         for object in self.resource_graph(&[value], Some(from)) {
             let identity = self.resources.identities.get_mut(&object).expect("identity");
             if identity.owner == Owner::Region(from) {
@@ -854,7 +857,10 @@ impl Runtime {
             return Closed::Done(primary);
         }
         let mut kept: HashSet<Word> =
-            if keep.is_empty() { HashSet::default() } else { self.resource_graph(keep, Some(region)).into_iter().collect() };
+            if keep.is_empty() { HashSet::default() } else {
+                okkama_devtrace::count!("runtime", "walk from: region close keep");
+                self.resource_graph(keep, Some(region)).into_iter().collect()
+            };
         // Groups add ownership edges, including to bound Futures. Drain
         // dying groups first, withdrawing their edges before deciding which
         // Futures die. The surviving group packets retain a Future when its
@@ -873,6 +879,7 @@ impl Runtime {
             if !group
                 && let Some(&home) = self.resources.identities[&object].groups.first()
             {
+                okkama_devtrace::count!("runtime", "walk from: region close child");
                 for child in self.resource_graph(&[object], Some(region)) {
                     self.resources.identities.get_mut(&child).expect("identity").owner = Owner::Region(home);
                     self.region_push(home, child);
