@@ -568,3 +568,37 @@ fn a_resource_made_by_a_defer_on_an_early_return_closes_once() {
     // The defer's vault is made and destroyed on the way out of `run` (log 5).
     support::assert_value(&module, "75");
 }
+
+/// #909 2b: a resource from a factory (not a constructor) and a local resource of an async body are static too;
+/// each closes once when its scope ends.
+#[test]
+fn factory_and_async_local_resources_close_once_with_their_scope() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Factory {
+            has log is Log;
+            Factory(:log);
+            vault(id is int) is Vault { Vault(log: log, id: id); }
+        }
+        object Probe {
+            Probe();
+            run(log is Log) is int {
+                let vault = Factory(log: log).vault(3);
+                vault.balance() * 10 + log.value();
+            }
+            async later(log is Log) is int {
+                let vault = Vault(log: log, id: 4);
+                vault.balance() * 10 + log.value();
+            }
+        }
+        async main() is int {
+            let log = Log(n: Atomic(0));
+            let first = Probe().run(log);
+            let second = await Probe().later(log);
+            first * 1000 + second * 10 + log.value();
+        }
+    "#));
+    assert!(is_static(&module, "Probe.run"), "a factory's fresh vault");
+    assert!(is_static(&module, "Probe.later"), "an async body's vault");
+    // run: 2·10 + 0 = 20, its vault closes (log 3); later: 2·10 + 3 = 23, its vault closes (log 34).
+    support::assert_value(&module, "20264");
+}

@@ -57,7 +57,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3082 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7278 lines
+## ir — 12 files, 7271 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
@@ -69,7 +69,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/print.rs` 907 — Канонический текст OIR-1 (§18 спецификации).
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 257 — Регионы, которые никогда не владеют идентичностями, — убираются.
-- `okkama-compiler/src/ir/statics.rs` 284 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
+- `okkama-compiler/src/ir/statics.rs` 277 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
 - `okkama-compiler/src/ir/verify.rs` 1886 — Верификатор OIR-1 (§17 спецификации).
 
 ## codegen — 4 files, 1299 lines
@@ -110,10 +110,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 1656 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 611 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30293 lines
+## sparrow — 63 files, 30296 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
-- `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
+- `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1094 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
 - `sparrow-core/src/heap.rs` 2062 — Non-moving precise heap (decision R1). Every object starts with a header:

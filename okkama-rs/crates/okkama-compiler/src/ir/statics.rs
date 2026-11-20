@@ -6,8 +6,9 @@
 //! worker, an atomic or a failure. On top of that this pass takes a value only when everything else is plain to
 //! see:
 //!
-//! - it is the result of a call to a constructor of an object with a synchronous destroy of its own, not
-//!   builtin, whose fields are all plain (no other identity can hang off it);
+//! - it is the result of a call (a constructor or a factory) typed as an object with a synchronous destroy of
+//!   its own, not builtin, whose fields are all plain (no other identity can hang off it); in an async body
+//!   too, unless its region settles (an async destroy elsewhere in the program);
 //! - its region operations are `region.track`/`region.adopt` into one region R, and R holds nothing else: no
 //!   other member, no transfer, no keep that could reach a resource, R not passed around;
 //! - every block reachable from its creation before R's exits is dominated by the creation (no drop flags yet).
@@ -22,7 +23,7 @@ use std::collections::HashSet;
 
 use super::ownership::{self, Owner};
 use super::regions::Plain;
-use super::{Attr, Block, BlockId, Function, Inst, InstKind, Module, Target, TermKind, Terminator, Type, ValueId, cfg};
+use super::{Block, BlockId, Function, Inst, InstKind, Module, Target, TermKind, Terminator, Type, ValueId, cfg};
 
 /// Make the module's provably local resources static; the number made static.
 pub fn make_static(module: &mut Module) -> usize {
@@ -40,11 +41,13 @@ pub fn make_static(module: &mut Module) -> usize {
             .map(|creation| ValueId(creation.value))
             .collect();
         for value in candidates {
-            if !eligible(module, &plain, &module.functions[found.function], value) {
+            if let Err(reason) = eligible(module, &plain, &module.functions[found.function], value) {
+                okkama_devtrace::count!("lower", format!("statics: not static ({reason})"));
                 continue;
             }
             split_after_definition(&mut module.functions[found.function], value);
             let Some(plan) = plan(&module.functions[found.function], value) else {
+                okkama_devtrace::count!("lower", "statics: not static (control flow)");
                 // The split alone changes nothing: the value stays dynamic.
                 continue;
             };
@@ -82,30 +85,23 @@ fn region_of(function: &Function, value: ValueId) -> Option<ValueId> {
 }
 
 /// The type and region conditions (no control flow yet).
-fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId) -> bool {
-    if function.is_async() {
-        return false;
+fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId) -> Result<(), &'static str> {
+    let Some((block, index)) = definition(function, value) else { return Err("no definition") };
+    if !matches!(function.blocks[block].insts[index].kind, InstKind::Call { .. }) {
+        return Err("not a call");
     }
-    let Some((block, index)) = definition(function, value) else { return false };
-    let InstKind::Call { func, .. } = &function.blocks[block].insts[index].kind else { return false };
-    let Some(object) = module.functions[func.0].attrs.iter().find_map(|attr| match attr {
-        Attr::Ctor(object) => Some(*object),
-        _ => None,
-    }) else {
-        return false;
-    };
-    if function.values[value.0] != Type::Object(object) {
-        return false;
-    }
+    // A constructor, or any call the census calls fresh (a factory): `resource.pin` and `resource.leave` act only
+    // on a free identity, so a result some other owner keeps is left alone.
+    let Type::Object(object) = function.values[value.0] else { return Err("not an object type") };
     let declaration = &module.objects[object.0];
-    let Some(destroy) = declaration.destroy else { return false };
-    if declaration.builtin
-        || module.functions[destroy.0].is_async()
-        || !declaration.fields.iter().all(|field| plain.ty(&field.ty))
-    {
-        return false;
+    let Some(destroy) = declaration.destroy else { return Err("no destroy of its own") };
+    if declaration.builtin || module.functions[destroy.0].is_async() {
+        return Err("builtin or async destroy");
     }
-    let Some(region) = region_of(function, value) else { return false };
+    if !declaration.fields.iter().all(|field| plain.ty(&field.ty)) {
+        return Err("a field may hold a resource");
+    }
+    let Some(region) = region_of(function, value) else { return Err("no single region") };
     // R holds only this value, closes without keeping a resource, and is used by nothing but its own operations.
     for block in &function.blocks {
         for inst in &block.insts {
@@ -113,28 +109,28 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
                 InstKind::RegionEnter => {}
                 InstKind::RegionTrack { region: r, value: v } | InstKind::RegionAdopt { region: r, value: v } => {
                     if *r == region && *v != value {
-                        return false;
+                        return Err("region shared");
                     }
                 }
                 InstKind::RegionTransfer { from, to, .. } => {
                     if *from == region || *to == region {
-                        return false;
+                        return Err("region transfers");
                     }
                 }
                 InstKind::RegionLeave { region: r, keep } => {
                     if *r == region && keep.is_some_and(|keep| !plain.ty(&function.values[keep.0])) {
-                        return false;
+                        return Err("region keeps a value");
                     }
                 }
                 InstKind::RegionUnwind { .. } => {}
                 InstKind::RegionSettle { region: r, .. } | InstKind::RegionSettleUnwind { region: r, .. } => {
                     if *r == region {
-                        return false;
+                        return Err("region settles");
                     }
                 }
                 other => {
                     if other.operands().contains(&region) {
-                        return false;
+                        return Err("region used");
                     }
                 }
             }
@@ -143,10 +139,10 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
         if targets.flat_map(|target| &target.args).any(|arg| *arg == region)
             || block.term.kind.operands().contains(&region)
         {
-            return false;
+            return Err("region passed");
         }
     }
-    true
+    Ok(())
 }
 
 /// Split the creating block right after the creation, so the creation's own failure keeps the old handler.

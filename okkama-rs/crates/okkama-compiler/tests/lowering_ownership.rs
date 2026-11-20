@@ -80,10 +80,15 @@ fn bindings_own_and_call_results_are_tracked() {
 
 #[test]
 fn discarded_await_results_are_tracked_by_the_enclosing_block() {
-    let module = module(&format!(
-        "{RES} object Work {{ Work(); async make() is Res {{ Res(n: 2); }} }} \
-         async main() is int {{ Res(n: 4); {{ Res(n: 1); await Work().make(); Res(n: 3); }} 0; }}"
-    ));
+    // A resource whose field may hold another one stays with its region (the static pass of #909 leaves it), so
+    // the regions the lowering chose stay visible.
+    let module = module(
+        "module app v1.0.0; role Tag { t() is int; } object Mark does Tag { Mark(); t() is int { 1; } destroy { } } \
+         object Res { has n is int; has tag is Tag; Res(:n, :tag); destroy { confirm n > 0; } } \
+         object Work { Work(); async make() is Res { Res(n: 2, tag: Mark()); } } \
+         async main() is int { Res(n: 4, tag: Mark()); { Res(n: 1, tag: Mark()); await Work().make(); \
+         Res(n: 3, tag: Mark()); } 0; }"
+    );
     let main = function(&module, "main");
     let insts: Vec<_> = main.blocks.iter().flat_map(|block| &block.insts).collect();
     let awaited = insts.iter().find(|inst| matches!(inst.kind, InstKind::AwaitTake(_)))
@@ -364,10 +369,13 @@ fn only_bodies_that_may_own_an_async_destroy_settle() {
     // The unrelated body still closes its regions, synchronously, on every
     // exit: block, loop iteration, failure.
     let unrelated = function(&module, "Job.unrelated");
-    assert!(count(unrelated, |kind| matches!(kind, InstKind::RegionLeave { .. })) >= 2, "{module}");
-    assert!(count(unrelated, |kind| matches!(kind, InstKind::RegionUnwind { .. })) >= 1, "{module}");
+    // A synchronous close goes through its region or, for a static resource (#909 2b), directly.
+    let leave = |kind: &InstKind| matches!(kind, InstKind::RegionLeave { .. } | InstKind::ResourceLeave { .. });
+    let unwind = |kind: &InstKind| matches!(kind, InstKind::RegionUnwind { .. } | InstKind::ResourceUnwind { .. });
+    assert!(count(unrelated, leave) >= 2, "{module}");
+    assert!(count(unrelated, unwind) >= 1, "{module}");
     let failing = function(&module, "Job.failing");
-    assert!(count(failing, |kind| matches!(kind, InstKind::RegionUnwind { .. })) >= 1, "{module}");
+    assert!(count(failing, unwind) >= 1, "{module}");
 
     // A function value hides what it captures: once a value that may reach
     // an async destroy is captured (or boxed as `any`) anywhere, every body
