@@ -542,3 +542,29 @@ fn an_atomic_in_a_summarized_container_borrows_a_late_resource() {
     // The fee is alive inside `late` (log 0) and closes once when `late` ends (log 3), whatever holds its name.
     support::assert_value(&module, "103");
 }
+
+/// #910 found it: an early return from a nested scope runs the defers of the scopes it leaves; a fresh resource a
+/// defer makes belongs to the defer's own scope (still open), not to the nested one the return already closed.
+#[test]
+fn a_resource_made_by_a_defer_on_an_early_return_closes_once() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Probe {
+            Probe();
+            run(log is Log, early is bool) is int {
+                defer Vault(log: log, id: 5).balance();
+                if early {
+                    let inner = 7;
+                    return inner;
+                }
+                2;
+            }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let result = Probe().run(log, true);
+            result * 10 + log.value();
+        }
+    "#));
+    // The defer's vault is made and destroyed on the way out of `run` (log 5).
+    support::assert_value(&module, "75");
+}

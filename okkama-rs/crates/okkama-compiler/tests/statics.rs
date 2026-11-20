@@ -50,3 +50,31 @@ fn a_resource_a_branch_hands_out_itself_outlives_the_branch() {
         chosen.read(); }} }} main() is int {{ Picker().pick(true); }}"), "Picker.pick");
     assert!(!text.contains("resource.leave"), "the branch keeps the resource it hands out: {text}");
 }
+
+/// #910: the linearity check accepts what the lowering makes and refuses a region left open or closed twice.
+#[test]
+fn the_linearity_check_refuses_a_missing_or_doubled_close() {
+    let source = SourceFile::new("test.ok", format!("{RES} object P {{ P(); run(a is Res, b is Res) is int {{ \
+        let r = Res(n: a.read() + b.read()); r.read(); }} }} main() is int {{ 0; }}")).expect("small source");
+    let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
+    let module = lower_program(&prune::strip_test_items(program)).expect("lowers");
+    ir::linearity::check(&module).expect("the lowering's output is linear");
+    let index = module.functions.iter().position(|function| function.symbol == "P.run").expect("P.run");
+    let closes = |kind: &ir::InstKind| matches!(kind, ir::InstKind::RegionLeave { .. } | ir::InstKind::ResourceLeave { .. });
+    let mut missing = module.clone();
+    for block in &mut missing.functions[index].blocks {
+        block.insts.retain(|inst| !closes(&inst.kind));
+    }
+    let error = ir::linearity::check(&missing).expect_err("a close is missing");
+    assert!(error.contains("may still be open"), "{error}");
+    let mut doubled = module.clone();
+    for block in &mut doubled.functions[index].blocks {
+        if let Some(at) = block.insts.iter().position(|inst| closes(&inst.kind)) {
+            let again = block.insts[at].clone();
+            block.insts.insert(at, again);
+            break;
+        }
+    }
+    let error = ir::linearity::check(&doubled).expect_err("a close is doubled");
+    assert!(error.contains("already closed"), "{error}");
+}

@@ -151,6 +151,9 @@ struct BodyLowerer<'c, 'r, 'a> {
     tries: Vec<TryCtx>,
     /// Очистка каждой области `scopes` (регион, defer, цели отказа).
     cleanups: Vec<scopes::Cleanup<'r>>,
+    /// While an early exit runs the defers of scope `n`, the scopes deeper than `n` are already closed: fresh values
+    /// are tracked no deeper than `n` (#910 found them tracked in a closed region).
+    exiting: Option<usize>,
     /// Значения, которые следующая блочная область примет при открытии
     /// (пойманный Error для тела `catch`).
     pending_adopt: Vec<Typed>,
@@ -300,6 +303,7 @@ fn lowerer_for<'c, 'r, 'a>(
         params: Vec::new(),
         tries: Vec::new(),
         cleanups: vec![scopes::Cleanup::default()],
+        exiting: None,
         pending_adopt: Vec::new(),
         taken_from: HashMap::new(),
         field_flags: Vec::new(),

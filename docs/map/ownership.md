@@ -52,6 +52,11 @@ A summary inherited at birth (#529) only comes from summarized parts, so it obey
 **Measuring.** `OKKAMA_DEV=runtime` counts identities requested and skipped by type, region helpers, walks by
 caller and steps, and structure indexes. `bench/ownership/run.py` compares against CPython (#908).
 
+**Checker (#910).** `ir/linearity.rs` checks after the IR passes that each region and static resource is opened
+once, used only while open and closed exactly once on every path (failure paths included). Debug builds and
+`OKKAMA_VERIFY_OWNERSHIP=1` only. Its first find: an early return's defers tracked fresh values in a nested scope
+the return had already closed (fixed in `exit_scopes`).
+
 **Next.** The static pass (#909 2b) takes one resource per region; several, drop flags for conditional
 creation and direct JIT destroy calls are the next steps. One linearity checker runs in debug
 and CI only (#910). Late edges stay conservative (#907).

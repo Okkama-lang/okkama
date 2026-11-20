@@ -16,6 +16,7 @@ pub mod ownership;
 pub mod param_adopts;
 pub mod regions;
 pub mod statics;
+pub mod linearity;
 pub mod print;
 pub mod recursion;
 pub mod verify;

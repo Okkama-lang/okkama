@@ -103,5 +103,6 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
    21.7 → 9.5 ms (plain twin 4.0). Owner 2026-11-20: ownership is solved; continue 0.6.0 in my own order.
    Merged (bdf7cb4a0); #526 closed as not needed.
 9. #817: the root region and root closer for Futures that outlive their owners (wave/90).
-10. #845: driver inputs (collector sequences' fresh Futures). Next: #797, #769, #587, #846, then #907, #910, #912,
-   #913.
+10. #845 and #797 merged (74f704764). #769 and #846 wait for the owner (std contract); #587 needs a channel and
+   group handoff on the region runtime (large).
+11. #907 (late edges), #912 (devtrace by site), #910 (linearity checker + an exit_scopes fix it found): wave/92.

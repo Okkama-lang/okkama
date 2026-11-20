@@ -40,13 +40,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11564 lines
+## lower — 14 files, 11585 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1583 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 126 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 345 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
-- `okkama-compiler/src/lowering/mod.rs` 741 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
+- `okkama-compiler/src/lowering/mod.rs` 756 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 790 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
@@ -54,15 +54,16 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/calls.rs` 844 — Вызовы: actions объектов и ролей, конструкторы, natives, builtins,
 - `okkama-compiler/src/lowering/body/collections.rs` 1633 — Массивы, диапазоны, словари и функциональные операции (§12, §19).
 - `okkama-compiler/src/lowering/body/matching.rs` 803 — Операторы, `&&`/`||`, `match` и `try`/`catch` (§16, §19.2–19.3).
-- `okkama-compiler/src/lowering/body/mod.rs` 3080 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
-- `okkama-compiler/src/lowering/body/scopes.rs` 375 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
+- `okkama-compiler/src/lowering/body/mod.rs` 3082 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
+- `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 11 files, 7072 lines
+## ir — 12 files, 7278 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
-- `okkama-compiler/src/ir/mod.rs` 1535 — OIR-1 — промежуточное представление программы (`docs/compiler/OIR-1.md`).
+- `okkama-compiler/src/ir/linearity.rs` 205 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
+- `okkama-compiler/src/ir/mod.rs` 1536 — OIR-1 — промежуточное представление программы (`docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/ir/ownership.rs` 941 — Read-only ownership census after the OIR passes (#553).
 - `okkama-compiler/src/ir/param_adopts.rs` 293 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
 - `okkama-compiler/src/ir/print.rs` 907 — Канонический текст OIR-1 (§18 спецификации).

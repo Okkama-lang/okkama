@@ -578,6 +578,16 @@ fn lower_analyzed(
             ),
         ));
     }
+    // #910: the ownership linearity check, in debug builds and with OKKAMA_VERIFY_OWNERSHIP=1; never in release.
+    if verify_ownership() {
+        let _span = okkama_devtrace::span!("lower", "linearity check");
+        if let Err(error) = ir::linearity::check(&module) {
+            if let Ok(path) = std::env::var("OKKAMA_DUMP_INVALID_IR") {
+                let _ = std::fs::write(path, module.to_string());
+            }
+            return Err((root, LoweringError::invalid(program.span, format!("internal compiler error: {error}"))));
+        }
+    }
     if let Some(path) = std::env::var_os("OKKAMA_OWNERSHIP_REPORT") {
         let mut report = ir::ownership::analyze(&module);
         report.record_param_adopts(&param_adopts_removed);
@@ -743,6 +753,14 @@ pub fn inspect(
     inspection.scopes = index.scopes;
     inspection.globals = index.globals;
     inspection
+}
+
+/// Whether the ownership linearity check runs (#910): debug builds (tests, CI) and `OKKAMA_VERIFY_OWNERSHIP=1`.
+fn verify_ownership() -> bool {
+    if cfg!(okkama_release) {
+        return false;
+    }
+    cfg!(debug_assertions) || std::env::var("OKKAMA_VERIFY_OWNERSHIP").is_ok_and(|value| value == "1")
 }
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
