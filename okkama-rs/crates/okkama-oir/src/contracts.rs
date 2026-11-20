@@ -290,6 +290,9 @@ pub struct ResultRelation {
     /// caches hold. The caller that admits it counts their destroy effects in the envelope of the scope that may
     /// settle them.
     pub held: Vec<HeldSite>,
+    /// #879 (Fable): one of `fresh` stands for a callee's family of several identities, which a call collapses into its
+    /// one site. Codegen then marks no fresh singleton, whatever the count of `fresh` says.
+    pub several: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Summary {

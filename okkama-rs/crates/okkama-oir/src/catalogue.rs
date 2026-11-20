@@ -191,12 +191,12 @@ pub fn open_callable_summary(module: &Module, callable: TypeId, protocol: Protoc
     }).collect();
     let results = function.result.iter().map(|&ty| {
         if plain_scalar(module, ty) {
-            ResultRelation { beside: vec![], held: vec![],
+            ResultRelation { beside: vec![], held: vec![], several: false,
                 fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
                 provenance: AdmissionProvenance::UnboundResult,
             }
         } else {
-            ResultRelation { beside: vec![], held: vec![],
+            ResultRelation { beside: vec![], held: vec![], several: false,
                 fresh: vec![CreationSiteId::from_u32(OPEN_RESULT_SITE)],
                 aliases: owning.iter().map(|index| SummarySelection::OwnerGraph(*index)).collect(),
                 external_deps: owning.clone(),

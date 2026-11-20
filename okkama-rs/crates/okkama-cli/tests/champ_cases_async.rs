@@ -1321,6 +1321,52 @@ async main() is int {
 "#, "made\ndestroy bound\ndestroy stored\n");
 }
 
+/// #879 (Fable): `relay` returns the `Box` that `make` returns, a family of two identities (the `Box` and its `Res`)
+/// that own collapses into the one site of the call. The relation now says `several`, so codegen no longer marks
+/// `relay` a fresh singleton, which the loader refused (FRESH_ORIGIN). `relay3` goes through `relay`. Tomato's output.
+#[test]
+fn a_returned_family_of_several_identities_is_returned_further() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object Box { has r is Res; Box(:r); }
+object Mk { Mk(); make(l is string) is Box { Box(r: Res(l: l)); } }
+object Other { Other(); relay(l is string) is Box { Mk().make(l); } relay3() is Box { Other().relay("deep"); } }
+async main() is int {
+    let a = Other().relay("relayed");
+    let b = Other().relay3();
+    Stdout().writeln("got");
+    0;
+}
+"#, "got\ndestroy deep\ndestroy relayed\n");
+}
+
+/// #876 with #879 and #880: `relay` returns, through its call, the `Box` that `make` builds over a cold Future over a
+/// fresh `Res`; `wrap` stores a Future that `pass` returned. Each relation types what the caches hold, and the
+/// families are several identities. Tomato's output.
+#[test]
+fn a_returned_object_storing_a_cold_future_is_returned_further() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object U { U(); async use(r is Res) is int { Stdout().writeln("use " + r.n().string()); r.n(); } }
+object P { P(); pass(l is string) is Future<int> { U().use(Res(l: l)); } }
+object Box { has f is Future<int>; Box(:f); }
+object Mk {
+    Mk();
+    make() is Box { Box(f: U().use(Res(l: "boxed"))); }
+    relay() is Box { Mk().make(); }
+    wrap() is Box { Box(f: P().pass("passed")); }
+}
+async main() is int {
+    let a = Mk().relay();
+    let b = Mk().wrap();
+    Stdout().writeln("made");
+    0;
+}
+"#, "made\ndestroy passed\ndestroy boxed\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {

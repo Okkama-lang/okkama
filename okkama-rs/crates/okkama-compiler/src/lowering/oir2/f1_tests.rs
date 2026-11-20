@@ -1141,6 +1141,44 @@ fn f1_what_a_returned_value_s_futures_hold_matches_its_relation() {
     }
 }
 
+/// #879 (Fable): `make` returns a `Box` with its `Res`, a family of two identities; `relay` returns it through its one
+/// call site, and `relay3` through `relay`. `make2` and `relay2` return a bare fresh `Res`.
+const SEVERAL: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object Box { has r is Res; Box(:r); } ",
+    "object Mk { Mk(); make() is Box { Box(r: Res(l: \"boxed\")); } make2() is Res { Res(l: \"bare\"); } } ",
+    "object Other { Other(); relay() is Box { Mk().make(); } relay2() is Res { Mk().make2(); } ",
+    "relay3() is Box { Other().relay(); } } ",
+    "main() is int { let a = Other().relay3(); let b = Other().relay2(); 0; }",
+);
+
+/// #879: a call collapses its callee's fresh family into one site; when that family has several identities, the
+/// relation says so (`several`), at every level of a chain, and codegen marks no fresh singleton. A bare fresh result
+/// keeps the singleton path.
+#[test]
+fn f1_a_returned_family_of_several_identities_is_no_fresh_singleton() {
+    use okkama_sparrow::spb17 as s;
+    let (own, _) = super::own_case_tests::own_stage(SEVERAL, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let expected = [
+        ("app.Mk.make#0", false, false), ("app.Mk.make2#1", false, true), ("app.Other.relay#0", true, false),
+        ("app.Other.relay2#1", false, true), ("app.Other.relay3#2", true, false),
+    ];
+    for (symbol, several, _) in expected {
+        let (_, relation) = relation_of(&own, symbol);
+        assert_eq!(relation.several, several, "{symbol}: {relation:?}");
+    }
+    let high = super::own_case_tests::high(SEVERAL, None).unwrap_or_else(|error| panic!("{error}"));
+    let bytes = super::super::pipeline::compile_high_with(high, ir::verify::VerifyMode::Structural)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let program = s::decode(&bytes).unwrap_or_else(|error| panic!("{error}"));
+    for (symbol, _, singleton) in expected {
+        let function = program.functions.iter().find(|function| function.symbol == symbol).unwrap();
+        assert_eq!(function.proofs.entry.as_ref().unwrap().fresh_singleton, singleton, "{symbol}");
+    }
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",
