@@ -23,7 +23,7 @@ rm -rf "$work/data"
 mkdir -p "$work/data"
 
 echo "==> instrumented build"
-(cd "$rs" && RUSTFLAGS="-Cforce-frame-pointers=yes -Cprofile-generate=$work/data" CARGO_TARGET_DIR="$work/instrumented" \
+(cd "$rs" && RUSTFLAGS="-Cforce-frame-pointers=yes --cfg okkama_release -Cprofile-generate=$work/data" CARGO_TARGET_DIR="$work/instrumented" \
     cargo build --release -p okkama-cli -p sparrow-cli)
 
 echo "==> training"
@@ -44,6 +44,6 @@ echo "==> merge profiles"
 "$profdata" merge -o "$work/merged.profdata" "$work/data"
 
 echo "==> optimized build"
-(cd "$rs" && RUSTFLAGS="-Cforce-frame-pointers=yes -Cprofile-use=$work/merged.profdata" \
+(cd "$rs" && RUSTFLAGS="-Cforce-frame-pointers=yes --cfg okkama_release -Cprofile-use=$work/merged.profdata" \
     cargo build --release -p okkama-cli -p sparrow-cli -p blade-cli)
 echo "pgo: built $rs/target/release with $(ls "$work/data" | wc -l | tr -d ' ') profiles"

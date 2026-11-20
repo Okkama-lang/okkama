@@ -851,6 +851,8 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
 mod champ;
 
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
+    let _span = okkama_devtrace::span!("jit", "compile");
+    okkama_devtrace::count!("jit", "functions compiled");
     #[cfg(feature = "champ-abi")]
     if runtime.champ.machine.is_some() {
         return champ::compile(runtime, function);

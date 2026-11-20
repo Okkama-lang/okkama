@@ -500,6 +500,8 @@ fn main() -> ExitCode {
     let _ = okkama_runtime_core::stdout::write(outcome.stdout.as_bytes());
     let _ = okkama_runtime_core::stdout::flush();
     let _ = io::stderr().lock().write_all(outcome.stderr.as_bytes());
+    // Development instrumentation (OKKAMA_DEV): flush events, write the counters, print the summary.
+    okkama_devtrace::finish();
     ExitCode::from(outcome.code)
 }
 

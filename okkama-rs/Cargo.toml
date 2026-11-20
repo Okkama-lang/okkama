@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/okkama-oir", "crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent"]
+members = ["crates/okkama-oir", "crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace"]
 
 [workspace.package]
 version = "0.5.8"
@@ -12,6 +12,8 @@ publish = false
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
+# `--cfg okkama_release` (release packaging) compiles the development instrumentation out (okkama-devtrace).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(okkama_release)"] }
 
 [workspace.lints.clippy]
 dbg_macro = "warn"

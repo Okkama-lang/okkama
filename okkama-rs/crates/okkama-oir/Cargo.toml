@@ -12,3 +12,6 @@ workspace = true
 
 [features]
 verifier-differential = []
+
+[dependencies]
+okkama-devtrace = { path = "../okkama-devtrace" }

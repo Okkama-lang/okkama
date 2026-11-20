@@ -16,7 +16,7 @@ mod coro;
 
 pub use diagnostic::{Diagnostic, DiagnosticKind, Span, PrintError, print_diagnostic};
 pub use parser::{parse, parse_with_limits};
-pub use print::{print, normalized_eq};
+pub use print::{print, normalized_eq, print_one_function};
 use crate::*;
 use parser::Reader;
 use print::Writer;

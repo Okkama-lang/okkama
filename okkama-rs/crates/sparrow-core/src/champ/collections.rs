@@ -355,6 +355,7 @@ fn site(runtime: &Runtime, function: u64, pc: u64) -> Option<Site> {
 pub extern "C" fn rt_machine_collection(ctx: *mut Ctx, function: u64, pc: u64, args: *const Word, count: u64)
     -> Word
 {
+    okkama_devtrace::count!("runtime", "rt_machine_collection");
     let frame = runtime::frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let Some(program) = program(runtime) else {
@@ -391,6 +392,7 @@ pub extern "C" fn rt_machine_collection(ctx: *mut Ctx, function: u64, pc: u64, a
 pub extern "C" fn rt_machine_lookup(ctx: *mut Ctx, function: u64, pc: u64, collection: Word, index: Word,
     post: *mut Word) -> Word
 {
+    okkama_devtrace::count!("runtime", "rt_machine_lookup");
     let runtime = unsafe { &*(*ctx).runtime };
     let Some(program) = program(runtime) else {
         return stop(ctx, error("lookup outside a Champ program"));
@@ -509,6 +511,7 @@ fn builder(runtime: &mut Runtime, program: &s::Program, op: s::Opcode, inclusive
 pub extern "C" fn rt_machine_builder(ctx: *mut Ctx, function: u64, pc: u64, args: *const Word, count: u64)
     -> Word
 {
+    okkama_devtrace::count!("runtime", "rt_machine_builder");
     let frame = runtime::frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let Some(program) = program(runtime) else {

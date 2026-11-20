@@ -270,6 +270,7 @@ fn resolve_deferred(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), 
 pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_begin");
     leaf(ctx, |runtime| {
         let inputs = unsafe { &*inputs };
         if inputs.scope.is_null() == inputs.packet.is_null() {
@@ -325,6 +326,7 @@ pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
 pub extern "C" fn rt_cleanup_settle_empty(ctx: *mut Ctx, input: *mut CleanupSlot,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_settle_empty");
     leaf(ctx, |runtime| {
         let record = unsafe { (*input).record };
         edit(runtime, record, |_, cleanup| {
@@ -347,6 +349,7 @@ pub extern "C" fn rt_cleanup_settle_empty(ctx: *mut Ctx, input: *mut CleanupSlot
 pub extern "C" fn rt_cleanup_settle_packet(ctx: *mut Ctx, input: *mut CleanupSlot,
     settled: *mut PacketSlot, failure: Word, post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_settle_packet");
     leaf(ctx, |runtime| {
         let record = unsafe { (*input).record };
         let packet_record = unsafe { (*settled).record };
@@ -394,6 +397,7 @@ pub extern "C" fn rt_cleanup_settle_packet(ctx: *mut Ctx, input: *mut CleanupSlo
 pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot, schedule: u64, index: u64,
     duty: Word, post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_service_settle");
     let _ = this;
     leaf(ctx, |runtime| {
         let kinds = runtime.champ.schedules.get(schedule.wrapping_sub(1) as usize)
@@ -471,6 +475,7 @@ pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut Clean
 pub extern "C" fn rt_cleanup_settle_dynamic(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_settle_dynamic");
     let _ = this;
     leaf(ctx, |runtime| {
         let record = unsafe { (*input).record };
@@ -501,6 +506,7 @@ pub extern "C" fn rt_cleanup_settle_dynamic(ctx: *mut Ctx, this: Word, input: *m
 pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *mut CleanupSlot,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_deliver_cancel");
     leaf(ctx, |runtime| {
         // The body's frame, checked as before.
         runtime.champ_task_of(this)?;
@@ -525,6 +531,7 @@ pub extern "C" fn rt_cleanup_deliver_cancel(ctx: *mut Ctx, this: Word, input: *m
 pub extern "C" fn rt_exit_abort(ctx: *mut Ctx, input: *mut PendingSlot, state: *mut CleanupSlot,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_exit_abort");
     leaf(ctx, |runtime| {
         let record = unsafe { (*state).record };
         let pending_record = unsafe { (*input).record };
@@ -552,6 +559,7 @@ pub extern "C" fn rt_exit_abort(ctx: *mut Ctx, input: *mut PendingSlot, state: *
 pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: PlanId,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_plan");
     leaf(ctx, |runtime| {
         let plan = *runtime.champ.cleanup_plans.get(plan.wrapping_sub(1) as usize)
             .ok_or_else(|| error("unknown cleanup plan"))?;
@@ -608,6 +616,7 @@ fn select(runtime: &Runtime, cleanup: &mut Cleanup) -> Option<(Word, u64, Holder
 }
 /// Ordinals follow Low selected/done order. The key has a two-word machine representation.
 pub extern "C" fn rt_cleanup_next(ctx: *mut Ctx, input: *mut CleanupSlot, post: *mut NextPost) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_cleanup_next");
     let mut ordinal = 0;
     let outcome = leaf(ctx, |runtime| {
         let record = unsafe { (*input).record };
@@ -636,6 +645,7 @@ pub extern "C" fn rt_cleanup_next(ctx: *mut Ctx, input: *mut CleanupSlot, post: 
 pub extern "C" fn rt_cleanup_finish(ctx: *mut Ctx, input: *mut CleanupSlot,
     post: *mut FinishPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_finish");
     leaf(ctx, |runtime| {
         let record = unsafe { (*input).record };
         let output = edit(runtime, record, |runtime, cleanup| {
@@ -661,6 +671,7 @@ pub extern "C" fn rt_cleanup_finish(ctx: *mut Ctx, input: *mut CleanupSlot,
 /// Capture is one noncollecting publication batch. The rooted destination is written before bridge reset.
 /// Catch/defer landings use the same primitive as destroy capture; trace must be recorded before landing.
 pub extern "C" fn rt_failure_capture(ctx: *mut Ctx, destination: *mut Word) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_failure_capture");
     unsafe {
         if (*ctx).status != FAILED || (*ctx).failure == 0 {
             return stop(ctx, error("capture without pending failure"));
@@ -675,6 +686,7 @@ pub extern "C" fn rt_failure_capture(ctx: *mut Ctx, destination: *mut Word) -> O
 pub extern "C" fn rt_destroy_claim(ctx: *mut Ctx, state: *mut CleanupSlot, key: KeyRef,
     expected_holder: u64, expected_owner: u64, post: *mut DestroyBorrow) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_destroy_claim");
     if unsafe { (*ctx).status } != OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("destroy step entered with active bridge failure"));
     }
@@ -750,6 +762,7 @@ fn check_borrow<'a>(runtime: &'a Runtime, record: Word, borrow: &DestroyBorrow) 
 pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borrow: *const DestroyBorrow,
     entry: EntryId, post: *mut DestroyPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_destroy_invoke");
     let frame = frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let record = unsafe { (*state).record };
@@ -808,6 +821,7 @@ pub extern "C" fn rt_destroy_invoke(ctx: *mut Ctx, state: *mut CleanupSlot, borr
 pub extern "C" fn rt_destroy_finish(ctx: *mut Ctx, state: *mut CleanupSlot,
     borrow: *mut DestroyBorrow) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_destroy_finish");
     if unsafe { (*ctx).status } != OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("destroy step entered with active bridge failure"));
     }
@@ -841,6 +855,7 @@ pub extern "C" fn rt_destroy_finish(ctx: *mut Ctx, state: *mut CleanupSlot,
 pub extern "C" fn rt_cleanup_failure(ctx: *mut Ctx, input: *mut CleanupSlot, failure: Word,
     post: *mut CleanupSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_failure");
     leaf(ctx, |runtime| {
         let record = unsafe { (*input).record };
         edit(runtime, record, |runtime, cleanup| {
@@ -868,6 +883,7 @@ pub extern "C" fn rt_cleanup_failure(ctx: *mut Ctx, input: *mut CleanupSlot, fai
 pub extern "C" fn rt_cleanup_destroy(ctx: *mut Ctx, state: *mut CleanupSlot, key: KeyRef,
     post: *mut DestroyPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cleanup_destroy");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let result = (|| {
         let cleanup = read_cleanup(runtime, unsafe { (*state).record })?;
@@ -905,6 +921,7 @@ pub extern "C" fn rt_cleanup_destroy(ctx: *mut Ctx, state: *mut CleanupSlot, key
 pub extern "C" fn rt_destroy_direct(ctx: *mut Ctx, state: *mut CleanupSlot, key: KeyRef,
     entry: EntryId, post: *mut DestroyPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_destroy_direct");
     let runtime = unsafe { &mut *(*ctx).runtime };
     if !matches!(read_cleanup(runtime, unsafe { (*state).record }), Ok(cleanup) if cleanup.planned) {
         return stop(ctx, error("direct destroy before plan"));
@@ -995,6 +1012,7 @@ pub(super) fn close_packet(ctx: *mut Ctx, input: &mut PacketSlot, primary: Word)
 }
 
 pub extern "C" fn rt_entry_reject(ctx: *mut Ctx, io: *mut CallOwn) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_entry_reject");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let io = unsafe { &mut *io };
     let Some(entry) = runtime.champ_entry_contract(io.entry_abi) else {
@@ -1066,6 +1084,7 @@ fn reject_inputs(ctx: *mut Ctx, input: &mut PacketSlot) -> Result<Word, Outcome>
 /// publishes the combined failure. A resumed body holds state that only its own code can close: running out of
 /// stack there stops the engine.
 pub extern "C" fn rt_body_reject(ctx: *mut Ctx, frame: Word) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_body_reject");
     use crate::tasks::{get, set, RESUME};
     let runtime = unsafe { &mut *(*ctx).runtime };
     let Some(map) = runtime.champ_frame_map(runtime.function_of(frame)) else {
@@ -1164,11 +1183,13 @@ fn invoke_owned(ctx: *mut Ctx, entry_id: EntryId, arguments: (*const Word, u64),
 pub extern "C" fn rt_call_owned(ctx: *mut Ctx, entry: EntryId, args: *const Word, argc: u64,
     io: *mut CallOwn, post: *mut CallPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_call_owned");
     invoke_owned(ctx, entry, (args, argc), io, 0, false, post)
 }
 pub extern "C" fn rt_invoke_defer(ctx: *mut Ctx, entry: EntryId, args: *const Word, argc: u64,
     io: *mut CallOwn, registration: *const RegistrationMap, post: *mut DeferPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_invoke_defer");
     invoke_owned(ctx, entry, (args, argc), io, unsafe { (*registration).replacements }, true, post)
 }
 

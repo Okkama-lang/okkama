@@ -56,7 +56,7 @@ impl Driver<'_, '_> {
             if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| created == value)
                 && Some(*owner) != outermost
             {
-                self.dynamic_owners.insert(*owner);
+                self.dynamic_owner(*owner, "offered fresh Future, owner not outermost (D25.2)");
             }
         }
         self.offered_values(point, values.into_iter().collect())
@@ -347,7 +347,7 @@ impl Driver<'_, '_> {
                 .and_then(|value| self.analysis.types.get(&value.ty))
                 .is_some_and(|classification| !classification.service_types.is_empty()));
             if services {
-                self.dynamic_owners.insert(scope);
+                self.dynamic_owner(scope, "call result can hold service entries (D25.1)");
             }
         }
         Ok(point)

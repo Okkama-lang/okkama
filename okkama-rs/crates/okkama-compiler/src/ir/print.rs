@@ -930,3 +930,14 @@ fn write_string(f: &mut Formatter<'_>, text: &str) -> fmt::Result {
     }
     f.write_char('"')
 }
+
+/// One function as text, with the module's names (development dumps, okkama-devtrace).
+pub fn function_text(module: &Module, function: &Function) -> String {
+    struct One<'a>(&'a Module, &'a Function);
+    impl Display for One<'_> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write_function(f, self.0, self.1)
+        }
+    }
+    One(module, function).to_string()
+}

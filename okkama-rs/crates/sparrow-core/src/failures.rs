@@ -38,6 +38,11 @@ pub struct Resources {
     pub enabled: bool,
     /// Per descriptor: can it reach a destroy-bearing identity?
     pub flags: Vec<bool>,
+    /// Per descriptor (#905): may a program-built instance (`obj.new`, `obj.next`, `variant.new`) be a leaf when
+    /// its fields reach no identity? Not with a destroy of its own, a builtin (a runtime cell that changes in
+    /// place) or a `once let` slot (filled after construction).
+    #[cfg_attr(feature = "champ-abi", allow(dead_code))]
+    leaf_capable: Vec<bool>,
     serial: u64,
     identities: HashMap<Word, Identity>,
     /// Work list, visited set and open containers of `resource_graph`, reused.
@@ -47,6 +52,10 @@ pub struct Resources {
     /// an identity no newer than `summarized` drops them all.
     summaries: HashMap<Word, u64>,
     summarized: u64,
+    /// Tweed #906: per immutable container (array version, closure, map, box), the children that may hold an
+    /// identity, found once. Structure, not ownership: it never goes stale, since the container never changes
+    /// and an object that is not an identity never becomes one (#905). Dropped when the container is reclaimed.
+    structure: HashMap<Word, Box<[(Word, Repr)]>>,
     /// `SPARROW_TRACE_DESTROY=FILE`: one line per destroyed identity, type and
     /// creation serial, the oracle for static ownership (#555).
     trace: Option<std::fs::File>,
@@ -131,6 +140,8 @@ impl Resources {
             // region (#601 Q1 audit).
             enabled: !cfg!(feature = "champ-abi") && program.objects.iter().any(|o| o.destroy.is_some()),
             flags: descriptor_flags(program),
+            leaf_capable: program.objects.iter().map(|object| object.destroy.is_none() && !object.builtin
+                && !object.fields.iter().any(|(name, _)| name.starts_with("$once"))).collect(),
             trace: std::env::var_os("SPARROW_TRACE_DESTROY")
                 .and_then(|path| std::fs::OpenOptions::new().create(true).append(true).open(path).ok()),
             ..Self::default()
@@ -141,6 +152,7 @@ impl Resources {
         for object in released {
             self.identities.remove(object);
             self.summaries.remove(object);
+            self.structure.remove(object);
         }
     }
 }
@@ -234,6 +246,43 @@ impl Runtime {
             resources.identities.insert(object, Identity { serial: resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
             self.heap.watch(object);
         }
+    }
+
+    /// Whether a field of a new object of `descriptor` may reach a resource identity (#905): an object that is an
+    /// identity, a container that may hold one, or a reference field not yet initialized.
+    #[cfg(not(feature = "champ-abi"))]
+    fn fields_may_reach_identity(&self, descriptor: usize, object: Word) -> bool {
+        let layout = &self.heap.layouts().objects[descriptor];
+        layout.iter().enumerate().any(|(index, &repr)| {
+            let word = self.heap.field(object, index);
+            let Some(pointer) = repr.pointer(word) else {
+                return repr == Repr::Ref && word == UNBOUND;
+            };
+            let header = self.heap.header_of(pointer);
+            match heap::kind(header) {
+                heap::OBJECT => self.resources.identities.contains_key(&pointer),
+                heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
+                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                _ => false,
+            }
+        })
+    }
+
+    /// An object the program built (`obj.new`, `obj.next`, `variant.new`: machine code's `rt_created`). Tweed #905:
+    /// whether it matters is decided per instance, not per type. An object without a destroy of its own is an
+    /// identity only so that walks descend into it; one whose fields, as built, reach no identity is a leaf for
+    /// its whole life, since its fields never change. A field not yet initialized (escaped construction,
+    /// `obj.init`) or a container keeps the old answer; so do builtins and `once` slots (`leaf_capable`), and
+    /// objects the runtime makes (groups, driver results), which go through [`Runtime::created`].
+    #[cfg(not(feature = "champ-abi"))]
+    pub fn created_built(&mut self, descriptor: usize, object: Word) {
+        if self.resources.enabled && self.resources.flags[descriptor] && self.resources.leaf_capable[descriptor]
+            && !self.fields_may_reach_identity(descriptor, object)
+        {
+            okkama_devtrace::count!("runtime", "identity skipped: fields reach none");
+            return;
+        }
+        self.created(descriptor, object);
     }
 
     /// Legacy allocation hooks must not commit incomplete Champ construction.
@@ -431,28 +480,43 @@ impl Runtime {
                     }
                     continue;
                 }
+                _ if self.resources.structure.contains_key(&object) => {
+                    okkama_devtrace::count!("runtime", "structure index used");
+                    pending.extend(self.resources.structure[&object].iter().rev().copied());
+                }
                 heap::ARRAY => {
                     let repr = Repr::from_bits((header >> 9) & 3);
                     let elements = self.heap.elements(object);
-                    pending.extend(elements.iter().rev().map(|&e| (e, repr)));
+                    // A buffer's slots past its frontier are still written: no index for it.
+                    if header & heap::BUFFER != 0 {
+                        pending.extend(elements.iter().rev().map(|&e| (e, repr)));
+                    } else {
+                        let children = elements.iter().map(|&e| (e, repr));
+                        let index = self.structure_of(children);
+                        pending.extend(index.iter().rev().copied());
+                        self.remember_structure(object, index);
+                    }
                 }
                 heap::CLOSURE => {
                     let layout = &self.heap.layouts().closures[heap::payload(header) as usize];
-                    for (index, &field) in layout.iter().enumerate().rev() {
-                        pending.push((self.heap.field(object, index), field));
-                    }
+                    let children = layout.iter().enumerate().map(|(index, &field)| (self.heap.field(object, index), field));
+                    let index = self.structure_of(children.collect::<Vec<_>>().into_iter());
+                    pending.extend(index.iter().rev().copied());
+                    self.remember_structure(object, index);
                 }
                 _ => {
-                    if let Some(map) = self.heap.payload::<crate::ops::MapValue>(object) {
-                        let values: Vec<Word> = map.entries.values().map(|(_, v)| *v).collect();
-                        pending.extend(values.into_iter().rev().map(|v| (v, map.value)));
+                    let children: Vec<(Word, Repr)> = if let Some(map) = self.heap.payload::<crate::ops::MapValue>(object) {
+                        map.entries.values().map(|(_, v)| (*v, map.value)).collect()
                     } else if let Some(boxed) = self.heap.payload::<crate::ops::AnyBox>(object) {
-                        pending.push((boxed.value, boxed.repr));
+                        vec![(boxed.value, boxed.repr)]
                     } else {
                         // Other payloads (region entries, waiters) change in
                         // place: never summarized.
                         continue;
-                    }
+                    };
+                    let index = self.structure_of(children.into_iter());
+                    pending.extend(index.iter().rev().copied());
+                    self.remember_structure(object, index);
                 }
             }
             open.push(Walked { container: object, base, steps, events });
@@ -461,6 +525,8 @@ impl Runtime {
             self.heap.unvisit(object);
         }
         self.resources.scratch = (pending, seen, open);
+        okkama_devtrace::count!("runtime", "resource graph walks");
+        okkama_devtrace::count!("runtime", "resource graph steps", steps);
         found.sort_unstable_by_key(|o| self.resources.identities[o].serial);
         found
     }
@@ -493,10 +559,36 @@ impl Runtime {
         if serial > self.resources.summarized {
             return;
         }
+        okkama_devtrace::count!("runtime", "summaries dropped (freed)", self.resources.summaries.len());
         for (container, _) in self.resources.summaries.drain() {
             self.heap.summarized(container, false);
         }
         self.resources.summarized = 0;
+    }
+
+    /// Keep a container's index until the collector reclaims the container (`forget`): a watched address
+    /// reports its release, so a reused address never inherits an old index.
+    fn remember_structure(&mut self, container: Word, index: Box<[(Word, Repr)]>) {
+        self.resources.structure.insert(container, index);
+        self.heap.watch(container);
+    }
+
+    /// Tweed #906: the children of an immutable container that may hold an identity, in order. A leaf (a scalar, a
+    /// string, an object that is not an identity, a container whose index is empty) is left out for good.
+    fn structure_of(&self, children: impl Iterator<Item = (Word, Repr)>) -> Box<[(Word, Repr)]> {
+        okkama_devtrace::count!("runtime", "structure index built");
+        children.filter(|&(word, repr)| {
+            let Some(pointer) = repr.pointer(word) else { return false };
+            let header = self.heap.header_of(pointer);
+            match heap::kind(header) {
+                heap::OBJECT => self.resources.flags[heap::payload(header) as usize]
+                    && self.resources.identities.contains_key(&pointer),
+                heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
+                    && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
+                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                _ => false,
+            }
+        }).collect()
     }
 
     /// Can `value` reach a free identity? False is certain (the common case:
@@ -675,6 +767,7 @@ impl Runtime {
         // Tracking (not owning) skips what the region already holds; adopting
         // must still take ownership of tracked objects.
         let known = if own { None } else { Some(region) };
+        okkama_devtrace::count!("runtime", "walk from: region add");
         for object in self.resource_graph_into(&[value], None, known) {
             if own || self.resources.identities[&object].cache_rehomed {
                 self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
@@ -687,6 +780,7 @@ impl Runtime {
         if self.region_len(from) == 0 {
             return;
         }
+        okkama_devtrace::count!("runtime", "walk from: region transfer");
         for object in self.resource_graph(&[value], Some(from)) {
             let identity = self.resources.identities.get_mut(&object).expect("identity");
             if identity.owner == Owner::Region(from) {
@@ -818,7 +912,10 @@ impl Runtime {
             return Closed::Done(primary);
         }
         let mut kept: HashSet<Word> =
-            if keep.is_empty() { HashSet::default() } else { self.resource_graph(keep, Some(region)).into_iter().collect() };
+            if keep.is_empty() { HashSet::default() } else {
+                okkama_devtrace::count!("runtime", "walk from: region close keep");
+                self.resource_graph(keep, Some(region)).into_iter().collect()
+            };
         // Groups add ownership edges, including to bound Futures. Drain
         // dying groups first, withdrawing their edges before deciding which
         // Futures die. The surviving group packets retain a Future when its
@@ -837,6 +934,7 @@ impl Runtime {
             if !group
                 && let Some(&home) = self.resources.identities[&object].groups.first()
             {
+                okkama_devtrace::count!("runtime", "walk from: region close child");
                 for child in self.resource_graph(&[object], Some(region)) {
                     self.resources.identities.get_mut(&child).expect("identity").owner = Owner::Region(home);
                     self.region_push(home, child);
@@ -1127,6 +1225,7 @@ unsafe fn parts<'a>(ctx: *mut Ctx) -> (&'a mut Ctx, &'a mut Runtime) {
 /// `region.adopt` (own) and `region.track` of `value`.
 #[inline(never)]
 pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u64) {
+    okkama_devtrace::count!("runtime", "rt_region_add");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|_| "region add".into());
     runtime.region_add(region, value, own != 0);
@@ -1136,6 +1235,7 @@ pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u
 /// `count` words at `keep` reach.
 #[inline(never)]
 pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const Word, count: u64) {
+    okkama_devtrace::count!("runtime", "rt_region_leave");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     runtime.count(|_| "region leave".into());
     let keep = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(keep, count as usize) } };
@@ -1149,14 +1249,21 @@ pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const 
 /// Resource identity of a new object with a destroy-reaching descriptor.
 #[inline(never)]
 pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
+    okkama_devtrace::count!("runtime", "rt_created");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|r| format!("resource {}", r.loaded.program.objects[descriptor as usize].name));
+    okkama_devtrace::count!("runtime", format!("identity requested: {}",
+        runtime.loaded.program.objects[descriptor as usize].name));
+    #[cfg(not(feature = "champ-abi"))]
+    runtime.created_built(descriptor as usize, object);
+    #[cfg(feature = "champ-abi")]
     runtime.created(descriptor as usize, object);
 }
 
 /// Region instructions and failure links of instruction `pc` (uses at `uses`).
 #[inline(never)]
 pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses: *const Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_failure_op");
     let frame = crate::runtime::frame_pointer!();
     let (ctx, runtime) = unsafe { parts(ctx_ptr) };
     // SAFETY: the loaded program is never mutated while machine code runs, so
@@ -1253,6 +1360,7 @@ pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses:
 /// `catch`: the payload (in `scratch`) and 1 when the failure matches.
 #[inline(never)]
 pub extern "C" fn rt_catch(ctx: *mut Ctx, function: u64, pc: u64, failure: Word) -> u64 {
+    okkama_devtrace::count!("runtime", "rt_catch");
     let (ctx, runtime) = unsafe { parts(ctx) };
     let I::Catch { kind, ty, .. } = &runtime.loaded.program.functions[function as usize].code[pc as usize] else {
         return 0;
@@ -1391,5 +1499,50 @@ mod cause_stack_tests {
         assert_eq!(runtime.failure_link(fresh, caught, false), caught);
         assert_eq!(runtime.failure_link(fresh, caught, true), fresh);
         assert_eq!(runtime.failure(fresh).unwrap().secondary, [caught]);
+    }
+}
+
+#[cfg(test)]
+mod structure_tests {
+    use super::*;
+
+    fn runtime() -> Runtime {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"structure\" \"1.0.0\"\ntype t0 int\n\
+             function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
+             0: const r0, int 0\n 1: ret r0\n}\nentry f0\n",
+        ).unwrap();
+        let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        runtime.resources.enabled = true;
+        runtime
+    }
+
+    /// Tweed #906: a container's index is dropped when the collector reclaims the container, so a container
+    /// later allocated at the same address never walks the old one's children.
+    #[test]
+    fn a_reclaimed_container_takes_its_structure_index_with_it() {
+        let mut runtime = runtime();
+        let text = runtime.heap.allocate_text("element");
+        let array = runtime.heap.allocate_array(Repr::Ref, &[text, text]);
+        runtime.resource_graph(&[array], None);
+        assert!(runtime.resources.structure.contains_key(&array), "the walk indexes the array");
+        runtime.heap.collect(|_| {});
+        let released = runtime.heap.take_released();
+        runtime.resources.forget(&released);
+        assert!(!runtime.resources.structure.contains_key(&array), "the reclaimed array's index is gone");
+    }
+
+    /// The index keeps only children that may hold an identity: strings and scalars are left out.
+    #[test]
+    fn an_index_leaves_out_children_that_can_hold_no_identity() {
+        let mut runtime = runtime();
+        let text = runtime.heap.allocate_text("element");
+        let inner = runtime.heap.allocate_array(Repr::Ref, &[text]);
+        let outer = runtime.heap.allocate_array(Repr::Ref, &[text, inner]);
+        runtime.resource_graph(&[outer], None);
+        assert_eq!(runtime.resources.structure[&inner].len(), 0);
+        // The inner array was indexed (empty) in the same walk, after the outer index was built from what was
+        // known then: the outer one keeps it (unknown at that moment), never the string.
+        assert_eq!(&*runtime.resources.structure[&outer], &[(inner, Repr::Ref)]);
     }
 }

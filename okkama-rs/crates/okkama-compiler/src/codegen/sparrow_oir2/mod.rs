@@ -1398,8 +1398,20 @@ pub fn compile_verified_low(
     if module.profile != o::Profile::Low {
         return Err(GenerateError("expected Low profile".into()));
     }
-    let output = generate_with_allocation(module, layouts)?;
-    s::verify_load(&output.program, contracts)?;
+    let output = {
+        let _span = okkama_devtrace::span!("codegen", "generate");
+        generate_with_allocation(module, layouts)
+    };
+    let output = output.inspect_err(|error| {
+        okkama_devtrace::event!("codegen", "rejected", error = format!("{error:?}"));
+    })?;
+    okkama_devtrace::count!("codegen", "functions", output.program.functions.len());
+    okkama_devtrace::count!("codegen", "instructions",
+        output.program.functions.iter().map(|function| function.code.len()).sum::<usize>());
+    {
+        let _span = okkama_devtrace::span!("loader", "verify_load");
+        s::verify_load(&output.program, contracts)?;
+    }
     Ok(output)
 }
 

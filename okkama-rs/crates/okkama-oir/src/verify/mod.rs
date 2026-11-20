@@ -156,9 +156,33 @@ macro_rules! profile_api {
             options: &VerifyOptions,
             context: VerifyContext<'_>,
         ) -> Result<VerifiedModule<'m>, VerifyReport> {
-            run(module, options, context, Some(Profile::$profile), None)
+            let _span = okkama_devtrace::span!("verify", stringify!($profile));
+            let result = run(module, options, context, Some(Profile::$profile), None);
+            dev_verified(stringify!($profile), &result);
+            result
         }
     )*};
+}
+
+/// Development counters (OKKAMA_DEV=verify): steps and entities of every verifier run, and each rejection.
+fn dev_verified(profile: &'static str, result: &Result<VerifiedModule<'_>, VerifyReport>) {
+    static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("verify");
+    if !GATE.on() {
+        return;
+    }
+    let stats = match result {
+        Ok(verified) => &verified.stats,
+        Err(report) => &report.stats,
+    };
+    okkama_devtrace::count("verify", &format!("{profile} steps"), stats.steps as u64);
+    okkama_devtrace::count("verify", &format!("{profile} entities"), stats.entities as u64);
+    okkama_devtrace::count("verify", &format!("{profile} functions"), stats.functions as u64);
+    if let Err(report) = result {
+        let first = report.diagnostics.first().map(|diagnostic| format!("{:?}", diagnostic.rule)).unwrap_or_default();
+        okkama_devtrace::event("verify", "rejected", &[("profile", profile.to_string()),
+            ("failure", format!("{:?}", report.failure)), ("diagnostics", report.diagnostics.len().to_string()),
+            ("first_rule", first), ("steps", stats.steps.to_string())]);
+    }
 }
 profile_api!(
     verify_high, verify_high_with => High,

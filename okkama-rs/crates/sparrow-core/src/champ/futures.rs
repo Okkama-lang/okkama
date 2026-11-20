@@ -811,6 +811,7 @@ fn native_driver(runtime: &Runtime, function: usize) -> bool {
 pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn, post: *mut FutureNewPost)
     -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_future_new_owned");
     let frame_pointer = frame_pointer!();
     if !bridge_clear(ctx) {
         return stop(ctx, error("G helper entered with an active bridge failure"));
@@ -876,6 +877,7 @@ pub extern "C" fn rt_future_new_owned(ctx: *mut Ctx, inputs: *const FutureNewIn,
 pub extern "C" fn rt_future_spawn(ctx: *mut Ctx, future: Word, cache: *mut CacheSlot, post: *mut SpawnPost)
     -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_future_spawn");
     if !bridge_clear(ctx) {
         return stop(ctx, error("X helper entered with an active bridge failure"));
     }
@@ -914,6 +916,7 @@ pub extern "C" fn rt_future_spawn(ctx: *mut Ctx, future: Word, cache: *mut Cache
 /// Future that is no longer cold is left as it is. No duty moves: the cache duty stays where it is, and the
 /// SPAWNED flag keeps a later detach from registering it twice (I-F4, I-F5). The caller keeps the Future rooted.
 pub extern "C" fn rt_future_spawn_bound(ctx: *mut Ctx, future: Word) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_future_spawn_bound");
     if !bridge_clear(ctx) {
         return stop(ctx, error("X helper entered with an active bridge failure"));
     }
@@ -1003,6 +1006,7 @@ fn await_pending(ctx: *mut Ctx, frame_pointer: u64, this: Word, future: Word) ->
 /// `await` (SPB 66), class S (draft 3 §4.1): a settled Future gives its value (deps take no words) or its cached
 /// failure; a running one registers `this` and returns PENDING. The outcome packet stays in the cache.
 pub extern "C" fn rt_await_view(ctx: *mut Ctx, this: Word, future: Word, post: *mut AwaitPost) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_await_view");
     let frame_pointer = frame_pointer!();
     match await_entry(ctx, frame_pointer, this, future) {
         Awaited::Ready => {}
@@ -1029,6 +1033,7 @@ pub extern "C" fn rt_await_view(ctx: *mut Ctx, this: Word, future: Word, post: *
 pub extern "C" fn rt_await_take(ctx: *mut Ctx, this: Word, future: Word, boundary: u64, post: *mut AwaitTakePost)
     -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_await_take");
     let frame_pointer = frame_pointer!();
     let unwound = |ctx: *mut Ctx, failure: Word, receipt: u64| {
         unsafe {
@@ -1096,6 +1101,7 @@ fn unwind(ctx: *mut Ctx, post: *mut AwaitPost, failure: Word, task: Word, receip
 pub extern "C" fn rt_await_unwind(ctx: *mut Ctx, this: Word, state: *mut ScopeSlot, failure: Word,
     task: *mut Word, receipt: *mut u64, post: *mut AwaitUnwindPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_await_unwind");
     let frame_pointer = frame_pointer!();
     if !bridge_clear(ctx) {
         return stop(ctx, error("S helper entered with an active bridge failure"));
@@ -1138,6 +1144,7 @@ pub extern "C" fn rt_await_unwind(ctx: *mut Ctx, this: Word, state: *mut ScopeSl
 /// and its waiters queued in registration order. Nothing runs, nothing collects and nothing fails. The slot area,
 /// the scope area and the step record are cleared.
 pub extern "C" fn rt_future_publish(ctx: *mut Ctx, this: Word, inputs: *const PublishIn) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_future_publish");
     if !bridge_clear(ctx) {
         return stop(ctx, error("L helper entered with an active bridge failure"));
     }
@@ -1203,6 +1210,7 @@ pub extern "C" fn rt_future_publish(ctx: *mut Ctx, this: Word, inputs: *const Pu
 /// settles as Cancelled with its preallocated carrier, and its inputs stay in it until its cache duty settles;
 /// a running one gets Tomato's request (`cancel_running`); a settled one is unchanged.
 pub extern "C" fn rt_cancel_request(ctx: *mut Ctx, future: Word) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_cancel_request");
     if !bridge_clear(ctx) {
         return stop(ctx, error("L helper entered with an active bridge failure"));
     }
@@ -1238,6 +1246,7 @@ impl Runtime {
 
 /// `fut.cancelled` (SPB 73), class L: whether the Future settled as Cancelled, as Tomato's `fut cancelled`.
 pub extern "C" fn rt_future_cancelled(ctx: *mut Ctx, future: Word, post: *mut FlagPost) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_future_cancelled");
     let runtime = unsafe { &*(*ctx).runtime };
     if let Err(failure) = runtime.champ_body(future) {
         return stop(ctx, failure);
@@ -1254,6 +1263,7 @@ pub extern "C" fn rt_future_cancelled(ctx: *mut Ctx, future: Word, post: *mut Fl
 pub extern "C" fn rt_machine_future_destination(ctx: *mut Ctx, frame: Word, post: *mut ExitDestination)
     -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_machine_future_destination");
     let runtime = unsafe { &*(*ctx).runtime };
     match runtime.champ_cache(frame) {
         Ok(cache) => {
@@ -1281,6 +1291,7 @@ pub extern "C" fn rt_machine_future_destination(ctx: *mut Ctx, frame: Word, post
 pub extern "C" fn rt_invoke_defer_async(ctx: *mut Ctx, this: Word, entry: u64, args: *const Word, argc: u64,
     io: *mut super::CallOwn, registration: *const super::RegistrationMap, post: *mut super::DeferPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_invoke_defer_async");
     let frame_pointer = frame_pointer!();
     if !bridge_clear(ctx) {
         return stop(ctx, error("S helper entered with an active bridge failure"));

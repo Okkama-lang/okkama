@@ -230,6 +230,9 @@ impl<'a> Budget<'a> {
         if next.is_none_or(|next| next > self.options.work_limit) {
             let mut stats = self.stats.clone();
             stats.exhausted_limit = Some(OwnLimit::Work);
+            okkama_devtrace::event!("own", "budget exhausted", limit = "work",
+                function = format!("{:?}", stats.active_function), work = stats.charged_work,
+                peak_bytes = stats.peak_auxiliary_bytes);
             return Err(OwnError::Incomplete { stats: Box::new(stats) });
         }
         self.stats.charged_work = next.unwrap();
@@ -240,6 +243,9 @@ impl<'a> Budget<'a> {
         if next.is_none_or(|next| next > self.options.memory_limit) {
             let mut stats = self.stats.clone();
             stats.exhausted_limit = Some(OwnLimit::Memory);
+            okkama_devtrace::event!("own", "budget exhausted", limit = "memory",
+                function = format!("{:?}", stats.active_function), work = stats.charged_work,
+                peak_bytes = stats.peak_auxiliary_bytes);
             return Err(OwnError::Incomplete { stats: Box::new(stats) });
         }
         self.live_bytes = next.unwrap();
@@ -461,4 +467,11 @@ fn phase_error(kind: OwnDiagnosticKind, message: impl Into<String>) -> OwnError 
         diagnostics: vec![OwnDiagnostic { kind, function: None, site: None, message: message.into() }],
         stats: Box::default(),
     }
+}
+
+/// A short label of an operation for development counters: `Ownership.ScopeSplit`, `Call.Direct`.
+pub(crate) fn dev_label(op: &crate::Operation) -> String {
+    let text = format!("{op:?}");
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|part| !part.is_empty()).take(2)
+        .collect::<Vec<_>>().join(".")
 }

@@ -12,6 +12,8 @@ use std::time::Instant;
 /// `pipeline <stage> <ms>` line per stage. Diagnostics only; keep it out of timed samples.
 struct Stages {
     last: Option<Instant>,
+    /// Development instrumentation (`OKKAMA_DEV=stages`): the same marks as timers.
+    dev: Option<Instant>,
 }
 
 impl Stages {
@@ -20,12 +22,16 @@ impl Stages {
     }
 
     fn enabled(on: bool) -> Self {
-        Self { last: on.then(Instant::now) }
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("stages");
+        Self { last: on.then(Instant::now), dev: GATE.on().then(Instant::now) }
     }
 
     fn mark(&mut self, stage: &str) {
         if let Some(line) = self.line(stage) {
             eprintln!("{line}");
+        }
+        if let Some(started) = self.dev.replace(std::time::Instant::now()) {
+            okkama_devtrace::time("stages", stage, started.elapsed());
         }
     }
 
@@ -62,7 +68,33 @@ impl std::fmt::Display for PipelineError {
 impl std::error::Error for PipelineError {}
 
 fn phase(phase: &'static str, error: impl std::fmt::Debug) -> PipelineError {
-    PipelineError::Phase { phase, message: format!("{error:?}") }
+    let message = format!("{error:?}");
+    okkama_devtrace::event!("stages", "failure", phase = phase, message = message);
+    PipelineError::Phase { phase, message }
+}
+
+/// Development dumps (`OKKAMA_DEV=<category>[:function],dump`): every function of the module as text after a
+/// stage, and its size as counters.
+fn dev_stage(category_stage: &'static str, module: &o::Module) {
+    static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("stages");
+    if !GATE.on() {
+        return;
+    }
+    let mut instructions = 0usize;
+    let mut blocks = 0usize;
+    for (id, function) in module.functions.iter() {
+        if let Some(body) = &function.body {
+            instructions += body.insts.len();
+            blocks += body.blocks.len();
+        }
+        if GATE.dumps_for(&function.symbol) {
+            let text = o::text::print_one_function(module, id).unwrap_or_else(|error| format!("{error:?}"));
+            okkama_devtrace::dump(category_stage, &function.symbol, &text);
+        }
+    }
+    okkama_devtrace::count("stages", &format!("{category_stage} functions"), module.functions.len() as u64);
+    okkama_devtrace::count("stages", &format!("{category_stage} blocks"), blocks as u64);
+    okkama_devtrace::count("stages", &format!("{category_stage} instructions"), instructions as u64);
 }
 
 /// Resolve imports and analyze directly, without invoking any OIR-1 lowering.
@@ -143,6 +175,7 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let mut stages = Stages::start();
     let catalog = P1NativeSummaries::for_module(&high).map_err(|error| phase("contracts", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
+    dev_stage("high", &high);
     o::verify_high_with(&high, &verify, context())
         .map_err(|error| phase("verify_high", error))?;
     stages.mark("verify_high");
@@ -152,6 +185,7 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let own = o::own::rewrite_subset(inferred, &options)
         .map_err(|error| phase("own_rewrite", error))?;
     stages.mark("own");
+    dev_stage("own", &own.module);
     let catalog = P1NativeSummaries::for_module(&own.module).map_err(|error| phase("contracts_own", error))?;
     let context = || o::VerifyContext { external_contracts: &catalog, ..o::VerifyContext::default() };
     o::verify_own_with(&own.module, &options.verify, context()).map_err(|error| phase("verify_own", error))?;
@@ -161,6 +195,7 @@ pub(super) fn compile_high_with(high: o::Module, mode: o::VerifyMode) -> Result<
     let coro = o::coro::lower_coro(own.module, &o::coro::CoroOptions::default())
         .map_err(|error| phase("coro", error))?;
     stages.mark("coro");
+    dev_stage("coro", &coro);
     compile_coro_stages(coro, &options.verify, &catalog, stages)
 }
 
@@ -183,6 +218,7 @@ fn compile_coro_stages(
     let low = o::low::lower_cleanup(coro, &o::low::LowOptions::default())
         .map_err(|error| phase("low", error))?;
     stages.mark("low");
+    dev_stage("low", &low);
     o::verify_low_with(&low, options, context()).map_err(|error| phase("verify_low", error))?;
     stages.mark("verify_low");
     let layouts = sparrow_oir2::with_composites(&low, || layouts(&low))?;

@@ -16,6 +16,7 @@ name = "okkama"
 path = "src/main.rs"
 
 [dependencies]
+okkama-devtrace = { path = "../okkama-devtrace" }
 okkama-allocation-counter = { path = "../../tools/allocation-counter", optional = true }
 mimalloc = { version = "0.1.52", default-features = false }
 okkama-compiler = { path = "../okkama-compiler" }

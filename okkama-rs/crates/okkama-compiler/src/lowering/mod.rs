@@ -517,15 +517,18 @@ fn lower_analyzed(
         return Err((owners[func.0], LoweringError::invalid(module.functions[func.0].span, message)));
     }
     let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
+    dev_ir("ir lowered", &module);
     let param_adopts_removed = passes.elide_param_adopts(&mut module);
     // Регионы, которые ничем не владеют, не открываются и не закрываются.
     // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
     // после вызова иначе оставляет его вызовом (#285).
     if passes.on("regions") {
+        let _span = okkama_devtrace::span!("lower", "pass regions");
         ir::regions::elide_unused_regions(&mut module);
     }
     // Хвостовая рекурсия исполняется циклом на всех движках.
     if passes.on("tail-calls") {
+        let _span = okkama_devtrace::span!("lower", "pass tail-calls");
         ir::recursion::eliminate_tail_calls(&mut module);
     }
     // Constant arithmetic is computed once, exactly, at build time.
@@ -555,6 +558,7 @@ fn lower_analyzed(
     if passes.sabotage {
         sabotage_int_add(&mut module);
     }
+    dev_ir("ir after passes", &module);
     // Lowering обязан выдавать только корректный IR: нарушение — ошибка компилятора.
     if let Err(error) = ir::verify(&module) {
         // Отладка компилятора: печать отвергнутого IR.
@@ -788,6 +792,43 @@ impl Passes {
 
     fn on(&self, pass: &str) -> bool {
         self.enabled.as_ref().is_none_or(|names| names.iter().any(|name| name == pass))
+    }
+}
+
+/// Development instrumentation of Tomato's pipeline (OKKAMA_DEV=lower[:function][,dump]): the module's size and
+/// its region operations by kind after a stage, and each function's text.
+fn dev_ir(stage: &'static str, module: &ir::Module) {
+    static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("lower");
+    if !GATE.on() {
+        return;
+    }
+    let mut instructions = 0u64;
+    let mut regions: std::collections::BTreeMap<&'static str, u64> = Default::default();
+    for function in &module.functions {
+        for block in &function.blocks {
+            instructions += block.insts.len() as u64;
+            for inst in &block.insts {
+                let kind = match &inst.kind {
+                    ir::InstKind::RegionEnter => "region.enter",
+                    ir::InstKind::RegionAdopt { .. } => "region.adopt",
+                    ir::InstKind::RegionTrack { .. } => "region.track",
+                    ir::InstKind::RegionTransfer { .. } => "region.transfer",
+                    ir::InstKind::RegionLeave { .. } => "region.leave",
+                    ir::InstKind::RegionUnwind { .. } => "region.unwind",
+                    ir::InstKind::RegionSettle { .. } => "region.settle",
+                    _ => continue,
+                };
+                *regions.entry(kind).or_default() += 1;
+            }
+        }
+        if GATE.dumps_for(&function.symbol) {
+            okkama_devtrace::dump(stage, &function.symbol, &ir::print::function_text(module, function));
+        }
+    }
+    okkama_devtrace::count("lower", &format!("{stage}: functions"), module.functions.len() as u64);
+    okkama_devtrace::count("lower", &format!("{stage}: instructions"), instructions);
+    for (kind, count) in regions {
+        okkama_devtrace::count("lower", &format!("{stage}: {kind}"), count);
     }
 }
 

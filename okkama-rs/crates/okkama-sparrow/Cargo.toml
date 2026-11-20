@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+okkama-devtrace = { path = "../okkama-devtrace" }
 okkama-runtime-abi = { path = "../okkama-runtime-abi" }
 
 [lints]

@@ -61,8 +61,9 @@ else
 fi
 
 if [[ $BUILD -eq 1 ]]; then
-    (cd "$ROOT/okkama-rs" && cargo build --release --locked "${CARGO_TARGET[@]}" \
-        -p okkama-cli -p sparrow-cli -p blade-cli)
+    # Release builds compile the development instrumentation out (okkama-devtrace).
+    (cd "$ROOT/okkama-rs" && RUSTFLAGS="${RUSTFLAGS:-} --cfg okkama_release" cargo build --release --locked \
+        "${CARGO_TARGET[@]}" -p okkama-cli -p sparrow-cli -p blade-cli)
 fi
 
 VERSION="${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/okkama-rs/Cargo.toml" | head -1)}"

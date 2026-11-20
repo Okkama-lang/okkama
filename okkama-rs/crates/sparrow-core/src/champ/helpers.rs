@@ -764,6 +764,7 @@ leaf_helper!(rt_own_split_static(ctx, input: *mut PacketSlot, plan: PlanId, post
 pub extern "C" fn rt_own_split_checked(ctx: *mut Ctx, input: *mut PacketSlot,
     selection: *const Selection, post: *mut SplitPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_own_split_checked");
     if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("checked helper entered with active bridge failure"));
     }
@@ -827,11 +828,13 @@ fn scope_partition(runtime: &Runtime, scope: &mut Scope, selected: &HashSet<Word
 pub extern "C" fn rt_scope_split(ctx: *mut Ctx, input: *mut ScopeSlot,
     selection: *const Selection, post: *mut ScopeSplitPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_scope_split");
     scope_split(ctx, input, selection, post, false)
 }
 pub extern "C" fn rt_scope_split_admissible(ctx: *mut Ctx, input: *mut ScopeSlot,
     selection: *const Selection, post: *mut ScopeSplitPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_scope_split_admissible");
     scope_split(ctx, input, selection, post, true)
 }
 fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection,
@@ -894,6 +897,7 @@ fn scope_split(ctx: *mut Ctx, input: *mut ScopeSlot, selection: *const Selection
 pub extern "C" fn rt_own_dynamic(ctx: *mut Ctx, state: *mut ScopeSlot, input: *mut PacketSlot,
     post: *mut ScopeSplitPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_own_dynamic");
     if unsafe { (*ctx).status } != runtime::OK || unsafe { (*ctx).failure } != 0 {
         return stop(ctx, error("checked helper entered with active bridge failure"));
     }
@@ -930,6 +934,7 @@ enum TransferFilter {
 pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_scope_transfer");
     scope_transfer(ctx, inputs, selection, post, TransferFilter::Strict)
 }
 /// An admissible transfer (`TRANSFER_ADMISSION`) moves only the selected identities its source admitted. Bound,
@@ -938,6 +943,7 @@ pub extern "C" fn rt_scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs
 pub extern "C" fn rt_scope_transfer_admissible(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_scope_transfer_admissible");
     scope_transfer(ctx, inputs, selection, post, TransferFilter::Admitted)
 }
 /// A held transfer (`TRANSFER_ADMISSION`, #697) moves the selected identities its source admitted or bound.
@@ -947,6 +953,7 @@ pub extern "C" fn rt_scope_transfer_admissible(ctx: *mut Ctx, inputs: *const Tra
 pub extern "C" fn rt_scope_transfer_held(ctx: *mut Ctx, inputs: *const TransferInputs,
     selection: *const Selection, post: *mut TransferPost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_scope_transfer_held");
     scope_transfer(ctx, inputs, selection, post, TransferFilter::Held)
 }
 fn scope_transfer(ctx: *mut Ctx, inputs: *const TransferInputs, selection: *const Selection,
@@ -1124,6 +1131,7 @@ fn take_duty(scope: &mut Scope, future: Word, kind: u64) -> Option<Service> {
 pub extern "C" fn rt_cache_rehome(ctx: *mut Ctx, pending: *mut PendingSlot, state: *mut ScopeSlot,
     cache: *mut CacheSlot, task: *mut TaskSlot, future: Word, target: u64, post: *mut RehomePost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_cache_rehome");
     leaf(ctx, |runtime| unsafe {
         let pending_record = (*pending).record;
         let mut exit = self::pending(runtime, pending_record)?;
@@ -1186,6 +1194,7 @@ pub extern "C" fn rt_cache_rehome(ctx: *mut Ctx, pending: *mut PendingSlot, stat
 pub extern "C" fn rt_service_absorb(ctx: *mut Ctx, input: *mut PacketSlot, token: Word, kind: u64,
     post: *mut PacketSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_service_absorb");
     leaf(ctx, |runtime| unsafe {
         let mut absorbed = packet(runtime, (*input).record)?;
         if runtime.champ_cache(token)?.flags & (super::RELEASED | super::REHOMED) != 0 {
@@ -1206,6 +1215,7 @@ pub extern "C" fn rt_service_absorb(ctx: *mut Ctx, input: *mut PacketSlot, token
 pub extern "C" fn rt_service_materialize(ctx: *mut Ctx, input: *mut PacketSlot, holder: Word, kind: u64,
     post: *mut MaterializePost) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_service_materialize");
     leaf(ctx, |runtime| unsafe {
         let mut source = packet(runtime, (*input).record)?;
         let index = source.services.iter().position(|entry| entry.holder == holder && entry.kind == kind)

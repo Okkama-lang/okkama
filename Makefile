@@ -23,8 +23,12 @@ VSIX    := vscode-okkama/okkama-vscode.vsix
 
 all: build
 
+# A release build compiles the development instrumentation (okkama-devtrace, OKKAMA_DEV) out;
+# `make build RELEASE_CFG=` keeps it.
+RELEASE_CFG ?= --cfg okkama_release
+
 build:
-	cd $(RS) && $(CARGO) build --release -p okkama-cli -p sparrow-cli -p blade-cli
+	cd $(RS) && RUSTFLAGS="$$RUSTFLAGS $(RELEASE_CFG)" $(CARGO) build --release -p okkama-cli -p sparrow-cli -p blade-cli
 
 install: build
 	./install.sh --prefix "$(PREFIX)" --no-build

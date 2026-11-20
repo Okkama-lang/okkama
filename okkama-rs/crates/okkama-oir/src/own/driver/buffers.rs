@@ -43,7 +43,7 @@ impl Driver<'_, '_> {
                 // A failed store split moves the token to its owner's dynamic step (the follow-up ruling), so the
                 // owner of the Future's `fut.new` settles entries at run time.
                 if let Some((owner, _)) = self.cache_duties.iter().rev().find(|(_, created)| *created == future) {
-                    self.dynamic_owners.insert(*owner);
+                    self.dynamic_owner(*owner, "Future pushed into a builder (#802)");
                 }
                 if !stored.contains(&future) {
                     stored.push(future);
@@ -199,7 +199,7 @@ impl Driver<'_, '_> {
             // #802: the journal joins the loose packets admitted before lexical unwinding, with its Futures' duties.
             if self.holds_services(buffer) {
                 let owner = self.journal_owner(&point)?;
-                self.dynamic_owners.insert(owner);
+                self.dynamic_owner(owner, "buffer holds service entries");
             }
             let journal = point.env.journals.remove(&buffer).unwrap();
             let value = point.env.values.remove(&buffer)
@@ -219,7 +219,7 @@ impl Driver<'_, '_> {
         let owner = self.journal_owner(&point)?;
         let state = point.env.state(owner)?;
         if services {
-            self.dynamic_owners.insert(owner);
+            self.dynamic_owner(owner, "builder journal holds service entries");
         }
         self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))
     }

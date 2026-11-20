@@ -636,6 +636,7 @@ unsafe fn parts<'a>(ctx: *mut Ctx) -> (&'a mut Ctx, &'a mut Runtime) {
 /// A cold Future of async `function` with `count` argument words.
 #[inline(never)]
 pub extern "C" fn rt_future_new(ctx: *mut Ctx, function: u64, arguments: *const Word, count: u64) -> Word {
+    okkama_devtrace::count!("runtime", "rt_future_new");
     let frame_pointer = crate::runtime::frame_pointer!();
     let (ctx, runtime) = unsafe { parts(ctx) };
     let arguments = unsafe { std::slice::from_raw_parts(arguments, count as usize) };
@@ -651,6 +652,7 @@ pub const AWAIT_PENDING: u64 = 2;
 /// (status set), or pending (`this` now waits for it).
 #[inline(never)]
 pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
+    okkama_devtrace::count!("runtime", "rt_await");
     let (ctx, runtime) = unsafe { parts(ctx_ptr) };
     runtime.count(|_| "await".into());
     // Re-entry after the awaited Future settled first (#663): only a
@@ -710,6 +712,7 @@ pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
 /// awaits leave their carrier in the cache for normal unwind cleanup.
 #[inline(never)]
 pub extern "C" fn rt_await_take(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
+    okkama_devtrace::count!("runtime", "rt_await_take");
     let outcome = rt_await(ctx_ptr, this, future);
     let (ctx, runtime) = unsafe { parts(ctx_ptr) };
     let delivered = outcome == AWAIT_READY && get(future, STATE) == DONE && ctx.status == OK;
@@ -729,6 +732,7 @@ pub extern "C" fn rt_await_take(ctx_ptr: *mut Ctx, this: Word, future: Word) -> 
 /// in the region, and re-enters here when it settles.
 #[inline(never)]
 pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, keep: Word, failure: Word) -> u64 {
+    okkama_devtrace::count!("runtime", "rt_region_settle");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     let unwind = failure != UNBOUND;
     let link = |runtime: &mut Runtime, primary: Option<Word>, cleanup: Word| match primary {
@@ -802,6 +806,7 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
 /// `return value` of an async body: settle its Future.
 #[inline(never)]
 pub extern "C" fn rt_complete(ctx: *mut Ctx, frame: Word, value: Word) {
+    okkama_devtrace::count!("runtime", "rt_complete");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.settle(frame, DONE, value);
 }
@@ -809,6 +814,7 @@ pub extern "C" fn rt_complete(ctx: *mut Ctx, frame: Word, value: Word) {
 /// `spawn future`: start a cold Future now, on this stack.
 #[inline(never)]
 pub extern "C" fn rt_spawn(ctx_ptr: *mut Ctx, future: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_spawn");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     runtime.spawn(ctx_ptr, future);
     future
@@ -817,6 +823,7 @@ pub extern "C" fn rt_spawn(ctx_ptr: *mut Ctx, future: Word) -> Word {
 /// `fut` operations: done, cancelled (flags) and cancel.
 #[inline(never)]
 pub extern "C" fn rt_fut(ctx_ptr: *mut Ctx, op: u64, future: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_fut");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     let state = get(future, STATE);
     match op {
