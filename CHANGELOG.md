@@ -8,6 +8,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Ownership gate against CPython (#908).** `bench/ownership/run.py` runs Linux builds of Okkama and CPython 3.13 in
+  the same container: the 11-ownership program and its plain twin, plus the micro pairs. On 2026-11-20:
+
+  | | 11-ownership |
+  |---|---|
+  | Tomato | 100.5 ms |
+  | Tweed after #905/#906 | 23.0 ms |
+  | CPython | 28.2 ms |
+
+  The owner's target (ownership on par with Python) is met on this program. A resource still costs ~100 ns per
+  call (micro destroy): phase 2, #909.
 - **Tweed: a resource walk goes through a container's structure index (#906).**
   - **The index.** An immutable container (array version, closure, persistent map, box) keeps the children
     that may hold an identity. It is found once and dropped when the collector reclaims the container.

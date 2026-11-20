@@ -113,7 +113,8 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 
 1. #911 step 1 (this wave/80): the Wave CI runs only the Tomato pipeline. Gone: the champ, oir and
    differential parts, the champ-abi clippy, conformance on Champ, the Champ blockers and corpora on Champ.
-2. #908: the container benchmark gate (Linux build of the tree against CPython 3.13).
+2. #908 is done: in the container 11-ownership takes 100.5 ms on Tomato, 23.0 ms on Tweed and 28.2 ms on CPython.
+   Command and table: bench/ownership/README.md.
 3. #909, phase 2: elide region tracking of values that do not escape (a reduce accumulator's versions), plus
    the remaining region-add calls.
 4. #914: a temporary child in a group reads a lent resource after its destroy (Tomato bug).
