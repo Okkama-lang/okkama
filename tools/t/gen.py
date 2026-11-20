@@ -509,8 +509,8 @@ def rat_family():
         batch.is_(f"{A}.abs().string()", lit_str(text_rat(abs(a))), f"{a}.abs()")
         batch.is_(f"{A}.sign()", lit_int(cmp(a, 0)), f"{a}.sign()")
         batch.is_(f"{A}.int()", lit_int(int(a)), f"{a}.int()")
-        batch.is_(f"{A}.numerator()", lit_str(str(a.numerator)), f"{a}.numerator()")
-        batch.is_(f"{A}.denominator()", lit_str(str(a.denominator)), f"{a}.denominator()")
+        batch.is_(f"{A}.numerator()", lit_int(a.numerator), f"{a}.numerator()")
+        batch.is_(f"{A}.denominator()", lit_int(a.denominator), f"{a}.denominator()")
         batch.is_(f"{A}.float()", lit_float(float(a)), f"{a}.float()")
         batch.is_(f"string({A})", lit_str(text_rat(a)), f"string({a})")
         for e in [-2, -1, 0, 1, 3]:

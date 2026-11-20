@@ -151,7 +151,7 @@ jobs:
           }
           run t python3 tools/t/run.py $t --jobs 4
           run micro python3 bench/micro/check.py --okkama $bin $pipeline --jobs 4
-          run examples env OKKAMA=$bin python3 examples/check.py
+          run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
           run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
           [ "${{ matrix.engine }}" = champ ] || exit $status
       - uses: actions/upload-artifact@v5
