@@ -74,7 +74,7 @@ def main():
                "rounds": args.rounds, "reps": args.reps, "points": [], "ladder": []}
     for point in filter(lambda p: wanted(p["scenario"]), manifest["points"]):
         program = HERE / "persistence" / f"{point['scenario']}.ok"
-        cmd = [args.okkama, "run", "--engine", "sparrow", str(program), str(point["n"]), str(point["k"]), str(args.reps)]
+        cmd = [args.okkama, "run", str(program), str(point["n"]), str(point["k"]), str(args.reps)]
         samples, checks = {"on": [], "off": []}, set()
         try:
             for mode in order:
@@ -98,7 +98,7 @@ def main():
         walls = {"on": [], "off": []}
         try:
             for mode in order * 2:
-                wall, _, _ = run([args.okkama, "run", "--engine", "sparrow", str(main_ok)], mode)
+                wall, _, _ = run([args.okkama, "run", str(main_ok)], mode)
                 walls[mode].append(wall)
         except (RuntimeError, subprocess.TimeoutExpired) as problem:
             failures.append(f"ladder {name}: {problem}")

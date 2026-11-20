@@ -74,7 +74,7 @@ cargo run -p okkama-cli -- --help
 
 ```sh
 cargo run --offline -p okkama-cli -- run examples/arithmetic.ok
-cargo run --offline -p okkama-cli -- run --engine sparrow examples/arithmetic.ok
+cargo run --offline -p okkama-cli -- run examples/arithmetic.ok
 cargo run --offline -p okkama-cli -- build examples/arithmetic.ok --target sparrow -o out.spb
 cargo run --offline -p okkama-cli -- exec out.spb
 ```
@@ -89,9 +89,8 @@ stdout, scheduler bridge, точную арифметику и вычислен�
 стек вызовов; `sparrow` и `okkama exec` — стек в терминах Sparrow.
 `OKKAMA_TRACE=off` печатает только сам отказ.
 
-IR-интерпретатор и зависевший от него `okkama repl` удалены (#584).
-`--engine ir` и `OKKAMA_ENGINE=ir` возвращают понятную ошибку.
-`--engine sparrow` и `OKKAMA_ENGINE=sparrow` явно выбирают Sparrow. OIR и его passes остаются частью компилятора.
+IR-интерпретатор и зависевший от него `okkama repl` удалены (#584), JVM-бэкенд — в 0.6.0 (#585).
+Движок один, Sparrow: у `okkama run` нет ключа `--engine`. OIR и его passes остаются частью компилятора.
 
 [План полного рантайма, GC и JIT](docs/sparrow-runtime-roadmap.md).
 

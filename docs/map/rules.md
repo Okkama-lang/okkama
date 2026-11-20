@@ -47,7 +47,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 | PR-N | 3 | loader: `spb17/drivers.rs`, `spb17/p1.rs`; champ: `champ/futures.rs`; other: `catalogue.rs` |
 | PR-P | 2 | own: `own/summaries/infer.rs`; verify: `verify/linearity/summaries.rs`, `verify/mod.rs` |
 
-## Tags in one layer (278)
+## Tags in one layer (276)
 
 - ABI_ARGUMENTS — champ: `champ/abi.rs`
 - ABI_CLOSED — champ: `champ/abi.rs`
@@ -174,7 +174,6 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - NO_COLOR — cli: `man.rs`
 - NUMBER_OF_PROCESSORS — other: `native/host.rs`
 - OBJECT_RETENTION — loader: `spb17/verify.rs`
-- OCS_RUST_ENGINE — cli: `ocs.rs`
 - OKKAMA_634_DIFFERENTIAL — verify: `verify/mod.rs`
 - OKKAMA_634_FUNCTIONS — verify: `verify/differential.rs`
 - OKKAMA_634_LIMITS — verify: `verify/differential.rs`
@@ -191,7 +190,6 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - OKKAMA_DEV — devtrace: `lib.rs`
 - OKKAMA_DEV_OUT — devtrace: `lib.rs`
 - OKKAMA_DUMP_INVALID_IR — lower-oir1: `lowering/mod.rs`
-- OKKAMA_ENGINE — cli: `main.rs`
 - OKKAMA_HOST_SESSION_TEST — other: `host.rs`
 - OKKAMA_ICU_LIBDIR — cli: `main.rs`
 - OKKAMA_IMPORT_DIRS — cli: `main.rs`

@@ -49,8 +49,8 @@ Last update: 2026-11-20, after wave/78. The working branch of 0.6.0 is `release/
 
 ## Tweed (decided 2026-11-20): phase 0 measurements
 
-Setup: Tomato v0.5.8 (Linux toolchain `okkama-work/micro-tc/v0.5.8`, `--engine sparrow`: the default there is
-still IR) and CPython 3.13 in the same `okkama-dev` container, 1 CPU. Micro-v2 protocol, oracles checked.
+Setup: Tomato v0.5.8 (Linux toolchain `okkama-work/micro-tc/v0.5.8`, `--engine sparrow`, which that old CLI still
+takes: its default was IR) and CPython 3.13 in the same `okkama-dev` container, 1 CPU. Micro-v2 protocol, oracles checked.
 Scripts: scratchpad `tweed0/` (session 36c16e3b).
 
 - **Micro, ns/iteration, Tomato / Python.**

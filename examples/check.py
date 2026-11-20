@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run every example and compare its output with NAME.expected.
 
-    examples/check.py [--engine sparrow ...] [PATH ...]
+    examples/check.py [PATH ...]
 
 Each example runs in a fresh temporary directory, with the std of this
 checkout, on every engine given (default: sparrow). Only the Python
@@ -17,14 +17,7 @@ ROOT = os.path.dirname(HERE)
 OKKAMA = os.environ.get("OKKAMA", os.path.join(ROOT, "okkama-rs", "target", "release", "okkama"))
 
 args = sys.argv[1:]
-engines = []
-while "--engine" in args:
-    at = args.index("--engine")
-    engines.append(args[at + 1])
-    del args[at:at + 2]
-engines = engines or ["sparrow"]
-if any(engine not in ("sparrow",) for engine in engines):
-    sys.exit("Sparrow is the only Okkama engine")
+engines = ["sparrow"]
 roots = [os.path.abspath(path) for path in args] or [HERE]
 examples = sorted(
     os.path.join(folder, name)
@@ -41,7 +34,7 @@ for example in examples:
     expected = open(example[:-3] + ".expected", encoding="utf-8").read()
     for engine in engines:
         with tempfile.TemporaryDirectory() as scratch:
-            run = subprocess.run([OKKAMA, "run", "--engine", engine, example], cwd=scratch, env=env,
+            run = subprocess.run([OKKAMA, "run", example], cwd=scratch, env=env,
                                  capture_output=True, text=True, timeout=60)
         ok = run.returncode == 0 and run.stdout == expected
         failed += not ok

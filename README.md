@@ -488,9 +488,9 @@ twice" is a job for durable state and idempotency.
 ## Sparrow
 
 Sparrow is the only Okkama engine for source programs and inline tests
-(`okkama run -t`). The IR interpreter and its REPL were removed (#584);
-`--engine ir` and `OKKAMA_ENGINE=ir` report an error. The JVM backend was
-removed in 0.6.0 (#585); its last frozen version is tag `v0.5.8`.
+(`okkama run -t`), so there is nothing to select: `okkama run` has no
+`--engine`. The IR interpreter and its REPL were removed (#584), and the JVM
+backend in 0.6.0 (#585); its last frozen version is tag `v0.5.8`.
 
 The compiler lowers Okkama to OIR, then generates Sparrow bytecode (SPB). The [conformance suite](conformance/) checks output, errors and
 exit status against the same expectations.

@@ -4,7 +4,7 @@
     bench/ownership/run.py --okkama LINUX_BIN [--okkama OTHER_BIN ...] [--image okkama-dev] [--repeats 9]
 
 Each `--okkama` is a Linux build of the CLI (for example built in Docker); it runs with this checkout's std,
-`--engine sparrow`, and is labelled by its parent directory's name. Every engine runs in `IMAGE` with one
+and is labelled by its parent directory's name. Every engine runs in `IMAGE` with one
 CPU, 2 GB and no network, CPython being the image's `python3`.
 
 - **ownership.ok** (the 11-ownership ladder program: 100 000 records behind a role, 1000 shelves, 300 rounds,
@@ -79,7 +79,7 @@ def main():
         for binary in args.okkama:
             binary = Path(binary).resolve()
             mounts = base + [(str(binary.parent), "/okkama")]
-            run = ["/okkama/" + binary.name, "run", "--engine", "sparrow"]
+            run = ["/okkama/" + binary.name, "run"]
             engines.append((binary.parent.name, mounts, run))
         rows = {}
         for label, mounts, run in engines:

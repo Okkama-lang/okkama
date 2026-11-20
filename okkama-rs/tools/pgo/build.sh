@@ -29,9 +29,9 @@ echo "==> instrumented build"
 echo "==> training"
 okkama="$work/instrumented/release/okkama"
 export OKKAMA_STDLIB_DIR="$root/std"
-"$okkama" run --engine sparrow "$rs/tools/pgo/json.ok" > /dev/null
+"$okkama" run "$rs/tools/pgo/json.ok" > /dev/null
 for main in "$rs"/tools/pgo/workloads/[0-9][0-9]-*/main.ok; do
-    "$okkama" run --engine sparrow "$main" > /dev/null
+    "$okkama" run "$main" > /dev/null
 done
 for module in json runtime/json strings/parse \
     url/form url/percent template/html template/compile toml/parse plist/parse csv csv/input \

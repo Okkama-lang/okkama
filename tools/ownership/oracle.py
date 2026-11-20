@@ -355,7 +355,7 @@ def process(item, args, output, environments):
             env['SPARROW_CORE_STATS'] = '1'
         program_args = args.program_arg if item['corpus'] == 'bench' else (case_setup['args'] if case_setup else [])
         run_env = dict(env, **(case_setup['env'] if case_setup else {}))
-        command = ([ok, 'run', '--engine', 'sparrow', *flags, source, *program_args] if label == 'source' else
+        command = ([ok, 'run', *flags, source, *program_args] if label == 'source' else
                    [sp, *(['test'] if item['tests'] else []), folder / (variant + '.spb'), *program_args])
         run = execute(command, run_env, cwd, folder / label,
                       min(args.timeout, case_setup['timeout']) if case_setup else args.timeout,

@@ -34,7 +34,7 @@ def check(stem, args):
         work = os.path.join(scratch, "examples")
         shutil.copytree(HERE, work, ignore=shutil.ignore_patterns("check.py", "__pycache__"))
         tests = ["-t"] if stem.endswith("-tests") else []
-        command = [args.okkama, "run", *tests, "--engine", "sparrow", stem + ".ok"]
+        command = [args.okkama, "run", *tests, stem + ".ok"]
         if args.cage:
             command = [sys.executable, CAGE, "--cpu-seconds", str(args.timeout), "--timeout", str(args.timeout + 30),
                        "--memory-mb", "1024", "--writable", work, "--"] + command

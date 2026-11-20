@@ -19,28 +19,11 @@ use okkama_compiler::syntax::{self, ParseMode, ParseOptions, ast, prune};
 const PROTOCOL: &str = "ocs-adapter/2";
 
 pub(super) fn capabilities() -> Outcome {
-    let engine = match engine() {
-        Ok(engine) => engine,
-        Err(message) => return Outcome::failure(format!("{message}\n"), 2),
-    };
-    // Все движки исполняют программы и тесты.
+    // Sparrow is the only engine: it runs programs and tests.
     let modes = "[\"parse\", \"check\", \"run\", \"test\"]";
     Outcome::success(format!(
-        "{{\"protocol\": \"{PROTOCOL}\", \"engine\": \"{engine}\", \"modes\": {modes}}}\n"
+        "{{\"protocol\": \"{PROTOCOL}\", \"engine\": \"sparrow\", \"modes\": {modes}}}\n"
     ))
-}
-
-fn engine() -> Result<String, String> {
-    // Как `okkama run` и адаптер: Sparrow — единственный движок.
-    let engine = std::env::var("OCS_RUST_ENGINE").unwrap_or_else(|_| "sparrow".into());
-    match engine.as_str() {
-        "sparrow" => Ok(engine),
-        "jvm" => Err("the JVM backend was removed in 0.6.0 (#585); Sparrow is the only Okkama engine".into()),
-        "ir" => Err("the IR engine was removed (#584); Sparrow is the only Okkama engine".into()),
-        _ => Err(format!(
-            "unknown OCS_RUST_ENGINE `{engine}`; expected sparrow"
-        )),
-    }
 }
 
 pub(super) fn request(args: &[String]) -> Outcome {
@@ -374,9 +357,6 @@ fn handle(request: &Json) -> Reply {
 
 /// Execute the program on Sparrow.
 fn run(mode: &str, module: &okkama_compiler::ir::Module, request: &Json) -> Reply {
-    if let Err(message) = engine() {
-        return Reply::internal(mode, message);
-    }
     run_native(mode, module, request)
 }
 

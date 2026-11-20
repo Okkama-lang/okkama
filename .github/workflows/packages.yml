@@ -116,11 +116,11 @@ jobs:
           run() { ${{ matrix.emulate }} "$@"; }
           run "$bin/okkama" env
           run "$bin/okkama" okkama-rs/examples/hello.ok
-          run "$bin/okkama" run --engine sparrow okkama-rs/tools/pgo/workloads/02-calls/main.ok
+          run "$bin/okkama" run okkama-rs/tools/pgo/workloads/02-calls/main.ok
           # The core's frame walk and stack maps under a stressed collector,
           # and budget polls in machine code.
-          run env SPARROW_CORE_GC_STRESS=1 "$bin/okkama" run --engine sparrow okkama-rs/examples/hello.ok
-          run "$bin/okkama" run --engine sparrow --max-steps 1000000000 okkama-rs/tools/pgo/workloads/02-calls/main.ok
+          run env SPARROW_CORE_GC_STRESS=1 "$bin/okkama" run okkama-rs/examples/hello.ok
+          run "$bin/okkama" run --max-steps 1000000000 okkama-rs/tools/pgo/workloads/02-calls/main.ok
           run "$bin/sparrow" --version
           run "$bin/blade" --version
       # Install the packages where v0.5.3's did not (glibc 2.26-2.34, #485)
@@ -130,7 +130,7 @@ jobs:
         run: |
           check='okkama env >/dev/null
             okkama okkama-rs/examples/hello.ok
-            okkama run --engine sparrow okkama-rs/tools/pgo/workloads/02-calls/main.ok
+            okkama run okkama-rs/tools/pgo/workloads/02-calls/main.ok
             sparrow --version
             blade --version'
           for image in rockylinux:8 rockylinux:9 amazonlinux:2 amazonlinux:2023 fedora:41; do

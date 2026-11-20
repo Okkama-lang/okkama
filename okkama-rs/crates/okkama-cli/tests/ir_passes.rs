@@ -9,7 +9,7 @@ const PASSES: [&str; 7] = ["all", "none", "tail-calls", "hoist", "regions", "jum
 fn run(program: &str, passes: &str) -> (String, String, Option<i32>) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/ir-passes/{program}.ok"));
     let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["run", "--engine", "sparrow"])
+        .args(["run"])
         .arg(&path)
         .env("OKKAMA_IR_PASSES", passes)
         .output()

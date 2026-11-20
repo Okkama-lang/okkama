@@ -398,14 +398,14 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 
 - `okkama-devtrace/src/lib.rs` 318 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 7 files, 3757 lines
+## cli — 7 files, 3704 lines
 
-- `okkama-cli/src/core.rs` 64 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run
+- `okkama-cli/src/core.rs` 64 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 868 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1677 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1642 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 247 — `okkama man` (#512): reference pages from the doc comments of modules, read
-- `okkama-cli/src/ocs.rs` 641 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
+- `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 
 ## other — 87 files, 36754 lines

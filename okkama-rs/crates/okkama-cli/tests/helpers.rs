@@ -9,7 +9,7 @@ fn helpers_of(name: &str, budget: &[&str]) -> (BTreeSet<String>, String, Option<
     let program = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/helpers/{name}.ok"));
     // A step budget makes machine code poll, which reaches the poll helper.
     let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["run", "--engine", "sparrow", "--max-steps", "1000000000000"])
+        .args(["run", "--max-steps", "1000000000000"])
         .args(budget)
         .arg(&program)
         .env("SPARROW_CORE_STATS", "1")

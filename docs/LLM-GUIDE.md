@@ -29,9 +29,10 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   unavoidable; flat APIs; the review plan and its inventory tool).
 - **CHANGELOG.md**: every feature or visible change gets an entry, unprompted
   (Keep a Changelog; release sections `## [X.Y.Z] — date`).
-- **Sparrow and Tomato**: the virtual machine is Sparrow (crate `sparrow-core`,
-  binary `sparrow`, `--engine sparrow`). Tomato is the name of its current
-  version, as Tahoe is a version of macOS. Write "Sparrow" for the machine,
+- **Sparrow, Tomato and Tweed**: the virtual machine is Sparrow (crate
+  `sparrow-core`, binary `sparrow`; the only engine, so `okkama run` has no
+  `--engine`). Tomato is the name of its current version, as Tahoe is a
+  version of macOS; Tweed is the next one (0.6.0, #903). Write "Sparrow" for the machine,
   and "Tomato" only where the version matters: against the previous VM
   (`sparrow-origin`, removed in 0.5.0, #14), or in release notes. Never write "the core" or «ядро».
   Both are proper nouns, not translated or declined in Russian. Crates,
@@ -200,7 +201,7 @@ sparrow --disassemble x.spb   |  sparrow --native-capabilities
 okkama exec x.spb      # SPB on Sparrow inside okkama
 ```
 
-Environment: `OKKAMA_STDLIB_DIR` (std root), `OKKAMA_ENGINE=sparrow`,
+Environment: `OKKAMA_STDLIB_DIR` (std root),
 `SPARROW_CORE_STATS=1` (= `--stats`: counts of natives, intrinsics, slow paths,
 regions, awaits, heap bytes, compile time and code size per function),
 `OKKAMA_PROFILE_REGISTERS=1` (compiler OIR-to-SPB register-colouring phase
@@ -303,8 +304,8 @@ For every 0.6.0 ownership rebuild step, use the [ownership oracle](../tools/owne
 | Generated programs | `tools/gen/okgen.py run --seeds N` (`show SEED`) | terminating deterministic programs (BigInt, strings, arrays, objects, roles, closures, try/catch, recursion) on Sparrow configurations; a disagreement is minimized (ddmin over `main`) into `conformance/reports/runs/okgen/<seed>`; `tools/gen/mutants.sh` checks it finds a seeded defect in each engine. Containers only |
 | Release gate | `make gate` (= `tools/gate/docker.sh`, ~15 min) | Rust tests (profile `gate`: release optimizations without fat LTO; and debug), clippy with `-D warnings`, conformance sparrow/sparrow-passes-off/sparrow-gc-stress, std tests Sparrow vs `tools/gate/known-failures.txt`, the t/ suite on all three configurations; logs in `conformance/reports/runs/gate-*`, statuses from exit codes in `gate.json`; a failed build stops it. On GitHub `gate.yml` runs it on the tagged commit and `packages.yml` publishes only after it passes. The Docker VM has ~8 GB: the container gets 7 GB and 2 cargo jobs (fat LTO for the release binaries only) |
 
-Sparrow is the only Okkama engine (#584); `--engine ir` and
-`OKKAMA_ENGINE=ir` are errors.
+Sparrow is the only Okkama engine (#584, #585): `okkama run` has no
+`--engine`, and `OKKAMA_ENGINE` is ignored.
 `OKKAMA_IR_PASSES=none` remains covered by `sparrow-passes-off`: OIR is still
 the compiler's intermediate representation. The IR-dependent REPL was removed.
 
@@ -328,8 +329,7 @@ Benchmarks live outside the repository in `../okkama-docs/benchmarks`
   carry raw samples, median, quartiles, σ and `real_iqr_ratio`, versions,
   build parameters, sha256 of inputs and binaries, timer bounds, `startup`
   (00-hello per configuration) and `reference_outdated` interpreters.
-  `tomato-compile` is compile+run in one process (`okkama run --engine
-  sparrow`). Steady state (#236): `--steady N` adds one run per configuration
+  `tomato-compile` is compile+run in one process (`okkama run`). Steady state (#236): `--steady N` adds one run per configuration
   that repeats the work N times in-process and prints `iteration <ns>` per
   repetition to stderr. Okkama programs do this through a `Repeat` object
   and get N as their first argument, read with the runtime's primitives

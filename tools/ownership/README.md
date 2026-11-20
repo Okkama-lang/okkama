@@ -180,7 +180,7 @@ a JSON argv array, executed without a shell:
 - `--a-build-command` / `--b-build-command`: default
   `["{prefix}/bin/okkama","build","{source}","--target","sparrow","-o","{binary}"]`.
 - `--a-run-command` / `--b-run-command`: default
-  `["{prefix}/bin/okkama","run","--engine","sparrow","{source}"]`.
+  `["{prefix}/bin/okkama","run","{source}"]`.
 - `--a-exec-command` / `--b-exec-command`: default
   `["{prefix}/bin/sparrow","{binary}"]`.
 

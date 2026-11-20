@@ -49,7 +49,7 @@ fn recursion_through_rust_ends_in_a_failure_and_the_process_goes_on() {
 #[test]
 fn helper_calls_share_one_argument_area() {
     let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["run", "--engine", "sparrow"])
+        .args(["run"])
         .arg(program("calls"))
         .env("SPARROW_CORE_STATS", "1")
         .output()
