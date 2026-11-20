@@ -1550,11 +1550,28 @@ unsafe fn parts<'a>(ctx: *mut Ctx) -> (&'a mut Ctx, &'a mut Runtime) {
 
 /// `region.adopt` (own) and `region.track` of `value`.
 #[inline(never)]
-pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u64) {
+pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u64) -> Word {
     okkama_devtrace::count!("runtime", "rt_region_add");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|_| "region add".into());
+    // #530: machine code enters a region as 0 and the first add that has something to hold makes it.
+    let region = match region {
+        UNBOUND if !runtime.may_reach_free(value) => return UNBOUND,
+        UNBOUND => {
+            okkama_devtrace::count!("runtime", "region made at its first add");
+            runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS])
+        }
+        region => region,
+    };
     runtime.region_add(region, value, own != 0);
+    region
+}
+
+/// #530: a region for a transfer into a region machine code has not made yet.
+#[inline(never)]
+pub extern "C" fn rt_region_new(ctx: *mut Ctx) -> Word {
+    let (_, runtime) = unsafe { parts(ctx) };
+    runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS])
 }
 
 /// `region.leave` of a region that holds something: close it, keeping what the
@@ -1652,7 +1669,10 @@ pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses:
             UNBOUND
         }
         I::RegionTransfer { from, to, value: v } => {
-            runtime.region_transfer(value(from), value(to), value(v));
+            // #530: a region never made holds nothing to transfer.
+            if value(from) != UNBOUND {
+                runtime.region_transfer(value(from), value(to), value(v));
+            }
             UNBOUND
         }
         I::RegionLeave { region, keep } => {
@@ -1666,6 +1686,9 @@ pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses:
         }
         I::RegionUnwind { region, failure, .. } => {
             let primary = value(failure);
+            if value(region) == UNBOUND {
+                return primary;
+            }
             let kept = runtime.failure_payloads(primary);
             runtime.region_close(ctx_ptr, value(region), &kept, Some(primary)).unwrap_or(primary)
         }

@@ -665,6 +665,13 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
     okkama_devtrace::count!("runtime", "rt_region_settle");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     let unwind = failure != UNBOUND;
+    // #530: a region machine code never made holds nothing to settle.
+    if region == UNBOUND {
+        if unwind {
+            unsafe { (*ctx_ptr).scratch = failure };
+        }
+        return AWAIT_READY;
+    }
     let link = |runtime: &mut Runtime, primary: Option<Word>, cleanup: Word| match primary {
         Some(primary) => runtime.failure_link(primary, cleanup, true),
         None => cleanup,

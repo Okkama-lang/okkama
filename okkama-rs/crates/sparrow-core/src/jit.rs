@@ -124,7 +124,8 @@ helpers! {
     failure_op = crate::failures::rt_failure_op as (ctx, function: u64, pc: u64, uses: *const Word) -> Word; [Allocates, Collects, Reenters, Fails];
     catch = crate::failures::rt_catch as (ctx, function: u64, pc: u64, failure: Word) -> u64; [Allocates];
     created = crate::failures::rt_created as (ctx, descriptor: u64, object: Word); [];
-    region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64); [];
+    region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64) -> Word; [Allocates];
+    region_new = crate::failures::rt_region_new as (ctx) -> Word; [Allocates];
     region_leave = crate::failures::rt_region_leave as (ctx, region: Word, keep: *const Word, count: u64); [Allocates, Collects, Reenters, Fails];
     resource_pin = crate::failures::rt_resource_pin as (ctx, object: Word); [];
     dev_site = crate::failures::rt_dev_site as (ctx, kind: u64, function: u64, pc: u64); [];
@@ -2064,6 +2065,11 @@ impl Emitter<'_, '_> {
                 self.jump(next);
                 return Ok(true);
             }
+            I::RegionEnter { dst } if !self.plain => {
+                // #530: a region is made at its first add that holds something (`rt_region_add`); most stay empty.
+                let none = self.iconst(0);
+                self.set(&dst.0, none);
+            }
             I::RegionEnter { dst } => {
                 // `[overflow, slots…]`, all unbound (see `failures::REGION_SLOTS`).
                 let length = 1 + crate::failures::REGION_SLOTS;
@@ -2076,16 +2082,18 @@ impl Emitter<'_, '_> {
                 }
                 self.set(&dst.0, cell);
             }
-            I::RegionAdopt { region, value: register } | I::RegionTrack { region, value: register } => {
+            I::RegionAdopt { region: region_register, value: register } | I::RegionTrack { region: region_register, value: register } => {
+                let region_register = *region_register;
                 // A scalar never reaches an identity.
                 if !self.kinds[register.0 as usize].traced() && !self.plain {
                     return Ok(false);
                 }
-                let (region, value) = (self.get(region), self.word(register));
+                let (region, value) = (self.get(&region_register), self.word(register));
                 let own = self.iconst(i64::from(matches!(instruction, I::RegionAdopt { .. })));
                 self.dev_site(1);
                 if self.plain {
-                    self.helper(|h| h.region_add, &[ctx, region, value, own]);
+                    let made = self.helper(|h| h.region_add, &[ctx, region, value, own]).expect("result");
+                    self.set(&region_register, made);
                 } else {
                     // #529: `region_add` returns at once unless the value may reach a free identity
                     // (`Runtime::may_reach_free`); most adds are objects without an identity, decided here.
@@ -2093,7 +2101,8 @@ impl Emitter<'_, '_> {
                     let done = self.builder.create_block();
                     self.may_reach_identity(value, call, done);
                     self.builder.switch_to_block(call);
-                    self.helper(|h| h.region_add, &[ctx, region, value, own]);
+                    let made = self.helper(|h| h.region_add, &[ctx, region, value, own]).expect("result");
+                    self.set(&region_register, made);
                     self.builder.ins().jump(done, &[]);
                     self.builder.switch_to_block(done);
                 }
@@ -2148,10 +2157,12 @@ impl Emitter<'_, '_> {
                 }
             }
             I::RegionLeave { region, .. } => {
-                // A region that tracked nothing closes without a call.
+                // A region never made (#530) or that tracked nothing closes without a call.
                 let cell = self.get(region);
+                let (made, close, done) = (self.builder.create_block(), self.builder.create_block(), self.builder.create_block());
+                self.builder.ins().brif(cell, made, &[], done, &[]);
+                self.builder.switch_to_block(made);
                 let entries = self.builder.ins().load(types::I64, MEMORY, cell, 16);
-                let (close, done) = (self.builder.create_block(), self.builder.create_block());
                 self.builder.ins().brif(entries, close, &[], done, &[]);
                 self.builder.switch_to_block(close);
                 let I::RegionLeave { keep, .. } = instruction else { unreachable!() };
@@ -2162,6 +2173,28 @@ impl Emitter<'_, '_> {
                 self.check(pc);
                 self.builder.ins().jump(done, &[]);
                 self.builder.switch_to_block(done);
+            }
+            I::RegionTransfer { to, .. } if !self.plain => {
+                // #530: a transfer into a region not made yet makes it first, then runs as before.
+                let target = self.get(to);
+                let (make, ready) = (self.builder.create_block(), self.builder.create_block());
+                self.builder.ins().brif(target, ready, &[], make, &[]);
+                self.builder.switch_to_block(make);
+                let made = self.helper(|h| h.region_new, &[ctx]).expect("result");
+                self.set(to, made);
+                self.builder.ins().jump(ready, &[]);
+                self.builder.switch_to_block(ready);
+                let mut uses = Vec::new();
+                instruction.visit(&mut |access| {
+                    if let okkama_sparrow::Access::Use(register) = access {
+                        uses.push(register);
+                    }
+                });
+                let address = self.spill(&uses);
+                let function = self.iconst(self.function as i64);
+                let at = self.iconst(pc as i64);
+                self.helper(|h| h.failure_op, &[ctx, function, at, address]);
+                self.check(pc);
             }
             other if failure_or_region(other) => {
                 let mut uses = Vec::new();

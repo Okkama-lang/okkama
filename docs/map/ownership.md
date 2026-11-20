@@ -32,6 +32,7 @@ regions, and the runtime tracks resource identities. Tweed (#903) keeps that des
 | inherited summary (#529) | an adopted big array is summarized at once; `arr.slice`/`arr.concat`/`map.new`/`map.merge` of summarized parts are summarized at birth, so versions of a growing map are never walked | `inherit_summary`, `region_add`, `ops::rt_exec` |
 | root (#817) | a Future still running when its owner closes, or started into a group whose owner closed, detaches to the root region (not cancelled); a member started after the owner closed and already finished is closed at the call; the root closer destroys the detached outcomes after shutdown drains the spawned tasks (memo OIR-2-async-remaining §2.4) | `detach_to_root`, `close_future`, `close_root`, `GroupStart` |
 | driver inputs (#845) | a fresh Future a collector's own sequence makes (`item`) is owned by the driver frame's private region; taking the driver's outcome releases only the outcome's package, and the inputs close with the driver | `driver_input`, `take_outcome`, `drivers::collect_start` |
+| lazy region (#530) | machine code enters a region as 0; the first add that holds something (`rt_region_add`) or a transfer into it (`rt_region_new`) makes it; leave, unwind and settle skip a region never made. `SPARROW_CORE_PLAIN` makes regions eagerly | `jit.rs` `RegionEnter`, `RegionTransfer` |
 | close | destroys the owned identities in reverse serial order, owner before fields; async destroys are awaited (`rt_region_settle`) | `region_close`, `tasks.rs` |
 
 ## Late edges (#907)

@@ -654,3 +654,31 @@ fn a_fresh_argument_dies_when_the_action_it_was_passed_to_returns() {
     // The vault is destroyed when `adopt` returns, before `run` reads the log: 2·10 + 3.
     support::assert_value(&module, "23");
 }
+
+/// #530: a region is made at its first add or transfer that holds something. A field built in a constructor's
+/// body moves to the constructor's root region, made by that transfer; the vaults close once, newest first, with
+/// the object's owner.
+#[test]
+fn a_region_made_by_its_first_transfer_closes_what_it_took() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Shelf {
+            has vaults is @Vault;
+            Shelf(log is Log, count is int) {
+                let made = (0..count).map() -> i { Vault(log: log, id: i + 1); };
+                vaults = made;
+            }
+            total() is int { vaults.reduce(0) -> sum, vault { sum + vault.balance(); }; }
+        }
+        object Probe {
+            Probe();
+            run(log is Log) is int { let shelf = Shelf(log: log, count: 3); shelf.total() * 1000 + log.value(); }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let inside = Probe().run(log);
+            inside * 1000 + log.value();
+        }
+    "#));
+    // Inside run: 3 vaults × 2 = 6, none closed (log 0); after run: closed newest first, 3 2 1.
+    support::assert_value(&module, "6000321");
+}

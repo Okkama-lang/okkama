@@ -41,6 +41,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
     devtrace and a destroy trace keep the runtime path.
   - **Measured.** Static resources over t/, examples and bench: 13 → 35. micro `destroy` on the host: 50 → 31 ns.
   - **Devtrace.** `OKKAMA_DEV=lower` counts why a value stays dynamic.
+- **Regions are made when they first hold something (#530).** Machine code enters a scope's region as nothing; the
+  first add with something to own, or a transfer into it, makes it. Most regions stay empty and cost nothing:
+  11-ownership allocates 20 MB instead of 51 MB per three rounds, collects 9 times instead of 24, and a round
+  takes 7.5 ms instead of 9.5 ms on the host.
 - **One ownership linearity check (#910).** After the IR passes, every region and static resource is opened once,
   used only while open and closed exactly once on every path, failure paths included. It runs in debug builds and
   with `OKKAMA_VERIFY_OWNERSHIP=1`, never in release.

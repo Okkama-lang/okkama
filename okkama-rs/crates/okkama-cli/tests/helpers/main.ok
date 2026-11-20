@@ -20,6 +20,15 @@ object Flush {
     async destroy { Stdout().writeln("flush " + name); }
 }
 
+object Shelf {
+    has guards is @Guard;
+    Shelf(count is int) {
+        let made = (0..count).map()->i{ Guard("kept " + i.string()); };
+        guards = made;
+    }
+    size() is int { guards.size(); }
+}
+
 object Flushing {
     Flushing();
     async run() is int {
@@ -69,11 +78,14 @@ object Work {
         } catch Boom.boom(found) { found; }
     }
     index(items is @int, at is int) is int { items[at]; }
+    // A field built in the constructor's body moves to its root region, made at that transfer (#530).
+    guarded_all(count is int) is int { Shelf(count).size(); }
 }
 
 async main() is int {
     let out = Stdout();
     let work = Work();
+    out.writeln(work.guarded_all(2).string());
     // Not a constant: `fold` would compute the big products at build time.
     let base = 1000000000000000000000 + "".length();
     let big = base * base + 7;
