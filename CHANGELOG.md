@@ -20,6 +20,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An async defer that awaits a method of a captured binding compiles on Champ (#890).** Example:
+  `defer await connection.settled()`, in every SQLite program. The defer call's summary kept the capture's
+  retention while the async entry's contract retains nothing, and the SPB 17 load check refused the program. With
+  this, #806, #888 and the low budget (#889), `L11.sqlite.round-trip` runs on Champ (Structural).
 - **An async method that returns a field of `self` compiles on Champ (#888).** Example:
   `async view() is Res { inner; }`. After coro, the body's only parameter is its frame, and `verify_coro` checked
   the summary's field against the frame type: T4 "summary field does not belong to its parameter type". It now reads
