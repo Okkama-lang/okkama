@@ -1,0 +1,671 @@
+oir 2 own
+module app v1.0.0
+requires core, async
+entry @main
+
+object encoding.utf.Utf8Encoded {
+    field origin: str
+}
+
+object io.stdout.Stdout {
+}
+
+object app.Job {
+    field n: int
+}
+
+object io.stream.IncompleteWrite.after {
+    field written: int
+}
+
+variant io.stream.IncompleteWrite is Error = (after: io.stream.IncompleteWrite.after)
+scope S0 action in @app.Job.run#0
+scope S1 action in @main
+scope S2 iteration in @main parent S1
+scope S3 branch in @main parent S2
+scope S4 branch in @main parent S2
+scope S5 branch in @main parent S2
+scope S6 branch in @main parent S2
+scope S7 iteration in @main parent S1
+scope S8 iteration in @main parent S1
+scope S9 action in @io.stdout.Stdout.writeln#4
+scope S10 iteration in @io.stdout.Stdout.writeln#4 parent S9
+scope S11 action in @io.stdout.Stdout.write_text#5
+scope S12 action in @io.stdout.Stdout.write_bytes#6
+scope S13 action in @encoding.utf.Utf8Encoded.bytes#0
+scope S14 action in @app.Job.new#0
+scope S15 action in @io.stdout.Stdout.new#0
+scope S16 action in @encoding.utf.Utf8Encoded.new#0
+summary M0 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M1 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M2 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M3 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], failures=[program, panic, native], publication=atomic)
+summary M4 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M5 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
+summary M6 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Job], failures=[program], publication=atomic)
+summary M7 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, native, cancelled], suspends=true, publication=atomic)
+summary M8 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M9 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[io.stdout.Stdout], failures=[program], publication=atomic)
+summary M10 call-boundary parameters [parameter_effect(convention=borrow, destination=none), parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[thrown, program, native], publication=atomic)
+summary M11 call-boundary parameters [parameter_effect(convention=borrow, destination=none), parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[thrown, program, native], publication=atomic)
+summary M12 call-boundary parameters [parameter_effect(convention=borrow, destination=none), parameter_effect(convention=borrow, destination=none)] contract call_contract(failures=[thrown, program, native], publication=atomic)
+summary M13 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[encoding.utf.Utf8Encoded], failures=[program], publication=atomic)
+summary M14 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M15 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[array<byte>], failures=[program, native], publication=atomic)
+summary M16 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[program, native], publication=atomic)
+summary M17 call-boundary parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M18 call-boundary results [result_relation(provenance=unbound_result)] contract call_contract(results=[future<int>], publication=atomic)
+summary M19 internal contract call_contract(publication=atomic)
+summary M20 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[app.Job], failures=[program], publication=atomic)
+summary M21 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[int], failures=[thrown, program, panic, native, cancelled], suspends=true, publication=atomic)
+summary M22 observation results [result_relation(provenance=unbound_result)] contract call_contract(results=[io.stdout.Stdout], failures=[program], publication=atomic)
+summary M23 observation parameters [parameter_effect(convention=borrow, destination=none)] results [result_relation(provenance=unbound_result)] contract call_contract(results=[encoding.utf.Utf8Encoded], failures=[program], publication=atomic)
+protocol P0 kind services holders [scope, cache, frame, receipt, root, pending_exit] rules [protocol_rule(transition=settle, from=cache, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=receipt, to=scope, checks=[owner, live_dependencies], normal=protocol_poststate(holder=scope, state=settled)), protocol_rule(transition=settle, from=cache, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=settle, from=frame, to=root, checks=[owner, live_dependencies], normal=protocol_poststate(holder=root, state=running)), protocol_rule(transition=rehome, from=scope, to=pending_exit, checks=[owner, live_dependencies, sufficient_boundary], normal=protocol_poststate(holder=pending_exit, state=open))]
+
+func @app.Job.new#0(%0: int) -> app.Job [ctor app.Job] abi observation summary(M20) {
+    binding b0 "n": int in S14
+    boundary B0 lexical in S14
+    ^b0 in S14:
+    br ^b1(%0)
+    ^b1(%1: int) in S14:
+    %2: int = undef ty int
+    invoke.own obj.new app.Job { n: %1 }
+        normal ^b2($value, %1)
+        unwind ^b3($failure)
+    ^b2(%3: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %4: int) in S14:
+    ret %3
+    ^b3(%5: failure) in S14:
+    raise %5
+}
+
+func @app.Job.run#0(%0: app.Job facts(plain(certificate=closed_graph(ty=app.Job))); %1: own) -> (int, own) [method app.Job, async] abi explicit(input_packet=1, output_packet=1) summary(M7) async-creation(M17) async-body(M7) {
+    boundary B0 lexical in S0
+    boundary B1 lexical in S0
+    ^b0 in S0:
+    %2: scope<S0> = scope.begin S0
+    %3: scope<S0> = own.accept %2, %1
+    br ^b1(%0, %3)
+    ^b1(%4: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %5: scope<S0>) in S0:
+    invoke.own call @io.stdout.Stdout.new#0()
+        normal ^b2($value, %4, %5)
+        unwind ^b3($failure, %5)
+    ^b2(%6: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %7: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %8: scope<S0>) in S0:
+    %9: str = const "job "
+    %10: int = obj.get %7, n
+    %11: str = cvt %10, from int, to str
+    %12: str = str.concat %9, %11
+    %13: array<str> facts(plain(certificate=closed_graph(ty=array<str>))) = array.new [%12], ty array<str>
+    %14: own = own.empty
+    invoke.own call @io.stdout.Stdout.writeln#4(%6, %13; %14)
+        normal ^b4($packet, $deps, %7, %8)
+        unwind ^b5($failure, %8)
+    ^b3(%15: failure, %16: scope<S0>) in S0:
+    %17: failure = scope.unwind %16, %15, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %17
+    ^b4(%18: own, %19: deps, %20: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %21: scope<S0>) in S0:
+    %22: scope<S0> = own.admit %21, %18
+    %23: int = obj.get %20, n
+    %24: own = own.empty
+    %25: deps = deps.of %23
+    %26: pending = exit.prepare return %23, %24, deps(%25) at B1
+    invoke.own scope.end %22, reserve %26, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b6($closed, $pending)
+        unwind ^b7($closed, $failure)
+    ^b5(%27: failure, %28: scope<S0>) in S0:
+    %29: failure = scope.unwind %28, %27, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %29
+    ^b6(%30: closed, %31: pending) in S0:
+    (%32: int, %33: own, %34: deps) = exit.commit %31, destination caller, result int
+    ret %32, %33
+    ^b7(%35: closed, %36: failure) in S0:
+    raise %36
+}
+
+func @main() -> int [entry, async] abi observation summary(M21) async-creation(M18) async-body(M21) {
+    service.schedule Schedule0 owner S2, protocol P0, duties [%109]
+    service.schedule Schedule1 owner S8, protocol P0, duties [%221]
+    service.schedule Schedule2 owner S7, protocol P0, duties [%269]
+    binding b0 "i": int in S2
+    binding b1 "f": future<int> in S2
+    binding b2 "k": int in S7
+    binding b3 "t": future<int> in S7
+    binding b4 "k": int in S8
+    boundary B0 lexical in S1
+    boundary B1 loop in S2
+    boundary B2 lexical in S4
+    boundary B3 lexical in S6
+    boundary B4 loop in S7
+    boundary B5 loop in S8
+    key k0: key = service_of(value=%109, kind=cache)
+    key k1: key = service_of(value=%221, kind=cache)
+    key k2: key = service_of(value=%269, kind=cache)
+    dependency d0: dependency = from_ssa(%29)
+    dependency d1: dependency = from_ssa(%36)
+    dependency d2: dependency = from_ssa(%41)
+    dependency d3: dependency = key(k0)
+    dependency d4: dependency = from_ssa(%108)
+    dependency d5: dependency = union([d3, d4])
+    dependency d6: dependency = from_ssa(%122)
+    dependency d7: dependency = from_ssa(%136)
+    dependency d8: dependency = key(k1)
+    dependency d9: dependency = from_ssa(%220)
+    dependency d10: dependency = union([d8, d9])
+    dependency d11: dependency = from_ssa(%237)
+    dependency d12: dependency = key(k2)
+    dependency d13: dependency = from_ssa(%268)
+    dependency d14: dependency = union([d12, d13])
+    ^b0 in S1:
+    %0: scope<S1> = scope.begin S1
+    br ^b1(%0)
+    ^b1(%1: scope<S1>) in S1:
+    %2: int = const 1
+    %3: int = const 4
+    invoke.own range.new %2, %3, inclusive true
+        normal ^b23($value, %1, %2, %3)
+        unwind ^b24($failure, %1)
+    ^b2(%4: int, %5: int, %6: scope<S1>) in S1:
+    %7: bool = int.le %5, %4
+    cond %7, ^b25, ^b26
+    ^b3(%8: scope<S1>) in S1:
+    br ^b10(%8)
+    ^b4(%9: int, %10: int, %11: scope<S1>, %12: scope<S2>) in S2:
+    %13: int = const 2
+    %14: bool = int.eq %10, %13
+    cond %14, ^b27, ^b28
+    ^b5(%15: int, %16: int, %17: int, %18: scope<S1>, %19: scope<S2>) in S4:
+    br ^b6(%15, %16, %17, %18, %19)
+    ^b6(%20: int, %21: int, %22: int, %23: scope<S1>, %24: scope<S2>) in S2:
+    invoke.own call @app.Job.new#0(%22)
+        normal ^b29($value, %20, %21, %22, %23, %24)
+        unwind ^b30($failure, %23, %24)
+    ^b7(%25: int, %26: int, %27: int, %28: future<int> facts(managed(deps=d0)), %29: deps, %30: scope<S1>, %31: scope<S2>) in S6:
+    br ^b8(%25, %26, %27, %28, %29, %30, %31)
+    ^b8(%32: int, %33: int, %34: int, %35: future<int> facts(managed(deps=d1)), %36: deps, %37: scope<S1>, %38: scope<S2>) in S2:
+    invoke.own call @io.stdout.Stdout.new#0()
+        normal ^b33($value, %32, %33, %35, %36, %37, %38)
+        unwind ^b34($failure, %37, %38)
+    ^b9(%39: int, %40: future<int> facts(managed(deps=d2)), %41: deps, %42: scope<S1>, %43: scope<S2>) in S5:
+    %44: closed = scope.end %43, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b40
+    ^b10(%45: scope<S1>) in S1:
+    %46: int = const 1
+    %47: int = const 2
+    invoke.own range.new %46, %47, inclusive true
+        normal ^b41($value, %45, %46, %47)
+        unwind ^b42($failure, %45)
+    ^b11(%48: int, %49: int, %50: scope<S1>) in S1:
+    %51: bool = int.le %49, %48
+    cond %51, ^b43, ^b44
+    ^b12(%52: scope<S1>) in S1:
+    br ^b13(%52)
+    ^b13(%53: scope<S1>) in S1:
+    %54: int = const 1
+    %55: int = const 2
+    invoke.own range.new %54, %55, inclusive true
+        normal ^b45($value, %53, %54, %55)
+        unwind ^b46($failure, %53)
+    ^b14(%56: int, %57: int, %58: scope<S1>) in S1:
+    %59: bool = int.le %57, %56
+    cond %59, ^b47, ^b48
+    ^b15(%60: scope<S1>) in S1:
+    br ^b16(%60)
+    ^b16(%61: scope<S1>) in S1:
+    invoke.own call @io.stdout.Stdout.new#0()
+        normal ^b49($value, %61)
+        unwind ^b50($failure, %61)
+    ^b17(%62: int, %63: int, %64: scope<S1>, %65: scope<S8>) in S8:
+    invoke.own call @io.stdout.Stdout.new#0()
+        normal ^b55($value, %62, %63, %64, %65)
+        unwind ^b56($failure, %64, %65)
+    ^b18(%66: int, %67: int, %68: scope<S1>) in S1:
+    %69: int = const 1
+    %70: int = int.add %67, %69
+    br ^b14(%66, %70, %68)
+    ^b19(%71: int, %72: int, %73: scope<S1>, %74: scope<S7>) in S7:
+    %75: int = const 10
+    %76: int = int.add %75, %72
+    invoke.own call @app.Job.new#0(%76)
+        normal ^b64($value, %71, %72, %73, %74)
+        unwind ^b65($failure, %73, %74)
+    ^b20(%77: int, %78: int, %79: scope<S1>) in S1:
+    %80: int = const 1
+    %81: int = int.add %78, %80
+    br ^b11(%77, %81, %79)
+    ^b21(%82: int, %83: int, %84: int, %85: scope<S1>, %86: scope<S2>) in S3:
+    %87: closed = scope.end %86, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b71
+    ^b22(%88: int, %89: int, %90: scope<S1>) in S1:
+    %91: int = const 1
+    %92: int = int.add %89, %91
+    br ^b2(%88, %92, %90)
+    ^b23(%93: range, %94: scope<S1>, %95: int, %96: int) in S1:
+    br ^b2(%96, %95, %94)
+    ^b24(%97: failure, %98: scope<S1>) in S1:
+    %99: failure = scope.unwind %98, %97, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %99
+    ^b25 in S1:
+    %100: scope<S2> = scope.begin S2
+    br ^b4(%4, %5, %6, %100)
+    ^b26 in S1:
+    br ^b3(%6)
+    ^b27 in S2:
+    br ^b21(%9, %10, %10, %11, %12)
+    ^b28 in S2:
+    br ^b5(%9, %10, %10, %11, %12)
+    ^b29(%101: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %102: int, %103: int, %104: int, %105: scope<S1>, %106: scope<S2>) in S2:
+    %107: own = own.empty
+    %108: deps = deps.of %101
+    (%109: future<int> facts(managed(deps=d5)), %110: scope<S2>) = fut.new %107, %108, %106, environment deferred(function=@app.Job.run#0, arguments=[%101]), result int, owner S2, binding b1
+    %111: deps = deps.of %109
+    %112: int = const 4
+    %113: bool = int.eq %104, %112
+    cond %113, ^b31, ^b32
+    ^b30(%114: failure, %115: scope<S1>, %116: scope<S2>) in S2:
+    %117: failure = scope.unwind %116, %114, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b82
+    ^b31 in S2:
+    br ^b9(%104, %109, %111, %105, %110)
+    ^b32 in S2:
+    br ^b7(%102, %103, %104, %109, %111, %105, %110)
+    ^b33(%118: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %119: int, %120: int, %121: future<int> facts(managed(deps=d6)), %122: deps, %123: scope<S1>, %124: scope<S2>) in S2:
+    %125: str = const "got "
+    invoke.own await %121, result int
+        normal ^b35($value, $deps, %118, %119, %120, %121, %122, %123, %124, %125)
+        unwind ^b36($failure, $task, $receipt, %123, %124)
+    ^b34(%126: failure, %127: scope<S1>, %128: scope<S2>) in S2:
+    %129: failure = scope.unwind %128, %126, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b81
+    ^b35(%130: int, %131: deps, %132: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %133: int, %134: int, %135: future<int> facts(managed(deps=d7)), %136: deps, %137: scope<S1>, %138: scope<S2>, %139: str) in S2:
+    %140: str = cvt %130, from int, to str
+    %141: str = str.concat %139, %140
+    %142: array<str> facts(plain(certificate=closed_graph(ty=array<str>))) = array.new [%141], ty array<str>
+    %143: own = own.empty
+    invoke.own call @io.stdout.Stdout.writeln#4(%132, %142; %143)
+        normal ^b37($packet, $deps, %133, %134, %137, %138)
+        unwind ^b38($failure, %137, %138)
+    ^b36(%144: failure, %145: task-state, %146: receipt, %147: scope<S1>, %148: scope<S2>) in S2:
+    (%149: scope<S2>, %150: failure) = await.unwind %148, %144, %145, %146, protocol P0
+    %151: failure = scope.unwind %149, %150, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b80
+    ^b37(%152: own, %153: deps, %154: int, %155: int, %156: scope<S1>, %157: scope<S2>) in S2:
+    %158: scope<S2> = own.admit %157, %152
+    %159: closed = scope.end %158, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b39
+    ^b38(%160: failure, %161: scope<S1>, %162: scope<S2>) in S2:
+    %163: failure = scope.unwind %162, %160, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b79
+    ^b39 in S1:
+    br ^b22(%154, %155, %156)
+    ^b40 in S1:
+    br ^b10(%42)
+    ^b41(%164: range, %165: scope<S1>, %166: int, %167: int) in S1:
+    br ^b11(%167, %166, %165)
+    ^b42(%168: failure, %169: scope<S1>) in S1:
+    %170: failure = scope.unwind %169, %168, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %170
+    ^b43 in S1:
+    %171: scope<S7> = scope.begin S7
+    br ^b19(%48, %49, %50, %171)
+    ^b44 in S1:
+    br ^b12(%50)
+    ^b45(%172: range, %173: scope<S1>, %174: int, %175: int) in S1:
+    br ^b14(%175, %174, %173)
+    ^b46(%176: failure, %177: scope<S1>) in S1:
+    %178: failure = scope.unwind %177, %176, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %178
+    ^b47 in S1:
+    %179: scope<S8> = scope.begin S8
+    br ^b17(%56, %57, %58, %179)
+    ^b48 in S1:
+    br ^b15(%58)
+    ^b49(%180: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %181: scope<S1>) in S1:
+    %182: str = const "main"
+    %183: array<str> facts(plain(certificate=closed_graph(ty=array<str>))) = array.new [%182], ty array<str>
+    %184: own = own.empty
+    invoke.own call @io.stdout.Stdout.writeln#4(%180, %183; %184)
+        normal ^b51($packet, $deps, %181)
+        unwind ^b52($failure, %181)
+    ^b50(%185: failure, %186: scope<S1>) in S1:
+    %187: failure = scope.unwind %186, %185, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %187
+    ^b51(%188: own, %189: deps, %190: scope<S1>) in S1:
+    %191: scope<S1> = own.admit %190, %188
+    %192: int = const 0
+    invoke.own scope.end %191, effects scope_effects(failures=[], suspends=false, cancel=true)
+        normal ^b53($closed, %192)
+        unwind ^b54($closed, $failure)
+    ^b52(%193: failure, %194: scope<S1>) in S1:
+    %195: failure = scope.unwind %194, %193, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %195
+    ^b53(%196: closed, %197: int) in S1:
+    ret %197
+    ^b54(%198: closed, %199: failure) in S1:
+    raise %199
+    ^b55(%200: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %201: int, %202: int, %203: scope<S1>, %204: scope<S8>) in S8:
+    %205: str = const "temp "
+    %206: int = const 20
+    %207: int = int.add %206, %202
+    invoke.own call @app.Job.new#0(%207)
+        normal ^b57($value, %200, %201, %202, %203, %204, %205)
+        unwind ^b58($failure, %203, %204)
+    ^b56(%208: failure, %209: scope<S1>, %210: scope<S8>) in S8:
+    %211: failure = scope.unwind %210, %208, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b78
+    ^b57(%212: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %213: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %214: int, %215: int, %216: scope<S1>, %217: scope<S8>, %218: str) in S8:
+    %219: own = own.empty
+    %220: deps = deps.of %212
+    (%221: future<int> facts(managed(deps=d10)), %222: scope<S8>) = fut.new %219, %220, %217, environment deferred(function=@app.Job.run#0, arguments=[%212]), result int, owner S8
+    %223: deps = deps.of %221
+    invoke.own await %221, result int
+        normal ^b59($value, $deps, %213, %214, %215, %216, %218, %221, %222, %223)
+        unwind ^b60($failure, $task, $receipt, %216, %222)
+    ^b58(%224: failure, %225: scope<S1>, %226: scope<S8>) in S8:
+    %227: failure = scope.unwind %226, %224, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b77
+    ^b59(%228: int, %229: deps, %230: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %231: int, %232: int, %233: scope<S1>, %234: str, %235: future<int> facts(managed(deps=d11)), %236: scope<S8>, %237: deps) in S8:
+    %238: str = cvt %228, from int, to str
+    %239: str = str.concat %234, %238
+    %240: array<str> facts(plain(certificate=closed_graph(ty=array<str>))) = array.new [%239], ty array<str>
+    %241: own = own.empty
+    invoke.own call @io.stdout.Stdout.writeln#4(%230, %240; %241)
+        normal ^b61($packet, $deps, %231, %232, %233, %236)
+        unwind ^b62($failure, %233, %236)
+    ^b60(%242: failure, %243: task-state, %244: receipt, %245: scope<S1>, %246: scope<S8>) in S8:
+    (%247: scope<S8>, %248: failure) = await.unwind %246, %242, %243, %244, protocol P0
+    %249: failure = scope.unwind %247, %248, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b76
+    ^b61(%250: own, %251: deps, %252: int, %253: int, %254: scope<S1>, %255: scope<S8>) in S8:
+    %256: scope<S8> = own.admit %255, %250
+    %257: closed = scope.end %256, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b63
+    ^b62(%258: failure, %259: scope<S1>, %260: scope<S8>) in S8:
+    %261: failure = scope.unwind %260, %258, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b75
+    ^b63 in S1:
+    br ^b18(%252, %253, %254)
+    ^b64(%262: app.Job facts(plain(certificate=closed_graph(ty=app.Job))), %263: int, %264: int, %265: scope<S1>, %266: scope<S7>) in S7:
+    %267: own = own.empty
+    %268: deps = deps.of %262
+    (%269: future<int> facts(managed(deps=d14)), %270: scope<S7>) = fut.new %267, %268, %266, environment deferred(function=@app.Job.run#0, arguments=[%262]), result int, owner S7, binding b3
+    %271: deps = deps.of %269
+    %272: scope<S7> = fut.spawn %269, state %270
+    invoke.own call @io.stdout.Stdout.new#0()
+        normal ^b66($value, %263, %264, %265, %272)
+        unwind ^b67($failure, %265, %272)
+    ^b65(%273: failure, %274: scope<S1>, %275: scope<S7>) in S7:
+    %276: failure = scope.unwind %275, %273, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b74
+    ^b66(%277: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %278: int, %279: int, %280: scope<S1>, %281: scope<S7>) in S7:
+    %282: str = const "spawned "
+    %283: str = cvt %279, from int, to str
+    %284: str = str.concat %282, %283
+    %285: array<str> facts(plain(certificate=closed_graph(ty=array<str>))) = array.new [%284], ty array<str>
+    %286: own = own.empty
+    invoke.own call @io.stdout.Stdout.writeln#4(%277, %285; %286)
+        normal ^b68($packet, $deps, %278, %279, %280, %281)
+        unwind ^b69($failure, %280, %281)
+    ^b67(%287: failure, %288: scope<S1>, %289: scope<S7>) in S7:
+    %290: failure = scope.unwind %289, %287, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b73
+    ^b68(%291: own, %292: deps, %293: int, %294: int, %295: scope<S1>, %296: scope<S7>) in S7:
+    %297: scope<S7> = own.admit %296, %291
+    %298: closed = scope.end %297, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b70
+    ^b69(%299: failure, %300: scope<S1>, %301: scope<S7>) in S7:
+    %302: failure = scope.unwind %301, %299, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b72
+    ^b70 in S1:
+    br ^b20(%293, %294, %295)
+    ^b71 in S1:
+    br ^b22(%82, %83, %85)
+    ^b72 in S1:
+    %303: failure = scope.unwind %300, %302, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %303
+    ^b73 in S1:
+    %304: failure = scope.unwind %288, %290, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %304
+    ^b74 in S1:
+    %305: failure = scope.unwind %274, %276, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %305
+    ^b75 in S1:
+    %306: failure = scope.unwind %259, %261, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %306
+    ^b76 in S1:
+    %307: failure = scope.unwind %245, %249, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %307
+    ^b77 in S1:
+    %308: failure = scope.unwind %225, %227, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %308
+    ^b78 in S1:
+    %309: failure = scope.unwind %209, %211, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %309
+    ^b79 in S1:
+    %310: failure = scope.unwind %161, %163, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %310
+    ^b80 in S1:
+    %311: failure = scope.unwind %147, %151, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %311
+    ^b81 in S1:
+    %312: failure = scope.unwind %127, %129, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %312
+    ^b82 in S1:
+    %313: failure = scope.unwind %115, %117, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %313
+}
+
+func @io.stdout.Stdout.new#0() -> io.stdout.Stdout [ctor io.stdout.Stdout] abi observation summary(M22) {
+    boundary B0 lexical in S15
+    ^b0 in S15:
+    br ^b1
+    ^b1 in S15:
+    invoke.own obj.new io.stdout.Stdout { }
+        normal ^b2($value)
+        unwind ^b3($failure)
+    ^b2(%0: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout)))) in S15:
+    ret %0
+    ^b3(%1: failure) in S15:
+    raise %1
+}
+
+func @io.stdout.Stdout.writeln#4(%0: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %1: array<str> facts(plain(certificate=closed_graph(ty=array<str>))); %2: own) -> own [method io.stdout.Stdout] abi explicit(input_packet=2, output_packet=0) summary(M10) {
+    binding b0 "values": array<str> in S9
+    binding b1 "data": array<str> in S9
+    binding b2 "value": str in S10
+    boundary B0 lexical in S9
+    boundary B1 loop in S10
+    ^b0 in S9:
+    %3: scope<S9> = scope.begin S9
+    %4: scope<S9> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %6: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %7: scope<S9>) in S9:
+    %8: int = const 0
+    %9: int = array.len %6
+    invoke.own range.new %8, %9
+        normal ^b7($value, %5, %6, %7, %8, %9)
+        unwind ^b8($failure, %7)
+    ^b2(%10: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %11: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %12: int, %13: int, %14: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %15: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %16: scope<S9>) in S9:
+    %17: bool = int.lt %13, %12
+    cond %17, ^b9, ^b10
+    ^b3(%18: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %19: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %20: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %21: scope<S9>) in S9:
+    br ^b4(%18, %19, %20, %21)
+    ^b4(%22: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %23: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %24: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %25: scope<S9>) in S9:
+    %26: str = const "\n"
+    %27: own = own.empty
+    invoke.own call @io.stdout.Stdout.write_text#5(%22, %26; %27)
+        normal ^b11($packet, $deps, %25)
+        unwind ^b12($failure, %25)
+    ^b5(%28: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %29: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %30: int, %31: int, %32: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %33: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %34: scope<S9>, %35: scope<S10>) in S10:
+    invoke.own array.get %29, %31
+        normal ^b13($value, %28, %29, %30, %31, %32, %33, %34, %35)
+        unwind ^b14($failure, %34, %35)
+    ^b6(%36: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %37: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %38: int, %39: int, %40: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %41: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %42: scope<S9>) in S9:
+    %43: int = const 1
+    %44: int = int.add %39, %43
+    br ^b2(%36, %37, %38, %44, %40, %41, %42)
+    ^b7(%45: range, %46: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %47: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %48: scope<S9>, %49: int, %50: int) in S9:
+    br ^b2(%46, %47, %50, %49, %47, %47, %48)
+    ^b8(%51: failure, %52: scope<S9>) in S9:
+    %53: failure = scope.unwind %52, %51, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %53
+    ^b9 in S9:
+    %54: scope<S10> = scope.begin S10
+    br ^b5(%10, %11, %12, %13, %14, %15, %16, %54)
+    ^b10 in S9:
+    br ^b3(%10, %14, %15, %16)
+    ^b11(%55: own, %56: deps, %57: scope<S9>) in S9:
+    %58: scope<S9> = own.admit %57, %55
+    %59: closed = scope.end %58, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %60: own = own.empty
+    ret %60
+    ^b12(%61: failure, %62: scope<S9>) in S9:
+    %63: failure = scope.unwind %62, %61, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %63
+    ^b13(%64: str, %65: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %66: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %67: int, %68: int, %69: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %70: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %71: scope<S9>, %72: scope<S10>) in S10:
+    %73: own = own.empty
+    invoke.own call @io.stdout.Stdout.write_text#5(%65, %64; %73)
+        normal ^b15($packet, $deps, %65, %66, %67, %68, %69, %70, %71, %72)
+        unwind ^b16($failure, %71, %72)
+    ^b14(%74: failure, %75: scope<S9>, %76: scope<S10>) in S10:
+    %77: failure = scope.unwind %76, %74, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b19
+    ^b15(%78: own, %79: deps, %80: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %81: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %82: int, %83: int, %84: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %85: array<str> facts(plain(certificate=closed_graph(ty=array<str>))), %86: scope<S9>, %87: scope<S10>) in S10:
+    %88: scope<S10> = own.admit %87, %78
+    %89: closed = scope.end %88, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b17
+    ^b16(%90: failure, %91: scope<S9>, %92: scope<S10>) in S10:
+    %93: failure = scope.unwind %92, %90, effects scope_effects(failures=[], suspends=false, cancel=false)
+    br ^b18
+    ^b17 in S9:
+    br ^b6(%80, %81, %82, %83, %84, %85, %86)
+    ^b18 in S9:
+    %94: failure = scope.unwind %91, %93, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %94
+    ^b19 in S9:
+    %95: failure = scope.unwind %75, %77, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %95
+}
+
+func @io.stdout.Stdout.write_text#5(%0: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %1: str; %2: own) -> own [method io.stdout.Stdout, private] abi explicit(input_packet=2, output_packet=0) summary(M11) {
+    binding b0 "value": str in S11
+    boundary B0 lexical in S11
+    ^b0 in S11:
+    %3: scope<S11> = scope.begin S11
+    %4: scope<S11> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %6: str, %7: scope<S11>) in S11:
+    invoke.own call @encoding.utf.Utf8Encoded.new#0(%6)
+        normal ^b2($value, %5, %7)
+        unwind ^b3($failure, %7)
+    ^b2(%8: encoding.utf.Utf8Encoded facts(plain(certificate=closed_graph(ty=encoding.utf.Utf8Encoded))), %9: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %10: scope<S11>) in S11:
+    %11: own = own.empty
+    invoke.own call @encoding.utf.Utf8Encoded.bytes#0(%8; %11)
+        normal ^b4($value, $packet, $deps, %9, %10)
+        unwind ^b5($failure, %10)
+    ^b3(%12: failure, %13: scope<S11>) in S11:
+    %14: failure = scope.unwind %13, %12, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %14
+    ^b4(%15: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %16: own, %17: deps, %18: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %19: scope<S11>) in S11:
+    %20: scope<S11> = own.admit %19, %16
+    %21: own = own.empty
+    invoke.own call @io.stdout.Stdout.write_bytes#6(%18, %15; %21)
+        normal ^b6($packet, $deps, %20)
+        unwind ^b7($failure, %20)
+    ^b5(%22: failure, %23: scope<S11>) in S11:
+    %24: failure = scope.unwind %23, %22, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %24
+    ^b6(%25: own, %26: deps, %27: scope<S11>) in S11:
+    %28: scope<S11> = own.admit %27, %25
+    %29: closed = scope.end %28, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %30: own = own.empty
+    ret %30
+    ^b7(%31: failure, %32: scope<S11>) in S11:
+    %33: failure = scope.unwind %32, %31, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %33
+}
+
+func @io.stdout.Stdout.write_bytes#6(%0: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %1: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))); %2: own) -> own [method io.stdout.Stdout, private] abi explicit(input_packet=2, output_packet=0) summary(M12) {
+    binding b0 "value": array<byte> in S12
+    binding b1 "written": int in S12
+    boundary B0 lexical in S12
+    ^b0 in S12:
+    %3: scope<S12> = scope.begin S12
+    %4: scope<S12> = own.accept %3, %2
+    br ^b1(%0, %1, %4)
+    ^b1(%5: io.stdout.Stdout facts(plain(certificate=closed_graph(ty=io.stdout.Stdout))), %6: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %7: scope<S12>) in S12:
+    %8: own = own.empty
+    invoke.own call.native @runtime.stdio.v1::stdout_write.1(%6; %8)
+        normal ^b4($value, $packet, $deps, %6, %7)
+        unwind ^b5($failure, %7)
+    ^b2(%9: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %10: int, %11: scope<S12>) in S12:
+    invoke.own variant.new [%10], ty io.stream.IncompleteWrite, case 0
+        normal ^b8($value, %9, %10, %11)
+        unwind ^b9($failure, %9, %10, %11)
+    ^b3(%12: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %13: int, %14: scope<S12>) in S12:
+    %15: closed = scope.end %14, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %16: own = own.empty
+    ret %16
+    ^b4(%17: int, %18: own, %19: deps, %20: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %21: scope<S12>) in S12:
+    %22: scope<S12> = own.admit %21, %18
+    %23: int = array.len %20
+    %24: bool = int.eq %17, %23
+    cond %24, ^b6, ^b7
+    ^b5(%25: failure, %26: scope<S12>) in S12:
+    %27: failure = scope.unwind %26, %25, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %27
+    ^b6 in S12:
+    br ^b3(%20, %17, %22)
+    ^b7 in S12:
+    br ^b2(%20, %17, %22)
+    ^b8(%28: io.stream.IncompleteWrite facts(plain(certificate=closed_graph(ty=io.stream.IncompleteWrite))), %29: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %30: int, %31: scope<S12>) in S12:
+    br ^b10(%28, %31)
+    ^b9(%32: failure, %33: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %34: int, %35: scope<S12>) in S12:
+    %36: failure = scope.unwind %35, %32, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %36
+    ^b10(%37: io.stream.IncompleteWrite facts(plain(certificate=closed_graph(ty=io.stream.IncompleteWrite))), %38: scope<S12>) in S12 unwind ^b11(%37, %38):
+    throw %37
+    ^b11(%39: io.stream.IncompleteWrite facts(plain(certificate=closed_graph(ty=io.stream.IncompleteWrite))), %40: scope<S12>, %41: failure) in S12:
+    %42: failure = scope.unwind %40, %41, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %42
+}
+
+func @encoding.utf.Utf8Encoded.new#0(%0: str) -> encoding.utf.Utf8Encoded [ctor encoding.utf.Utf8Encoded] abi observation summary(M23) {
+    binding b0 "origin": str in S16
+    boundary B0 lexical in S16
+    ^b0 in S16:
+    br ^b1(%0)
+    ^b1(%1: str) in S16:
+    %2: str = undef ty str
+    invoke.own obj.new encoding.utf.Utf8Encoded { origin: %1 }
+        normal ^b2($value, %1)
+        unwind ^b3($failure)
+    ^b2(%3: encoding.utf.Utf8Encoded facts(plain(certificate=closed_graph(ty=encoding.utf.Utf8Encoded))), %4: str) in S16:
+    ret %3
+    ^b3(%5: failure) in S16:
+    raise %5
+}
+
+func @encoding.utf.Utf8Encoded.bytes#0(%0: encoding.utf.Utf8Encoded facts(plain(certificate=closed_graph(ty=encoding.utf.Utf8Encoded))); %1: own) -> (array<byte>, own) [method encoding.utf.Utf8Encoded] abi explicit(input_packet=1, output_packet=1) summary(M14) {
+    boundary B0 lexical in S13
+    ^b0 in S13:
+    %2: scope<S13> = scope.begin S13
+    %3: scope<S13> = own.accept %2, %1
+    br ^b1(%0, %3)
+    ^b1(%4: encoding.utf.Utf8Encoded facts(plain(certificate=closed_graph(ty=encoding.utf.Utf8Encoded))), %5: scope<S13>) in S13:
+    %6: str = obj.get %4, origin
+    %7: own = own.empty
+    invoke.own call.native @runtime.utf.v1::utf8_encode.1(%6; %7)
+        normal ^b2($value, $packet, $deps, %5)
+        unwind ^b3($failure, %5)
+    ^b2(%8: array<byte> facts(plain(certificate=closed_graph(ty=array<byte>))), %9: own, %10: deps, %11: scope<S13>) in S13:
+    %12: scope<S13> = own.admit %11, %9
+    %13: closed = scope.end %12, effects scope_effects(failures=[], suspends=false, cancel=false)
+    %14: own = own.empty
+    ret %8, %14
+    ^b3(%15: failure, %16: scope<S13>) in S13:
+    %17: failure = scope.unwind %16, %15, effects scope_effects(failures=[], suspends=false, cancel=false)
+    raise %17
+}
+
+extern @runtime.utf.v1::utf8_encode.1(%arg0: str; %arg1: own) -> (array<byte>, own) abi explicit(input_packet=1, output_packet=1) summary(M15) = "runtime/utf@1::utf8_encode/1"
+
+extern @runtime.stdio.v1::stdout_write.1(%arg0: array<byte>; %arg1: own) -> (int, own) abi explicit(input_packet=1, output_packet=1) summary(M16) = "runtime/stdio@1::stdout_write/1"

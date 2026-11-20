@@ -221,21 +221,65 @@ pub(super) fn repair(
         Some((_, value)) => Reach::Value(*value),
         None => entry[index],
     };
+    // #806: `join` is not monotone (an entry can move from `Merge(b)` to another block's merge and back), so the
+    // fixed point could oscillate around several loops that each suspend. A block that has once merged keeps its
+    // merge, which bounds every entry's changes; the merges that end up trivial (every input the same version)
+    // are removed afterwards, so the result again satisfies `join` at every block.
+    let inputs = |entry: &Vec<Reach>, block: BlockId| {
+        let index = block.as_u32() as usize;
+        let mut inputs: Vec<Reach> = predecessors[index].iter()
+            .map(|source| exit(entry, source.as_u32() as usize)).collect();
+        if block == body.entry {
+            inputs.push(Reach::Undefined);
+        }
+        inputs
+    };
     changed = true;
     while changed {
         changed = false;
         for (block, _) in body.blocks.iter() {
             budget.step(1)?;
             let index = block.as_u32() as usize;
-            let mut inputs: Vec<Reach> = predecessors[index].iter()
-                .map(|source| exit(&entry, source.as_u32() as usize)).collect();
-            if block == body.entry {
-                inputs.push(Reach::Undefined);
+            if entry[index] == Reach::Merge(block) {
+                continue;
             }
-            let reach = join(block, &inputs);
+            let reach = join(block, &inputs(&entry, block));
             if reach != entry[index] {
                 entry[index] = reach;
                 changed = true;
+            }
+        }
+    }
+    loop {
+        // The trivial merges of this round, each replaced by its single input; one rewrite of every entry
+        // follows the chain (a merge whose input is another removed merge).
+        let mut removed: BTreeMap<BlockId, Reach> = BTreeMap::new();
+        for (block, _) in body.blocks.iter() {
+            budget.step(1)?;
+            let index = block.as_u32() as usize;
+            if entry[index] != Reach::Merge(block) {
+                continue;
+            }
+            let reach = join(block, &inputs(&entry, block));
+            if reach != Reach::Merge(block) {
+                removed.insert(block, reach);
+            }
+        }
+        if removed.is_empty() {
+            break;
+        }
+        for other in entry.iter_mut() {
+            budget.step(1)?;
+            let mut seen = 0;
+            while let Reach::Merge(at) = *other
+                && let Some(&reach) = removed.get(&at) {
+                *other = reach;
+                seen += 1;
+                if seen > removed.len() {
+                    return Err(CoroError::InvalidInput {
+                        function: Some(function), message: "trivial merges replace each other in a cycle".into(),
+                    });
+                }
             }
         }
     }

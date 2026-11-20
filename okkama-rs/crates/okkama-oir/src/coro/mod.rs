@@ -30,8 +30,11 @@ pub struct CoroOptions {
     pub max_steps: usize,
 }
 impl Default for CoroOptions {
+    /// #806: the budget is one per module. Repair scans the body once per value saved across a suspension, so
+    /// the work grows with a function's size times its suspensions: the SQLite programs' module spends about
+    /// 15 000 000 steps (one std function, `SqliteOpening.connection`, 9 000 000).
     fn default() -> Self {
-        Self { max_steps: 10_000_000 }
+        Self { max_steps: 100_000_000 }
     }
 }
 
