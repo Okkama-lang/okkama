@@ -6,6 +6,9 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-20. One engine, no selector.** `okkama run` has no `--engine`, and `OKKAMA_ENGINE` and
+  `OCS_RUST_ENGINE` are ignored (a4b8ad285). Only `bench/micro/run.py` still passes the flag, and only to old
+  toolchains that know it.
 - **2026-11-20. Tweed is built on Tomato's pipeline**, keeping every Tomato optimization (persistent
   collections, reduce/map fast paths, JIT). Only the ownership tracking is replaced, in phases (#903). Tomato's
   async bugs are fixed on the way: #587, #797, #817, #845, #846. The board was cleaned the same day:
