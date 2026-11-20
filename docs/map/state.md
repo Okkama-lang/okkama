@@ -113,4 +113,8 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 
 1. Merge wave/79 (devtrace + maps) after a green CI.
 2. #911 step 1: drop the Champ jobs from the Wave CI (saves CI time).
-3. #912: devtrace in Tomato's pipeline, then #905 and #906 (phase 1), measured with #908.
+3. #912 is done in part: lowering and IR passes, identities by type.
+4. #905 step 1 is done: per-instance identity for destroy-less objects (11-ownership 84 → 27 ms on the host).
+   Next is #906: arrays and containers get the same per-instance answer. The remaining 1.7M walk steps go
+   through the records array.
+5. Container measurement with #908 (a Linux build of the tree).

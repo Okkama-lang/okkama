@@ -38,6 +38,8 @@ pub struct Resources {
     pub enabled: bool,
     /// Per descriptor: can it reach a destroy-bearing identity?
     pub flags: Vec<bool>,
+    /// Per descriptor: does it declare a destroy of its own? (#905)
+    destroys: Vec<bool>,
     serial: u64,
     identities: HashMap<Word, Identity>,
     /// Work list, visited set and open containers of `resource_graph`, reused.
@@ -131,6 +133,7 @@ impl Resources {
             // region (#601 Q1 audit).
             enabled: !cfg!(feature = "champ-abi") && program.objects.iter().any(|o| o.destroy.is_some()),
             flags: descriptor_flags(program),
+            destroys: program.objects.iter().map(|object| object.destroy.is_some()).collect(),
             trace: std::env::var_os("SPARROW_TRACE_DESTROY")
                 .and_then(|path| std::fs::OpenOptions::new().create(true).append(true).open(path).ok()),
             ..Self::default()
@@ -228,12 +231,43 @@ impl Runtime {
     /// A new object of `descriptor` gets a resource identity if it can matter.
     #[cfg(not(feature = "champ-abi"))]
     pub fn created(&mut self, descriptor: usize, object: Word) {
+        if !(self.resources.enabled && self.resources.flags[descriptor]) {
+            return;
+        }
+        // Tweed #905: whether an object matters is decided per instance, not per type. An object without a destroy
+        // of its own is an identity only so that walks descend into it; one whose fields, as built, reach no
+        // identity is a leaf for its whole life (objects are immutable). A field not yet initialized (escaped
+        // construction, `obj.init`) or a container keeps the old answer.
+        if !self.resources.destroys[descriptor] && !self.fields_may_reach_identity(descriptor, object) {
+            okkama_devtrace::count!("runtime", "identity skipped: fields reach none");
+            return;
+        }
         let resources = &mut self.resources;
-        if resources.enabled && resources.flags[descriptor] {
+        {
             resources.serial += 1;
             resources.identities.insert(object, Identity { serial: resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
             self.heap.watch(object);
         }
+    }
+
+    /// Whether a field of a new object of `descriptor` may reach a resource identity (#905): an object that is an
+    /// identity, a container that may hold one, or a reference field not yet initialized.
+    #[cfg(not(feature = "champ-abi"))]
+    fn fields_may_reach_identity(&self, descriptor: usize, object: Word) -> bool {
+        let layout = &self.heap.layouts().objects[descriptor];
+        layout.iter().enumerate().any(|(index, &repr)| {
+            let word = self.heap.field(object, index);
+            let Some(pointer) = repr.pointer(word) else {
+                return repr == Repr::Ref && word == UNBOUND;
+            };
+            let header = self.heap.header_of(pointer);
+            match heap::kind(header) {
+                heap::OBJECT => self.resources.identities.contains_key(&pointer),
+                heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
+                heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
+                _ => false,
+            }
+        })
     }
 
     /// Legacy allocation hooks must not commit incomplete Champ construction.
@@ -1156,7 +1190,7 @@ pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
     okkama_devtrace::count!("runtime", "rt_created");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|r| format!("resource {}", r.loaded.program.objects[descriptor as usize].name));
-    okkama_devtrace::count!("runtime", format!("identity created: {}",
+    okkama_devtrace::count!("runtime", format!("identity requested: {}",
         runtime.loaded.program.objects[descriptor as usize].name));
     runtime.created(descriptor as usize, object);
 }

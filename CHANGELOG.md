@@ -8,6 +8,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Tweed, step 1: an object is tracked per instance, not per type (#905).** Tomato gave a resource identity
+  to every object whose *type* could reach a `destroy`. On 11-ownership that is all 100 000 `Record`s, through
+  a `Ledger`-role field that one implementation, `Vault`, closes. An object without a destroy of its own is
+  now an identity only when its fields, as built, may reach one: an identity, a container, or a reference
+  field not yet initialized. Objects are immutable, so a leaf stays a leaf.
+  - **11-ownership:** 84 ms → 27 ms (host, gate build; Python 30 ms). 99 900 identities are skipped, region
+    closes drop from 100k to 503, and walk steps from 2.9M to 1.7M.
+  - **Tests:** behaviour tests with a mutation check (`tests/tweed_ownership.rs`).
 - **Development instrumentation across the pipeline and the runtime (owner, 2026-11-20).** The new crate
   `okkama-devtrace` adds events, counters, timers and dumps, switched on by `OKKAMA_DEV` (categories, function
   filters, `dump`) and written to `OKKAMA_DEV_OUT`.

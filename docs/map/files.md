@@ -80,13 +80,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/oir2/coverage/p2_4.rs` 246 — C1 inventory checks. These do not claim source lowering or runtime acceptance.
 - `okkama-compiler/src/lowering/oir2/coverage/p2_5.rs` 179 — P2.5 (#601) coverage inventory: one row per L08 case and per async case elsewhere (plan §1.3),
 
-## lower-oir1 — 14 files, 11511 lines
+## lower-oir1 — 14 files, 11549 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1583 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 126 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 345 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
-- `okkama-compiler/src/lowering/mod.rs` 688 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
+- `okkama-compiler/src/lowering/mod.rs` 726 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 790 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
@@ -251,7 +251,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/codegen/sparrow/mod.rs` 725 — Проверенный IR → программа Sparrow (SPB 9).
 - `okkama-compiler/src/codegen/sparrow/registers.rs` 267 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
 
-## compiler — 23 files, 12301 lines
+## compiler — 23 files, 12310 lines
 
 - `okkama-compiler/src/lib.rs` 13 — Okkama compiler library.
 - `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
@@ -269,7 +269,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/mod.rs` 1520 — OIR-1 — промежуточное представление программы (`docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/ir/ownership.rs` 938 — Read-only ownership census after the OIR passes (#553).
 - `okkama-compiler/src/ir/param_adopts.rs` 293 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
-- `okkama-compiler/src/ir/print.rs` 895 — Канонический текст OIR-1 (§18 спецификации).
+- `okkama-compiler/src/ir/print.rs` 904 — Канонический текст OIR-1 (§18 спецификации).
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 257 — Регионы, которые никогда не владеют идентичностями, — убираются.
 - `okkama-compiler/src/ir/verify.rs` 1868 — Верификатор OIR-1 (§17 спецификации).
@@ -323,13 +323,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/champ/streams.rs` 144 — FutureCompletions on Champ (#810 G1 step 4, ruling Q4 of the steps 3–4 review). The stream Tomato keeps in
 - `sparrow-core/src/champ/testing.rs` 247 — The test profile on Champ (§14, OIR-2 §7.4): assertions, the test intrinsics and the runner.
 
-## sparrow — 68 files, 35097 lines
+## sparrow — 68 files, 35125 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1128 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/failures.rs` 1197 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 1225 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/heap.rs` 2132 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 1082 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
