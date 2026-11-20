@@ -1553,3 +1553,32 @@ async main() is int {
         assert_eq!((run.stdout.as_str(), run.result), ("got x\ndestroy x\n", Ok(0)), "{mode:?}");
     }
 }
+
+/// An async defer that awaits a method of a binding it captures (`defer await connection.settled()` in every SQLite
+/// program). Its entry is an async body, whose entry contract retains no parameter (#772), but the defer call's
+/// summary kept the capture's retention, and the SPB 17 load check refused the program ("call summary disagrees
+/// with verified entry contract"). The defers run in reverse order of registration.
+#[test]
+fn an_async_defer_awaits_a_method_of_a_captured_binding() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Conn {
+    has name is string;
+    Conn(:name);
+    async settled() is void { Stdout().writeln("settled " + name); }
+    close() is void { Stdout().writeln("close " + name); }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+async main() is int {
+    let c = Conn(name: "c");
+    defer await c.settled();
+    defer c.close();
+    Stdout().writeln("body");
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("body\nclose c\nsettled c\ndestroy c\n", Ok(0)), "{mode:?}");
+    }
+}

@@ -30,10 +30,12 @@ pub struct LowOptions {
     pub max_root_bindings: usize,
 }
 impl Default for LowOptions {
+    /// The step budget is one per module. #889: cleanup expansion of one std method (`SqliteRows.row`, three nested
+    /// defers over an await) spends about 17 000 000 steps, so the budget is 100 000 000 until that work shrinks.
     fn default() -> Self {
         Self {
             max_entities: 1_000_000,
-            max_steps: 10_000_000,
+            max_steps: 100_000_000,
             max_generated_blocks: 100_000,
             max_root_bindings: 1_000_000,
         }

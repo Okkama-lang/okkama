@@ -335,6 +335,11 @@ impl Emitter<'_> {
                 o::SummarySelection::Descriptor(_) => return Err(later("descriptor summary retention")),
             }
         }
+        // An async defer entry runs inside its owner's cleanup and creates no Future (C-6); like every async body
+        // its entry retains no SPB parameter (`cleanup::entry_contract`, #772), and its call says the same.
+        if defer && declaration.body.is_some() && declaration.attrs.contains(&o::FunctionAttr::Async) {
+            retained.clear();
+        }
         let parameter_indices = params.iter().enumerate().filter_map(|(index, ty)| {
             matches!(ty, P::Value(_)).then_some(index as u32)
         }).collect::<Vec<_>>();
