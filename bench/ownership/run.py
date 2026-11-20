@@ -13,6 +13,8 @@ CPU, 2 GB and no network, CPython being the image's `python3`.
   ownership tax. ownership.py is the CPython port.
 - **Micro pairs** (bench/micro programs, micro-v2 protocol, oracles checked): baseline, constructor,
   successor, destroy, destroy-observed, defer. micro_pairs.py holds the CPython ports.
+- **Go** (`go/`, the same work; a destroy is `defer Close()`): built statically in `--go-image`, run in `IMAGE`
+  under the same limits. `--go-image none` leaves Go out.
 
 Timing belongs on a quiet machine: CI runners are bimodal, so run this locally. The target (owner,
 2026-11-20): ownership.ok no slower than CPython.
@@ -70,6 +72,7 @@ def main():
     parser.add_argument("--image", default="okkama-dev")
     parser.add_argument("--repeats", type=int, default=9)
     parser.add_argument("--n", type=int, default=1_000_000, help="micro iterations (CPython: at most 1M)")
+    parser.add_argument("--go-image", default="golang:1.23.4-bookworm", help="Go toolchain image, or none")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="tweed-bench-") as work:
         plain = Path(work) / "plain.ok"
@@ -93,12 +96,25 @@ def main():
         for name in PAIRS:
             n = min(args.n, 1_000_000)
             python[name] = micro(args.image, base, ["python3", "/bench/micro_pairs.py", name], name, n, n)
+        others = [("CPython", python)]
+        if args.go_image != "none":
+            built = Path(work) / "go"
+            built.mkdir()
+            subprocess.run(["docker", "run", "--rm", "-v", f"{HERE / 'go'}:/src:ro", "-v", f"{built}:/out",
+                            "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/gocache", args.go_image, "sh", "-c",
+                            "cd /src && go build -o /out/ownership ownership/main.go && go build -o /out/micro micro/main.go"],
+                           check=True, capture_output=True, timeout=600)
+            mounts = [(str(built), "/go")]
+            go = {"ownership.ok": ladder(args.image, mounts, ["/go/ownership"], args.repeats)}
+            for name in PAIRS:
+                go[name] = micro(args.image, mounts, ["/go/micro", name], name, args.n, args.n)
+            others.append(("Go", go))
     labels = [label for label, _, _ in engines]
-    print("| program | " + " | ".join(labels) + " | CPython |")
-    print("|---|" + "---:|" * (len(labels) + 1))
+    print("| program | " + " | ".join(labels + [name for name, _ in others]) + " |")
+    print("|---|" + "---:|" * (len(labels) + len(others)))
     for key, unit in [("ownership.ok", "ms"), ("plain twin", "ms")] + [(name, "ns/it") for name in PAIRS]:
         cells = [f"{rows[label][key]:.1f}" for label in labels]
-        cells.append(f"{python[key]:.1f}" if key in python else "—")
+        cells += [f"{other[key]:.1f}" if key in other else "—" for _, other in others]
         print(f"| {key} ({unit}) | " + " | ".join(cells) + " |")
     worst = max(rows[label]["ownership.ok"] for label in labels[-1:])
     print(f"\nTarget (#903): ownership.ok of `{labels[-1]}` {worst:.1f} ms vs CPython {python['ownership.ok']:.1f} ms:"
