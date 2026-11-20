@@ -6,10 +6,16 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-20. The next engine is named Tweed** (Sparrow's next version, after Tomato; "Champ" is retired:
+  the static-ownership attempt). Tweed is the next release's engine. Its ownership has one implementation:
+  lowering holds the rules, one elaboration pass (static where proven locally, otherwise dynamic), a runtime
+  owner tree with O(1) transfers, and one checker in debug and CI only. **Target:** the ownership overhead
+  should be at least on par with Python, which it is 4–5× slower than today. "10× Tomato" is not the goal.
+  Phase 0 is measurement (Tomato's ownership tax, the share that can be static, a prototype of the owner tree).
 - **2026-11-20. Ownership gets one implementation.** Five layers re-derive the same rule. The owner wants to
   throw that out and adopt a proven model after a survey of Swift, Rust, Koka/Lean, Nim, Mojo, Python, Lua and
-  Go, even if that means a rewrite. **Open:** the decision document goes to the owner. Until it is decided,
-  don't extend the old own and don't chase deep blocker chains in it.
+  Go, even if that means a rewrite. **Decided** the same day: Tweed (above). Don't extend the old own and don't
+  chase deep blocker chains in it.
 - **2026-11-20. Development instrumentation is a must-have.** It is the `okkama-devtrace` crate, switched on by
   `OKKAMA_DEV`; release builds compile it out (`--cfg okkama_release`).
 - **2026-11-20. Code maps.** This directory is read before every task and updated after it.

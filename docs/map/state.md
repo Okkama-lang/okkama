@@ -47,19 +47,50 @@ Last update: 2026-11-20, after wave/78. The working branch of 0.6.0 is `release/
 - First devtrace reading (a 50-line race, debug build): verify_load takes 21.5 s of about 34 s, own's analysis of
   main takes 1.87M work units, and the native-contract catalogue takes 1.7 s.
 
-## Ownership redesign (open, owner's decision)
+## Tweed (decided 2026-11-20): phase 0 measurements
 
-- Survey: scratchpad `ownership-survey.md` (session of 2026-11-20). Its recommendation is A.
-  - A is a runtime owner tree, syntactic lowering and one `ElaborateOwnership` pass with drop flags.
-    Uncertain cases stay dynamic.
-  - Verification is one checker in debug and CI only; the loader trusts the bytecode.
-  - B is A without the static pass and is phase 1. Perceus-style refcounting for destroy is rejected:
-    it releases at the last reference, while Okkama releases at the owner scope.
-- The decision document goes to the owner; nothing is rewritten before the decision.
+Setup: Tomato v0.5.8 (Linux toolchain `okkama-work/micro-tc/v0.5.8`, `--engine sparrow`: the default there is
+still IR) and CPython 3.13 in the same `okkama-dev` container, 1 CPU. Micro-v2 protocol, oracles checked.
+Scripts: scratchpad `tweed0/` (session 36c16e3b).
+
+- **Micro, ns/iteration, Tomato / Python.**
+
+  | Bench | Tomato | Python |
+  |---|---|---|
+  | baseline | 4.2 | 22.8 |
+  | constructor | 8.3 | 102 |
+  | successor | 13.5 | 184 |
+  | destroy | 95 | 208 |
+  | destroy-observed | 84 | 184 |
+  | defer | 11.7 | 97 |
+
+  Tomato is faster everywhere. A resource still costs about 87 ns over a plain object, 11× the object itself.
+- **11-ownership: Tomato 84 ms, Python 30 ms (2.8× slower).** The same program without `Vault.destroy` takes
+  4.6 ms. **The ownership tax is about 95% of the run.**
+- **Why.** devtrace counters, per run of 11-ownership:
+
+  | Counter | Count |
+  |---|---|
+  | `rt_created` | ~100k |
+  | `rt_region_add` | ~600k |
+  | `rt_region_leave` | ~100k |
+  | graph walks | 2.9k |
+  | walk steps | 2.9M |
+
+  Only about 400 objects have a destroy. Tomato decides "managed" **per type**: every `Record` has a
+  `Ledger`-role field, and `Vault` is one implementation of that role. The decision should be **per
+  instance**: 99.9% of the records hold a plain `Account`.
+- **Tweed runtime, phase 1.**
+  - A per-instance "reaches managed" bit computed at construction from the field values. Objects are immutable,
+    so it never changes: O(fields).
+  - Region add and transfer of a value without the bit cost one branch.
+  - Walks descend only into fields with the bit set.
+  - Late edges (Atomic, Future outcomes, builders, `obj.init`) keep a conservative path.
+  - Expected on 11-ownership: about plain (≈5 ms) against Python's 30 ms.
 
 ## Next
 
 1. Merge wave/79 (devtrace + maps) after a green CI.
-2. Write the ownership decision document for the owner.
-3. Until then: work through the bulk buckets that do not depend on the ownership model (#895 diagnostics,
+2. Tweed phase 1 on Tomato's pipeline (owner to confirm the base): per-instance managed bit and summaries.
+3. Meanwhile: work through the bulk buckets that do not depend on the ownership model (#895 diagnostics,
    #900 Atomic, #902 builtins, #896 closure identity).

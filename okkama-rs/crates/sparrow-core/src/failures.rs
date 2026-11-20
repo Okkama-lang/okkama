@@ -461,6 +461,8 @@ impl Runtime {
             self.heap.unvisit(object);
         }
         self.resources.scratch = (pending, seen, open);
+        okkama_devtrace::count!("runtime", "resource graph walks");
+        okkama_devtrace::count!("runtime", "resource graph steps", steps);
         found.sort_unstable_by_key(|o| self.resources.identities[o].serial);
         found
     }
