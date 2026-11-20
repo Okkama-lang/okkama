@@ -160,6 +160,16 @@ jobs:
           name: corpora-${{ matrix.engine }}
           path: out/corpora/
 
+  maps:
+    name: Code maps current
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      # docs/map/files.md and rules.md are generated from the code (owner, 2026-11-20): regenerate and commit.
+      - run: python3 tools/map/gen.py --check
+
   blockers:
     name: Champ blockers
     needs: conformance
