@@ -20,6 +20,12 @@ pub struct ScopeFacts {
     pub potential_owned_types: BTreeSet<TypeId>,
     pub defers: BTreeSet<FuncId>,
     pub service_protocols: BTreeSet<ProtocolId>,
+    /// The types a settle of a Future's cache duty may release in this scope (L13, #847): the Futures created here or
+    /// in a nested scope (a duty can be rehomed, stored or offered outward and settle here, at run time when it is an
+    /// admitted entry), for their outcomes, and the start values of their entries, which a Future cancelled before it
+    /// started releases unstarted. Their destroy failures join the close's envelope, as the loader's
+    /// `visible_destroy_failures` sees them.
+    pub released: BTreeSet<TypeId>,
     pub blockers: BTreeSet<ElisionBlocker>,
     pub effects: ScopeEffectEnvelope,
     /// Eligibility for the later rewrite; commit 1 erases no scopes.
@@ -112,6 +118,24 @@ pub(super) fn inventory(
             budget.memory(ops.len() * 64)?;
             for (op, results) in ops {
                 budget.work(1)?;
+                if let Operation::Call(CallOp::Direct { function, .. } | CallOp::Intrinsic { function, .. }) = op
+                    && super::futures::is_async(module, *function)
+                {
+                    let params = &module.functions.get(*function).map_err(arena)?.signature.params;
+                    let mut released: Vec<TypeId> = language(module, params);
+                    for value in &results {
+                        released.push(body.values.get(*value).map_err(arena)?.ty);
+                    }
+                    // The scope that creates the Future and every enclosing scope of the function.
+                    let mut scope = Some(block.lexical_scope);
+                    while let Some(current) = scope {
+                        budget.work(1 + released.len())?;
+                        if let Some(facts) = scopes.get_mut(&current) {
+                            facts.released.extend(released.iter().copied());
+                        }
+                        scope = module.scopes.get(current).map_err(arena)?.parent;
+                    }
+                }
                 let can_own = matches!(op, Operation::Core(CoreOp::ObjNew { .. } | CoreOp::ObjNext { .. }
                     | CoreOp::VariantNew { .. } | CoreOp::CapMake { .. } | CoreOp::FnClosure { .. }
                     | CoreOp::FnBind { .. } | CoreOp::FnBindRole { .. } | CoreOp::AnyBox { .. }
@@ -431,6 +455,17 @@ pub(super) fn analyze(
         }
         for protocol in &facts.service_protocols {
             summaries::project(&mut facts.effects, universe.protocol_summary(*protocol));
+        }
+        // A dynamic step (entries admitted at run time) may settle any of the function's Futures in any of its
+        // scopes, so every scope takes the function's released types, which its root scope collects.
+        let mut root = *scope;
+        while let Some(parent) = module.scopes.get(root).map_err(arena)?.parent {
+            root = parent;
+        }
+        for ty in universe.inventories.get(&root).into_iter().flat_map(|root| &root.released) {
+            if let Some(effects) = result.cleanup_effects.get(ty) {
+                normal::failures(&mut facts.effects.failures, &effects.failures);
+            }
         }
         // #730, async ABI C-6: the defers of an async owner may suspend (`defer await`). Own runs each as an
         // explicit `invoke.defer` before the close, which coro brackets; the close itself runs no defer, so its

@@ -20,6 +20,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A scope's close envelope covers what settling the function's Futures may release (L13, #847).** On Champ,
+  `L13.migration-and-restart` (awaits in a branch, over SQLite) stopped at `D18_EXECUTOR: merge envelope omits
+  destroy failures`. A close that settles a Future's duty, or entries admitted at run time, may release the outcome
+  or the unstarted inputs of any Future the function creates; own now adds their destroy failures to every scope's
+  envelope of such a function, as the loader assumes.
+- **std's TCP race gets through B9 and codegen on Champ (#847).** B9 no longer carries a binding across an edge that
+  leaves the binding's scope (Fable's ruling), and codegen admits a static split of an object that holds a resource
+  without a destroy of its own; the loader reconstructs it. The TCP cases stop next at `SPB_SCHEDULE`.
 - **The Champ conformance adapter builds with the `gate` profile** (owner, 2026-11-20): release optimizations without
   LTO, as the Wave CI's crate tests. A debug build compiled the SQLite cases in about 90 s, over their 60 s budget.
 - **Async tests run on Champ (#570).** A test profile with an `async test` stopped before lowering with

@@ -1640,3 +1640,142 @@ async main() is int {
         assert_eq!((run.stdout.as_str(), run.result), ("door 1\ndoor 2\ndoor 3\n", Ok(0)), "{mode:?}");
     }
 }
+
+/// L13: a branch awaits a temporary whose outcome has a destroy that may fail, after another await. The close's
+/// envelope covers the destroys a settle in this function may run, as the SPB 17 load check sees them
+/// ("D18_EXECUTOR: ... merge envelope omits destroy failures" before).
+#[test]
+fn a_close_settling_a_plain_future_sees_no_destroy_of_another() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Reply {
+    has n is int;
+    Reply(:n);
+    destroy { Stdout().writeln("drop " + (10 / n).string()); }
+}
+object Conn {
+    Conn();
+    async exec(n is int) is Reply { Reply(n: n); }
+}
+object Migrator {
+    has c is Conn;
+    Migrator(:c);
+    async version() is int { 1; }
+    async migrate() is int {
+        let current = await self.version();
+        if current < 2 {
+            await c.exec(1);
+        }
+        current;
+    }
+}
+async main() is int {
+    Stdout().writeln((await Migrator(c: Conn()).migrate()).string());
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("drop 10\n1\n", Ok(0)), "{mode:?}");
+    }
+}
+
+/// L13.migration-and-restart over an in-memory database: `migrate` awaits `connection.execution(...)` in a branch
+/// after another await. A scope where such a Future's duty may settle (also at run time, as an admitted entry) may
+/// release its outcome or its unstarted inputs, so own's envelope takes their destroy failures, as the loader sees
+/// them. Structural only: Full ends at its step limit on the SQLite module (#887).
+#[test]
+fn a_migration_awaits_in_a_branch_on_sqlite() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "db/sqlite" take SqliteMemory, SqliteConnection;
+import "db/statement" take Statement;
+
+object Migrator {
+    has connection is SqliteConnection;
+    Migrator(:connection);
+    async version() is int {
+        await connection.execution(Statement("CREATE TABLE IF NOT EXISTS schema_version(v INTEGER)"));
+        let rows = await connection.rows(Statement("SELECT COALESCE(MAX(v), 0) AS v FROM schema_version"));
+        let row = await rows.row();
+        rows.close();
+        row.int("v");
+    }
+    async migrate() is int {
+        let current = await self.version();
+        if current < 1 {
+            await connection.execution(Statement("CREATE TABLE invoices(id TEXT PRIMARY KEY, cents INTEGER)"));
+            await connection.execution(Statement("INSERT INTO schema_version VALUES(1)"));
+        }
+        await self.version();
+    }
+}
+async main() is int {
+    let connection = await SqliteMemory().connection();
+    defer await connection.settled();
+    defer connection.close();
+    Stdout().writeln("version " + (await Migrator(connection: connection).migrate()).string());
+    Stdout().writeln("again " + (await Migrator(connection: connection).migrate()).string());
+    0;
+}
+"#;
+    let run = run_source_with(source, okkama_compiler::oir2::VerifyMode::Structural)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result), ("version 1\nagain 1\n", Ok(0)));
+}
+
+/// #847: std's `net/tcp` race. A `map` body binds a Future, starts it in a group and returns it; the attempts hold a
+/// resource, so the iteration scope is retained and the body's value (a bound Future past its binding's scope) is
+/// pushed by a held transfer. B9 no longer carries the binding across that exit (Fable's ruling), and codegen admits
+/// a static split of an object that holds a resource without a destroy of its own (the loader reconstructs it).
+/// Structural only: Full ends at its step limit (#887).
+#[test]
+fn a_race_starts_bound_futures_from_a_map_body() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/collect" take FirstSuccessful;
+import "async/event" take Event;
+enum Refused is Error = (refused);
+object Line { has name is string; Line(:name); label() is string { name; } destroy { Stdout().writeln("close " + name); } }
+object Win {
+    has position is int;
+    Win(:position);
+    label() is string { "attempt " + position.string(); }
+}
+object Cleanup {
+    has group is FutureGroup<Win>;
+    Cleanup(:group);
+    async close() is void { await group.wait(); }
+}
+object Attempt {
+    has position is int;
+    has gate is Event;
+    has probe is Line;
+    Attempt(:position, :gate, :probe);
+    async result() is Win {
+        await gate.wait();
+        Win(position: position);
+    }
+}
+async main() is int {
+    let gate = Event(ready: true);
+    let attempts is @Attempt = (0..3).map() -> index { Attempt(position: index, gate: gate, probe: Line(name: "probe " + index.string())); };
+    let group is FutureGroup<Win> = FutureGroup();
+    let cleanup = Cleanup(group: group);
+    defer await cleanup.close();
+    let futures is @Future<Win> = attempts.map() -> attempt {
+        let future = attempt.result();
+        group.start(future);
+        future;
+    };
+    let winner = await FirstSuccessful(origins: futures).outcome();
+    Stdout().writeln("winner " + winner.label());
+    0;
+}
+"#;
+    let run = run_source_with(source, okkama_compiler::oir2::VerifyMode::Structural)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((run.stdout.as_str(), run.result),
+        ("winner attempt 0\nclose probe 2\nclose probe 1\nclose probe 0\n", Ok(0)));
+}

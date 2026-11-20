@@ -60,7 +60,8 @@ pub(super) fn check<'a>(module: &'a Module, function: FuncId, data: &'a Function
 fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut State<'_>) {
     let future = |value: ValueId| body.values.get(value).ok()
         .is_some_and(|data| matches!(module.types.get(data.ty), Ok(Type::Future(_))));
-    let mut bound = std::collections::BTreeSet::new();
+    // A bound Future with the scope of its binding (#847): bound only while it stays inside that scope.
+    let mut bound = std::collections::BTreeMap::<ValueId, ScopeId>::new();
     let mut tokens = std::collections::BTreeSet::new();
     let mut insts = Vec::new();
     for (block_id, block) in body.blocks.iter() {
@@ -86,12 +87,14 @@ fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut Sta
                     state.error(R::B9BindingAttribute,
                         "fut.new binds its Future to a binding of its owner scope and of its type (PR-B1)");
                 }
-                bound.extend(results.first().copied());
+                bound.extend(results.first().map(|value| (*value, *owner)));
                 tokens.extend(results.get(1).copied().filter(|_| results.len() == 3));
             }
             Operation::Ownership(OwnershipOp::Bind { binding } | OwnershipOp::Rebind { binding })
                 if future(binding.resource.value) => {
-                bound.insert(binding.resource.value);
+                let scope = body.bindings.get(binding.binding)
+                    .map_or(binding.original_scope, |declared| declared.scope);
+                bound.insert(binding.resource.value, scope);
             }
             _ => {}
         }
@@ -113,17 +116,38 @@ fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut Sta
             }
         }
     }
+    // #847 (Fable's ruling): an edge that leaves the binding's scope does not carry the binding. Past the exit
+    // the Future's duty was rehomed to the scope it lands in, which admits it unbound (own's analysis agrees).
+    let within = |inner: ScopeId, outer: ScopeId| {
+        let mut current = Some(inner);
+        while let Some(scope) = current {
+            if scope == outer {
+                return true;
+            }
+            current = module.scopes.get(scope).ok().and_then(|data| data.parent);
+        }
+        false
+    };
     let mut changed = true;
     while changed {
         changed = false;
         for ((target, index), arguments) in &incoming {
-            let Some(&param) = body.blocks.get(*target).ok().and_then(|block| block.params.get(*index)) else {
+            let Some(target_block) = body.blocks.get(*target).ok() else {
                 continue;
             };
-            if !bound.contains(&param) && future(param)
-                && arguments.iter().all(|argument| argument.is_some_and(|value| bound.contains(&value)))
+            let Some(&param) = target_block.params.get(*index) else {
+                continue;
+            };
+            if bound.contains_key(&param) || !future(param) {
+                continue;
+            }
+            let scopes: Option<Vec<ScopeId>> = arguments.iter()
+                .map(|argument| argument.and_then(|value| bound.get(&value).copied())).collect();
+            if let Some(scopes) = scopes
+                && let Some(&scope) = scopes.first()
+                && scopes.iter().all(|&binding| within(target_block.lexical_scope, binding))
             {
-                bound.insert(param);
+                bound.insert(param, scope);
                 changed = true;
             }
         }
@@ -140,7 +164,7 @@ fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut Sta
                     match body.selections.get(selection) {
                         Ok(SelectionExpr::Union(items)) => pending.extend(items),
                         Ok(SelectionExpr::Admissible(inner) | SelectionExpr::Held(inner)) => pending.push(*inner),
-                        Ok(SelectionExpr::Value(value)) => named |= bound.contains(value),
+                        Ok(SelectionExpr::Value(value)) => named |= bound.contains_key(value),
                         _ => {}
                     }
                 }
