@@ -1278,6 +1278,42 @@ fn without_local_rehome(text: &str) -> String {
     format!("{}{}{}", &text[..start], edited, &text[end..])
 }
 
+/// #877 (Fable): `size` takes a FutureGroup, whose members are started Futures, and `drop` a bare cold Future.
+const GROUP_ENTRY: &str = concat!(
+    "module app v1.0.0; ",
+    "import \"io/stdout\" take Stdout; ",
+    "import \"async/scope\" take FutureGroup; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln(l); } } ",
+    "object U { U(); async use(r is Res) is int { r.n(); } } ",
+    "object D { D(); size(g is FutureGroup<int>) is int { 0; } drop(f is Future<int>) is int { 0; } } ",
+    "async main() is int { let g is FutureGroup<int> = FutureGroup(); let a = D().size(g); ",
+    "let b = D().drop(U().use(Res(l: \"x\"))); await g.wait(); a + b; }",
+);
+
+/// #877: a FutureGroup in the entry packet carries no cold Future (a group starts every member it registers), so a
+/// function that takes one keeps its precise envelope and summary, as the loader demands nothing more; a bare cold
+/// Future still makes its function assume every destroy failure (#875).
+#[test]
+fn f1_a_future_group_in_the_entry_assumes_no_destroy_failure() {
+    let (own, _) = super::own_case_tests::own_stage(GROUP_ENTRY, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let destroy = own.declarations.iter().find_map(|(_, declaration)| match &declaration.kind {
+        ir::DeclarationKind::Object { destroy: Some(destroy), .. } if declaration.name.ends_with("Res") => {
+            Some(*destroy)
+        }
+        _ => None,
+    }).expect("Res has a destroy");
+    let failures = &own.summaries.get(own.functions.get(destroy).unwrap().summary.unwrap()).unwrap().contract.failures;
+    let declared = |symbol: &str| {
+        let (_, function) = function(&own, symbol);
+        own.summaries.get(function.summary.unwrap()).unwrap().contract.failures.clone()
+    };
+    let size = [close_failures(&own, "app.D.size#0"), declared("app.D.size#0")].concat();
+    assert!(!failures.iter().all(|kind| size.contains(kind)), "size: {size:?} has {failures:?}");
+    let drop = close_failures(&own, "app.D.drop#1");
+    assert!(failures.iter().all(|kind| drop.contains(kind)), "drop: {drop:?} lacks {failures:?}");
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",

@@ -8,7 +8,7 @@ mod per_value;
 mod shared;
 mod metadata;
 mod packets;
-pub(super) use packets::holds_futures;
+pub(super) use packets::{holds_futures, reaches_cold_futures};
 mod scopes;
 mod summaries;
 mod cleanup;

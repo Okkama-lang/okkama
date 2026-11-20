@@ -51,6 +51,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function that takes a FutureGroup keeps its precise failures (#877).** Since #875, a function whose entry
+  can carry a Future assumes every destroy failure. Own counted a FutureGroup's members among those Futures, and the
+  loader did not. A group starts every member it registers and holds no cold Future, so own now skips its members
+  as the loader does. A Future stored in any other object, a collector's included, still counts.
 - **A function can return a Future over its bound local Future (#874).** Example:
   `chain() is Future<int> { let g = M().make("x"); U().take(g); }`. Structural refused the caller
   (`D18_EXECUTOR`) and Full refused `chain` (B51).
