@@ -20,6 +20,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Async tests run on Champ (#570).** A test profile with an `async test` stopped before lowering with
+  "async test … (#570)", although the async lowering already took test bodies as fixed roots. The gate is gone:
+  `L04.fakes.typed-state` and `L07.test-runner.all-pass-async` pass on Champ (Structural). A silent exit status 4
+  from `main` is no longer read by the Champ adapter as an unsupported program (`L01.gram.test.inner-grammar-not-parsed`).
 - **An array of Events compiles on Champ (#891).** Example: `has events is @Event`. own keeps such an array as a
   managed collection of capabilities (references with deps), the loader as closed plain data, and codegen refused it.
   `L08.collect.completions-consumers` and `L08.collect.settlement-order` now print their expected output on Champ.
