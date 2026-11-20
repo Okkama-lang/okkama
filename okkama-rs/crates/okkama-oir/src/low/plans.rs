@@ -109,73 +109,91 @@ impl<T> Builder<T> {
     }
 }
 
-/// The incoming edge arguments of the blocks an inventory asks for (#687), each found once per inventory. A block is
-/// found by one scan of the terminators that clones only the edges into it (#889: a close's inventory asks for the
-/// few blocks on its state's chain, and cleanup expansion proves one close after another on a changing body).
 /// The edges into one block: each source with its argument list.
 type IncomingEdges = Vec<(BlockId, Vec<EdgeArg>)>;
+/// The incoming edge arguments of the blocks an inventory asks for (#687). Cleanup expansion proves one close after
+/// another on a changing body, and most inventories ask for one or two blocks on their state's chain (#889): those
+/// are found by a scan of the terminators that clones only the edges into them. An inventory that asks for more
+/// indexes every block once, as a full index always did.
 struct Edges {
-    /// Per asked block: its incoming edges, or `None` when an unsupported terminator or a block unwind enters it
-    /// (no finite inventory there).
+    /// Per block: its incoming edges, or `None` when an unsupported terminator or a block unwind enters it (no finite
+    /// inventory there).
     into: BTreeMap<BlockId, Option<IncomingEdges>>,
+    /// Whether `into` holds every block; a block it lacks then has no incoming edge.
+    full: bool,
 }
 impl Edges {
+    /// The blocks found one by one before the whole body is indexed.
+    const SCANS: usize = 2;
+
     fn new(_body: &Body, _budget: &mut Budget<'_>) -> Result<Self, LowError> {
-        Ok(Self { into: BTreeMap::new() })
+        Ok(Self { into: BTreeMap::new(), full: false })
     }
-    fn scan(body: &Body, block: BlockId, budget: &mut Budget<'_>) -> Result<Option<IncomingEdges>, LowError>
+    /// One pass over the terminators: the edges into `only`, or into every block when `only` is `None`.
+    fn index(body: &Body, only: Option<BlockId>, budget: &mut Budget<'_>)
+        -> Result<BTreeMap<BlockId, Option<IncomingEdges>>, LowError>
     {
-        let mut edges = vec![];
+        let wanted = |target: BlockId| only.is_none_or(|block| block == target);
+        let mut into: BTreeMap<BlockId, Option<IncomingEdges>> = BTreeMap::new();
+        let mut closed = BTreeSet::new();
         for (id, data) in body.blocks.iter() {
             budget.step(1)?;
-            if data.unwind.as_ref().is_some_and(|unwind| unwind.target.block == block) {
-                return Ok(None);
-            }
-            let mut values = |target: &Target| {
-                if target.block == block {
-                    edges.push((id, target.args.iter().copied().map(EdgeArg::Value).collect()));
+            let mut edge = |target: BlockId, values: &dyn Fn() -> Vec<EdgeArg>| {
+                if wanted(target) && let Some(edges) = into.entry(target).or_insert_with(|| Some(vec![])) {
+                    edges.push((id, values()));
                 }
             };
             match &data.term.kind {
-                TermKind::Br(target) => values(target),
+                TermKind::Br(target) => {
+                    edge(target.block, &|| target.args.iter().copied().map(EdgeArg::Value).collect());
+                }
                 TermKind::Cond { yes, no, .. } => {
-                    values(yes);
-                    values(no);
+                    for target in [yes, no] {
+                        edge(target.block, &|| target.args.iter().copied().map(EdgeArg::Value).collect());
+                    }
                 }
                 TermKind::Switch { cases, default, .. } => {
                     for target in cases.iter().map(|case| &case.target).chain([default]) {
-                        values(target);
+                        edge(target.block, &|| target.args.iter().copied().map(EdgeArg::Value).collect());
                     }
                 }
                 TermKind::InvokeOwn { normal, unwind, .. } => {
-                    for edge in [normal, unwind] {
-                        if edge.block == block {
-                            edges.push((id, edge.args.clone()));
-                        }
-                    }
+                    edge(normal.block, &|| normal.args.clone());
+                    edge(unwind.block, &|| unwind.args.clone());
                 }
                 _ => {
                     // A non-supported predecessor invalidates finite inventory inference.
-                    if graph::successors(body, id).is_ok_and(|targets| targets.contains(&block)) {
-                        return Ok(None);
+                    if let Ok(targets) = graph::successors(body, id) {
+                        budget.step(targets.len())?;
+                        closed.extend(targets.into_iter().filter(|target| wanted(*target)));
                     }
                 }
             }
+            if let Some(unwind) = &data.unwind && wanted(unwind.target.block) {
+                closed.insert(unwind.target.block);
+            }
         }
-        Ok(Some(edges))
+        for block in closed {
+            into.insert(block, None);
+        }
+        if let Some(block) = only {
+            into.entry(block).or_insert_with(|| Some(vec![]));
+        }
+        Ok(into)
     }
     /// The edges into `block` with their argument at `index`, charged by the scan and by the edges it examines.
     fn incoming(&mut self, body: &Body, block: BlockId, index: usize, budget: &mut Budget<'_>)
         -> Result<Vec<(BlockId, EdgeArg)>, LowError>
     {
-        let into = match self.into.get(&block) {
-            Some(into) => into,
-            None => {
-                let scanned = Self::scan(body, block, budget)?;
-                self.into.entry(block).or_insert(scanned)
+        if !self.full && !self.into.contains_key(&block) {
+            if self.into.len() < Self::SCANS {
+                self.into.extend(Self::index(body, Some(block), budget)?);
+            } else {
+                self.into = Self::index(body, None, budget)?;
+                self.full = true;
             }
-        };
-        let Some(edges) = into else {
+        }
+        let Some(Some(edges)) = self.into.get(&block) else {
             return Ok(vec![]);
         };
         budget.step(edges.len())?;
