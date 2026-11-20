@@ -109,59 +109,93 @@ impl<T> Builder<T> {
     }
 }
 
-/// The incoming edge arguments of every block, indexed once per inventory. `incoming` scans the whole body,
-/// and an inventory asks it for each block parameter on its chain (#687).
+/// The edges into one block: each source with its argument list.
+type IncomingEdges = Vec<(BlockId, Vec<EdgeArg>)>;
+/// The incoming edge arguments of the blocks an inventory asks for (#687). Cleanup expansion proves one close after
+/// another on a changing body, and most inventories ask for one or two blocks on their state's chain (#889): those
+/// are found by a scan of the terminators that clones only the edges into them. An inventory that asks for more
+/// indexes every block once, as a full index always did.
 struct Edges {
-    into: BTreeMap<BlockId, Vec<(BlockId, Vec<EdgeArg>)>>,
-    /// Blocks entered by an unsupported terminator or a block unwind: no finite inventory there.
-    closed: BTreeSet<BlockId>,
+    /// Per block: its incoming edges, or `None` when an unsupported terminator or a block unwind enters it (no finite
+    /// inventory there).
+    into: BTreeMap<BlockId, Option<IncomingEdges>>,
+    /// Whether `into` holds every block; a block it lacks then has no incoming edge.
+    full: bool,
 }
 impl Edges {
-    fn new(body: &Body, budget: &mut Budget<'_>) -> Result<Self, LowError> {
-        let mut edges = Self { into: BTreeMap::new(), closed: BTreeSet::new() };
+    /// The blocks found one by one before the whole body is indexed.
+    const SCANS: usize = 2;
+
+    fn new(_body: &Body, _budget: &mut Budget<'_>) -> Result<Self, LowError> {
+        Ok(Self { into: BTreeMap::new(), full: false })
+    }
+    /// One pass over the terminators: the edges into `only`, or into every block when `only` is `None`.
+    fn index(body: &Body, only: Option<BlockId>, budget: &mut Budget<'_>)
+        -> Result<BTreeMap<BlockId, Option<IncomingEdges>>, LowError>
+    {
+        let wanted = |target: BlockId| only.is_none_or(|block| block == target);
+        let mut into: BTreeMap<BlockId, Option<IncomingEdges>> = BTreeMap::new();
+        let mut closed = BTreeSet::new();
         for (id, data) in body.blocks.iter() {
             budget.step(1)?;
-            let mut edge = |target: BlockId, values: Vec<EdgeArg>| {
-                edges.into.entry(target).or_default().push((id, values));
+            let mut edge = |target: BlockId, values: &dyn Fn() -> Vec<EdgeArg>| {
+                if wanted(target) && let Some(edges) = into.entry(target).or_insert_with(|| Some(vec![])) {
+                    edges.push((id, values()));
+                }
             };
             match &data.term.kind {
-                TermKind::Br(target) => edge(target.block, target.args.iter().copied().map(EdgeArg::Value).collect()),
+                TermKind::Br(target) => {
+                    edge(target.block, &|| target.args.iter().copied().map(EdgeArg::Value).collect());
+                }
                 TermKind::Cond { yes, no, .. } => {
                     for target in [yes, no] {
-                        edge(target.block, target.args.iter().copied().map(EdgeArg::Value).collect());
+                        edge(target.block, &|| target.args.iter().copied().map(EdgeArg::Value).collect());
                     }
                 }
                 TermKind::Switch { cases, default, .. } => {
                     for target in cases.iter().map(|case| &case.target).chain([default]) {
-                        edge(target.block, target.args.iter().copied().map(EdgeArg::Value).collect());
+                        edge(target.block, &|| target.args.iter().copied().map(EdgeArg::Value).collect());
                     }
                 }
                 TermKind::InvokeOwn { normal, unwind, .. } => {
-                    edge(normal.block, normal.args.clone());
-                    edge(unwind.block, unwind.args.clone());
+                    edge(normal.block, &|| normal.args.clone());
+                    edge(unwind.block, &|| unwind.args.clone());
                 }
                 _ => {
                     // A non-supported predecessor invalidates finite inventory inference.
                     if let Ok(targets) = graph::successors(body, id) {
                         budget.step(targets.len())?;
-                        edges.closed.extend(targets);
+                        closed.extend(targets.into_iter().filter(|target| wanted(*target)));
                     }
                 }
             }
-            if let Some(unwind) = &data.unwind {
-                edges.closed.insert(unwind.target.block);
+            if let Some(unwind) = &data.unwind && wanted(unwind.target.block) {
+                closed.insert(unwind.target.block);
             }
         }
-        Ok(edges)
+        for block in closed {
+            into.insert(block, None);
+        }
+        if let Some(block) = only {
+            into.entry(block).or_insert_with(|| Some(vec![]));
+        }
+        Ok(into)
     }
-    /// `incoming` from the index, charged by the edges it examines.
-    fn incoming(&self, block: BlockId, index: usize, budget: &mut Budget<'_>)
+    /// The edges into `block` with their argument at `index`, charged by the scan and by the edges it examines.
+    fn incoming(&mut self, body: &Body, block: BlockId, index: usize, budget: &mut Budget<'_>)
         -> Result<Vec<(BlockId, EdgeArg)>, LowError>
     {
-        if self.closed.contains(&block) {
-            return Ok(vec![]);
+        if !self.full && !self.into.contains_key(&block) {
+            if self.into.len() < Self::SCANS {
+                self.into.extend(Self::index(body, Some(block), budget)?);
+            } else {
+                self.into = Self::index(body, None, budget)?;
+                self.full = true;
+            }
         }
-        let edges = self.into.get(&block).map_or(&[][..], Vec::as_slice);
+        let Some(Some(edges)) = self.into.get(&block) else {
+            return Ok(vec![]);
+        };
         budget.step(edges.len())?;
         Ok(edges.iter().filter_map(|(source, args)| args.get(index).map(|arg| (*source, *arg))).collect())
     }
@@ -304,7 +338,7 @@ fn recipe(body: &Body, value: ValueId, fresh: &FreshSummaries, edges: &mut Optio
                 Some(edges) => edges,
                 None => edges.insert(Edges::new(body, budget)?),
             };
-            let args = edges.incoming(block, index as usize, budget)?;
+            let args = edges.incoming(body, block, index as usize, budget)?;
             if args.is_empty() {
                 return Ok(None);
             }
@@ -507,10 +541,25 @@ fn pending_empty(body: &Body, value: ValueId, budget: &mut Budget<'_>) -> Result
     };
     Ok(inventory(body, packet, &BTreeMap::new(), budget)?.is_some_and(|value| value.entries.is_empty()))
 }
+/// The `type.of` instructions of a body, in arena order (#889). Cleanup expansion splits blocks and adds cleanup
+/// operations but never a `type.of`, so the list collected before it serves every close it proves.
+pub(super) fn type_ofs(body: &Body, budget: &mut Budget<'_>) -> Result<Vec<InstId>, LowError> {
+    budget.step(body.insts.len())?;
+    Ok(body.insts.iter().filter(|(_, inst)| matches!(inst.op, Operation::Core(CoreOp::TypeOf { .. })))
+        .map(|(id, _)| id).collect())
+}
+
+/// What every proof of one body reads: the fresh summaries and the body's `type.of` instructions (#889).
+pub(super) struct ProofContext<'a> {
+    pub fresh: &'a FreshSummaries,
+    pub type_ofs: &'a [InstId],
+}
+
 pub(super) fn prove(
     module: &Module, body: &Body, state: ValueId, pending: Option<ValueId>, close: &CleanupClose,
-    fresh: &FreshSummaries, budget: &mut Budget<'_>,
+    context: &ProofContext<'_>, budget: &mut Budget<'_>,
 ) -> Result<Option<CleanupOrderProof>, LowError> {
+    let (fresh, type_ofs) = (context.fresh, context.type_ofs);
     let reserve_empty = match pending {
         None => true,
         Some(value) => pending_empty(body, value, budget)?,
@@ -554,8 +603,9 @@ pub(super) fn prove(
             return Ok(None);
         }
         let mut target = None;
-        for (id, inst) in body.insts.iter() {
+        for &id in type_ofs {
             budget.step(1)?;
+            let inst = body.insts.get(id)?;
             let Operation::Core(CoreOp::TypeOf { ty, descriptor }) = &inst.op else {
                 continue;
             };
@@ -607,6 +657,7 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
         let Some(body) = &function.body else {
             continue;
         };
+        let type_ofs = type_ofs(body, budget)?;
         for (_, plan) in body.cleanup.plans.iter() {
             budget.step(1)?;
             let close = body.cleanup.closes.get(plan.close)?;
@@ -645,7 +696,8 @@ pub(super) fn check(module: &Module, budget: &mut Budget<'_>) -> Result<(), LowE
             if !source_matches {
                 return Err(LowError::InvalidOutput("plan has the wrong owner or packet source".into()));
             }
-            let reconstructed = prove(module, body, *state, *pending, close, &fresh, budget)?;
+            let context = ProofContext { fresh: &fresh, type_ofs: &type_ofs };
+            let reconstructed = prove(module, body, *state, *pending, close, &context, budget)?;
             if reconstructed.as_ref() != Some(proof) {
                 return Err(LowError::InvalidOutput(
                     "direct order, active inventory, suffix or B2 evidence invalid".into(),
@@ -778,10 +830,10 @@ func @main(%c: bool) -> void summary(M0) {{
             let module = crate::text::parse(source).unwrap();
             for (_, function) in module.functions.iter() {
                 let Some(body) = &function.body else { continue };
-                let edges = Edges::new(body, &mut budget(&options)).unwrap();
+                let mut edges = Edges::new(body, &mut budget(&options)).unwrap();
                 for (block, data) in body.blocks.iter() {
                     for index in 0..data.params.len() + 1 {
-                        let indexed = edges.incoming(block, index, &mut budget(&options)).unwrap();
+                        let indexed = edges.incoming(body, block, index, &mut budget(&options)).unwrap();
                         assert_eq!(indexed, incoming(body, block, index), "{block:?} {index}");
                         checked += usize::from(!indexed.is_empty());
                     }

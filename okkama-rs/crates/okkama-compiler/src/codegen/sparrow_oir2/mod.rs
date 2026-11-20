@@ -105,7 +105,12 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
             undef::sink_undef_params(body)?;
         }
     }
-    let module = &sunk;
+    // #889: the composite table is keyed by the module's address; the sunk copy builds its own once, instead of
+    // once per `translate_type`.
+    with_composites(&sunk, || translate_sunk(&sunk, layouts))
+}
+
+fn translate_sunk(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::Program, GenerateError> {
     // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
     // Plain async (#601 V7) is part of SPB 17; process workers are not.
     let profile = |feature: &o::Feature| matches!(feature, o::Feature::Core | o::Feature::Async)
@@ -172,9 +177,15 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
                 // array only when every object it can reach is closed plain data (ARRAY_PLAIN).
                 let view = roles::view_array(module, value.ty)? && matches!(value.facts, o::ValueFacts::Managed { .. });
                 // A builtin capability without destroy (Atomic, Event: P2.4 §4.8) is a reference with deps to own,
-                // and closed plain data to the loader: its runtime cell is outside the value (`ARRAY_PLAIN`).
+                // and closed plain data to the loader: its runtime cell is outside the value (`ARRAY_PLAIN`). So is
+                // an object that holds one and reaches no resource (`TcpRaceAttempt` keeps its Events). The loader
+                // checks that the leaf's graph is closed plain data; a D23 service holder is not admitted here.
                 let capabilities = matches!(value.facts, o::ValueFacts::Managed { .. })
-                    && capability_leaf(module, value.ty)?;
+                    && matches!(leaf, Some(s::Type::Object(id)) if p.objects.get(id as usize).is_some_and(|object| {
+                        !object.layout.has_destroy && !object.layout.may_reach_resource
+                            && !object.layout.may_async_destroy
+                    }))
+                    && !service_holder_leaf(module, value.ty)?;
                 if collection && !plain && !managed && !view && !capabilities {
                     return Err(GenerateError("plain array or map requires own ClosedGraph certificate".into()));
                 }
@@ -1594,17 +1605,14 @@ fn variant_name(name: &str) -> &str {
 #[cfg(test)]
 mod ordering_tests;
 
-/// Whether a collection's leaf (through nested arrays and map values) is a builtin object without a destroy, a
-/// capability such as `Atomic` or `Event` (P2.4 §4.8), and not a D23 service holder.
-fn capability_leaf(module: &o::Module, mut ty: o::TypeId) -> Result<bool, GenerateError> {
+/// Whether a collection's leaf (through nested arrays and map values) is a D23 service holder (a FutureGroup).
+fn service_holder_leaf(module: &o::Module, mut ty: o::TypeId) -> Result<bool, GenerateError> {
     loop {
         match module.types.get(ty)? {
             o::Type::Array(element) => ty = *element,
             o::Type::Map(_, value) => ty = *value,
             o::Type::Object { decl, .. } => {
-                let declaration = module.declarations.get(*decl)?;
-                return Ok(matches!(declaration.kind, o::DeclarationKind::Object { builtin: true, destroy: None, .. })
-                    && !o::catalogue::service_holder(&declaration.name));
+                return Ok(o::catalogue::service_holder(&module.declarations.get(*decl)?.name));
             }
             _ => return Ok(false),
         }

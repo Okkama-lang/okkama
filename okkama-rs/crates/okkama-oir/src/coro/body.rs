@@ -129,13 +129,15 @@ impl Lowering<'_, '_> {
                 let entry = self.bracket(start, continuation, suspension, &mut slots, &mut versions, &mut frames)?;
                 continuations.push(entry);
             }
+            // #889: one use index serves the whole series; a repair inserts no instruction.
+            let uses = repair::Uses::of(self.module, &self.body, self.budget)?;
             repair::repair(self.module, self.function, &mut self.body,
-                &Variable { original: start, versions: frames, implicit: Vec::new() }, self.budget)?;
+                &Variable { original: start, versions: frames, implicit: Vec::new() }, &uses, self.budget)?;
             let mut repaired = BTreeMap::new();
             for (value, versions) in versions {
                 let implicit = self.implicit_sites(&closes, value);
                 let found = repair::repair(self.module, self.function, &mut self.body,
-                    &Variable { original: value, versions, implicit }, self.budget)?;
+                    &Variable { original: value, versions, implicit }, &uses, self.budget)?;
                 repaired.insert(value, found);
             }
             self.recheck_proofs()?;
@@ -1162,11 +1164,13 @@ impl Lowering<'_, '_> {
         let closes: Vec<Site> = self.close_sites()?.into_iter().filter(|(.., closed)| *closed == scope)
             .map(|(site, ..)| site).collect();
         let mut found = BTreeMap::new();
+        let uses = repair::Uses::of(self.module, &self.body, self.budget)?;
         for (token, task, site, versions) in slots {
             let mut implicit = closes.clone();
             implicit.push(Site::Instruction(site));
             let variable = Variable { original: token, versions, implicit };
-            let mut reached = repair::repair(self.module, self.function, &mut self.body, &variable, self.budget)?;
+            let mut reached =
+                repair::repair(self.module, self.function, &mut self.body, &variable, &uses, self.budget)?;
             let slot = reached.remove(&Site::Instruction(site))
                 .ok_or_else(|| self.invalid("a duty's creation has no slot version (D26)"))?;
             match &mut self.body.insts.get_mut(site)?.op {

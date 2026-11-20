@@ -677,6 +677,14 @@ impl Emitter<'_> {
     {
         let linear = |location| matches!(location, L::Service(id) if !matches!(
             self.result.services[id as usize], K::Closed | K::Deps | K::DestroyBorrow));
+        // #889: the block boundaries, the block of each pc and the roots of each pc, indexed once (a scan per block
+        // or edge was quadratic in the function's blocks).
+        let mut starts: Vec<u32> = self.result.blocks.iter().map(|block| block.pc).collect();
+        starts.sort_unstable();
+        let mut block_at = BTreeMap::new();
+        for (&block, &pc) in &self.pcs {
+            block_at.entry(pc).or_insert(block);
+        }
         let mut states = BTreeMap::<u32, BTreeSet<L>>::new();
         let mut incoming = BTreeMap::from([(self.body.entry,
             self.result.params.iter().copied().filter(|&loc| linear(loc)).collect::<BTreeSet<_>>())]);
@@ -732,8 +740,8 @@ impl Emitter<'_> {
                     if linear(loc) { active.remove(&loc); }
                 }
             }
-            let end = self.result.blocks.iter().find(|block| block.pc > pc)
-                .map_or(self.result.code.len(), |block| block.pc as usize);
+            let end = starts.get(starts.partition_point(|&start| start <= pc))
+                .map_or(self.result.code.len(), |&start| start as usize);
             let last = &self.result.code[end - 1];
             let edges = match last {
                 s::Instruction::Br(edge) => vec![edge],
@@ -756,7 +764,7 @@ impl Emitter<'_> {
                 for assignment in &edge.assignments {
                     if linear(assignment.destination) { next.insert(assignment.destination); }
                 }
-                let target = self.pcs.iter().find_map(|(&block, &pc)| (pc == edge.target_pc).then_some(block))
+                let target = block_at.get(&edge.target_pc).copied()
                     .ok_or_else(|| error("Low edge relocation has no block"))?;
                 if let Some(previous) = incoming.get(&target) {
                     if *previous != next { return Err(error("Low service states disagree at join")); }
@@ -768,6 +776,10 @@ impl Emitter<'_> {
         }
         // One Low construction expands to allocate/commit/join/branch. The two temporary packets
         // have no Low SSA name, so their states are recorded at the expansion's own boundaries.
+        let mut roots_at = BTreeMap::<u32, Vec<L>>::new();
+        for root in &self.result.proofs.roots {
+            roots_at.entry(root.pc).or_default().extend(root.locations.iter().copied());
+        }
         for pc in 0..self.result.code.len().saturating_sub(3) {
             if matches!(self.result.code[pc], s::Instruction::Data { op: s::DataOp::ObjNew | s::DataOp::ObjNext, .. })
                 && let s::Instruction::Champ { flow: s::Flow::Next(committed), .. } = &self.result.code[pc + 1]
@@ -787,9 +799,8 @@ impl Emitter<'_> {
                 }
                 after.extend(joined);
                 states.insert(pc as u32 + 3, after.clone());
-                let mut values = self.result.proofs.roots.iter().filter(|root| root.pc == pc as u32)
-                    .flat_map(|root| root.locations.iter().copied()).filter(|loc| matches!(loc, L::Register(_)))
-                    .collect::<BTreeSet<_>>();
+                let mut values = roots_at.get(&(pc as u32)).into_iter().flatten().copied()
+                    .filter(|loc| matches!(loc, L::Register(_))).collect::<BTreeSet<_>>();
                 if let s::Instruction::Data { output: Some(object), .. } = self.result.code[pc] {
                     values.insert(L::Register(object));
                 }
