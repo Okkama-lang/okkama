@@ -7664,6 +7664,98 @@ end
 псевдонимы, возвращаемые ресурсы, независимость преемников, области ветвей и
 ресурсы, собранные через `reduce`.
 
+### Роль может скрывать ресурс
+
+Поле с типом роли хранит ту реализацию, которую ему дали, и владение следует
+за этим значением, а не за типом. `Ledger` выполняют `Account`, которому
+нечего закрывать, и `Vault` с `destroy`. `Record`, собранный со счётом, ничем
+не владеет; собранный с хранилищем владеет хранилищем. Ниже каждая десятая
+запись держит хранилище, и массив записей, который возвращает `records`,
+переходит к вызывающему вместе с тремя хранилищами внутри:
+
+```okkama
+module bible/role_resource v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Any ledger answers its balance; only a vault holds something to close.
+role Ledger {
+    balance() is int;
+}
+
+object Account does Ledger {
+    has amount is int;
+
+    Account(:amount);
+
+    balance() is int { amount; }
+}
+
+object Vault does Ledger {
+    has amount is int;
+
+    Vault(:amount);
+
+    balance() is int { amount * 2; }
+
+    destroy { Stdout().writeln("  vault " + amount.string() + " closed"); }
+}
+
+object Record {
+    has id is int;
+    has ledger is Ledger;
+
+    Record(:id, :ledger);
+
+    total() is int { ledger.balance(); }
+}
+
+object Bank {
+    Bank();
+
+    // Every tenth record holds a vault; the array of records is returned.
+    records(count is int) is @Record {
+        (0..count).map() -> i {
+            let ledger is Ledger = if i % 10 == 0 { Vault(amount: i); } else { Account(amount: i); };
+            Record(id: i, ledger: ledger);
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    {
+        let records = Bank().records(25);
+        let sum = records.reduce(0) -> total, record { total + record.total(); };
+        out.writeln("main owns 25 records, total " + sum.string());
+    }
+    out.writeln("the block ended");
+    0;
+}
+```
+
+Вывод:
+
+```text
+main owns 25 records, total 330
+  vault 20 closed
+  vault 10 closed
+  vault 0 closed
+the block ended
+```
+
+- Хранилища создаются внутри `map` в `Bank.records`. Массив, в который они
+  попадают, — результат этого действия, поэтому они переходят вместе с ним
+  в блок `main`.
+- Пока блок их читает, ничего не закрывается: `reduce` заимствует каждую
+  запись.
+- Когда блок кончается, три хранилища закрываются, от нового к старому.
+  Остальные двадцать две записи держат счета, и с ними ничего не происходит.
+
+Роль не делает свои значения ресурсами: каждое значение решает само. Код,
+который держит `Ledger`, читается одинаково, есть ли за ним что закрывать или
+нет, и там, где ничего не удерживается, ничего и не закрывается.
+
 ## 11.6 Ресурсы в коллекциях и замыканиях
 
 Контейнеры не владеют, а несут. Словарь дескрипторов, массив соединений и

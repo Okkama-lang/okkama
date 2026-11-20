@@ -7573,6 +7573,97 @@ The conformance suite pins the same rules: alias borrowing, returned
 resources, independent successors, branch scopes and resources gathered by
 `reduce`.
 
+### A role can hide a resource
+
+A field typed by a role holds whichever implementation it was given, and
+ownership follows that value, not the type. `Ledger` is done by `Account`,
+which has nothing to close, and by `Vault`, which has a `destroy`. A `Record`
+built with an account owns nothing to release; one built with a vault owns
+the vault. Every tenth record below holds a vault, and the array of records
+that `records` returns moves to the caller with the three vaults in it:
+
+```okkama
+module bible/role_resource v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Any ledger answers its balance; only a vault holds something to close.
+role Ledger {
+    balance() is int;
+}
+
+object Account does Ledger {
+    has amount is int;
+
+    Account(:amount);
+
+    balance() is int { amount; }
+}
+
+object Vault does Ledger {
+    has amount is int;
+
+    Vault(:amount);
+
+    balance() is int { amount * 2; }
+
+    destroy { Stdout().writeln("  vault " + amount.string() + " closed"); }
+}
+
+object Record {
+    has id is int;
+    has ledger is Ledger;
+
+    Record(:id, :ledger);
+
+    total() is int { ledger.balance(); }
+}
+
+object Bank {
+    Bank();
+
+    // Every tenth record holds a vault; the array of records is returned.
+    records(count is int) is @Record {
+        (0..count).map() -> i {
+            let ledger is Ledger = if i % 10 == 0 { Vault(amount: i); } else { Account(amount: i); };
+            Record(id: i, ledger: ledger);
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    {
+        let records = Bank().records(25);
+        let sum = records.reduce(0) -> total, record { total + record.total(); };
+        out.writeln("main owns 25 records, total " + sum.string());
+    }
+    out.writeln("the block ended");
+    0;
+}
+```
+
+Output:
+
+```text
+main owns 25 records, total 330
+  vault 20 closed
+  vault 10 closed
+  vault 0 closed
+the block ended
+```
+
+- The vaults are made inside a `map` in `Bank.records`. The array they end
+  up in is that action's result, so they move to the block in `main` with
+  it.
+- Nothing closes while the block reads them: `reduce` borrows every record.
+- When the block ends, the three vaults close, newest first. The other
+  twenty-two records hold accounts, and nothing happens to them.
+
+A role does not make its values resources; each value decides for itself.
+Code that holds a `Ledger` reads the same whether the ledger behind it has
+something to close or not, and nothing is closed where nothing is held.
+
 ## 11.6 Resources in collections and closures
 
 Containers do not own; they carry. A map of handles, an array of

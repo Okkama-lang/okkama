@@ -189,6 +189,28 @@ The conformance suite pins the same rules: alias borrowing, returned
 resources, independent successors, branch scopes and resources gathered by
 `reduce`.
 
+### A role can hide a resource
+
+A field typed by a role holds whichever implementation it was given, and
+ownership follows that value, not the type. `Ledger` is done by `Account`,
+which has nothing to close, and by `Vault`, which has a `destroy`. A `Record`
+built with an account owns nothing to release; one built with a vault owns
+the vault. Every tenth record below holds a vault, and the array of records
+that `records` returns moves to the caller with the three vaults in it:
+
+{{example:11-role-resource}}
+
+- The vaults are made inside a `map` in `Bank.records`. The array they end
+  up in is that action's result, so they move to the block in `main` with
+  it.
+- Nothing closes while the block reads them: `reduce` borrows every record.
+- When the block ends, the three vaults close, newest first. The other
+  twenty-two records hold accounts, and nothing happens to them.
+
+A role does not make its values resources; each value decides for itself.
+Code that holds a `Ledger` reads the same whether the ledger behind it has
+something to close or not, and nothing is closed where nothing is held.
+
 ## 11.6 Resources in collections and closures
 
 Containers do not own; they carry. A map of handles, an array of

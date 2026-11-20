@@ -141,8 +141,19 @@ def stats():
         print(f"{language} total {size} chars, {size / PAGE:.0f} pages")
 
 
+def engine_flag():
+    """`--engine sparrow` for a toolchain that still takes it (0.5.8 defaulted to IR); 0.6.0 has one engine and
+    no such option (owner, 2026-11-20)."""
+    try:
+        help_text = subprocess.run([OKKAMA, "run", "--help"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return ["--engine", "sparrow"] if "--engine" in help_text else []
+
+
 def check():
     failures = 0
+    flag = engine_flag()
     examples = os.path.join(HERE, "examples")
     for name in sorted(os.listdir(examples)):
         if not name.endswith(".ok"):
@@ -157,7 +168,7 @@ def check():
                     "--cpu-seconds", "30", "--timeout", "60", "--memory-mb", "1024", "--writable", examples, "--"]
             # A `-tests` example is a test suite: its report is the output.
             tests = ["-t"] if stem.endswith("-tests") else []
-            p = subprocess.run(cage + [OKKAMA, "run", *tests, "--engine", engine, name], cwd=examples,
+            p = subprocess.run(cage + [OKKAMA, "run", *tests, *flag, name], cwd=examples,
                                capture_output=True, text=True, timeout=120,
                                env={**os.environ, "OKKAMA_STDLIB_DIR": STDLIB, "OKKAMA_TRACE": "off"})
             # A rejected example is shown with the compiler's diagnostic; a

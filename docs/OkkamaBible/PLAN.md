@@ -113,9 +113,9 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
   cannot be a field); `15-library-tests` and 15.3/15.5 rewritten, and the
   example passes on 0.5.8 (same pattern as the 0.6.0 conformance case
   fakes.typed-state); recheck with the 0.6.0 toolchain.
-- Since 2026-11-15 `build.py --check` runs every example on Sparrow only,
-  with `--engine sparrow`, which both the 0.5.8 and the 0.6.0 toolchains
-  accept. The IR engine was removed in 0.6.0 (#584, owner's decision on
+- Since 2026-11-15 `build.py --check` runs every example on Sparrow only.
+  Since 2026-11-20 it passes `--engine sparrow` only to a toolchain that
+  knows the option (0.5.8, whose default was IR); 0.6.0 has none. The IR engine was removed in 0.6.0 (#584, owner's decision on
   #574), and the JVM backend too (#585).
 
 ## Notes for unwritten chapters
@@ -167,6 +167,14 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
   needs no group (compare Trio nurseries, Kotlin structured concurrency).
 
 ## Progress
+
+- 2026-11-20: 11.5 gains "A role can hide a resource" (`11-role-resource`): a role-typed field holds a
+  resource or a plain value, and ownership follows the value; the records' array moves with its vaults to the
+  caller. Checked on 0.5.8 and tree Tomato with Tweed's #905. `build.py --check` passes `--engine sparrow`
+  only to a toolchain that knows it (0.6.0 has one engine and no such option). **Open:** 20.9's claim that a
+  child started as a temporary keeps what it borrows was true on Champ (#882), which is gone; on Tomato a
+  temporary child reads a lent resource after its destroy (#914). Fix #914 before the release, or revise 20.9.
+  Chapter 23 no longer shows `--target sparrow` (one engine, one target).
 
 - 2026-11-17, later: chapter 20's std coordination tools get examples
   (coverage: every std family shown on a task). 20.7 adds `Raced` and
