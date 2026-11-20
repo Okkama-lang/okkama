@@ -563,3 +563,10 @@ To add for the floor:
 - the same suite over PostgresStore in CI (a role contract suite), only if the book's check gets a database;
 - a session/login walkthrough with web/session (blocked: WebTestClient sends no headers on GET/DELETE and keeps no cookies, #650);
 - the server-perf notes, only with measured numbers.
+
+- 2026-11-20: 20.9 "What a future keeps, and for how long" (`20-keeps`): a
+  returned future borrows its parameter and leaves it with the caller (§6.3c,
+  #862, #866); a child that outlives its starter's scope keeps what it borrows
+  until the program ends (#881), at the price of holding it until shutdown;
+  the uncovered cases name #882. The expected output is tree Tomato's and
+  Champ's (0.6.0): release 0.5.8 destroys `lent` before the child reads it.

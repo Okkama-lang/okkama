@@ -551,6 +551,43 @@ synchronous action cannot await, so it cannot own an object whose cleanup
 suspends: `Lease has an async destroy; own it in an async action`. The rule
 keeps "every cleanup has run" true at the end of every scope.
 
+### What a future keeps, and for how long
+
+A future holds the values it was given in two ways. A value it *takes*, such as
+a fresh object passed straight into an async action, belongs to the task: the
+body owns it and destroys it when the body ends. A value it *borrows*, a
+binding or a parameter of whoever created the future, stays with its owner.
+The future only reads it, so the owner must not destroy it while the future
+can still run.
+
+Two rules keep that true without anyone writing cleanup by hand:
+
+{{example:20-keeps}}
+
+- `Desk.start(lamp)` returns a future that borrows its parameter. The lamp
+  goes back to the caller beside the future, and the caller's scope destroys
+  it when it closes, after the future has been awaited (`off: desk` follows
+  `read 4`). A function can return such a future further in the same way: what
+  it borrows travels with it to whoever receives it.
+- `Desk.lend` starts a child in its caller's group and returns while the
+  child still waits on the gate. The child outlives `lend`'s scope, so
+  everything of `lend` the child can still use goes with it: `lent` is not
+  destroyed when `lend` ends. It is destroyed when the program ends, after
+  `main ends`, by the same owner that settles every task left running at the
+  end.
+
+The second rule has a price. What a running child borrows is kept until the
+program ends, not until the child finishes, because two children can borrow
+the same value. A server that starts one detached child per request and lets
+each borrow a large value keeps all of them alive. Wait for the children
+(`await group.wait()`, a `FutureScope`) when that matters.
+
+Two cases are not covered yet. A child created in the same expression that
+starts it (`group.start(Reader().later(lamp, gate))`), and a child that
+borrows from a scope enclosing the one it outlives, can still see the value
+destroyed under it (issue #882). Bind the child first, as `lend` does, and
+start it from the scope that owns what it reads.
+
 ## 20.10 Streams: `for await`
 
 A source that produces values one at a time, each after a wait, is consumed

@@ -17539,6 +17539,112 @@ main: job -1
 destroy; own it in an async action`. Правило сохраняет истинным «вся очистка
 выполнена» в конце каждой области.
 
+### Что Future держит и как долго
+
+Future держит переданные ему значения двумя способами. Значение, которое он
+*забирает* (например, свежий объект, переданный прямо в асинхронное действие),
+принадлежит задаче: тело владеет им и уничтожает его, когда заканчивается.
+Значение, которое он *заимствует* (привязку или параметр того, кто создал
+Future), остаётся у владельца. Future его только читает, поэтому владелец не
+должен уничтожить его, пока Future ещё может выполняться.
+
+Два правила обеспечивают это без ручной очистки:
+
+```okkama
+module bible/keeps v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+
+object Lamp {
+    has name is string;
+
+    Lamp(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("off: " + name); }
+}
+
+object Reader {
+    Reader();
+
+    async read(lamp is Lamp) is int { lamp.label().length(); }
+
+    async later(lamp is Lamp, gate is Event) is int {
+        await gate.wait();
+        Stdout().writeln("reads " + lamp.label());
+        1;
+    }
+}
+
+object Desk {
+    Desk();
+
+    // The returned future borrows `lamp`: the lamp stays with the caller.
+    start(lamp is Lamp) is Future<int> { Reader().read(lamp); }
+
+    // A child started in the caller's group keeps what it borrows.
+    async lend(group is FutureGroup<int>, gate is Event) is void {
+        let lamp = Lamp(name: "lent");
+        let child = Reader().later(lamp, gate);
+        group.start(child);
+        Stdout().writeln("lend ends");
+    }
+}
+
+async main() is int {
+    {
+        let desk = Lamp(name: "desk");
+        let reading = Desk().start(desk);
+        Stdout().writeln("read " + (await reading).string());
+    }
+    let gate = Event();
+    let group is FutureGroup<int> = FutureGroup();
+    await Desk().lend(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main ends");
+    0;
+}
+```
+
+Вывод:
+
+```text
+read 4
+off: desk
+lend ends
+reads lent
+main ends
+off: lent
+```
+
+- `Desk.start(lamp)` возвращает Future, который заимствует свой параметр. Лампа
+  возвращается вызывающему рядом с Future, и область вызывающего уничтожает её
+  при закрытии, после того как Future дождались (`off: desk` идёт после
+  `read 4`). Функция может так же вернуть такой Future дальше: то, что он
+  заимствует, уходит вместе с ним к получателю.
+- `Desk.lend` запускает ребёнка в группе вызывающего и возвращается, пока
+  ребёнок ещё ждёт открытия ворот. Ребёнок переживает область `lend`, поэтому
+  всё, что `lend` владеет и что ребёнок ещё может использовать, уходит вместе
+  с ним: `lent` не уничтожается при выходе из `lend`. Он уничтожается в конце
+  программы, после `main ends`, тем же владельцем, который подводит итог всем
+  задачам, оставшимся к концу работающими.
+
+У второго правила есть цена. То, что заимствует работающий ребёнок,
+удерживается до конца программы, а не до конца ребёнка: одно значение могут
+заимствовать два ребёнка. Сервер, который на каждый запрос запускает
+отцепленного ребёнка и даёт ему заимствовать большое значение, держит их все.
+Если это важно, дождитесь детей (`await group.wait()`, `FutureScope`).
+
+Два случая пока не покрыты. Ребёнок, созданный в том же выражении, которое
+его запускает (`group.start(Reader().later(lamp, gate))`), и ребёнок,
+заимствующий у области, объемлющей ту, который он переживает, всё ещё могут
+увидеть значение уничтоженным (issue #882). Сначала привяжите ребёнка, как
+`lend`, и запускайте его из области, которой принадлежит то, что он читает.
+
 ## 20.10 Потоки значений: `for await`
 
 Источник, который выдаёт значения по одному, каждое после ожидания,

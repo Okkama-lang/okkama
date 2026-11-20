@@ -1,0 +1,57 @@
+module bible/keeps v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+
+object Lamp {
+    has name is string;
+
+    Lamp(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("off: " + name); }
+}
+
+object Reader {
+    Reader();
+
+    async read(lamp is Lamp) is int { lamp.label().length(); }
+
+    async later(lamp is Lamp, gate is Event) is int {
+        await gate.wait();
+        Stdout().writeln("reads " + lamp.label());
+        1;
+    }
+}
+
+object Desk {
+    Desk();
+
+    // The returned future borrows `lamp`: the lamp stays with the caller.
+    start(lamp is Lamp) is Future<int> { Reader().read(lamp); }
+
+    // A child started in the caller's group keeps what it borrows.
+    async lend(group is FutureGroup<int>, gate is Event) is void {
+        let lamp = Lamp(name: "lent");
+        let child = Reader().later(lamp, gate);
+        group.start(child);
+        Stdout().writeln("lend ends");
+    }
+}
+
+async main() is int {
+    {
+        let desk = Lamp(name: "desk");
+        let reading = Desk().start(desk);
+        Stdout().writeln("read " + (await reading).string());
+    }
+    let gate = Event();
+    let group is FutureGroup<int> = FutureGroup();
+    await Desk().lend(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main ends");
+    0;
+}
