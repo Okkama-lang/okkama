@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The t/ suite runs on Champ and in the Wave CI (#894).** `tools/t/run.py` has a `champ` configuration (a
+  champ-abi build given by `--champ-okkama`, `OKKAMA_PIPELINE=oir2`) and groups failing files by reason. The Wave
+  CI's conformance job runs t/'s 50 668 checks on the binary it built: on Sparrow a failure fails the job, on Champ
+  the failures are ranked in the summary.
 - **`rat.numerator()` and `rat.denominator()` return `int` (#743, owner's
   decision).** They returned decimal strings because a part could exceed the
   old `int`; since `int` is exact and unbounded (#189) every part fits. The

@@ -1,6 +1,6 @@
 # Heavy runs of the 0.6.0 Rebuild on GitHub's runners instead of the owner's
 # machine (LLM-GUIDE §1.1): the crate suites of a wave branch, and conformance
-# on Tomato and Champ with the ranking of Champ's blockers. Run it by pushing a
+# and the t/ suite on Tomato and Champ with the ranking of Champ's blockers. Run it by pushing a
 # branch named wave/<name> at the commit to test (both suites), or, once this
 # file is on the default branch, by dispatch:
 #   gh workflow run wave.yml -f ref=<branch> -f suites=tests|conformance|both
@@ -122,6 +122,31 @@ jobs:
         with:
           name: conformance-${{ matrix.engine }}
           path: out/${{ matrix.engine }}/
+      # The t/ suite (#245, ~50k generated checks) on the binary conformance built: on Sparrow a failure fails
+      # the job; on Champ the failures are data, ranked by reason in the summary (owner, 2026-11-20).
+      - name: t/ suite
+        run: |
+          mkdir -p out/t
+          if [ "${{ matrix.engine }}" = champ ]; then
+            args="--configs champ --champ-okkama conformance/adapters/rust/.target/engine-champ/gate/okkama"
+          else
+            args="--configs sparrow --okkama conformance/adapters/rust/.target/debug/okkama"
+          fi
+          status=0
+          python3 tools/t/run.py $args --jobs 4 > out/t/t-${{ matrix.engine }}.txt || status=$?
+          {
+            echo "### t/ on ${{ matrix.engine }}"
+            echo '```'
+            sed -n '/^Failures by reason:/,/^$/p' out/t/t-${{ matrix.engine }}.txt | head -60
+            tail -2 out/t/t-${{ matrix.engine }}.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "${{ matrix.engine }}" = champ ] || exit $status
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: t-${{ matrix.engine }}
+          path: out/t/
 
   blockers:
     name: Champ blockers
