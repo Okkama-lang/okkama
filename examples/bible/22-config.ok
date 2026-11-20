@@ -1,0 +1,49 @@
+module bible/config v1.0.0;
+
+// Settings from a file and the environment, the later layer winning, each
+// value knowing where it came from; and a logger whose destination is the
+// program's own object, behind a filter that hides the password field.
+import "toml/parse" take ParsedToml;
+import "config/source" take LayeredSettings, SettingSource, SettingSourceKind;
+import "config/document" take TomlSettings;
+import "config/environment" take EnvironmentSettings, EnvironmentBinding;
+import "config/key" take SettingKey;
+import "os/environment" take Environment;
+import "logging/logger" take Logger;
+import "logging/level" take LogLevel, LogLevelName;
+import "logging/name" take LogName;
+import "logging/record" take LogRecord;
+import "logging/write" take LogWriting;
+import "logging/redact" take RedactedLogs;
+import "json" take JsonField;
+import "io/stdout" take Stdout;
+
+// A destination that prints the level, the logger's name, the message and
+// the fields, and nothing that changes from run to run.
+object Lines does LogWriting {
+    Lines();
+    write(origin is LogRecord) is void {
+        Stdout().writeln(LogLevelName(origin::Entry::level).string() + " " + origin.context().name().string() + ": "
+            + origin::Entry::message + " " + origin.context().fields().values().string());
+    }
+    enabled(name is LogName, level is LogLevel) is bool { true; }
+}
+
+main() is int {
+    let out = Stdout();
+    let file = TomlSettings(document: ParsedToml("[server]\nport = 8080\nhost = \"localhost\"\n").root(),
+        source: SettingSource(kind: SettingSourceKind.document, name: "app.toml"));
+    let env = EnvironmentSettings(environment: Environment(values: ["APP_PORT": "9090"]),
+        names: [EnvironmentBinding(name: "APP_PORT", key: SettingKey("server", "port"))],
+        source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
+    let settings = LayeredSettings(file, env);
+    out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
+        + (settings.source("server.port")?? .some(source): source::Source::name !! .none: "nowhere"));
+    out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
+        + (settings.bool("server.debug") else false).string());
+    let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
+        level: LogLevel.info);
+    log.debug("not written, not even built");
+    log.info("login", JsonField("user", "ann"), JsonField("password", "hunter2"));
+    0;
+}

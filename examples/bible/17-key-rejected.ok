@@ -1,0 +1,17 @@
+module bible/key v1.0.0;
+
+// T is a map key here, so every specialization must be a key type.
+object Tally<T> {
+    has counts is %T:int;
+    Tally() {
+        let empty is %T:int = [:];
+        counts = empty;
+    }
+    size() is int { counts.size(); }
+}
+
+main() is int {
+    let words is Tally<string> = Tally();
+    let rows is Tally<@int> = Tally();
+    words.size() + rows.size();
+}

@@ -1,0 +1,25 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let big = 9223372036854775807 + i;
+        self.run(i + 1, n, acc + ((big * 3 - big) % 1000) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

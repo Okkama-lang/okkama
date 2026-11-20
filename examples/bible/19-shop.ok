@@ -1,0 +1,16 @@
+module bible/shop v1.0.0;
+
+// Three forms of import: names taken as bare bindings, a namespace, an alias.
+import "io/stdout" take Stdout;
+import "shop/money" take Money, CURRENCY;
+import "shop/basket";
+import "shop/money" as cash;
+
+main() is int {
+    let cart = basket.Basket(prices: [Money(cents: 1250)]).added(cash.Money(cents: 399));
+    let total is Money = cart.total();
+    Stdout().writeln(total.string());
+    Stdout().writeln(total.percent(20).string() + " of VAT in " + CURRENCY);
+    Stdout().writeln(cash.CENTS.string() + " cents to the " + cash.CURRENCY);
+    0;
+}

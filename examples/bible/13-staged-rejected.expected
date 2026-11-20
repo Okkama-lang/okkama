@@ -1,0 +1,1 @@
+13-staged-rejected.ok:7:9: semantic error: `^field = value` is allowed only in successor actions

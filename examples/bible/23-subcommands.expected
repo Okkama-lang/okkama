@@ -1,0 +1,5 @@
+count
+top, n = 5
+top, n = 3
+refused: CliFailure.detailed(0, "", "child command required")
+refused: CliFailure.detailed(0, "sort", "unknown child command")

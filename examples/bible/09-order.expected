@@ -1,0 +1,15 @@
+arguments, left to right:
+  a
+  b
+  c
+operands, left to right:
+  x
+  y
+&& stops at false:
+  left
+|| stops at true:
+  left
+?? !! evaluates one branch:
+  condition
+  then
+6 42 false true 1

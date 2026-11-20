@@ -1,0 +1,65 @@
+module bible/owners v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Tag {
+    has name is string;
+
+    Tag(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("  destroy " + name); }
+}
+
+object Desk {
+    Desk();
+
+    // A parameter borrows: the caller's tag outlives this action.
+    look(tag is Tag) is int { tag.label().length(); }
+
+    // A fresh argument is adopted, and destroyed when the action returns.
+    adopt(tag is Tag) is int { tag.label().length(); }
+
+    // A returned object moves to the caller.
+    make(name is string) is Tag { Tag(name: name); }
+}
+
+main() is int {
+    let out = Stdout();
+    let desk = Desk();
+    out.writeln("alias");
+    {
+        let a = Tag(name: "a");
+        let alias = a;
+        out.writeln("  " + alias.label() + " has one owner");
+    }
+    out.writeln("parameter");
+    let kept = Tag(name: "kept");
+    desk.look(kept);
+    out.writeln("  still here: " + kept.label());
+    out.writeln("fresh argument");
+    desk.adopt(Tag(name: "adopted"));
+    out.writeln("returned");
+    {
+        let made = desk.make("made");
+        out.writeln("  main owns " + made.label());
+    }
+    out.writeln("aggregate");
+    {
+        let tags = [Tag(name: "first"), Tag(name: "second")];
+        out.writeln("  " + tags.size().string() + " in the array");
+    }
+    out.writeln("loop");
+    for ["x", "y"] -> name {
+        let t = Tag(name: name);
+        out.writeln("  iteration " + t.label());
+    }
+    out.writeln("branch");
+    if kept.label().length() > 0 {
+        let b = Tag(name: "branch");
+        out.writeln("  inside " + b.label());
+    }
+    out.writeln("end");
+    0;
+}

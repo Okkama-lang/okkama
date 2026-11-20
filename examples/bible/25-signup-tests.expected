@@ -1,0 +1,5 @@
+=== RUN   every member gets one welcome mail
+--- PASS: every member gets one welcome mail
+=== RUN   the first signup is untouched by its successors
+--- PASS: the first signup is untouched by its successors
+PASS

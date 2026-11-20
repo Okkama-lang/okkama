@@ -1,0 +1,4 @@
+customer: cancel
+delivery: van returned to the depot
+order: closed
+outcome: cancelled; cancelled: true

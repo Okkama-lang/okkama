@@ -1,0 +1,7 @@
+=== RUN   digit and rest rebuild the amount
+--- PASS: digit and rest rebuild the amount
+=== RUN   rest is never negative
+--- FAIL: rest is never negative
+    property failed: seed=42 case=1 size=5 value=-1 false condition
+FAIL
+exit 1

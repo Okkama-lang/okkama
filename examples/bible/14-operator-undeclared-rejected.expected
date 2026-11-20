@@ -1,0 +1,1 @@
+14-operator-undeclared-rejected.ok:11:16: semantic error: Operator + cannot be applied to Weight and Weight: Weight does not do Adding

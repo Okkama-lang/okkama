@@ -1,0 +1,2 @@
+main: done, without awaiting the payment
+exit 1

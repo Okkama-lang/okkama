@@ -1,0 +1,55 @@
+module bible/tally_commands v1.0.0;
+
+import "io/stdout" take Stdout;
+import "cli/command" take CliCommand, Option, Flag, CliFailure;
+
+// Two subcommands under one root. Each declares only what it takes.
+object Commands {
+    has count is CliCommand;
+    has top is CliCommand;
+    has root is CliCommand;
+
+    Commands() {
+        let counting = CliCommand(name: "count", summary: "Count lines and words");
+        let ranking = CliCommand(
+            name: "top",
+            summary: "List the most frequent words",
+            options: [Option(name: "n", value: "N", help: "How many words")],
+        );
+        count = counting;
+        top = ranking;
+        root = CliCommand(
+            name: "tally",
+            flags: [Flag(name: "help", short: "h", help: "Show this help")],
+            commands: [counting, ranking],
+        );
+    }
+
+    // What the arguments select, as text the example can print.
+    selected(arguments is @string) is string {
+        try {
+            let call = root.invocation(arguments);
+            if call.command() == top {
+                "top, n = " + (call.int("n") else 3).string();
+            } else if call.command() == count {
+                "count";
+            } else {
+                "root only, path " + call.path().join(" ");
+            }
+        }
+        catch e is CliFailure {
+            "refused: " + e.text();
+        };
+    }
+}
+
+main() is int {
+    let commands = Commands();
+    let out = Stdout();
+    out.writeln(commands.selected(["count"]));
+    out.writeln(commands.selected(["top", "--n", "5"]));
+    out.writeln(commands.selected(["top"]));
+    out.writeln(commands.selected([]));
+    out.writeln(commands.selected(["sort"]));
+    0;
+}

@@ -1,0 +1,25 @@
+module bible/exact v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Factorial {
+    Factorial() {}
+    of(n is int) is int {
+        if n <= 1 { 1; } else { n * self.of(n - 1); }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let largest = 9223372036854775807;                 // 2^63 - 1
+    out.writeln("2^63 - 1 + 1 = " + (largest + 1).string());
+    out.writeln("30! = " + Factorial().of(30).string());
+    out.writeln("1/3 + 2/3 = " + (1 / 3 + 2 / 3).string());
+    out.writeln("1/10 + 2/10 = " + (1 / 10 + 2 / 10).string());
+    out.writeln("0.1 + 0.2 = " + (0.1 + 0.2).string());
+    out.writeln("-7 % 3 = " + (-7 % 3).string());
+    out.writeln("int(-3.9) = " + int(-3.9).string());
+    out.writeln("0.125 as rat = " + 0.125.rat().string());
+    out.writeln("1/3 as float = " + (1 / 3).float().string());
+    0;
+}

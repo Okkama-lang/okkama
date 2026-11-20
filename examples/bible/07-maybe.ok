@@ -1,0 +1,46 @@
+module bible/maybe v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Missing is Error = (user(id is int));
+
+object Directory {
+    has names is %int:string;
+    Directory(:names);
+
+    // Absence is part of the answer, and the type says so.
+    find(id is int) is Maybe<string> {
+        if names.has(id) { Maybe.some(names[id]); } else { Maybe.none; }
+    }
+
+    // The caller who cannot continue without a user gets a typed error.
+    require(id is int) is string {
+        confirm names.has(id) else throw Missing.user(id);
+        names[id];
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let users = Directory(names: [1: "Ada", 2: "Grace"]);
+
+    // 1. A fallback with else.
+    out.writeln("user 3 is " + (users.find(3) else "nobody"));
+
+    // 2. A compact choice over the two cases.
+    let greeting = users.find(1)
+        ?? .some(name): "hello, " + name
+        !! .none: "hello, stranger";
+    out.writeln(greeting);
+
+    // 3. match, when each case needs more than an expression.
+    match users.find(2) {
+        case Maybe.some(name) { out.writeln(name + " is registered"); }
+        case Maybe.none { out.writeln("not registered"); }
+    }
+
+    // 4. try? turns a typed error into absence.
+    let found = try? users.require(4);
+    out.writeln("require(4) gave " + (found ?? .some(name): name !! .none: "none"));
+    0;
+}

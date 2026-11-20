@@ -1,0 +1,35 @@
+module bible/semaphore v1.0.0;
+
+// A Semaphore hands out at most n permits: the third task waits until one
+// of the first two closes its permit.
+import "async/semaphore" take Semaphore;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object Job {
+    has name is string;
+    has slots is Semaphore;
+    has gate is Event;
+    Job(:name, :slots, :gate);
+    async run() is void {
+        let permit = await slots.permit();
+        defer permit.close();
+        Stdout().writeln(name + " runs, free " + slots.permits().string());
+        await gate.wait();
+    }
+}
+
+async main() is int {
+    let slots = Semaphore(permits: 2);
+    let gate = Event();
+    let a = spawn Job(name: "a", slots: slots, gate: gate).run();
+    let b = spawn Job(name: "b", slots: slots, gate: gate).run();
+    let c = spawn Job(name: "c", slots: slots, gate: gate).run();
+    Stdout().writeln("waiting, free " + slots.permits().string());
+    gate.set();
+    await a;
+    await b;
+    await c;
+    Stdout().writeln("done, free " + slots.permits().string());
+    0;
+}

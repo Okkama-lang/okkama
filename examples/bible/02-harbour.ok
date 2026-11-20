@@ -1,0 +1,76 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A ship, as Simula saw it: something that acts over time.
+object Ship {
+    has name is string;
+    has cargo is int;
+    Ship(:name, :cargo);
+
+    // The crane lifts up to `count` containers; what remains is the ship's next state.
+    unloaded(count is int) is ^Ship {
+        ^cargo = if count < cargo { cargo - count; } else { 0; };
+    }
+    empty() is bool { cargo == 0; }
+    called() is string { name; }
+}
+
+// A ship due at a given hour.
+object Arrival {
+    has hour is int;
+    has ship is Ship;
+    Arrival(:hour, :ship);
+    due(at is int) is bool { hour == at; }
+    vessel() is Ship { ship; }
+}
+
+// One berth, one crane. The first ship in the queue is at the berth.
+object Harbour {
+    has queue is @Ship;
+    has rate is int;
+    has hour is int;
+    has log is @string;
+    Harbour(:rate) { self.queue = []; self.hour = 0; self.log = []; }
+
+    arrived(ship is Ship) is ^Harbour {
+        ^queue = queue + [ship];
+        ^log = log + ["h" + hour.string() + " " + ship.called() + " arrives"];
+    }
+
+    // One hour passes: the crane works on the ship at the berth; an empty ship sails.
+    worked() is ^Harbour {
+        ^hour = hour + 1;
+        if queue.size() > 0 {
+            let ship = queue.first().unloaded(rate);
+            if ship.empty() {
+                ^queue = queue.drop(1);
+                ^log = log + ["h" + (hour + 1).string() + " " + ship.called() + " sails"];
+            } else {
+                ^queue = queue.replaced(0, ship);
+            }
+        }
+    }
+    waiting() is int { queue.size(); }
+    journal() is @string { log; }
+}
+
+main() is int {
+    let out = Stdout();
+    let arrivals = [
+        Arrival(hour: 0, ship: Ship(name: "Tanker", cargo: 7)),
+        Arrival(hour: 1, ship: Ship(name: "Ferry", cargo: 2)),
+        Arrival(hour: 1, ship: Ship(name: "Collier", cargo: 4))
+    ];
+    let start = Harbour(rate: 3);
+    // Every hour is a new Harbour, so the whole history is an array of values.
+    let history = (0..8).reduce([start]) -> states, hour {
+        let now = arrivals.filter() -> a { a.due(hour); }
+            .reduce(states.last()) -> h, a { h.arrived(a.vessel()); };
+        states + [now.worked()];
+    };
+    out.writeln(history.last().journal().join("\n"));
+    out.writeln("waiting after hour 2: " + history[2].waiting().string());
+    out.writeln("waiting after hour 8: " + history[8].waiting().string());
+    0;
+}

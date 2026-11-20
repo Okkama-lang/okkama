@@ -1,0 +1,5 @@
+module bible/rules v1.0.0;
+main() is int {
+    let name = null;
+    0;
+}

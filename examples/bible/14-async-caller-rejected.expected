@@ -1,0 +1,1 @@
+14-async-caller-rejected.ok:19:34: semantic error: await is available only inside an async action

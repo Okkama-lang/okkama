@@ -1,0 +1,20 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    // Ten dimes as floats and as rats.
+    let floats = (1..=10).reduce(0.0) -> sum, n { sum + 0.1; };
+    let rats = (1..=10).reduce(0.rat()) -> sum, n { sum + 1.rat() / 10.rat(); };
+    out.writeln(floats.string() + " " + (floats == 1.0).string());
+    out.writeln(rats.string() + " " + (rats == 1.rat()).string());
+    // A float comparison needs a tolerance; an exact one does not.
+    out.writeln(((floats - 1.0).abs() < 0.000000001).string());
+    // Monthly interest of 1/12 percent on 1000, twelve times, exactly.
+    let balance = (1..=12).reduce(1000.rat()) -> total, month { total + total / 1200.rat(); };
+    out.writeln(balance.float().string());
+    // Integers never overflow; they grow.
+    out.writeln((2).pow(70).string());
+    0;
+}

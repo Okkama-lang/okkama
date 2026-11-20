@@ -1,0 +1,26 @@
+module bible/ids v1.0.0;
+
+// Identifiers and media types: a UUID is read, made from a name, or drawn
+// from an explicit source of randomness; a media type is read into parts,
+// and a file name is mapped to one by a table the program chooses.
+import "uuid/value" take UuidText;
+import "uuid/generation" take Uuid5, Uuid4s;
+import "random/source" take SecureRandom;
+import "mime/media_type" take MediaType;
+import "mime/types" take StandardMediaTypes;
+import "fs/path" take Path;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let given = UuidText(origin: "550E8400-E29B-41D4-A716-446655440000");
+    out.writeln(given.string() + ", version " + given.version().string());
+    let dns = UuidText(origin: "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+    out.writeln("stable: " + Uuid5(namespace: dns, name: "example.com").string());
+    out.writeln("drawn: version " + Uuid4s(random: SecureRandom()).sample().version().string());
+    let page = MediaType("text/html; charset=UTF-8");
+    out.writeln(page::Type::type + " / " + page::Type::subtype + ", charset " + page.parameters().first("charset"));
+    let types = StandardMediaTypes();
+    out.writeln("report.pdf is " + types.type(Path("report.pdf")).string());
+    0;
+}

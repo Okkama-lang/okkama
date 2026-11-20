@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **More code runs on Champ, in the Wave CI (#894, owner's decision).** The conformance job also runs, on the
+  binary it built: the t/ suite (50 668 checks; `tools/t/run.py` has a `champ` configuration, `--champ-okkama`), the
+  micro-benchmark programs against their oracles (moved from okkama-docs into `bench/micro`; `check.py` checks
+  N=17 and N=31 without timing), `examples/` and the Bible's 240 examples (copied into `examples/bible`, with
+  `check.py`). On Sparrow a failure fails the job; on Champ the failures are ranked by reason in the summary.
 - **`rat.numerator()` and `rat.denominator()` return `int` (#743, owner's
   decision).** They returned decimal strings because a part could exceed the
   old `int`; since `int` is exact and unbounded (#189) every part fits. The

@@ -1,0 +1,36 @@
+module bible/cap_reads v1.0.0;
+
+// A cap computes on every read: nothing is cached, neither a value nor an
+// error.
+import "async/atomic" take Atomic;
+import "io/stdout" take Stdout;
+
+enum NoHits is Error = (none);
+
+object Counter {
+    has hits is Atomic<int>;
+    Counter() { hits = Atomic(0); }
+
+    hit() is void { hits.replace(hits.value() + 1); }
+
+    cap Report {
+        seen is string { hits.value().string() + " hits"; }
+        share is rat {
+            confirm hits.value() > 0 else throw NoHits.none;
+            100 / hits.value();
+        }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let counter = Counter();
+    let report = counter::Report;
+    out.writeln(report::seen);
+    out.writeln(try { report::share.string(); } catch e is NoHits { "no share yet"; });
+    counter.hit();
+    counter.hit();
+    out.writeln(report::seen);
+    out.writeln(report::share.string());
+    0;
+}

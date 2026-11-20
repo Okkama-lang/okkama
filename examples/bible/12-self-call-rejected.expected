@@ -1,0 +1,1 @@
+12-self-call-rejected.ok:9:16: semantic error: Cannot call actions on self before construction completes

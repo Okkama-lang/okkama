@@ -1,0 +1,4 @@
+13-with-rejected.ok:6:5: syntax error at "with_limit": Action names "with" and "with_*" are forbidden; use domain composition or an explicitly named result.
+  |
+6 |     with_limit(limit is int) is ^Tab { ^limit = limit; }
+  |     ^^^^^^^^^^

@@ -1,0 +1,36 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Refused is Error = (negative, overdrawn(balance is int, wanted is int));
+
+object Account {
+    has owner is string;
+    has cents is int;
+    Account(:owner, :cents) {
+        confirm cents >= 0 else throw Refused.negative;
+    }
+    withdrawn(amount is int) is ^Account {
+        confirm amount <= cents else throw Refused.overdrawn(cents, amount);
+        ^cents = cents - amount;
+    }
+    shown() is string { owner + " " + cents.string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let accounts = ["ada": Account(owner: "ada", cents: 1000)];
+    let ada = accounts["ada"].withdrawn(300);
+    out.writeln(ada.shown());
+    out.writeln(if accounts.has("bob") { accounts["bob"].shown(); } else { "no bob"; });
+    let refused = try { ada.withdrawn(5000).shown(); }
+        catch Refused.overdrawn(balance, wanted) {
+            "refused: overdrawn: " + balance.string() + " < " + wanted.string();
+        };
+    out.writeln(refused);
+    // The map still holds the account it was given; the new state is a new value.
+    out.writeln("in the map: " + accounts["ada"].shown());
+    let updated = accounts + ["ada": ada];
+    out.writeln("in the updated map: " + updated["ada"].shown());
+    0;
+}

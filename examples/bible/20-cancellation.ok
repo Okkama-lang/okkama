@@ -1,0 +1,42 @@
+module bible/cancellation v1.0.0;
+
+// A Cancellation is a request that cooperating code checks: a synchronous
+// loop between its steps (check throws Cancelled once it is requested), a
+// task by awaiting it. Holders of the Cancelling role can observe the
+// request but not issue it.
+import "async/cancellation" take Cancellation, Cancelling;
+import "io/stdout" take Stdout;
+
+object Monitor {
+    has cancelling is Cancelling;
+    Monitor(:cancelling);
+    async run() is void {
+        await cancelling.wait();
+        Stdout().writeln("monitor: cancellation requested");
+    }
+}
+
+object Worker {
+    has cancelling is Cancelling;
+    Worker(:cancelling);
+    process(records is @string, stop is Cancellation) is int {
+        let done = (0..records.size()).reduce(0) -> count, index {
+            cancelling.check();
+            Stdout().writeln("processed " + records.item(index));
+            if records.item(index) == "stop" { stop.cancel(); }
+            count + 1;
+        };
+        done;
+    }
+}
+
+async main() is int {
+    let cancellation = Cancellation();
+    let monitor = spawn Monitor(cancelling: cancellation.cancelling()).run();
+    let worker = Worker(cancelling: cancellation.cancelling());
+    let outcome = try { worker.process(["a", "b", "stop", "c"], cancellation).string(); }
+        catch e is Cancelled { "cancelled"; };
+    Stdout().writeln("worker: " + outcome);
+    await monitor;
+    0;
+}

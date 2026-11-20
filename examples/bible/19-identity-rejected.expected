@@ -1,0 +1,2 @@
+19-identity-rejected.ok:14:22: semantic error: No action "count" on object "Till" accepts (bank.Money)
+Available: count(amount is shop.Money)

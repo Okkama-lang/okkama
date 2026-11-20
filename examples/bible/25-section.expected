@@ -1,0 +1,14 @@
+begin import
+begin row 1
+end row 1
+begin row 2
+end row 2
+end import
+imported 2
+begin import
+begin row 3
+end row 3
+begin row -1
+end row -1
+end import
+refused: Bad.row(-1)

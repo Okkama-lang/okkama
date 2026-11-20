@@ -1,0 +1,32 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Impulse in the units the navigation software expects.
+object NewtonSeconds {
+    has amount is rat;
+    NewtonSeconds(:amount);
+    plus(other is NewtonSeconds) is NewtonSeconds { NewtonSeconds(amount: amount + other.size()); }
+    size() is rat { amount; }
+    shown() is string { amount.float().string() + " N*s"; }
+}
+
+// Impulse in the units a thruster table was written in.
+object PoundSeconds {
+    has amount is rat;
+    PoundSeconds(:amount);
+    // One pound-force is exactly 0.45359237 kg * 9.80665 m/s^2 = 4.4482216152605 N.
+    newton_seconds() is NewtonSeconds {
+        NewtonSeconds(amount: amount * 44482216152605.rat() / 10000000000000.rat());
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let burns = [PoundSeconds(amount: 12.rat()), PoundSeconds(amount: 7.rat() / 2.rat())];
+    // The conversion is a call, written where the two kinds of number meet.
+    let total = burns.map() -> burn { burn.newton_seconds(); }
+        .reduce(NewtonSeconds(amount: 0.rat())) -> sum, n { sum.plus(n); };
+    out.writeln(total.shown());
+    0;
+}

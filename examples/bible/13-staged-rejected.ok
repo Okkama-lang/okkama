@@ -1,0 +1,12 @@
+module bible/staged v1.0.0;
+
+object Counter {
+    has count is int = 0;
+    Counter();
+    bump() is int {
+        ^count = count + 1;
+        count;
+    }
+}
+
+main() is int { 0; }

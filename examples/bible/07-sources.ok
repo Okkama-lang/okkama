@@ -1,0 +1,41 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Lookup is Error = (unknown(name is string));
+
+object Directory {
+    has phones is %string:string;
+    Directory(:phones);
+
+    // A lookup that may find nothing answers a Maybe.
+    phone(name is string) is Maybe<string> {
+        if phones.has(name) { Maybe.some(phones[name]); } else { Maybe<string>.none; }
+    }
+
+    // The same question as an error, for callers that cannot go on without it.
+    require(name is string) is string {
+        self.phone(name) else throw Lookup.unknown(name);
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let names = ["ada", "brian", "grace"];
+    // Searches answer Maybe, never -1 or an empty string.
+    out.writeln((names.index_of("grace") else -1).string() + " " + (names.index_of("linus") else -1).string());
+    out.writeln(names.find() -> n { n.starts_with("b"); } else "nobody");
+    out.writeln(("a=1;b=2".find(";") else -1).string() + " " + ("a=1".find(";") else -1).string());
+    // An index or a key with a fallback; without one, a miss is a failure.
+    out.writeln(names[5] else "past the end");
+    let book = Directory(phones: ["ada": "555-0101"]);
+    out.writeln(book.phone("ada") else "unlisted");
+    // Several sources tried in order: each `else` takes the next.
+    let office is Maybe<string> = Maybe<string>.none;
+    out.writeln(book.phone("brian") else office else "no number");
+    // try? turns an error into absence; a Maybe result is kept whole, never flattened.
+    out.writeln(try? book.require("grace") else "unknown");
+    let nested is Maybe<Maybe<string>> = try? book.phone("grace");
+    out.writeln(nested == Maybe.some(Maybe<string>.none) ?? "found the answer: no phone" !! "something else");
+    0;
+}

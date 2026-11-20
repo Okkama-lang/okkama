@@ -1,0 +1,34 @@
+module bible/parse v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/parse" take Number, InvalidInteger, InvalidRational;
+
+// Reads a quantity typed by a person, and says why it is not one.
+object Quantity {
+    has text is string;
+
+    Quantity(:text);
+
+    described() is string {
+        try {
+            text + " -> " + Number(text).int().string();
+        }
+        catch InvalidInteger.source(source) {
+            text + " -> not an integer: '" + source + "'";
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(Number("42").int().string());
+    out.writeln(Number("ff").int(16).string() + " " + Number("0x2A").int(0).string() + " " + Number("101").int(2).string());
+    out.writeln(Number("6/8").rat().string() + " " + Number("-42.5").float().string());
+    out.writeln(Number("12345678901234567890").int().string());
+    for ["17", " 17", "+17", "1_000", "-0"] -> text {
+        out.writeln(Quantity(text: text).described());
+    }
+    let ratio = try { Number("1/0").rat().string(); } catch e is InvalidRational { "1/0 is not a rat"; };
+    out.writeln(ratio);
+    0;
+}

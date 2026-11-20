@@ -1,0 +1,10 @@
+module bible/reexport v1.0.0;
+
+// shop/basket imports Money, but does not own it: nothing is re-exported.
+import "io/stdout" take Stdout;
+import "shop/basket" take Basket, Money;
+
+main() is int {
+    Stdout().writeln(Basket(prices: [Money(cents: 1)]).total().string());
+    0;
+}

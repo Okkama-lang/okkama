@@ -1,0 +1,36 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Shape {
+    area() is rat;
+}
+
+object Square does Shape {
+    has side is int;
+    Square(:side);
+    area() is rat { (side * side).rat(); }
+}
+
+object Circle does Shape {
+    has radius is int;
+    Circle(:radius);
+    area() is rat { (3 * radius * radius).rat(); }
+}
+
+main() is int {
+    let out = Stdout();
+    // Values compare by what they are: equal fields, equal elements, equal entries.
+    out.writeln((Square(side: 2) == Square(side: 2)).string());
+    out.writeln(([1, 2, 3] == [1, 2, 3]).string() + " " + (["a": 1] == ["a": 1, "b": 2]).string());
+    // Behind a role, different objects are simply different values.
+    let first is Shape = Square(side: 2);
+    let second is Shape = Circle(radius: 1);
+    let third is Shape = Square(side: 2);
+    out.writeln((first == second).string() + " " + (first == third).string());
+    // Exact numbers are equal when they are the same number; floats are equal when they are the same bits.
+    out.writeln((1 / 2 == 2 / 4).string() + " " + (0.1 + 0.2 == 0.3).string());
+    // Order: numbers have < and >; text has order() and less(), by code point.
+    out.writeln((byte(3) < byte(4)).string() + " " + "apple".less("banana").string() + " " + "Zebra".less("apple").string());
+    0;
+}

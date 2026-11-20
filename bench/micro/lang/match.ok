@@ -1,0 +1,26 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+
+enum Reading = (empty, value(item is int), pair(left is int, right is int));
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let r = if i % 3 == 0 { Reading.empty; } else if i % 3 == 1 { Reading.value(i); } else { Reading.pair(i, 1); };
+        self.run(i + 1, n, acc + (match r { case Reading.empty { 0; } case Reading.value(v) { v; } case Reading.pair(a, b) { a + b; } }) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -1,0 +1,48 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Stage = (draft, paid, shipped, delivered);
+enum Refused is Error = (step(from is Stage, action is string));
+
+// An order's life as successors: each transition returns the order in its next stage.
+object Order {
+    has id is int;
+    has stage is Stage;
+    has paid_cents is int;
+    Order(:id) { self.stage = Stage.draft; self.paid_cents = 0; }
+
+    pay(cents is int) is ^Order {
+        confirm stage == Stage.draft else throw Refused.step(stage, "pay");
+        ^stage = Stage.paid;
+        ^paid_cents = cents;
+    }
+    ship() is ^Order {
+        confirm stage == Stage.paid else throw Refused.step(stage, "ship");
+        ^stage = Stage.shipped;
+    }
+    deliver() is ^Order {
+        confirm stage == Stage.shipped else throw Refused.step(stage, "deliver");
+        ^stage = Stage.delivered;
+    }
+    shown() is string {
+        let name = match stage {
+            case Stage.draft { "draft"; }
+            case Stage.paid { "paid"; }
+            case Stage.shipped { "shipped"; }
+            case Stage.delivered { "delivered"; }
+        };
+        "#" + id.string() + " " + name + " (" + paid_cents.string() + ")";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = Order(id: 7);
+    let done = order.pay(1250).ship().deliver();
+    out.writeln(order.shown());
+    out.writeln(done.shown());
+    let early = try { order.ship().shown(); } catch Refused.step(from, action) { "cannot " + action + " a draft"; };
+    out.writeln(early);
+    0;
+}

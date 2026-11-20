@@ -1,0 +1,27 @@
+module bible/closure_async v1.0.0;
+
+import "io/stdout" take Stdout;
+
+role Fetching {
+    async fetch(id is int) is string;
+}
+
+object Table does Fetching {
+    Table();
+    async fetch(id is int) is string { "item " + id.string(); }
+}
+
+object Loader {
+    has source is Fetching;
+    has label is (string) is string;
+    Loader(:source, :label);
+    // The synchronous closure runs after the await, with what it captured.
+    async load(id is int) is string { label(await source.fetch(id)); }
+}
+
+async main() is int {
+    let prefix = "#";
+    let loader = Loader(source: Table(), label: (text is string) is string { prefix + text; });
+    Stdout().writeln(await loader.load(7));
+    0;
+}

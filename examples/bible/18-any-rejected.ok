@@ -1,0 +1,7 @@
+module bible/anyfn v1.0.0;
+
+main() is int {
+    let double = (x is int) is int { x * 2; };
+    let boxed is any = double;
+    0;
+}

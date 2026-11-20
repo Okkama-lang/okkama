@@ -1,0 +1,51 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+import "strings/parse" take Number, InvalidInteger;
+
+enum SettingError is Error = (malformed(name is string, text is string));
+
+// Settings as read from a file: a name and its text, nothing more.
+object Settings {
+    has entries is %string:string;
+    Settings(:entries);
+
+    // Absence is an answer: the setting is not there.
+    text(name is string) is Maybe<string> {
+        if entries.has(name) { Maybe.some(entries[name]); } else { Maybe<string>.none; }
+    }
+
+    // Absent gives none; present but not a number is an error that names the setting.
+    int(name is string) is Maybe<int> {
+        self.text(name) ?? .some(raw): Maybe.some(try {
+            Number(raw).int();
+        } catch failure is InvalidInteger {
+            throw SettingError.malformed(name, raw);
+        }) !! .none: Maybe<int>.none;
+    }
+}
+
+// What the program does with each setting decides what absence means.
+object Server {
+    has settings is Settings;
+    Server(:settings);
+
+    port() is int { settings.int("port") else 8080; }
+    certificate() is string { settings.text("certificate") ?? .some(path): "TLS with " + path !! .none: "plain HTTP"; }
+    workers() is int { settings.int("workers") else throw SettingError.malformed("workers", "(missing)"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let full = Server(settings: Settings(entries: ["port": "9000", "certificate": "/etc/tls/site.pem", "workers": "4"]));
+    out.writeln(full.port().string() + ", " + full.certificate() + ", " + full.workers().string() + " workers");
+    let sparse = Server(settings: Settings(entries: ["workers": "2"]));
+    out.writeln(sparse.port().string() + ", " + sparse.certificate() + ", " + sparse.workers().string() + " workers");
+    let broken = Server(settings: Settings(entries: ["port": "90o0"]));
+    let port = try { broken.port().string(); } catch SettingError.malformed(name, text) { name + " is not a number: " + text; };
+    out.writeln(port);
+    let lean = Server(settings: Settings(entries: ["port": "80"]));
+    let workers = try { lean.workers().string(); } catch SettingError.malformed(name, text) { name + " " + text; };
+    out.writeln(workers);
+    0;
+}

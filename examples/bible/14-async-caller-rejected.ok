@@ -1,0 +1,25 @@
+module bible/async_caller_rejected v1.0.0;
+
+// An async action of a role is awaited only inside an async action.
+
+import "io/stdout" take Stdout;
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+object Fixed does Rates {
+    Fixed() {}
+    async rate(code is string) is rat { 1 / 1; }
+}
+
+object Report {
+    has rates is Rates;
+    Report(:rates);
+    line() is string { "EUR " + (await rates.rate("EUR")).string(); }
+}
+
+async main() is int {
+    Stdout().writeln(Report(rates: Fixed()).line());
+    0;
+}

@@ -1,0 +1,1 @@
+03-field-rejected.ok:8:15: semantic error: Field "opened" of object "Bottle" is private; call an action instead

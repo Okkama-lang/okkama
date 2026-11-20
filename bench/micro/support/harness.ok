@@ -1,0 +1,28 @@
+module bench/support/harness v1.0.0;
+import "io/stdout" take Stdout;
+import "time/clock" take SystemClock, MonotonicInstant;
+import "cli/arguments" take ProcessArguments;
+import "strings/parse" take Number;
+
+// Protocol v2: one explicitly warmed batch. Reporting is outside the timed span.
+object Measurement {
+    has clock is SystemClock;
+    has count, warming is int;
+    Measurement() {
+        let args = ProcessArguments().strings();
+        confirm args.size() == 2 else panic "expected N WARMUP";
+        let n = Number(args[0]).int();
+        let warm = Number(args[1]).int();
+        confirm n > 0 && warm >= 0 else panic "N must be positive and WARMUP nonnegative";
+        count = n;
+        warming = warm;
+        clock = SystemClock();
+    }
+    n() is int { count; }
+    warmup() is int { warming; }
+    start() is MonotonicInstant { clock.monotonic_instant(); }
+    finish(start is MonotonicInstant, checksum is int, warm_checksum is int) is void {
+        let elapsed = clock.monotonic_instant().minus(start).nanoseconds();
+        Stdout().writeln("micro-v2 ", count, " ", warming, " ", elapsed, " ", checksum, " ", warm_checksum);
+    }
+}

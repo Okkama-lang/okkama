@@ -1,0 +1,9 @@
+=== RUN   Library :: a shelved title can be read back
+--- PASS: Library :: a shelved title can be read back
+=== RUN   a bad id is refused
+--- PASS: a bad id is refused
+=== RUN   an id cannot be shelved twice
+--- PASS: an id cannot be shelved twice
+=== RUN   a fake keeps its state through successors
+--- PASS: a fake keeps its state through successors
+PASS

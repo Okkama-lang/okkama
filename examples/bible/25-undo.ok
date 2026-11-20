@@ -1,0 +1,60 @@
+module bible/undo v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Undo is Error = (nothing);
+
+object Draft {
+    has text is string;
+
+    Draft(:text);
+
+    typed(more is string) is ^Draft {
+        ^text = text + more;
+    }
+
+    text() is string {
+        text;
+    }
+}
+
+// The past is a list of earlier values. Nothing is copied to keep it:
+// a value that cannot change is its own snapshot.
+object Editor {
+    has draft is Draft;
+    has past is @Draft;
+
+    Editor(:draft, :past);
+
+    typed(more is string) is ^Editor {
+        ^draft = draft.typed(more);
+        ^past = past + [draft];
+    }
+
+    undone() is ^Editor {
+        confirm past.size() > 0 else throw Undo.nothing;
+        ^draft = past.last();
+        ^past = past.take(past.size() - 1);
+    }
+
+    text() is string {
+        draft.text() + " (" + past.size().string() + " back)";
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let editor = Editor(draft: Draft(text: ""), past: []);
+    editor = editor.typed("Dear Ada");
+    editor = editor.typed(", thanks");
+    out.writeln(editor.text());
+    editor = editor.undone();
+    out.writeln(editor.text());
+    editor = editor.typed(", welcome");
+    out.writeln(editor.text());
+    editor = editor.undone();
+    editor = editor.undone();
+    let refused = try { editor.undone().text(); } catch e is Undo { "refused: " + e.text(); };
+    out.writeln(refused);
+    0;
+}

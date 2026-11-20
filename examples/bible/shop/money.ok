@@ -1,0 +1,27 @@
+module shop/money v1.0.0;
+
+// An amount in cents. The rounding policy is the module's own business.
+import "io/stdout" take Stdout;
+
+const CURRENCY = "EUR";
+const CENTS = 100;
+
+hidden object Rounding {
+    Rounding();
+    half_up(cents is int, percent is int) is int { ((cents * percent + 50) / 100).int(); }
+}
+
+object Money {
+    has cents is int;
+    Money(:cents);
+    plus(other is Money) is Money { Money(cents: cents + other.cents()); }
+    percent(rate is int) is Money { Money(cents: Rounding().half_up(cents, rate)); }
+    cents() is int { cents; }
+    string() is string { (cents / CENTS).int().string() + "." + (cents % CENTS + CENTS).string().slice(1, 3) + " " + CURRENCY; }
+}
+
+// Never runs when the module is imported.
+main() is int {
+    Stdout().writeln("money: main");
+    0;
+}

@@ -1,0 +1,52 @@
+module bible/roles v1.0.0;
+
+// A role is a named contract. Objects declare that they do it; code that
+// holds a role sees only the role's actions, and successors stay successors.
+import "io/stdout" take Stdout;
+
+role Package {
+    label() is string;
+    opened() is ^Package;
+}
+
+object Bottle does Package {
+    has open is bool = false;
+    has volume is int;
+    Bottle(:volume);
+
+    label() is string { "bottle " + volume.string() + (if open { " open"; } else { " sealed"; }); }
+    opened() is ^Bottle { ^open = true; }
+    poured() is int { volume; }
+}
+
+object Crate does Package {
+    has count is int;
+    has open is bool = false;
+    Crate(:count);
+
+    label() is string { "crate of " + count.string() + (if open { " open"; } else { " sealed"; }); }
+    opened() is ^Crate { ^open = true; }
+}
+
+object Shelf {
+    has packages is @Package;
+    Shelf(packages is ...Package) { self.packages = packages...; }
+
+    labels() is string {
+        packages.map() -> p { p.label(); }.join(", ");
+    }
+    unpacked() is @Package {
+        packages.map() -> p { p.opened(); };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let shelf = Shelf(Bottle(volume: 500), Crate(count: 12));
+    out.writeln(shelf.labels());
+    out.writeln(Shelf(shelf.unpacked()...).labels());
+    let one is Package = Bottle(volume: 330);
+    let unsealed = one.opened();
+    out.writeln(unsealed.label());
+    0;
+}

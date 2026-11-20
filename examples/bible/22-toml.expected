@@ -1,0 +1,5 @@
+shop on 0.0.0.0:8080
+debug: false
+https://a.example weight 3
+https://b.example weight 1
+refused: InvalidToml.located(10, 2, 1, "duplicate TOML key")

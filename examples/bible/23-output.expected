@@ -1,0 +1,4 @@
+no colour: 2 lines, 12 words
+no colour: 2 lines, 12 words
+8 colours: ESC[1;39;49m2 lines, 12 wordsESC[0m
+{"lines":2,"words":12,"top":["the","on"]}

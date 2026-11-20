@@ -1,8 +1,9 @@
 # Heavy runs of the 0.6.0 Rebuild on GitHub's runners instead of the owner's
-# machine (LLM-GUIDE §1.1): the crate suites of a wave branch, and conformance
-# on Tomato and Champ with the ranking of Champ's blockers. Run it by pushing a
-# branch named wave/<name> at the commit to test (both suites), or, once this
-# file is on the default branch, by dispatch:
+# machine (LLM-GUIDE §1.1): the crate suites of a wave branch, conformance and
+# more corpora (t/, micro programs, examples) on Tomato and Champ, with the
+# ranking of Champ's blockers. Run it by pushing a branch named wave/<name> at
+# the commit to test (both suites), or, once this file is on the default
+# branch, by dispatch:
 #   gh workflow run wave.yml -f ref=<branch> -f suites=tests|conformance|both
 name: Wave
 
@@ -122,6 +123,42 @@ jobs:
         with:
           name: conformance-${{ matrix.engine }}
           path: out/${{ matrix.engine }}/
+      # More code on the binary conformance built (#894, owner 2026-11-20): the t/ suite (#245, ~50k
+      # generated checks), the micro-benchmark programs against their oracles (bench/micro, no timing),
+      # examples/ and the Bible's examples. On Sparrow a failure fails the job; on Champ failures are
+      # data, ranked in the summary.
+      - name: Corpora
+        run: |
+          mkdir -p out/corpora
+          if [ "${{ matrix.engine }}" = champ ]; then
+            bin=conformance/adapters/rust/.target/engine-champ/gate/okkama
+            t="--configs champ --champ-okkama $bin"; pipeline="--pipeline oir2"; export OKKAMA_PIPELINE=oir2
+          else
+            bin=conformance/adapters/rust/.target/debug/okkama
+            t="--configs sparrow --okkama $bin"; pipeline=""
+          fi
+          status=0
+          run() {
+            name=$1; shift
+            "$@" > out/corpora/$name.txt 2>&1 || status=1
+            {
+              echo "### $name on ${{ matrix.engine }}"
+              echo '```'
+              sed -n '/^Failures by reason:/,/^$/p' out/corpora/$name.txt | head -40
+              tail -2 out/corpora/$name.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          run t python3 tools/t/run.py $t --jobs 4
+          run micro python3 bench/micro/check.py --okkama $bin $pipeline --jobs 4
+          run examples env OKKAMA="$PWD/$bin" python3 examples/check.py
+          run bible python3 examples/bible/check.py --okkama $bin $pipeline --jobs 4
+          [ "${{ matrix.engine }}" = champ ] || exit $status
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: corpora-${{ matrix.engine }}
+          path: out/corpora/
 
   blockers:
     name: Champ blockers

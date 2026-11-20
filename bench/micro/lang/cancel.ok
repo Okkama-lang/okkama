@@ -1,0 +1,48 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "async/event" take Event;
+
+object Waiter {
+    has gate is Event;
+    has i is int;
+    Waiter(:gate, :i);
+    async run() is int {
+        await gate.wait();
+        i % 7;
+    }
+}
+
+object Sum {
+    has total is int;
+    Sum(:total);
+    add(value is int) is ^Sum { ^total = total + value; }
+    total() is int { total; }
+}
+
+// A task waiting on an Event cancelled and awaited per repetition (#340).
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let waiter = spawn Waiter(gate: Event(), i: i).run();
+            waiter.cancel();
+            let value = try { await waiter; } catch e is Cancelled { i % 7; };
+            sum = sum.add(value);
+        }
+        sum.total();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}

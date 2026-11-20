@@ -1,0 +1,26 @@
+module bible/capture v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has count is int;
+    Counter(:count);
+    count() is int { count; }
+    bumped() is ^Counter { ^count = count + 1; }
+    // A closure that reads a field keeps this receiver alive.
+    reader() is () is int { () is int { count * 10; }; }
+}
+
+main() is int {
+    let out = Stdout();
+    let counter = Counter(count: 1);
+    let early = () is int { counter.count(); };
+    counter = counter.bumped();
+    let late = () is int { counter.count(); };
+    out.writeln(early().string() + " " + late().string());
+    let read = Counter(count: 4).reader();
+    out.writeln(read().string());
+    let ops is @(int) is int = [(x is int) is int { x + 1; }, (x is int) is int { x * 2; }];
+    out.writeln(ops.reduce(5) -> value, op { op(value); }.string());
+    0;
+}

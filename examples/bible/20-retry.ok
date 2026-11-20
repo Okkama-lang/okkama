@@ -1,0 +1,51 @@
+module bible/retry v1.0.0;
+
+import "io/stdout" take Stdout;
+
+enum Busy is Error = (at(attempt is int));
+
+object Endpoint {
+    has failures is int;
+
+    Endpoint(:failures);
+
+    async fetch(attempt is int) is string {
+        Stdout().writeln("fetch: attempt " + attempt.string());
+        if attempt <= failures {
+            throw Busy.at(attempt);
+        }
+        "200 OK";
+    }
+}
+
+object Retry {
+    has attempts is int;
+
+    Retry(:attempts);
+
+    async run(work is async (int) is string, attempt is int) is string {
+        try {
+            await work(attempt);
+        }
+        catch e is Busy {
+            if attempt == attempts {
+                throw e;
+            }
+            await self.run(work, attempt + 1);
+        };
+    }
+}
+
+async main() is int {
+    let patient = Retry(attempts: 3);
+    let body = await patient.run(Endpoint(failures: 2).fetch, 1);
+    Stdout().writeln("main: " + body);
+    let outcome = try {
+        await patient.run(Endpoint(failures: 5).fetch, 1);
+    }
+    catch e is Busy {
+        "gave up";
+    };
+    Stdout().writeln("main: " + outcome);
+    0;
+}

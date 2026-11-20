@@ -1,0 +1,35 @@
+module bible/escape_call v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Echo {
+    Echo();
+    said(text is string) is string {
+        Stdout().writeln(text);
+        text;
+    }
+}
+
+object Leaf {
+    has up is Tree;
+    has seen is string = "";
+    Leaf(up is Tree) {
+        self.up = up;
+        seen = up.greeted(Echo().said("argument"));
+    }
+}
+
+object Tree {
+    has name is string;
+    has leaf is Maybe<Leaf>;
+    Tree(name is string) {
+        self.name = name;
+        leaf = Maybe.some(Leaf(self));
+    }
+    greeted(text is string) is string { text + " " + name; }
+}
+
+main() is int {
+    Tree("oak");
+    0;
+}

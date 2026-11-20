@@ -1,0 +1,10 @@
+module bible/const_call v1.0.0;
+
+import "io/stdout" take Stdout;
+
+const WIDTH = "okkama".length();
+
+main() is int {
+    Stdout().writeln(WIDTH.string());
+    0;
+}

@@ -1,0 +1,1 @@
+19-hidden-rejected.ok:4:26: semantic error: Import "shop/money" cannot take hidden declaration "Rounding"

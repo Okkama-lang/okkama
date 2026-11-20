@@ -1,0 +1,72 @@
+module bible/library_collections v1.0.0;
+
+// The library's persistent collections at work: a Deque as the queue of a
+// breadth-first search, an OrderedSet for the towns already reached, and a
+// Heap that hands out the most urgent delivery first.
+import "io/stdout" take Stdout;
+import "collections/deque" take Deque;
+import "collections/set" take Set, OrderedSet;
+import "collections/heap" take Heap;
+import "compare" take Comparing, Order;
+
+object Search {
+    has roads is %string:@string;
+    has queue is Deque<string>;
+    has reached is Set<string>;
+    has order is @string;
+
+    Search(:roads, :queue, :reached, :order);
+
+    done() is bool { queue.size() == 0; }
+
+    // The front town leaves the queue; its neighbours not reached yet join the back.
+    stepped() is ^Search {
+        let town = queue.first();
+        let fresh = (roads[town] else []).filter() -> n { !reached.membership(n); };
+        ^queue = fresh.reduce(queue.tail()) -> q, n { q.suffix(n); };
+        ^reached = fresh.reduce(reached) -> s, n { s.addition(n); };
+        ^order = order + fresh;
+    }
+
+    shown() is string { order.join(" > "); }
+}
+
+// A delivery is ordered by the hours left before its deadline.
+object Delivery does Comparing<Delivery> {
+    has town is string;
+    has hours is int;
+    Delivery(:town, :hours);
+    town() is string { town; }
+    hours() is int { hours; }
+    order(other is Delivery) is Order { hours.order(other.hours()); }
+}
+
+main() is int {
+    let out = Stdout();
+    let roads = [
+        "Kostanay": ["Astana", "Aktobe"],
+        "Astana": ["Kostanay", "Karaganda", "Pavlodar"],
+        "Aktobe": ["Kostanay"],
+        "Karaganda": ["Astana", "Almaty"],
+        "Pavlodar": ["Astana"],
+        "Almaty": ["Karaganda", "Shymkent"],
+        "Shymkent": ["Almaty"]
+    ];
+    let start is Set<string> = OrderedSet(values: ["Kostanay"]);
+    let search = Search(roads: roads, queue: Deque(values: ["Kostanay"]), reached: start, order: ["Kostanay"]);
+    loop {
+        last if search.done();
+        search = search.stepped();
+    }
+    out.writeln("reached: " + search.shown());
+
+    let pending = Heap(values: [
+        Delivery(town: "Almaty", hours: 48),
+        Delivery(town: "Astana", hours: 12),
+        Delivery(town: "Aktobe", hours: 30)
+    ]);
+    let later = pending.addition(Delivery(town: "Rudny", hours: 3));
+    out.writeln("most urgent now: " + pending.top().town() + ", after the new order: " + later.top().town());
+    out.writeln("still waiting before: " + pending.size().string() + ", after: " + later.size().string());
+    0;
+}

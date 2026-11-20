@@ -1,0 +1,16 @@
+module bible/identity v1.0.0;
+
+// Two declarations named Money, from two modules: two types.
+import "io/stdout" take Stdout;
+import "shop/money" as shop;
+import "bank/money" as bank;
+
+object Till {
+    Till();
+    count(amount is shop.Money) is int { amount.cents(); }
+}
+
+main() is int {
+    Stdout().writeln(Till().count(bank.Money(cents: 500)).string());
+    0;
+}

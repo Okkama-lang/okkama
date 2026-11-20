@@ -1,0 +1,36 @@
+module bible/patterns v1.0.0;
+
+// Patterns go through the regex module, explicitly. The dialect is regular:
+// no backreferences and no lookaround, so every match runs in linear time.
+import "io/stdout" take Stdout;
+import "regex/pattern" take Regex, InvalidRegex;
+
+main() is int {
+    let out = Stdout();
+    let log = "2026-11-03 deploy; 2026-11-14 rollback; 2026-11-16 deploy";
+
+    // Named groups read like the fields of a record.
+    let entry = Regex("(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2}) (?<event>\\w+)");
+    for entry.all(log) -> each {
+        out.writeln(each.text("event") + " on day " + each.int("day").string());
+    }
+
+    // Splitting and replacing by a pattern, and the literal forms beside them.
+    out.writeln(Regex(";\\s*").parts(log).join(" | "));
+    out.writeln(Regex("\\d{4}-\\d{2}-\\d{2}").replaced(origin: log, by: "<date>"));
+    out.writeln("1.5.0".split(".").join(" "));
+
+    // The pattern that hangs a backtracking matcher: forty a's and a b.
+    let nested = Regex("(a+)+$");
+    out.writeln("nested quantifiers: " + nested.found("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab").string());
+
+    // A malformed pattern is a typed error that says where it is wrong.
+    let broken = try {
+        Regex("(?<year>\\d{4}").found(log).string();
+    }
+    catch e is InvalidRegex {
+        e.text();
+    };
+    out.writeln(broken);
+    0;
+}

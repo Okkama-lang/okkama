@@ -1,0 +1,49 @@
+module bible/flags v1.0.0;
+
+// Anti-pattern: one object that reads its flags on every call. Pattern: one
+// small object per behaviour, composed through a role.
+import "io/stdout" take Stdout;
+
+object FlagLabel {
+    has text is string;
+    has prefix is string;
+    has framed is bool;
+    FlagLabel(:text, :prefix, :framed);
+    shown() is string {
+        let body = prefix + text;
+        if framed { "[" + body + "]"; } else { body; }
+    }
+}
+
+role Label {
+    shown() is string;
+}
+
+object Plain does Label {
+    has text is string;
+    Plain(:text);
+    shown() is string { text; }
+}
+
+object Prefixed does Label {
+    has origin is Label;
+    has prefix is string;
+    Prefixed(:origin, :prefix);
+    shown() is string { prefix + origin.shown(); }
+}
+
+object Framed does Label {
+    has origin is Label;
+    Framed(:origin);
+    shown() is string { "[" + origin.shown() + "]"; }
+}
+
+main() is int {
+    let out = Stdout();
+    out.writeln(FlagLabel(text: "draft", prefix: "! ", framed: true).shown());
+    let inner is Label = Framed(origin: Prefixed(origin: Plain(text: "draft"), prefix: "! "));
+    let outer is Label = Prefixed(origin: Framed(origin: Plain(text: "draft")), prefix: "! ");
+    out.writeln(inner.shown());
+    out.writeln(outer.shown());
+    0;
+}

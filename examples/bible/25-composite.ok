@@ -1,0 +1,49 @@
+module bible/composite v1.0.0;
+
+// Composite: the leaf and the container do the same role, so a bundle of
+// bundles is priced the same way as one item.
+import "io/stdout" take Stdout;
+import "cell" take Cell;
+
+role Priced {
+    total() is int;
+    label() is string;
+}
+
+object Item does Priced {
+    has name is string;
+    has price is int;
+    Item(:name, :price);
+    total() is int { price; }
+    label() is string { name; }
+}
+
+object Bundle does Priced {
+    has name is string;
+    has parts is @Priced;
+    has percent is int = 0;
+    Bundle(:name, :parts);
+    Bundle(:name, :parts, :percent);
+
+    total() is int {
+        let sum = Cell(0);
+        for parts -> part {
+            sum.replace(sum.value() + part.total());
+        }
+        let full = sum.value();
+        full - (full * percent / 100).int();
+    }
+
+    label() is string { name + " of " + parts.size().string(); }
+}
+
+main() is int {
+    let out = Stdout();
+    let tea is Priced = Item(name: "tea", price: 300);
+    let cups is Priced = Bundle(name: "cups", parts: [Item(name: "cup", price: 150), Item(name: "cup", price: 150)]);
+    let gift is Priced = Bundle(name: "gift", parts: [tea, cups], percent: 10);
+    for [tea, cups, gift] -> priced {
+        out.writeln(priced.label() + ": " + priced.total().string());
+    }
+    0;
+}

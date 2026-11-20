@@ -1,0 +1,1 @@
+14-downcast-rejected.ok:14:32: semantic error: Cannot initialize variable "customer" of type Customer with Presentation

@@ -1,0 +1,143 @@
+module tally/tool v1.0.0;
+
+// tally: counts lines and words in files or in the standard input and
+// lists the most frequent words. The tool decides; main only prints.
+import "io/stdin" take Stdin, Utf8Input;
+import "fs/path" take Path;
+import "fs/file" take File;
+import "fs/error" take FileError;
+import "cli/command" take CliCommand, Option, Flag, Operand, OperandCount, CliFailure;
+import "compare" take Comparing, Order;
+
+// The tool's own refusal, beside the command line's CliFailure.
+enum TallyError is Error = (negative_top(value is int));
+
+// Where text comes from: the disk and the standard input in a real run,
+// prepared lines in a test.
+role Sources {
+    file(path is string) is @string;
+    input() is @string;
+}
+
+object Disk does Sources {
+    Disk();
+
+    file(path is string) is @string {
+        let file = File(path: Path(path));
+        defer file.close();
+        file.text().lines();
+    }
+
+    input() is @string {
+        let input = Utf8Input(origin: Stdin());
+        defer input.close();
+        let text = input.content();
+        if text.empty() { []; } else { text.chomp().split("\n"); }
+    }
+}
+
+// One word and how often it occurs. More frequent words come first;
+// words with the same count are in alphabetical order.
+object WordCount does Comparing<WordCount> {
+    has word is string;
+    has count is int;
+
+    WordCount(:word, :count);
+
+    word() is string { word; }
+    count() is int { count; }
+
+    order(other is WordCount) is Order {
+        if count > other.count() { Order.less; }
+        else if count < other.count() { Order.greater; }
+        else { word.order(other.word()); }
+    }
+
+    shown() is string {
+        count.string() + " " + word;
+    }
+}
+
+// The counts so far. Reading a line returns a successor.
+object Tally {
+    has lines is int = 0;
+    has words is %string:int = [:];
+    has fold is bool = false;
+
+    Tally(:fold);
+
+    read(line is string) is ^Tally {
+        ^lines = lines + 1;
+        ^words = line.split(" ").filter() -> part { !part.trim().empty(); }.reduce(words) -> counts, part {
+            let word = if fold { part.trim().lower(); } else { part.trim(); };
+            counts + [word: (counts[word] else 0) + 1];
+        };
+    }
+
+    summary() is string {
+        let total = words.values().reduce(0) -> sum, count { sum + count; };
+        lines.string() + " lines, " + total.string() + " words, " + words.size().string() + " distinct";
+    }
+
+    top(limit is int) is @string {
+        let ranked = words.keys().map() -> word { WordCount(word: word, count: words[word]); }.ordering();
+        ranked.take(limit).map() -> entry { entry.shown(); };
+    }
+}
+
+// What a run gives back: lines for each stream and the exit status.
+object Outcome {
+    has out is @string = [];
+    has err is @string = [];
+    has code is int = 0;
+
+    Outcome(:out, :err, :code);
+
+    out() is @string { out; }
+    err() is @string { err; }
+    code() is int { code; }
+}
+
+object Tool {
+    has command is CliCommand;
+
+    Tool() {
+        command = CliCommand(
+            name: "tally",
+            summary: "Count lines and words, and list the most frequent words",
+            options: [Option(name: "top", short: "n", value: "N", help: "How many words to list (default 3)")],
+            flags: [
+                Flag(name: "ignore-case", short: "i", help: "Count Word and word as one word"),
+                Flag(name: "help", short: "h", help: "Show this help"),
+            ],
+            operands: [Operand(name: "FILE", count: OperandCount.repeated, help: "Files to read; none reads the input")],
+        );
+    }
+
+    outcome(arguments is @string, sources is Sources) is Outcome {
+        try {
+            let call = command.invocation(arguments);
+            if call.flag("help") {
+                Outcome(out: command.usage(program: "tally").chomp().split("\n"));
+            } else {
+                let top = call.int("top") else 3;
+                confirm top >= 0 else throw TallyError.negative_top(top);
+                let files = call.operands();
+                let texts = if files.size() == 0 { [sources.input()]; } else { files.map() -> path { sources.file(path); }; };
+                let tally = texts.reduce(Tally(fold: call.flag("ignore-case"))) -> counts, text {
+                    text.reduce(counts) -> current, line { current.read(line); };
+                };
+                Outcome(out: [tally.summary()] + tally.top(top));
+            }
+        }
+        catch e is CliFailure {
+            Outcome(err: ["tally: " + e.text(), "Try 'tally --help'."], code: 2);
+        }
+        catch e is TallyError {
+            Outcome(err: ["tally: " + e.text(), "Try 'tally --help'."], code: 2);
+        }
+        catch e is FileError {
+            Outcome(err: ["tally: " + e.text()], code: 1);
+        };
+    }
+}

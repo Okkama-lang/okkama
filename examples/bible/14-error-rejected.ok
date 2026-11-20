@@ -1,0 +1,8 @@
+module bible/object_error v1.0.0;
+
+object Failure does Error {
+    Failure();
+    text() is string { "failed"; }
+}
+
+main() is int { 0; }

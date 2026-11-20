@@ -1,0 +1,1 @@
+18-escape-rejected.ok:5:34: semantic error: `last` used outside of a loop

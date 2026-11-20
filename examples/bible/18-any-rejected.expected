@@ -1,0 +1,1 @@
+18-any-rejected.ok:5:24: semantic error: Cannot initialize variable "boxed" of type any with (int) is int

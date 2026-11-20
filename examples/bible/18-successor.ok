@@ -1,0 +1,19 @@
+module bible/closure_successor v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has count is int;
+    Counter(:count);
+    count() is int { count; }
+    bumped() is ^Counter { ^count = count + 1; }
+}
+
+main() is int {
+    let later = Counter(count: 1).bumped();
+    let show = () is int { later.count(); };
+    let alias = show;
+    // Calling the closure uses the successor it captured.
+    Stdout().writeln(alias().string());
+    0;
+}

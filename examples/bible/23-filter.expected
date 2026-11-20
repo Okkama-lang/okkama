@@ -1,0 +1,6 @@
+error: retry
+status 0
+Error: disk full
+error: retry
+status 0
+status 1

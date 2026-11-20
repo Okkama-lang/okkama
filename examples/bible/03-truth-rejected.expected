@@ -1,0 +1,1 @@
+03-truth-rejected.ok:3:8: semantic error: If condition must be bool, got int

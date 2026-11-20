@@ -1,0 +1,20 @@
+module bible/grow v1.0.0;
+
+object Box<T> {
+    has value is T;
+    Box(:value);
+    get() is T { value; }
+}
+
+object Grow<T> {
+    has value is T;
+    Grow(:value);
+    deeper(depth is int) is int {
+        if depth == 0 { return 0; }
+        Grow(value: Box(value: value)).deeper(depth - 1) + 1;
+    }
+}
+
+main() is int {
+    Grow(value: 1).deeper(3);
+}

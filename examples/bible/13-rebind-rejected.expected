@@ -1,0 +1,1 @@
+13-rebind-rejected.ok:5:5: semantic error: Cannot rebind variable "n": type "int" has no successor actions

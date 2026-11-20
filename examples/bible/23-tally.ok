@@ -1,0 +1,25 @@
+module bible/tally_run v1.0.0;
+
+import "io/stdout" take Stdout, Stderr;
+import "tally/tool" take Tool, Disk, Outcome;
+
+// The shell: run the tool, print what it decided, return its status.
+object Shell {
+    Shell();
+
+    printed(outcome is Outcome) is int {
+        for outcome.out() -> line { Stdout().writeln(line); }
+        for outcome.err() -> line { Stderr().writeln(line); }
+        outcome.code();
+    }
+}
+
+main() is int {
+    let tool = Tool();
+    let shell = Shell();
+    let first = shell.printed(tool.outcome(["--top", "2", "tally/sample.txt"], Disk()));
+    Stdout().writeln("exit " + first.string());
+    let second = shell.printed(tool.outcome(["-i", "-n", "2", "tally/sample.txt"], Disk()));
+    Stdout().writeln("exit " + second.string());
+    0;
+}

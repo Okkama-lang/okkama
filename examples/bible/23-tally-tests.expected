@@ -1,0 +1,11 @@
+=== RUN   files are read in order and counted together
+--- PASS: files are read in order and counted together
+=== RUN   no file means the standard input
+--- PASS: no file means the standard input
+=== RUN   a missing file is an error with status 1
+--- PASS: a missing file is an error with status 1
+=== RUN   a bad argument is a usage error with status 2
+--- PASS: a bad argument is a usage error with status 2
+=== RUN   help goes to the standard output with status 0
+--- PASS: help goes to the standard output with status 0
+PASS

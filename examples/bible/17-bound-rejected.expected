@@ -1,0 +1,1 @@
+17-bound-rejected.ok:15:17: semantic error: Generic parameter "T" for object "Least" has type bool, which does not satisfy Comparing<bool>

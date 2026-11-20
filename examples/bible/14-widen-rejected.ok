@@ -1,0 +1,18 @@
+module bible/widen v1.0.0;
+
+role Account { label() is string; balance() is int; }
+role Labelled { label() is string; }
+
+object Wallet does Account, Labelled {
+    has owner is string;
+    has cents is int;
+    Wallet(:owner, :cents);
+    label() is string { owner; }
+    balance() is int { cents; }
+}
+
+main() is int {
+    let tag is Labelled = Wallet(owner: "Ada", cents: 250);
+    let account is Account = tag;
+    account.balance();
+}

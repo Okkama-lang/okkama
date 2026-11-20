@@ -1,0 +1,3 @@
+main: cancel requested; done: false
+lease: returned to the pool
+main: job -1

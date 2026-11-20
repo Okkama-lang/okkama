@@ -1,0 +1,1 @@
+18-bound-rejected.ok:14:22: semantic error: Bound action requires an exact action-type boundary before it can be called

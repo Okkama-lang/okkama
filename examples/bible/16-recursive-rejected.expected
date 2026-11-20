@@ -1,0 +1,1 @@
+16-recursive-rejected.ok:3:1: semantic error: Recursive variant payload types are not supported

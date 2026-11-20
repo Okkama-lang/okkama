@@ -1,0 +1,36 @@
+module bible/group v1.0.0;
+
+// A FutureGroup owns a changing set of children: `start` registers and starts
+// one (the same future twice is one child), `wait` seals the group and waits
+// for every child, and a child started after that is refused.
+import "async/scope" take FutureGroup, FinishedFutureGroup;
+import "async/event" take Event;
+import "io/stdout" take Stdout;
+
+object Worker {
+    has id is int;
+    has gate is Event;
+    Worker(:id, :gate);
+    async run() is int {
+        await gate.wait();
+        Stdout().writeln("worker " + id.string());
+        id;
+    }
+}
+
+async main() is int {
+    let out = Stdout();
+    let gate = Event();
+    let group is FutureGroup<int> = FutureGroup();
+    let first = Worker(id: 1, gate: gate).run();
+    group.start(first);
+    group.start(Worker(id: 2, gate: gate).run());
+    group.start(first);
+    out.writeln("active " + group.active().string());
+    gate.set();
+    await group.wait();
+    out.writeln("active " + group.active().string() + ", first gave " + (await first).string());
+    let late = try { group.start(Worker(id: 3, gate: gate).run()); "started"; } catch e is FinishedFutureGroup { "refused"; };
+    out.writeln("late start " + late);
+    0;
+}

@@ -1,0 +1,21 @@
+module bible/csv v1.0.0;
+
+// CSV with a header: a record is read by column name, and rows are printed
+// back with the quoting the format needs. The dialect (separator, quote,
+// line end) is a value; the default ends lines with CRLF, this one with LF.
+import "csv" take CsvDialect, CsvRecords, CsvString;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let out = Stdout();
+    let lines = CsvDialect(",", "\"", "\n");
+    let orders = CsvRecords("item,qty,note\ntea,2,\"green, loose\"\ncake,1,\n", lines);
+    let total = orders.reduce(0) -> sum, record { sum + record.int("qty"); };
+    for orders -> record {
+        out.writeln(record.text("item") + " x" + record.int("qty").string() + " [" + record.text("note") + "]");
+    }
+    out.writeln("total " + total.string());
+    let rows is @@string = [["item", "note"], ["tea", "green, loose"], ["quote", "say \"hi\""]];
+    out.write(CsvString(rows, lines).string());
+    0;
+}

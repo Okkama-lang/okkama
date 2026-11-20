@@ -1,0 +1,16 @@
+module bible/bound_rejected v1.0.0;
+
+// A bound action needs a written action type before it can be called.
+import "io/stdout" take Stdout;
+
+object Price {
+    has rate is int;
+    Price(:rate);
+    of(units is int) is int { units * rate; }
+}
+
+main() is int {
+    let pick = Price(rate: 12).of;
+    Stdout().writeln(pick(3).string());
+    0;
+}

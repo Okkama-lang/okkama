@@ -1,0 +1,10 @@
+module bible/rules v1.0.0;
+object Bottle {
+    has opened is bool = false;
+    Bottle() {}
+}
+main() is int {
+    let bottle = Bottle();
+    if bottle.opened { return 1; }
+    0;
+}

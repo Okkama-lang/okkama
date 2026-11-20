@@ -1,0 +1,19 @@
+module bible/async_shape_rejected v1.0.0;
+
+// A role's async action is kept only by an async action.
+
+import "io/stdout" take Stdout;
+
+role Rates {
+    async rate(code is string) is rat;
+}
+
+object Fixed does Rates {
+    Fixed() {}
+    rate(code is string) is rat { 1 / 1; }
+}
+
+async main() is int {
+    Stdout().writeln((await Fixed().rate("EUR")).string());
+    0;
+}

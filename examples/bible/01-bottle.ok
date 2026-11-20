@@ -1,0 +1,28 @@
+module bible/bottle v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A bottle never changes: opening one gives a new, opened bottle.
+object Bottle {
+    has opened is bool = false;
+
+    Bottle() {}
+
+    open() is ^Bottle {
+        confirm !opened;
+        ^opened = true;
+    }
+
+    state() is string {
+        if opened { "open"; } else { "closed"; }
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let bottle = Bottle();
+    let poured = bottle.open();
+    out.writeln("the first bottle is " + bottle.state());
+    out.writeln("its successor is " + poured.state());
+    0;
+}

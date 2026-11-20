@@ -1,0 +1,14 @@
+module bible/unregistered v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// A native declared outside the runtime's modules: nothing answers it.
+native object Vault;
+native vault_open(name is string) is Vault;
+
+main() is int {
+    Stdout().writeln("before the call");
+    let vault = vault_open("settings");
+    Stdout().writeln("after the call");
+    0;
+}

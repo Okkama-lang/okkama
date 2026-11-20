@@ -1,0 +1,39 @@
+module bible/json_reference v1.0.0;
+
+import "io/stdout" take Stdout;
+import "json" take Json, JsonField, ParsedJson, JsonError;
+
+// An order arrives as text, is read without casts, and a reply is built and
+// written by the runtime in one call.
+object Line {
+    has sku is string;
+    has qty is int;
+    Line(:sku, :qty);
+
+    string() is string {
+        sku + " x" + qty.string();
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    let order = ParsedJson("{\"id\": 4711, \"customer\": {\"name\": \"Ada\"}, \"items\": [{\"sku\": \"tea\", \"qty\": 2}, {\"sku\": \"cake\", \"qty\": 1}]}").root();
+    out.writeln("order ", order.int("id"), " for ", order.get("customer").text("name"));
+    out.writeln("note: ", order.maybe("note").text() else "none");
+    let lines = order.list("items").map() -> item { Line(sku: item.text("sku"), qty: item.int("qty")); };
+    for lines -> line {
+        out.writeln("  ", line.string());
+    }
+
+    let reply = Json(JsonField("id", 4711), JsonField("state", "accepted"), JsonField("lines", lines.size()));
+    out.writeln(reply.string());
+
+    let refused = try {
+        order.text("id");
+    }
+    catch JsonError.wrong_kind(pointer, expected, actual) {
+        "wrong kind at " + pointer;
+    };
+    out.writeln(refused);
+    0;
+}
