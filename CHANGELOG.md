@@ -58,7 +58,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - A call that borrows the view is offered nothing.
   - Returned, the view leaves with the cache's rehome to the caller, as `await f;` already did.
   - The verifier no longer reads what a cache holds as an input of a call whose arguments cannot hold a Future.
-  - A callee that takes the view is still refused in Full (#878).
+  - A callee that takes the view, such as a constructor storing it (`Box(r: r)`), borrows it too (#878, Fable's
+    ruling). Nothing leaves the cache, which destroys the outcome once, when its owner closes, and a later `await f`
+    stays legal. Own never offers a view, and the verifier lets an admissible selection of values that cannot hold
+    a Future reach a cache's holder graph without taking it, as a cache-owned duty piece already did. An explicit
+    selection through a view is still refused (B91).
 - **A Future that arrives in an entry packet no longer crashes Champ when its input fails to destroy (#875).**
   A synchronous function given a cold Future over a resource, bare (`drop(f is Future<int>)`) or stored in an
   aggregate (`drop(h is Holder)`), settles that Future's cache at its close. If the resource's destroy failed,

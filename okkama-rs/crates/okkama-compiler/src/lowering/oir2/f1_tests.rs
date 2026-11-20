@@ -1048,6 +1048,49 @@ fn f1_an_outcome_view_is_bound_and_lent_without_a_split() {
         "the borrowing call is offered nothing");
 }
 
+/// #878 (Fable): `relay` stores the view of a shared await's outcome in a `Box` while the Future's cache holds a fresh
+/// `Res` input, then awaits the Future again. The store borrows the view.
+const STORED_VIEW: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object W { W(); async over(r is Res) is Res { Res(l: \"out\" + r.n().string()); } } ",
+    "object Box { has r is Res; Box(:r); n() is int { r.n(); } } ",
+    "object R { R(); async relay() is int { let f = W().over(Res(l: \"in\")); let r = await f; ",
+    "let b = Box(r: r); b.n() + (await f).n(); } } ",
+    "async main() is int { await R().relay(); }",
+);
+
+/// #878: the `Box` aliases the view and depends on the cache; nothing is offered for the view, and the binding of the
+/// `Box` takes nothing the cache holds. Full accepts it.
+#[test]
+fn f1_a_stored_outcome_view_is_borrowed() {
+    super::own_case_tests::own_stage(STORED_VIEW, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// #878: only an admissible selection leaves what a cache holds behind silently. The same splits made explicit (not
+/// admissible) reach the cache's holder graph through the view, and Full refuses them (B91).
+#[test]
+fn f1_an_explicit_selection_through_an_outcome_view_is_refused() {
+    let (own, _) = super::own_case_tests::own_stage(STORED_VIEW, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (relay, _) = function(&own, "app.R.relay#0");
+    let mut cut = own.clone();
+    let body = cut.functions.get_mut(relay).unwrap().body.as_mut().unwrap();
+    let explicit: Vec<_> = body.selections.iter().filter_map(|(id, selection)| match selection {
+        ir::SelectionExpr::Admissible(inner) => Some((id, body.selections.get(*inner).unwrap().clone())),
+        _ => None,
+    }).collect();
+    assert!(!explicit.is_empty(), "relay has admissible splits");
+    for (id, inner) in explicit {
+        *body.selections.get_mut(id).unwrap() = inner;
+    }
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.rule == ir::verify::RuleId::B91
+        && diagnostic.message == "scope/packet selection cannot extract a private protocol holder graph"),
+        "{report:?}");
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",
