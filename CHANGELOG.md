@@ -8,6 +8,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Ownership gate on 2026-11-21 (release/0.6.0 at 9f3740325).** In the container, 11-ownership takes 7.8 ms against
+  CPython's 27.5 and Go's 5.1; micro `destroy` takes 20.6 ns (Tomato 114.6, CPython 213.8). bench/ownership/README.md.
 - **Ownership on par with CPython, measured against Go too (#903).** The container gate (`bench/ownership/run.py`,
   1 CPU, now with a Go 1.23 column) after #528 and #909 2b:
 
