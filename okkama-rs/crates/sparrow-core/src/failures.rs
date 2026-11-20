@@ -20,6 +20,26 @@ enum Owner {
     Dead,
 }
 
+/// The owner word of an inline identity (#528): free, dead, or a region's address (aligned, so never 0 or 1).
+const OWNER_FREE: u64 = 0;
+const OWNER_DEAD: u64 = 1;
+
+fn encode_owner(owner: Owner) -> u64 {
+    match owner {
+        Owner::Free => OWNER_FREE,
+        Owner::Dead => OWNER_DEAD,
+        Owner::Region(region) => region,
+    }
+}
+
+fn decode_owner(word: u64) -> Owner {
+    match word {
+        OWNER_FREE => Owner::Free,
+        OWNER_DEAD => Owner::Dead,
+        region => Owner::Region(region),
+    }
+}
+
 #[derive(Debug)]
 struct Identity {
     serial: u64,
@@ -38,6 +58,14 @@ pub struct Resources {
     pub enabled: bool,
     /// Per descriptor: can it reach a destroy-bearing identity?
     pub flags: Vec<bool>,
+    /// Per descriptor (#528): the byte offset of the identity words (serial, owner) kept in the object, for an
+    /// object with a destroy of its own; `None` keeps the identity in the map.
+    pub(crate) inline: Vec<Option<u32>>,
+    /// #528 packed prototype: region ids. A region gets one when it first owns an inline identity and gives it
+    /// back when the collector reclaims it; id 0 and 1 stand for free and dead.
+    region_ids: HashMap<Word, u32>,
+    region_addresses: Vec<Word>,
+    region_free_ids: Vec<u32>,
     /// Per descriptor (#905): may a program-built instance (`obj.new`, `obj.next`, `variant.new`) be a leaf when
     /// its fields reach no identity? Not with a destroy of its own, a builtin (a runtime cell that changes in
     /// place) or a `once let` slot (filled after construction).
@@ -139,6 +167,11 @@ impl Resources {
         Self {
             enabled: program.objects.iter().any(|o| o.destroy.is_some()),
             flags: descriptor_flags(program),
+            region_ids: HashMap::default(),
+            region_addresses: vec![0, 0],
+            region_free_ids: Vec::new(),
+            inline: program.objects.iter().map(|object| (object.destroy.is_some() && !object.builtin)
+                .then(|| 8 * (1 + object.fields.len().max(1)) as u32)).collect(),
             leaf_capable: program.objects.iter().map(|object| object.destroy.is_none() && !object.builtin
                 && !object.fields.iter().any(|(name, _)| name.starts_with("$once"))).collect(),
             trace: std::env::var_os("SPARROW_TRACE_DESTROY")
@@ -153,7 +186,30 @@ impl Resources {
             self.summaries.remove(object);
             self.origins.remove(object);
             self.structure.remove(object);
+            if let Some(id) = self.region_ids.remove(object) {
+                self.region_addresses[id as usize] = 0;
+                self.region_free_ids.push(id);
+            }
         }
+    }
+
+    /// The region id of `region`, given out on first use (#528 packed prototype).
+    fn region_id(&mut self, region: Word, heap: &mut heap::Heap) -> u64 {
+        if let Some(&id) = self.region_ids.get(&region) {
+            return id as u64;
+        }
+        let id = match self.region_free_ids.pop() {
+            Some(id) => id,
+            None => {
+                let id = u32::try_from(self.region_addresses.len()).expect("#528 prototype: region ids exhausted");
+                self.region_addresses.push(0);
+                id
+            }
+        };
+        self.region_addresses[id as usize] = region;
+        self.region_ids.insert(region, id);
+        heap.watch(region);
+        id as u64
     }
 }
 
@@ -242,7 +298,30 @@ impl Runtime {
         let resources = &mut self.resources;
         if resources.enabled && resources.flags[descriptor] {
             resources.serial += 1;
+            // #528: an object with a destroy keeps its identity in its own words; nothing to forget on release.
+            if let Some(offset) = resources.inline[descriptor]
+                && (!cfg!(okkama_identity_packed) || resources.serial <= u32::MAX as u64)
+            {
+                let serial = resources.serial;
+                // SAFETY: the allocation of a descriptor with inline identity has its two words (`object_words`).
+                unsafe {
+                    if cfg!(okkama_identity_packed) {
+                        *((object + offset as Word) as *mut u64) = serial << 32 | OWNER_FREE;
+                    } else {
+                        *((object + offset as Word) as *mut u64) = serial;
+                        *((object + offset as Word + 8) as *mut u64) = OWNER_FREE;
+                    }
+                }
+                // `obj.next` copies the source's header: a rehomed cache is the source's, not this object's.
+                unsafe { *(object as *mut u64) &= !(heap::REHOMED | heap::SPILLED) };
+                self.heap.mark_identity(object);
+                return;
+            }
             resources.identities.insert(object, Identity { serial: resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
+            if resources.inline[descriptor].is_some() {
+                // A packed serial would overflow: this identity lives in the map (checked, never truncated).
+                self.heap.set_header_bits(object, heap::SPILLED);
+            }
             self.heap.mark_identity(object);
             self.heap.watch(object);
         }
@@ -265,6 +344,68 @@ impl Runtime {
                 _ => false,
             }
         })
+    }
+
+    /// The address of `object`'s inline identity words (#528), if it keeps them.
+    #[inline]
+    fn inline_slot(&self, object: Word) -> Option<Word> {
+        let header = self.heap.header_of(object);
+        if heap::kind(header) != heap::OBJECT || header & (heap::IDENTITY | heap::SPILLED) != heap::IDENTITY {
+            return None;
+        }
+        self.resources.inline[heap::payload(header) as usize].map(|offset| object + offset as Word)
+    }
+
+    /// The owner of `object`'s identity, if it has one.
+    fn owner_of(&self, object: Word) -> Option<Owner> {
+        if let Some(slot) = self.inline_slot(object) {
+            // SAFETY: the identity words of a live object.
+            if cfg!(okkama_identity_packed) {
+                let id = unsafe { *(slot as *const u64) } & u32::MAX as u64;
+                return Some(match id {
+                    OWNER_FREE | OWNER_DEAD => decode_owner(id),
+                    id => Owner::Region(self.resources.region_addresses[id as usize]),
+                });
+            }
+            return Some(decode_owner(unsafe { *((slot + 8) as *const u64) }));
+        }
+        self.resources.identities.get(&object).map(|identity| identity.owner)
+    }
+
+    fn set_owner(&mut self, object: Word, owner: Owner) {
+        if let Some(slot) = self.inline_slot(object) {
+            if cfg!(okkama_identity_packed) {
+                let id = match owner {
+                    Owner::Region(region) => self.resources.region_id(region, &mut self.heap),
+                    owner => encode_owner(owner),
+                };
+                // SAFETY: as in `owner_of`.
+                unsafe {
+                    let word = slot as *mut u64;
+                    *word = *word & !(u32::MAX as u64) | id;
+                }
+                return;
+            }
+            // SAFETY: as in `owner_of`.
+            unsafe { *((slot + 8) as *mut u64) = encode_owner(owner) };
+            return;
+        }
+        self.resources.identities.get_mut(&object).expect("identity").owner = owner;
+    }
+
+    fn rehomed(&self, object: Word) -> bool {
+        if self.inline_slot(object).is_some() {
+            return self.heap.header_of(object) & heap::REHOMED != 0;
+        }
+        self.resources.identities.get(&object).is_some_and(|identity| identity.cache_rehomed)
+    }
+
+    fn set_rehomed(&mut self, object: Word) {
+        if self.inline_slot(object).is_some() {
+            self.heap.set_header_bits(object, heap::REHOMED);
+            return;
+        }
+        self.resources.identities.get_mut(&object).expect("identity").cache_rehomed = true;
     }
 
     /// An object the program built (`obj.new`, `obj.next`, `variant.new`: machine code's `rt_created`). Tweed #905:
@@ -361,10 +502,9 @@ impl Runtime {
         }
         for index in 0..self.region_len(owned) {
             let object = self.region_get(owned, index);
-            let identity = self.resources.identities.get_mut(&object).expect("identity");
-            if identity.owner == Owner::Region(owned) {
-                identity.owner = Owner::Free;
-                let serial = identity.serial;
+            if self.owner_of(object) == Some(Owner::Region(owned)) {
+                self.set_owner(object, Owner::Free);
+                let serial = self.serial_of(object);
                 self.freed(serial);
             }
         }
@@ -429,10 +569,10 @@ impl Runtime {
                     if header & heap::IDENTITY == 0 {
                         continue;
                     }
-                    let Some(identity) = self.resources.identities.get(&object) else {
+                    let Some(owner) = self.owner_of(object) else {
                         continue;
                     };
-                    if identity.owner != Owner::Free && Some(identity.owner) != via.map(Owner::Region) {
+                    if owner != Owner::Free && Some(owner) != via.map(Owner::Region) {
                         continue;
                     }
                     events += 1;
@@ -526,7 +666,7 @@ impl Runtime {
         self.resources.scratch = (pending, seen, open);
         okkama_devtrace::count!("runtime", "resource graph walks");
         okkama_devtrace::count!("runtime", "resource graph steps", steps);
-        found.sort_unstable_by_key(|o| self.resources.identities[o].serial);
+        found.sort_unstable_by_key(|&o| self.serial_of(o));
         found
     }
 
@@ -620,8 +760,7 @@ impl Runtime {
         let header = self.heap.header_of(value);
         match heap::kind(header) {
             heap::OBJECT => {
-                header & heap::IDENTITY != 0
-                    && self.resources.identities.get(&value).is_some_and(|i| i.owner == Owner::Free)
+                header & heap::IDENTITY != 0 && self.owner_of(value) == Some(Owner::Free)
             }
             heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
             heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
@@ -664,37 +803,25 @@ impl Runtime {
         self.heap.payload::<RegionValue>(overflow).expect("region").entries[index - REGION_SLOTS]
     }
 
-    /// Scan a stable entry view until work needs the whole runtime again.
-    /// No allocation, heap mutation, safepoint or callback is allowed here.
-    /// In particular, never retain this view across a destroy: nested cleanup
-    /// can mutate regions and collection can reclaim their payloads.
+    /// Scan the region's entries from `index` down until work needs the whole runtime again. Every entry is
+    /// read afresh: nested cleanup can mutate regions and collection can reclaim their payloads.
     fn region_next_action(&mut self, region: Word, index: &mut usize, kept: &HashSet<Word>) -> Option<CloseAction> {
-        let entries = if *index > REGION_SLOTS {
-            let overflow = self.heap.field(region, 0);
-            &self.heap.payload::<RegionValue>(overflow).expect("region").entries[..]
-        } else {
-            &[]
-        };
         while *index > 0 {
             *index -= 1;
-            let object = if *index < REGION_SLOTS {
-                self.heap.field(region, *index + 1)
-            } else {
-                entries[*index - REGION_SLOTS]
-            };
-            let Some(identity) = self.resources.identities.get_mut(&object) else { continue };
+            let object = self.region_get(region, *index);
+            let Some(owner) = self.owner_of(object) else { continue };
             if kept.contains(&object) {
-                if identity.owner == Owner::Region(region) {
-                    identity.owner = Owner::Free;
-                    return Some(CloseAction::Freed(identity.serial));
+                if owner == Owner::Region(region) {
+                    self.set_owner(object, Owner::Free);
+                    return Some(CloseAction::Freed(self.serial_of(object)));
                 }
                 continue;
             }
-            if identity.owner != Owner::Free && identity.owner != Owner::Region(region) {
+            if owner != Owner::Free && owner != Owner::Region(region) {
                 continue;
             }
-            identity.owner = Owner::Dead;
-            return Some(CloseAction::Destroy(object, identity.serial));
+            self.set_owner(object, Owner::Dead);
+            return Some(CloseAction::Destroy(object, self.serial_of(object)));
         }
         None
     }
@@ -749,6 +876,11 @@ impl Runtime {
 
     /// Serial of an identity; 0 (older than anything) for none.
     fn serial_of(&self, object: Word) -> u64 {
+        if let Some(slot) = self.inline_slot(object) {
+            // SAFETY: as in `owner_of`.
+            let word = unsafe { *(slot as *const u64) };
+            return if cfg!(okkama_identity_packed) { word >> 32 } else { word };
+        }
         self.resources.identities.get(&object).map_or(0, |identity| identity.serial)
     }
 
@@ -776,8 +908,8 @@ impl Runtime {
         // The common add, a cursor or a constructor's result, is one free
         // identity whose fields reach no other: no walk.
         if let Some(object) = self.lone_free(value) {
-            if own || self.resources.identities[&object].cache_rehomed {
-                self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
+            if own || self.rehomed(object) {
+                self.set_owner(object, Owner::Region(region));
                 self.dev_owned(object, region);
             } else if self.region_contains(region, object) {
                 return;
@@ -790,8 +922,8 @@ impl Runtime {
         let known = if own { None } else { Some(region) };
         okkama_devtrace::count!("runtime", "walk from: region add");
         for object in self.resource_graph_into(&[value], None, known) {
-            if own || self.resources.identities[&object].cache_rehomed {
-                self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
+            if own || self.rehomed(object) {
+                self.set_owner(object, Owner::Region(region));
                 self.dev_owned(object, region);
             }
             self.region_push(region, object);
@@ -804,9 +936,8 @@ impl Runtime {
         }
         okkama_devtrace::count!("runtime", "walk from: region transfer");
         for object in self.resource_graph(&[value], Some(from)) {
-            let identity = self.resources.identities.get_mut(&object).expect("identity");
-            if identity.owner == Owner::Region(from) {
-                identity.owner = Owner::Region(to);
+            if self.owner_of(object) == Some(Owner::Region(from)) {
+                self.set_owner(object, Owner::Region(to));
                 self.region_push(to, object);
                 self.dev_owned(object, to);
             }
@@ -923,11 +1054,9 @@ impl Runtime {
         if length <= REGION_SLOTS && (0..length).all(|index| keep.contains(&self.region_get(region, index))) {
             for index in 0..length {
                 let object = self.region_get(region, index);
-                if let Some(identity) = self.resources.identities.get_mut(&object)
-                    && identity.owner == Owner::Region(region)
-                {
-                    identity.owner = Owner::Free;
-                    let serial = identity.serial;
+                if self.owner_of(object) == Some(Owner::Region(region)) {
+                    self.set_owner(object, Owner::Free);
+                    let serial = self.serial_of(object);
                     self.freed(serial);
                 }
             }
@@ -948,32 +1077,33 @@ impl Runtime {
             self.queue_private(self.region_get(region, index), &mut groups, &mut futures);
         }
         while let Some(object) = groups.pop().or_else(|| futures.pop()) {
-            if kept.contains(&object) || !self.resources.identities.get(&object)
-                .is_some_and(|identity| identity.owner == Owner::Free || identity.owner == Owner::Region(region))
+            if kept.contains(&object) || !self.owner_of(object)
+                .is_some_and(|owner| owner == Owner::Free || owner == Owner::Region(region))
             {
                 continue;
             }
             let group = matches!(self.states.get(&object), Some(crate::primitives::State::Group(_)));
             if !group
-                && let Some(&home) = self.resources.identities[&object].groups.first()
+                && let Some(&home) = self.resources.identities.get(&object).and_then(|identity| identity.groups.first())
             {
                 okkama_devtrace::count!("runtime", "walk from: region close child");
                 for child in self.resource_graph(&[object], Some(region)) {
-                    self.resources.identities.get_mut(&child).expect("identity").owner = Owner::Region(home);
+                    self.set_owner(child, Owner::Region(home));
                     self.region_push(home, child);
                     self.dev_owned(child, home);
                 }
                 continue;
             }
-            self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Dead;
+            self.set_owner(object, Owner::Dead);
             if let Some(owned) = self.private_region(object) {
                 for index in 0..self.region_len(owned) {
                     let child = self.region_get(owned, index);
-                    let identity = self.resources.identities.get_mut(&child).expect("identity");
-                    if group { identity.groups.retain(|&packet| packet != owned); }
-                    if identity.owner == Owner::Region(owned) {
-                        identity.owner = Owner::Region(region);
-                        identity.cache_rehomed = true;
+                    if group && let Some(identity) = self.resources.identities.get_mut(&child) {
+                        identity.groups.retain(|&packet| packet != owned);
+                    }
+                    if self.owner_of(child) == Some(Owner::Region(owned)) {
+                        self.set_owner(child, Owner::Region(region));
+                        self.set_rehomed(child);
                         self.region_push(region, child);
                         self.dev_owned(child, region);
                         self.queue_private(child, &mut groups, &mut futures);
@@ -1575,5 +1705,93 @@ mod structure_tests {
         // The inner array was indexed (empty) in the same walk, after the outer index was built from what was
         // known then: the outer one keeps it (unknown at that moment), never the string.
         assert_eq!(&*runtime.resources.structure[&outer], &[(inner, Repr::Ref)]);
+    }
+}
+
+#[cfg(test)]
+mod inline_identity_tests {
+    use super::*;
+
+    fn runtime() -> Runtime {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"inline\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+             object obj0 \"Vault\" {\n field \"n\" t0\n destroy f1\n}\n\
+             function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
+             0: const r0, int 0\n 1: ret r0\n}\n\
+             function f1 \"Vault.destroy\" {\n registers [t1]\n params [r0]\n result void\n 0: ret _\n}\n\
+             entry f0\n",
+        ).unwrap();
+        let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
+        runtime.resources.enabled = true;
+        runtime
+    }
+
+    /// #528: an object with a destroy of its own carries its serial and owner in two words after its fields;
+    /// the identity map never sees it.
+    #[test]
+    fn an_object_with_a_destroy_keeps_its_identity_in_itself() {
+        let mut runtime = runtime();
+        assert_eq!(runtime.heap.object_words(0, 1), 2 + heap::IDENTITY_WORDS, "header, one field, identity");
+        let vault = runtime.heap.object_new(0, &[7]);
+        runtime.created(0, vault);
+        assert!(!runtime.resources.identities.contains_key(&vault), "no map entry");
+        assert_eq!(runtime.serial_of(vault), runtime.resources.serial);
+        assert_eq!(runtime.owner_of(vault), Some(Owner::Free));
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.set_owner(vault, Owner::Region(region));
+        assert_eq!(runtime.owner_of(vault), Some(Owner::Region(region)));
+        runtime.set_owner(vault, Owner::Dead);
+        assert_eq!(runtime.owner_of(vault), Some(Owner::Dead));
+        assert_eq!(runtime.heap.field(vault, 0), 7, "the field is untouched");
+    }
+
+    /// `obj.next` copies the source's header word; the successor is a new identity whose cache was never rehomed.
+    #[test]
+    fn a_successor_does_not_inherit_its_sources_rehomed_cache() {
+        let mut runtime = runtime();
+        let source = runtime.heap.object_new(0, &[1]);
+        runtime.created(0, source);
+        runtime.set_rehomed(source);
+        assert!(runtime.rehomed(source));
+        let successor = runtime.heap.object_new(0, &[2]);
+        let header = runtime.heap.header_of(source);
+        // SAFETY: both are live objects of the same descriptor; this is the copy `obj.next` makes.
+        unsafe { *(successor as *mut u64) = header };
+        runtime.created(0, successor);
+        assert!(!runtime.rehomed(successor));
+        assert!(runtime.serial_of(successor) > runtime.serial_of(source));
+    }
+
+    /// Packed (#528): a serial that does not fit its 32 bits moves the identity to the map, never truncates it.
+    #[cfg(okkama_identity_packed)]
+    #[test]
+    fn a_serial_too_wide_to_pack_keeps_its_identity_in_the_map() {
+        let mut runtime = runtime();
+        runtime.resources.serial = u32::MAX as u64;
+        let vault = runtime.heap.object_new(0, &[7]);
+        runtime.created(0, vault);
+        assert!(runtime.resources.identities.contains_key(&vault));
+        assert_eq!(runtime.serial_of(vault), u32::MAX as u64 + 1);
+        runtime.set_owner(vault, Owner::Region(0x2000));
+        assert_eq!(runtime.owner_of(vault), Some(Owner::Region(0x2000)));
+    }
+
+    /// Packed (#528): a region's id names it until the collector reclaims the region; then a new region reuses
+    /// the id and an identity owned by it reads its own region.
+    #[cfg(okkama_identity_packed)]
+    #[test]
+    fn a_reclaimed_regions_id_is_reused_by_the_next_region() {
+        let mut runtime = runtime();
+        let first = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        let vault = runtime.heap.object_new(0, &[7]);
+        runtime.created(0, vault);
+        runtime.set_owner(vault, Owner::Region(first));
+        assert_eq!(runtime.owner_of(vault), Some(Owner::Region(first)));
+        let id = runtime.resources.region_ids[&first];
+        runtime.resources.forget(&[first]);
+        let second = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.set_owner(vault, Owner::Region(second));
+        assert_eq!(runtime.resources.region_ids[&second], id, "the id was reused");
+        assert_eq!(runtime.owner_of(vault), Some(Owner::Region(second)));
     }
 }

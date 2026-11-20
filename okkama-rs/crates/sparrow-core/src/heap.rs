@@ -76,6 +76,15 @@ pub const PREPENDED: u64 = 1 << 26;
 /// An object with a resource identity (`Runtime::created`, Tweed #909 step 2a): the resource walks and region
 /// adds test this bit before they look the identity up. Objects only; an identity is dropped only with its object.
 pub const IDENTITY: u64 = 1 << 27;
+/// An in-object identity whose cache was rehomed (#528): `Identity::cache_rehomed` for identities kept in the
+/// object rather than in the map.
+pub const REHOMED: u64 = 1 << 28;
+/// An object whose descriptor carries inline identity words but whose identity lives in the map (#528 packed:
+/// its serial did not fit).
+pub const SPILLED: u64 = 1 << 29;
+/// #528 prototype: the hidden identity words of an object with a destroy. Two (+16 bytes: serial, owner) or,
+/// built with `--cfg okkama_identity_packed`, one (+8: serial and a region id packed).
+pub const IDENTITY_WORDS: usize = if cfg!(okkama_identity_packed) { 1 } else { 2 };
 /// Arrays shorter than this are copied by `replaced`, as before.
 pub const TRIE_MIN: usize = 64;
 const TRIE_BITS: u32 = 5;
@@ -251,6 +260,8 @@ pub struct Heap {
     // Neither table may be replaced independently: stale indices could lose roots.
     layouts: Layouts,
     trace_layouts: TraceLayouts,
+    /// Per object descriptor (#528): two hidden words (serial, owner) after the fields hold its resource identity.
+    identity_words: Vec<bool>,
     pages: Vec<Page>,
     /// Free list heads per class; a free cell's second word links the next.
     free: [Word; CLASSES.len()],
@@ -394,6 +405,7 @@ impl Heap {
     pub fn new(layouts: Layouts) -> Self {
         Self {
             trace_layouts: TraceLayouts::new(&layouts),
+            identity_words: Vec::new(),
             layouts,
             pages: Vec::new(),
             free: [0; CLASSES.len()],
@@ -570,9 +582,21 @@ impl Heap {
 
     // ---- objects ----
 
+    /// Declare which object descriptors carry their identity inline (#528).
+    pub fn set_identity_words(&mut self, descriptors: Vec<bool>) {
+        self.identity_words = descriptors;
+    }
+
+    /// The words an object of `descriptor` with `fields` fields occupies (#528: plus two identity words).
+    #[inline]
+    pub fn object_words(&self, descriptor: u32, fields: usize) -> usize {
+        fields.max(1) + 1 + if self.identity_words.get(descriptor as usize).copied().unwrap_or(false) { IDENTITY_WORDS } else { 0 }
+    }
+
     pub fn object_new(&mut self, descriptor: u32, fields: &[Word]) -> Word {
-        self.counted("object", descriptor, fields.len().max(1) + 1);
-        let object = self.allocate(fields.len().max(1) + 1);
+        let words = self.object_words(descriptor, fields.len());
+        self.counted("object", descriptor, words);
+        let object = self.allocate(words);
         // SAFETY: freshly allocated storage of fields.len() + 1 words.
         unsafe {
             *(object as *mut u64) = header(OBJECT, Repr::Raw, descriptor);
@@ -605,6 +629,13 @@ impl Heap {
         unsafe { *(object as *mut u64) &= !VISITED }
     }
     /// Set or clear the [`SUMMARY`] bit of `object`.
+    /// Set header bits of `object`.
+    pub fn set_header_bits(&mut self, object: Word, bits: u64) {
+        // SAFETY: as in `visit`.
+        unsafe {
+            *(object as *mut u64) |= bits;
+        }
+    }
     /// Mark `object` as having a resource identity ([`IDENTITY`]).
     pub fn mark_identity(&mut self, object: Word) {
         // SAFETY: as in `visit`.

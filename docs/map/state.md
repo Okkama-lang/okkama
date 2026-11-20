@@ -94,3 +94,7 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 3. #909, phase 2: elide region tracking of values that do not escape (a reduce accumulator's versions), plus
    the remaining region-add calls.
 4. #914: a temporary child in a group reads a lent resource after its destroy (Tomato bug).
+5. #909 step 2a merged (044ce1979 = release/0.6.0): the IDENTITY header bit; small closes sort on the stack.
+6. #528 (OH-04), in-object identity: both layouts prototyped on feature/909-phase2 (default +16,
+   `--cfg okkama_identity_packed` = +8). Numbers and the recommendation (+16): okkama-docs/runtime/identity-layout-528.md.
+   **Waiting for the owner's choice**; then the loser and the cfg go, and 2b (static destroy) builds on the chosen layout.

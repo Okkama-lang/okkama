@@ -1651,7 +1651,7 @@ impl Emitter<'_, '_> {
             }
             I::ObjNew { dst, object, fields } => {
                 let pointer = {
-                    let words = fields.len().max(1) + 1;
+                    let words = self.object_words(object.0 as usize, fields.len());
                     let pointer = self.allocate(words);
                     let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
                     self.builder.ins().store(MEMORY, header, pointer, 0);
@@ -1681,7 +1681,7 @@ impl Emitter<'_, '_> {
                 };
                 let pointer = {
                     let count = program.objects[declared].fields.len();
-                    let pointer = self.allocate(count.max(1) + 1);
+                    let pointer = self.allocate(self.object_words(declared, count));
                     let source_object = self.get(object);
                     for word_index in 0..=count {
                         let value = match updates.iter().find(|(f, _)| *f as usize + 1 == word_index) {
@@ -1705,7 +1705,7 @@ impl Emitter<'_, '_> {
             I::VariantNew { dst, variant, case, fields } => {
                 let object = program.variants[variant.0 as usize].cases[*case as usize].1;
                 let pointer = {
-                    let words = fields.len().max(1) + 1;
+                    let words = self.object_words(object.0 as usize, fields.len());
                     let pointer = self.allocate(words);
                     let header = self.iconst(heap::header(heap::OBJECT, Repr::Raw, object.0) as i64);
                     self.builder.ins().store(MEMORY, header, pointer, 0);
@@ -2550,6 +2550,11 @@ impl Emitter<'_, '_> {
     }
 
 
+
+    /// The words of a new object (#528: the heap adds its identity words).
+    fn object_words(&self, descriptor: usize, fields: usize) -> usize {
+        self.heap.object_words(descriptor as u32, fields)
+    }
 
     /// Give a new object a resource identity when its type can reach a destroy.
     fn created(&mut self, descriptor: usize, object: Value) {

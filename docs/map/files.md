@@ -103,21 +103,21 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1130 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 1946 lines
+## ownership-runtime — 2 files, 2128 lines
 
-- `sparrow-core/src/failures.rs` 1335 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 1517 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 611 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30085 lines
+## sparrow — 63 files, 30107 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1093 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/heap.rs` 2045 — Non-moving precise heap (decision R1). Every object starts with a header:
+- `sparrow-core/src/heap.rs` 2063 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 997 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 2443 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/jit.rs` 2446 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 365 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 301 — Native providers. Arguments and results are words whose representation
@@ -125,7 +125,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 367 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 185 — Static facts about a loaded SPB program: the machine representation of every
-- `sparrow-core/src/runtime.rs` 903 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 904 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB
 - `sparrow-core/src/worker.rs` 420 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
@@ -188,7 +188,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 
-## other — 87 files, 36712 lines
+## other — 104 files, 291466 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -277,3 +277,20 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 117 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
 - `sparrow-cli/src/main.rs` 253 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
+- `target-packed/debug/build/cranelift-assembler-x64-29b37427aa9a036b/out/assembler.rs` 91933
+- `target-packed/debug/build/cranelift-assembler-x64-29b37427aa9a036b/out/generated-files.rs` 3
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/assembler-isle-macro.rs` 9974
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/inst_builder.rs` 1981
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/isle_aarch64.rs` 18708
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/isle_numerics.rs` 4656
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/isle_opt.rs` 31175
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/isle_riscv64.rs` 21954
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/isle_s390x.rs` 26784
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/isle_x64.rs` 38678
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/opcodes.rs` 4148
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/settings-arm64.rs` 190
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/settings.rs` 744
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/types.rs` 77
+- `target-packed/debug/build/cranelift-codegen-1f919226c688ce00/out/version.rs` 1
+- `target-packed/debug/build/libsqlite3-sys-0f6456ad619577d6/out/bindgen.rs` 3689
+- `target-packed/debug/build/target-lexicon-16974a1dc25bd81c/out/host.rs` 59

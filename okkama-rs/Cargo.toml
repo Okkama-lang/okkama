@@ -13,7 +13,7 @@ publish = false
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 # `--cfg okkama_release` (release packaging) compiles the development instrumentation out (okkama-devtrace).
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(okkama_release)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(okkama_release)", "cfg(okkama_identity_packed)"] }
 
 [workspace.lints.clippy]
 dbg_macro = "warn"

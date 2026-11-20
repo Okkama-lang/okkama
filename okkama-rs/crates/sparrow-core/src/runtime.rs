@@ -210,6 +210,7 @@ impl Runtime {
             })
         }).collect::<Result<Box<[_]>, Error>>()?;
         let resources = crate::failures::Resources::new(&loaded.program);
+        heap.set_identity_words(resources.inline.iter().map(Option::is_some).collect());
         let intrinsics = loaded
             .program
             .functions

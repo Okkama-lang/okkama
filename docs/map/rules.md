@@ -7,7 +7,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 | tag | layers | files |
 |---|---|---|
 
-## Tags in one layer (113)
+## Tags in one layer (115)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -18,6 +18,8 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - CHACHA20_POLY1305_SHA384 — other: `native/tls.rs`
 - D04 — front: `analysis/thir.rs`
 - D22 — other: `catalogue.rs`
+- D32 — other: `target-packed/debug/build/cranelift-assembler-x64-29b37427aa9a036b/out/assembler.rs`
+- D8 — other: `target-packed/debug/build/cranelift-assembler-x64-29b37427aa9a036b/out/assembler.rs`
 - DB_BENCH_LOOKUPS — other: `okkama-runtime-core/examples/sqlite_sync.rs`
 - DB_BENCH_ROWS — other: `okkama-runtime-core/examples/sqlite_sync.rs`
 - DB_BENCH_WARMUPS — other: `okkama-runtime-core/examples/sqlite_sync.rs`
