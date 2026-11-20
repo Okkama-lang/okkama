@@ -538,6 +538,7 @@ impl Heap {
     /// Uninitialized storage of `words` words (header included); the caller
     /// writes the header and every word before the next collection.
     pub fn allocate(&mut self, words: usize) -> Word {
+        okkama_devtrace::count!("runtime", "heap words allocated", words);
         let Some(class) = Self::class_of(words) else {
             self.allocated += words * 8;
             self.large_bytes += words * 8;
@@ -571,6 +572,7 @@ impl Heap {
     /// Pop a cell of `class` from its free list, refilling it from the swept
     /// cells or, when there are none, with a new page.
     pub fn allocate_class(&mut self, class: usize) -> Word {
+        okkama_devtrace::count!("runtime", "heap class allocations");
         if self.free[class] == 0 {
             match self.reserve[class].pop() {
                 Some((chain, bytes)) => {
@@ -1459,6 +1461,7 @@ impl Heap {
         roots: impl FnOnce(&mut dyn FnMut(Word, Repr)),
         mut ephemerons: impl FnMut(&dyn Fn(Word) -> bool, &mut dyn FnMut(Word, Repr)),
     ) {
+        let _span = okkama_devtrace::span!("gc", "collect");
         // A freed string's address may be reused for another one.
         self.positions = Positions::default();
         let started = self.allocations.is_some().then(std::time::Instant::now);

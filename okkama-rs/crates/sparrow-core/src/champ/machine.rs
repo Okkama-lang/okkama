@@ -462,6 +462,7 @@ extern "C" fn owned_adapter(ctx: *mut Ctx, io: *mut CallOwn, args: *const Word, 
 pub extern "C" fn rt_machine_external(ctx: *mut Ctx, function: u64, io: *mut CallOwn,
     args: *const Word, count: u64) -> Word
 {
+    okkama_devtrace::count!("runtime", "rt_machine_external");
     #[cfg(test)]
     EXTERNAL_CALLS.with(|calls| calls.set(calls.get() + 1));
     // The direct call of a compiled function is on every level of a recursion: its frame stays
@@ -515,6 +516,7 @@ fn machine_provider(ctx: *mut Ctx, function: u64, io: *mut CallOwn, args: *const
 /// Test-only collection at each collecting/reentrant machine call, before Post publication.
 #[cfg(test)]
 pub extern "C" fn rt_machine_safepoint(ctx: *mut Ctx) {
+    okkama_devtrace::count!("runtime", "rt_machine_safepoint");
     let frame = runtime::frame_pointer!();
     unsafe { &mut *(*ctx).runtime }.safepoint(frame, unsafe { &*ctx }, &[]);
 }
@@ -522,6 +524,7 @@ pub extern "C" fn rt_machine_safepoint(ctx: *mut Ctx) {
 pub extern "C" fn rt_machine_scope(ctx: *mut Ctx, function: u64, scope_id: u64,
     parent: Word, post: *mut ScopeSlot) -> Outcome
 {
+    okkama_devtrace::count!("runtime", "rt_machine_scope");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let result = (|| {
         let owner = runtime.champ_new_owner()?;
@@ -555,10 +558,12 @@ pub extern "C" fn rt_machine_scope(ctx: *mut Ctx, function: u64, scope_id: u64,
 }
 
 pub extern "C" fn rt_machine_invalid(ctx: *mut Ctx) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_machine_invalid");
     stop(ctx, error("invalid machine outcome or unreachable SPB block"))
 }
 
 pub extern "C" fn rt_machine_destination(ctx: *mut Ctx, state: Word, post: *mut ExitDestination) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_machine_destination");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let result = if state == 0 {
         runtime.champ_new_holder().and_then(|holder| {
@@ -580,10 +585,12 @@ pub extern "C" fn rt_machine_destination(ctx: *mut Ctx, state: Word, post: *mut 
 }
 
 pub extern "C" fn rt_machine_serial(ctx: *mut Ctx, object: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_serial");
     unsafe { &*(*ctx).runtime }.heap.champ_identity(object).expect("verified identity").serial
 }
 
 pub extern "C" fn rt_machine_fatal_stack(ctx: *mut Ctx) -> Outcome {
+    okkama_devtrace::count!("runtime", "rt_machine_fatal_stack");
     stop(ctx, error("cleanup stack headroom exhausted"))
 }
 
@@ -607,18 +614,22 @@ pub(super) fn leave_cleanup(ctx: *mut Ctx, saved: (u64, Option<u64>)) {
 }
 
 pub extern "C" fn rt_machine_cleanup_mode(ctx: *mut Ctx) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_cleanup_mode");
     u64::from(unsafe { &*(*ctx).runtime }.champ.cleanup_floor.is_some())
 }
 
 pub extern "C" fn rt_machine_secondary(ctx: *mut Ctx, primary: Word, secondary: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_secondary");
     unsafe { &mut *(*ctx).runtime }.failure_link(primary, secondary, true)
 }
 
 pub extern "C" fn rt_machine_caused(ctx: *mut Ctx, fresh: Word, handled: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_caused");
     unsafe { &mut *(*ctx).runtime }.failure_link(fresh, handled, false)
 }
 
 pub extern "C" fn rt_machine_fail(ctx: *mut Ctx, kind: Word, payload: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_fail");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let failure = match kind {
         0 => runtime::FailureKind::Thrown(payload),
@@ -630,6 +641,7 @@ pub extern "C" fn rt_machine_fail(ctx: *mut Ctx, kind: Word, payload: Word) -> W
 }
 
 pub extern "C" fn rt_machine_range(ctx: *mut Ctx, kind: Word, left: Word, right: Word, inclusive: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_range");
     let frame = runtime::frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let integer = |word| match runtime.heap.integer(word) {
@@ -694,6 +706,7 @@ fn scalar_type(code: Word) -> Option<(okkama_sparrow::Type, Repr)> {
 /// SPB 17 `Convert` on Tomato's scalar representations. A failing conversion is a program failure.
 /// Conversions to byte are Tomato's `byte.from`; every other pair is Tomato's `cvt`.
 pub extern "C" fn rt_machine_convert(ctx: *mut Ctx, from: Word, to: Word, value: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_convert");
     use okkama_sparrow::Type as T;
     let frame = runtime::frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
@@ -728,6 +741,7 @@ pub extern "C" fn rt_machine_convert(ctx: *mut Ctx, from: Word, to: Word, value:
 /// representations and with Tomato's semantics (`crate::ops`); unused operands are zero. A failure is a
 /// program failure with Tomato's message; a result larger than the memory budget stops.
 pub extern "C" fn rt_machine_scalar(ctx: *mut Ctx, op: Word, first: Word, second: Word, third: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_scalar");
     let frame = runtime::frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let Some((op, result)) = s::DataOp::from_scalar_code(op)
@@ -877,6 +891,7 @@ pub(crate) fn scalar(runtime: &mut Runtime, op: s::DataOp, first: Word, second: 
 
 /// A payload field of a variant value whose active case must be the object `case`.
 pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Word, value: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_variant_get");
     let runtime = unsafe { &*(*ctx).runtime };
     if u64::from(heap::payload(runtime.heap.header_of(value))) != case {
         super::helpers::fail(ctx, crate::Error("Variant payload of an inactive case".into()));
@@ -888,6 +903,7 @@ pub extern "C" fn rt_machine_variant_get(ctx: *mut Ctx, case: Word, storage: Wor
 /// A role value narrowed to `role`: the value itself when its object implements the role, otherwise
 /// Tomato's program failure for a missing witness (`I::RoleNarrow` without a source message).
 pub extern "C" fn rt_machine_role_narrow(ctx: *mut Ctx, role: Word, value: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_role_narrow");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let Some(machine) = runtime.champ.machine.as_ref() else {
         return stop(ctx, error("role narrowing outside a Champ program"));
@@ -909,6 +925,7 @@ pub extern "C" fn rt_machine_role_narrow(ctx: *mut Ctx, role: Word, value: Word)
 
 /// The order of two exact rationals: -1, 0 or 1.
 pub extern "C" fn rt_machine_rat_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
+    okkama_devtrace::count!("runtime", "rt_machine_rat_order");
     let runtime = unsafe { &*(*ctx).runtime };
     match runtime.rational(left).compare(runtime.rational(right)) {
         std::cmp::Ordering::Less => -1,
@@ -921,6 +938,7 @@ pub extern "C" fn rt_machine_rat_order(ctx: *mut Ctx, left: Word, right: Word) -
 /// `descriptor` (the comparison reads the actual objects): 1 or 0. Comparing an unbound field is a program
 /// failure, as in Tomato.
 pub extern "C" fn rt_machine_value_eq(ctx: *mut Ctx, descriptor: Word, left: Word, right: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_value_eq");
     let runtime = unsafe { &*(*ctx).runtime };
     let Some(machine) = runtime.champ.machine.as_ref() else {
         return stop(ctx, error("value equality outside a Champ program"));
@@ -1041,6 +1059,7 @@ pub(crate) fn value_equal(runtime: &Runtime, program: &s::Program, left: Word, r
 /// The payload of a failure that a `catch` of `descriptor` takes, or zero: every thrown, native or cancellation
 /// payload (`u64::MAX`, the Error role), a payload of that descriptor, or of a case of that multi-case Error variant.
 pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_catch");
     let runtime = unsafe { &mut *(*ctx).runtime };
     let source = runtime.champ.machine.as_ref().map(|machine| machine.source.clone());
     // A cancellation matches the program's system Cancelled (#724) and the Error role (#738), and binds a new
@@ -1071,6 +1090,7 @@ pub extern "C" fn rt_machine_catch(ctx: *mut Ctx, failure: Word, descriptor: Wor
 }
 
 pub extern "C" fn rt_machine_plain_packet(ctx: *mut Ctx, packet: *const PacketSlot) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_plain_packet");
     let runtime = unsafe { &*(*ctx).runtime };
     if runtime.champ_packet_keys(unsafe { &*packet }).is_ok_and(|keys| keys.is_empty()) {
         NORMAL
@@ -1080,6 +1100,7 @@ pub extern "C" fn rt_machine_plain_packet(ctx: *mut Ctx, packet: *const PacketSl
 }
 
 pub extern "C" fn rt_machine_text_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
+    okkama_devtrace::count!("runtime", "rt_machine_text_order");
     let runtime = unsafe { &*(*ctx).runtime };
     match runtime.heap.text(left).cmp(runtime.heap.text(right)) {
         std::cmp::Ordering::Less => -1,
@@ -1089,6 +1110,7 @@ pub extern "C" fn rt_machine_text_order(ctx: *mut Ctx, left: Word, right: Word) 
 }
 
 pub extern "C" fn rt_machine_text_len(ctx: *mut Ctx, text: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_text_len");
     let runtime = unsafe { &*(*ctx).runtime };
     crate::word::small(runtime.heap.text(text).chars().count() as i64).expect("addressable text length")
 }

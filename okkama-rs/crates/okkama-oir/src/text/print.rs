@@ -4,7 +4,7 @@ use super::*;
 pub fn print(module: &Module) -> Result<String, PrintError> {
     parser::check_type_depth(module, Limits::default().max_type_depth).map_err(PrintError::new)?;
     let mut w = Writer { module, output: String::new(), names: HashMap::new(), scope: 0, depth: 0, overflow: false,
-        generic_owner: None, body: None, literal_type: None };
+        generic_owner: None, body: None, literal_type: None, unlimited: false };
     w.module_names()?;
     w.push(match module.profile {
         Profile::High => "oir 2 high\n", Profile::Own => "oir 2 own\n",
@@ -131,78 +131,7 @@ pub fn print(module: &Module) -> Result<String, PrintError> {
         w.push("\n");
     }
     for (id, function) in module.functions.iter() {
-        w.scope = id.as_u32() as usize + 1;
-        w.generic_owner = Some(GenericOwner::Function(id));
-        w.body = function.body.as_ref();
-        if let Some(body) = &function.body {
-            w.body_names(body)?;
-        }
-        let external = if function.body.is_none() {
-            match function.attrs.last() {
-                Some(FunctionAttr::Extern(name)) => Some(name), _ => None
-            }
-        } else {
-            None
-        };
-        w.push(if external.is_some() { "\nextern " } else { "\nfunc " });
-        id.write(&mut w)?;
-        w.type_parameters(&function.type_params)?;
-        if let Some(body) = &function.body {
-            let entry = body.blocks.get(body.entry).map_err(|e| PrintError::new(e.to_string()))?;
-            let params = entry.params.iter().map(|v| body.values.get(*v).map(|v| v.ty))
-                .collect::<Result<Vec<_>, _>>().map_err(|e| PrintError::new(e.to_string()))?;
-            if params != function.signature.params {
-                return Err(PrintError::new(
-                "signature and entry parameters differ"));
-            }
-            w.values(body, &entry.params, true, true)?;
-        } else {
-            w.push("(");
-            for (i, ty) in function.signature.params.iter().enumerate() {
-                if i > 0 {
-                    w.push(if is_service(module, *ty) { "; " } else { ", " });
-                }
-                w.push(&format!("%arg{i}: "));
-                ty.write(&mut w)?;
-            }
-            w.push(")");
-        }
-        w.push(" -> ");
-        w.results(&function.signature.results)?;
-        let attrs = if external.is_some() {
-            &function.attrs[..function.attrs.len() - 1]
-        }
-        else {
-            &function.attrs[..]
-        };
-        w.attributes(attrs)?;
-        if function.signature.ownership_abi != OwnershipAbi::Unelaborated {
-            w.push(" abi ");
-            function.signature.ownership_abi.write(&mut w)?;
-        }
-        w.summary_reference("summary", function.summary)?;
-        w.summary_reference("async-creation", function.async_creation_summary)?;
-        w.summary_reference("async-body", function.async_body_summary)?;
-        w.location(function.loc)?;
-        if let Some(body) = &function.body {
-            w.push(" {\n");
-            if body.entry.as_u32() != 0 {
-                w.push("    entry ");
-                body.entry.write(&mut w)?;
-                w.push("\n");
-            }
-            w.body(body)?;
-            w.push("}\n");
-        } else if let Some(name) = external {
-            w.push(" = ");
-            name.write(&mut w)?;
-            w.push("\n");
-        } else {
-            w.push(";\n");
-        }
-        w.scope = 0;
-        w.generic_owner = None;
-        w.body = None;
+        print_function(&mut w, module, id, function)?;
     }
     if w.overflow {
         return Err(PrintError::new("canonical text size limit"));
@@ -211,6 +140,96 @@ pub fn print(module: &Module) -> Result<String, PrintError> {
     // defaults (including nesting, literal and entity limits).
     parser::parse(&w.output).map_err(|e| PrintError::new(e.to_string()))?;
     Ok(w.output)
+}
+
+/// One function of a module, in the module's text form (names resolved against the whole module). For
+/// diagnostics and development dumps (okkama-devtrace): no size limit, not checked by the parser.
+pub fn print_one_function(module: &Module, id: FuncId) -> Result<String, PrintError> {
+    let function = module.functions.get(id).map_err(|e| PrintError::new(e.to_string()))?;
+    let mut w = Writer { module, output: String::new(), names: HashMap::new(), scope: 0, depth: 0, overflow: false,
+        generic_owner: None, body: None, literal_type: None, unlimited: false };
+    w.unlimited = true;
+    w.module_names()?;
+    print_function(&mut w, module, id, function)?;
+    Ok(w.output)
+}
+
+fn print_function<'a>(w: &mut Writer<'a>, module: &'a Module, id: FuncId, function: &'a Function)
+    -> Result<(), PrintError>
+{
+    w.scope = id.as_u32() as usize + 1;
+    w.generic_owner = Some(GenericOwner::Function(id));
+    w.body = function.body.as_ref();
+    if let Some(body) = &function.body {
+        w.body_names(body)?;
+    }
+    let external = if function.body.is_none() {
+        match function.attrs.last() {
+            Some(FunctionAttr::Extern(name)) => Some(name), _ => None
+        }
+    } else {
+        None
+    };
+    w.push(if external.is_some() { "\nextern " } else { "\nfunc " });
+    id.write(w)?;
+    w.type_parameters(&function.type_params)?;
+    if let Some(body) = &function.body {
+        let entry = body.blocks.get(body.entry).map_err(|e| PrintError::new(e.to_string()))?;
+        let params = entry.params.iter().map(|v| body.values.get(*v).map(|v| v.ty))
+            .collect::<Result<Vec<_>, _>>().map_err(|e| PrintError::new(e.to_string()))?;
+        if params != function.signature.params {
+            return Err(PrintError::new(
+            "signature and entry parameters differ"));
+        }
+        w.values(body, &entry.params, true, true)?;
+    } else {
+        w.push("(");
+        for (i, ty) in function.signature.params.iter().enumerate() {
+            if i > 0 {
+                w.push(if is_service(module, *ty) { "; " } else { ", " });
+            }
+            w.push(&format!("%arg{i}: "));
+            ty.write(w)?;
+        }
+        w.push(")");
+    }
+    w.push(" -> ");
+    w.results(&function.signature.results)?;
+    let attrs = if external.is_some() {
+        &function.attrs[..function.attrs.len() - 1]
+    }
+    else {
+        &function.attrs[..]
+    };
+    w.attributes(attrs)?;
+    if function.signature.ownership_abi != OwnershipAbi::Unelaborated {
+        w.push(" abi ");
+        function.signature.ownership_abi.write(w)?;
+    }
+    w.summary_reference("summary", function.summary)?;
+    w.summary_reference("async-creation", function.async_creation_summary)?;
+    w.summary_reference("async-body", function.async_body_summary)?;
+    w.location(function.loc)?;
+    if let Some(body) = &function.body {
+        w.push(" {\n");
+        if body.entry.as_u32() != 0 {
+            w.push("    entry ");
+            body.entry.write(w)?;
+            w.push("\n");
+        }
+        w.body(body)?;
+        w.push("}\n");
+    } else if let Some(name) = external {
+        w.push(" = ");
+        name.write(w)?;
+        w.push("\n");
+    } else {
+        w.push(";\n");
+    }
+    w.scope = 0;
+    w.generic_owner = None;
+    w.body = None;
+    Ok(())
 }
 
 /// Canonical equality ignores SSA names, type-table and SSA arena numbering.
@@ -226,10 +245,12 @@ pub(crate) struct Writer<'a> {
     pub(super) generic_owner: Option<GenericOwner>,
     pub(super) body: Option<&'a Body>,
     pub(super) literal_type: Option<TypeId>,
+    /// Development dumps: no text size limit.
+    pub(super) unlimited: bool,
 }
 impl Writer<'_> {
     pub(crate) fn push(&mut self, s: &str) {
-        if self.output.len().saturating_add(s.len()) > Limits::default().max_text_bytes {
+        if !self.unlimited && self.output.len().saturating_add(s.len()) > Limits::default().max_text_bytes {
             self.overflow = true;
         }
         else if !self.overflow {
@@ -761,7 +782,7 @@ pub(super) fn payload_print<T: Codec>(value: &T) -> String {
     builder.intern_type(Type::Int).unwrap();
     let module = builder.finish().unwrap();
     let mut writer = Writer { module: &module, output: String::new(), names: HashMap::new(), scope: 0, depth: 0,
-        overflow: false, generic_owner: None, body: None, literal_type: None };
+        overflow: false, generic_owner: None, body: None, literal_type: None, unlimited: false };
     for &(ns, name) in TEST_NAMES {
         writer.bind(0, ns, 0, name.into()).unwrap();
     }

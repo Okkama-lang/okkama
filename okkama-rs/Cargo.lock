@@ -1189,6 +1189,7 @@ dependencies = [
  "mimalloc",
  "okkama-allocation-counter",
  "okkama-compiler",
+ "okkama-devtrace",
  "okkama-runtime-core",
  "okkama-sparrow",
  "serde_json",
@@ -1199,6 +1200,7 @@ dependencies = [
 name = "okkama-compiler"
 version = "0.5.8"
 dependencies = [
+ "okkama-devtrace",
  "okkama-oir",
  "okkama-runtime-core",
  "okkama-sparrow",
@@ -1206,6 +1208,10 @@ dependencies = [
  "serde_json",
  "sparrow-core",
 ]
+
+[[package]]
+name = "okkama-devtrace"
+version = "0.5.8"
 
 [[package]]
 name = "okkama-native"
@@ -1237,6 +1243,9 @@ dependencies = [
 [[package]]
 name = "okkama-oir"
 version = "0.5.8"
+dependencies = [
+ "okkama-devtrace",
+]
 
 [[package]]
 name = "okkama-persistent"
@@ -1277,6 +1286,7 @@ dependencies = [
 name = "okkama-sparrow"
 version = "0.5.8"
 dependencies = [
+ "okkama-devtrace",
  "okkama-runtime-abi",
 ]
 
@@ -1851,6 +1861,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "okkama-devtrace",
  "okkama-native",
  "okkama-persistent",
  "okkama-runtime-abi",

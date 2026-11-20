@@ -15,6 +15,7 @@ champ-abi = []
 mimalloc = []
 
 [dependencies]
+okkama-devtrace = { path = "../okkama-devtrace" }
 okkama-sparrow = { path = "../okkama-sparrow" }
 okkama-runtime-abi = { path = "../okkama-runtime-abi" }
 okkama-runtime-core = { path = "../okkama-runtime-core" }

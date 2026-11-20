@@ -541,6 +541,15 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
 
 ## 9. Debugging recipes
 
+- **Development instrumentation first** (owner, 2026-11-20; crate `okkama-devtrace`): `OKKAMA_DEV=all,dump`
+  (or `own:connection,loader,runtime,…`; `OKKAMA_DEV=help` lists the categories) and `OKKAMA_DEV_OUT=DIR`.
+  The run writes `events.jsonl`, with the own decisions and their reasons (`dynamic owner`), every rejection
+  naming the function and the check, and budget exhaustion. It writes `dumps/NNNN-<stage>/<function>.txt`:
+  OIR after high, own, coro and low, and the SPB 17 listing of each function the loader checks. It also writes
+  `summary.txt`/`counters.json`: stage times and sizes, the time of each loader check, verifier steps, emitted
+  own operations by kind, runtime helper calls, allocation, GC and JIT. Release builds (`make build`,
+  `install-pgo`, packages) pass `--cfg okkama_release`, which compiles it out. Add a hook (`count!`, `span!`,
+  `event!`, `dump!`) wherever you would add a temporary `eprintln!`; do not write throwaway debug prints.
 - Runtime event counts: `sparrow --stats x.spb` or `SPARROW_CORE_STATS=1` —
   also allocations by site (`alloc site <function>:<pc> obj.new <Type>`, from
   machine code) and by kind (`alloc runtime object <Type>|string|array|…`),

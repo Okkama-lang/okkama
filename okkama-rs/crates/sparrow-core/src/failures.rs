@@ -1127,6 +1127,7 @@ unsafe fn parts<'a>(ctx: *mut Ctx) -> (&'a mut Ctx, &'a mut Runtime) {
 /// `region.adopt` (own) and `region.track` of `value`.
 #[inline(never)]
 pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u64) {
+    okkama_devtrace::count!("runtime", "rt_region_add");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|_| "region add".into());
     runtime.region_add(region, value, own != 0);
@@ -1136,6 +1137,7 @@ pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u
 /// `count` words at `keep` reach.
 #[inline(never)]
 pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const Word, count: u64) {
+    okkama_devtrace::count!("runtime", "rt_region_leave");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     runtime.count(|_| "region leave".into());
     let keep = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(keep, count as usize) } };
@@ -1149,6 +1151,7 @@ pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const 
 /// Resource identity of a new object with a destroy-reaching descriptor.
 #[inline(never)]
 pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
+    okkama_devtrace::count!("runtime", "rt_created");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|r| format!("resource {}", r.loaded.program.objects[descriptor as usize].name));
     runtime.created(descriptor as usize, object);
@@ -1157,6 +1160,7 @@ pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
 /// Region instructions and failure links of instruction `pc` (uses at `uses`).
 #[inline(never)]
 pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses: *const Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_failure_op");
     let frame = crate::runtime::frame_pointer!();
     let (ctx, runtime) = unsafe { parts(ctx_ptr) };
     // SAFETY: the loaded program is never mutated while machine code runs, so
@@ -1253,6 +1257,7 @@ pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses:
 /// `catch`: the payload (in `scratch`) and 1 when the failure matches.
 #[inline(never)]
 pub extern "C" fn rt_catch(ctx: *mut Ctx, function: u64, pc: u64, failure: Word) -> u64 {
+    okkama_devtrace::count!("runtime", "rt_catch");
     let (ctx, runtime) = unsafe { parts(ctx) };
     let I::Catch { kind, ty, .. } = &runtime.loaded.program.functions[function as usize].code[pc as usize] else {
         return 0;

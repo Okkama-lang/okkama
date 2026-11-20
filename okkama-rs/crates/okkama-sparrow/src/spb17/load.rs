@@ -236,31 +236,49 @@ pub fn verify_load(p: &Program, contracts: &dyn ExternalContracts) -> Check {
             drivers::check_origins(p, f, name)?;
             continue;
         }
-        drivers::check_native_inputs(p, f)?;
-        check_fallible_data(f)?;
-        check_creations(p, f)?;
-        check_failure_mask(p, f)?;
-        check_call_contracts(p, f)?;
-        check_service_results(p, f)?;
-        suspension::check_flow(p, f)?;
-        take::check(p, index as u32, f)?;
-        services::check_materialize(p, f, &fresh)?;
-        let states = service_states(f)?;
-        enforce(f.proofs.states == states, "EVIDENCE_STATES",
-            "service maps differ from reconstructed lifetimes")?;
-        let live = check_roots(f)?;
+        // Development instrumentation (OKKAMA_DEV=loader[:function][,dump]): each check's time, the rejecting
+        // check with its function, and the function's code as a listing.
+        okkama_devtrace::count!("loader", "functions checked");
+        okkama_devtrace::dump!("loader", "spb17", f.symbol, || listing(f));
+        macro_rules! step {
+            ($name:literal, $check:expr) => {{
+                let _span = okkama_devtrace::span!("loader", $name);
+                match $check {
+                    Ok(value) => value,
+                    Err(error) => {
+                        okkama_devtrace::event!("loader", "rejected", fn = f.symbol, check = $name,
+                            error = format!("{error:?}"));
+                        return Err(error);
+                    }
+                }
+            }};
+        }
+        step!("native inputs", drivers::check_native_inputs(p, f));
+        step!("fallible data", check_fallible_data(f));
+        step!("creations", check_creations(p, f));
+        step!("failure mask", check_failure_mask(p, f));
+        step!("call contracts", check_call_contracts(p, f));
+        step!("service results", check_service_results(p, f));
+        step!("suspension flow", suspension::check_flow(p, f));
+        step!("take", take::check(p, index as u32, f));
+        step!("materialize", services::check_materialize(p, f, &fresh));
+        let states = step!("service states", service_states(f));
+        step!("evidence states", enforce(f.proofs.states == states, "EVIDENCE_STATES",
+            "service maps differ from reconstructed lifetimes"));
+        let live = step!("roots", check_roots(f));
         let mut reconstructed = evidence::Evidence::new(p, f);
-        let destroy_masks = (0..f.proofs.closes.len()).map(|close| {
+        let destroy_masks = step!("destroy masks", (0..f.proofs.closes.len()).map(|close| {
             visible_destroy_failures(p, f, close as u32, &mut reconstructed)
-        }).collect::<Result<Vec<_>, _>>()?;
-        check_plans(p, f, &mut reconstructed, &destroy_masks)?;
-        check_fresh(f, &mut reconstructed)?;
-        enforce(f.proofs.static_selections == evidence::static_selections_with(p, f, &mut reconstructed)?,
-            "EVIDENCE_SELECTIONS", "static selection relocation mismatch")?;
-        reconstructed.check_budget()?;
-        automaton::check(p, f, &destroy_masks)?;
-        let allocation = allocation::allocate_with(f, &live)?;
-        allocation::check_allocation_with(f, &allocation, &live)?;
+        }).collect::<Result<Vec<_>, _>>());
+        step!("plans", check_plans(p, f, &mut reconstructed, &destroy_masks));
+        step!("fresh", check_fresh(f, &mut reconstructed));
+        let selections = step!("static selections", evidence::static_selections_with(p, f, &mut reconstructed));
+        step!("evidence selections", enforce(f.proofs.static_selections == selections, "EVIDENCE_SELECTIONS",
+            "static selection relocation mismatch"));
+        step!("evidence budget", reconstructed.check_budget());
+        step!("automaton", automaton::check(p, f, &destroy_masks));
+        let allocation = step!("allocation", allocation::allocate_with(f, &live));
+        step!("allocation check", allocation::check_allocation_with(f, &allocation, &live));
     }
     Ok(())
 }
@@ -927,4 +945,14 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
     let declared = f.proofs.entry.as_ref().map_or(0, |entry| entry.failures);
     enforce(computed & !declared == 0, "ENTRY_FAILURE_MASK",
         &format!("{}: body failure mask {computed} exceeds declared mask {declared}", f.symbol))
+}
+
+/// A function's code, one instruction per line with its pc (development dumps, OKKAMA_DEV=loader,dump).
+pub(crate) fn listing(f: &Function) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!("fn {} entry {:?}\nparams {:?}\n", f.symbol, f.entry_abi, f.params);
+    for (pc, instruction) in f.code.iter().enumerate() {
+        let _ = writeln!(text, "{pc:5} {instruction:?}");
+    }
+    text
 }

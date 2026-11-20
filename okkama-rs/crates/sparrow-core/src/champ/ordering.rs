@@ -61,6 +61,7 @@ pub(crate) fn order_natural(ctx: *mut Ctx, array: Word, ty: s::Type) -> Word {
 /// (or a stop) in the context. Re-entrant: each comparison runs compiled code, which may collect, so the
 /// source array, which holds every element, stays a runtime root while the comparisons run.
 pub extern "C" fn rt_machine_order(ctx: *mut Ctx, function: u64, pc: u64, array: Word) -> Word {
+    okkama_devtrace::count!("runtime", "rt_machine_order");
     let frame = runtime::frame_pointer!();
     let runtime = unsafe { &mut *(*ctx).runtime };
     let Some(program) = runtime.champ.machine.as_ref().map(|machine| machine.source.clone()) else {

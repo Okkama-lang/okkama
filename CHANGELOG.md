@@ -8,6 +8,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Development instrumentation across the pipeline and the runtime (owner, 2026-11-20).** The new crate
+  `okkama-devtrace` adds events, counters, timers and dumps, switched on by `OKKAMA_DEV` (categories, function
+  filters, `dump`) and written to `OKKAMA_DEV_OUT`.
+  - **Compiler.** Every OIR-2 stage is timed and sized, with per-function dumps (a new
+    `text::print_one_function`). own records why each scope settles dynamically, the operations it emits and
+    the work and memory of each function's analysis, including budget exhaustion. Verifiers record their steps
+    and rejections. SPB 17 records codegen and each load check's time, plus the rejecting check with its
+    function and a listing.
+  - **Runtime.** The calls of every Champ helper and Tomato region helper, allocation, GC and JIT.
+  - **Release.** Release builds compile it out with `--cfg okkama_release`: make, PGO, packages.
 - **More code runs on Champ, in the Wave CI (#894, owner's decision).** The conformance job also runs, on the
   binary it built: the t/ suite (50 668 checks; `tools/t/run.py` has a `champ` configuration, `--champ-okkama`), the
   micro-benchmark programs against their oracles (moved from okkama-docs into `bench/micro`; `check.py` checks

@@ -53,7 +53,11 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
     let entry_sets = super::entries::entry_sets(&output.module, emitter.budget_ref())?;
     let mut flows = BTreeMap::new();
     for function in &functions {
+        let _span = okkama_devtrace::span!("own", "analyze");
         let flow = analyze_function(&output.module, *function, &output.analysis, options)?;
+        okkama_devtrace::event!("own", "analyzed", fn = output.module.functions.get(*function).map_err(arena)?.symbol,
+            work = flow.stats.charged_work, peak_bytes = flow.stats.peak_auxiliary_bytes);
+        okkama_devtrace::count!("own", "analysis work", flow.stats.charged_work);
         let retained = flow.allocated_bytes() + 128;
         let peak = flow.stats.peak_auxiliary_bytes.max(retained);
         emitter.charge(flow.stats.charged_work, peak)?;
@@ -117,6 +121,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
     }
     output.module.profile = Profile::Own;
     for function in functions {
+        let _span = okkama_devtrace::span!("own", "rewrite");
         let high = output.module.functions.get_mut(function).map_err(arena)?.body.take().unwrap();
         let graph = Graph::index(&output.module, &high, emitter.budget_ref())?;
         let root = high.blocks.get(high.entry).map_err(arena)?.lexical_scope;
@@ -358,7 +363,7 @@ pub fn rewrite_subset(mut output: OwnOutput, options: &OwnOptions) -> Result<Own
                 })
             });
             if carries {
-                driver.dynamic_owners.insert(root);
+                driver.dynamic_owner(root, "root parameters can carry service entries");
             }
         } else {
             signature.ownership_abi = OwnershipAbi::Observation;
@@ -736,6 +741,20 @@ impl Driver<'_, '_> {
     fn emit(&mut self, point: Landing, op: Operation) -> Result<Landing, OwnError> {
         self.emit_restoring(point, op, None)
     }
+
+    /// A scope whose close settles service entries at run time (D25.3), with the reason (OKKAMA_DEV=own).
+    pub(super) fn dynamic_owner(&mut self, scope: ScopeId, reason: &'static str) {
+        if self.dynamic_owners.insert(scope) {
+            okkama_devtrace::count!("own", format!("dynamic owner: {reason}"));
+            okkama_devtrace::event!("own", "dynamic owner", fn = self.scope_symbol(scope), scope = scope.as_u32(),
+                reason = reason);
+        }
+    }
+
+    fn scope_symbol(&self, scope: ScopeId) -> String {
+        self.module.scopes.get(scope).ok().and_then(|declaration| self.module.functions.get(declaration.function).ok())
+            .map_or_else(String::new, |function| function.symbol.clone())
+    }
     /// `restored` names the High buffer whose checked unwind results (buffer
     /// and element journal) replace it under the same High name.
     fn emit_restoring(
@@ -745,6 +764,7 @@ impl Driver<'_, '_> {
         restored: Option<ValueId>,
     ) -> Result<Landing, OwnError> {
         point.env.unwind_values = Some(self.unwind_needed(&point));
+        okkama_devtrace::count!("own", format!("emit {}", super::dev_label(&op)));
         let closed_parent = match &op {
             Operation::Ownership(OwnershipOp::ScopeEnd { state, .. }) => {
                 match self.module.types.get(self.body.values.get(*state).map_err(arena)?.ty).map_err(arena)? {
@@ -1072,7 +1092,7 @@ impl Driver<'_, '_> {
             point = self.emit(point, Operation::Ownership(OwnershipOp::Admit { state, packet }))?;
             // Admitted service entries join the landing scope's dynamic inventory (D25.3).
             if rehomed {
-                self.dynamic_owners.insert(original.lexical_scope);
+                self.dynamic_owner(original.lexical_scope, "a nested scope rehomed admitted entries (D25.3)");
             }
             point.env.cleanup.rehomed = false;
             point.env.cleanup.wanted = None;
