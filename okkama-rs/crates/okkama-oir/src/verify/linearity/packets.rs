@@ -176,6 +176,16 @@ impl Engine<'_, '_> {
                 rest.pieces.insert(piece.clone());
                 continue;
             }
+            // #878 (Fable): an admissible selection of values that cannot hold a Future reaches a cache's holder graph
+            // only through a borrowed outcome view. It takes nothing the cache holds, as the runtime's admission walk
+            // cannot: the piece stays, silently, like a cache-owned duty piece. A piece the selection names itself,
+            // and every other selection, keep the check below.
+            let through_holder = !input_related && !keys.contains(&piece.origin) && !possible.contains(&piece.origin)
+                && piece.holder.is_some_and(|holder| keys.contains(&holder));
+            if *fresh && !base.futures && through_holder {
+                rest.pieces.insert(piece.clone());
+                continue;
+            }
             if related && eligible && !keys.is_empty() && piece.holder.is_some() && !base.whole_future {
                 let rule = if piece.channel { R::B74 } else { R::B91 };
                 self.error(rule, "scope/packet selection cannot extract a private protocol holder graph");

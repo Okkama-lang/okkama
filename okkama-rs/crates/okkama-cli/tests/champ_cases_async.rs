@@ -1225,6 +1225,42 @@ async main() is int {
         "destroy wrapped twice\n"));
 }
 
+/// #878 (Fable): `relay` stores the view of a shared await's outcome in a `Box` (whose constructor takes `r`), reads
+/// it through the `Box`, and awaits the Future again. The store borrows the view: nothing leaves the cache, which
+/// destroys the outcome once, when its owner closes. Full refused it (B91). Tomato's output.
+#[test]
+fn a_stored_outcome_view_borrows_the_cached_outcome() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Wrapper { Wrapper(); async wrap(n is string) is Res { Res(name: "wrapped " + n); } }
+object Box { has r is Res; Box(:r); name() is string { r.label(); } }
+object Relay {
+    Relay();
+    async relay() is Res {
+        let f = Wrapper().wrap("in");
+        let r = await f;
+        let b = Box(r: r);
+        Stdout().writeln("boxed " + b.name());
+        let again = await f;
+        Stdout().writeln("again " + again.label());
+        Res(name: "fresh");
+    }
+}
+async main() is int {
+    let r = await Relay().relay();
+    Stdout().writeln("got " + r.label());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "boxed wrapped in\nagain wrapped in\ndestroy wrapped in\ngot fresh\nmain end\ndestroy fresh\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
