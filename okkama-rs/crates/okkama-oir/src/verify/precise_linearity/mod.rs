@@ -533,12 +533,16 @@ impl Engine<'_, '_> {
         if successor(self.module, self.body, value) && flow.must_use[i] == 1 {
             self.error(R::B82, "successor incarnation overwritten before a permitted use");
         }
-        if slot.aliases != flow.aliases[i] || !slot.aliases.contains(&value) {
+        // A slot captured before an earlier result of the same operation was defined
+        // names its members' classes as they were; the source is their classes now.
+        let source: BTreeSet<_> = slot.aliases.iter().copied().chain(slot.aliases.iter()
+            .filter(|member| **member != value)
+            .flat_map(|member| flow.aliases[member.as_u32() as usize].iter().copied())).collect();
+        if source != flow.aliases[i] || !source.contains(&value) {
             let old = flow.aliases[i].clone();
             let retained: BTreeSet<_> = old.iter().copied().filter(|v| *v != value).collect();
             flow.replace_aliases(&old, &retained);
         }
-        let source = slot.aliases.clone();
         let aliases: BTreeSet<_> = source.iter().copied().chain(std::iter::once(value)).collect();
         flow.replace_aliases(&source, &aliases);
         flow.aliases[i] = aliases.clone();

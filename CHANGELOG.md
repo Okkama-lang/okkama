@@ -20,6 +20,17 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **Full ownership verification no longer rebuilds the whole function's aliases on every edge (#883).**
+  An ordinary `main` with 40 calls ran out of the verifier's step budget (Incomplete), and 20 calls
+  took 47 s in a debug build. Changes:
+  - `define` takes a result's source from its members' current alias classes, so two results of one
+    operation share one class. The alias directory stays a partition, and no verdict changes.
+  - An edge renames only the classes of the target's parameters and of the forwarded values.
+  - `OKKAMA_803_EDGE_CHECK=1`, set by `tools/verifier-differential.sh`, checks the partition and
+    compares the class remap with the full remap on every edge.
+
+  Now 20 calls take 19 s and 40 calls complete in 81 s. Full stays quadratic; the remaining scan of
+  contained sets is #884, postponed by the owner because Full is a test and CI gate.
 - **A function that returns a Future over its own parameter no longer destroys that parameter
   first (#862, #864).** For example, `start(r is Res) is Future<int> { Feeder().feed(r); }`.
   Champ destroyed `r` when `start` returned, and the Future later read it, yet Full

@@ -601,7 +601,7 @@ func @f() -> void {
     }
 
     #[test]
-    fn two_results_with_shared_stale_aliases_remap_containment_by_exact_union() {
+    fn two_results_from_one_captured_slot_share_one_class() {
         let mut module = module();
         let function = FuncId::from_u32(0);
         let value = ValueId::from_u32;
@@ -637,22 +637,61 @@ func @f() -> void {
             for result in &body.insts.get(instruction).unwrap().results {
                 engine.define(&mut flow, *result, slot.clone());
             }
-            assert_eq!(flow.aliases[0], SharedSet::from([value(0), value(1)]));
-            assert_eq!(flow.aliases[1], SharedSet::from([value(1), value(2)]));
-            // The first result's labels include the source, whose class was
-            // changed by the second result defined from the captured slot.
+            // #803: the second result is defined from the source's class as it is now,
+            // so both results and the source share one class and the directory stays a
+            // partition: every member's entry is the whole class.
+            let class = SharedSet::from([value(0), value(1), value(2)]);
+            for index in 0..3 {
+                assert_eq!(flow.aliases[index], class);
+            }
             flow.contained[3] = flow.aliases[0].clone();
-            let classes = BTreeMap::from([
-                (flow.aliases[0].clone(), SharedSet::from([value(0)])),
-                (flow.aliases[1].clone(), SharedSet::from([value(2)])),
-            ]);
-            let expected: SharedSet<_> = flow.contained[3].iter().flat_map(|label| {
-                classes.get(&flow.aliases[label.as_u32() as usize]).into_iter().flatten().copied()
-            }).collect();
-            assert_eq!(expected, SharedSet::from([value(0), value(2)]));
+            let classes = BTreeMap::from([(class.clone(), SharedSet::from([value(0), value(2)]))]);
             flow.remap_aliases(&classes, engine.state);
-            assert_eq!(flow.contained[3], expected);
+            assert_eq!(flow.contained[3], SharedSet::from([value(0), value(2)]));
+            assert!(flow.aliases[1].is_empty());
         });
+    }
+
+    #[test]
+    fn renaming_the_changed_classes_equals_the_full_remap() {
+        let module = module();
+        let body = module.functions.get(FuncId::from_u32(0)).unwrap().body.as_ref().unwrap();
+        let value = ValueId::from_u32;
+        let mut flow = Flow::new(4, witnesses(&module, body));
+        let kept = SharedSet::from([value(0), value(1)]);
+        let changed = SharedSet::from([value(2), value(3)]);
+        for (index, class) in [(0, &kept), (1, &kept), (2, &changed), (3, &changed)] {
+            flow.availability[index] = AVAILABLE;
+            flow.aliases.set(index, class.clone());
+            flow.contained.set(index, class.clone());
+        }
+        flow.contained.set(0, SharedSet::from([value(0), value(1), value(2), value(3)]));
+        let filter = |labels: SharedSet<ValueId>| Filter {
+            keys: BTreeSet::new(), fresh: false, possible: BTreeSet::new(),
+            labels, stale: false, whole_future: false, futures: false, state: 0,
+        };
+        let mut piece = Piece::new(Origin::Input(value(2)), AdmissionProvenance::Bound);
+        piece.predicates.insert(filter(changed.clone()), true);
+        flow.tokens[2].pieces.insert(piece);
+        // A settled piece whose labels miss a member defined after it was captured.
+        let mut settled = Piece::new(Origin::Input(value(1)), AdmissionProvenance::Bound);
+        settled.predicates.insert(filter(SharedSet::from([value(0)])), true);
+        flow.closed_inputs.insert(settled);
+        // Value 3 is a parameter of the target and leaves its class.
+        let remapped = BTreeMap::from([(changed.clone(), SharedSet::from([value(2)]))]);
+        with_state(&module, |state| {
+            let mut reference = flow.clone();
+            let all = BTreeMap::from([(kept.clone(), kept.clone()), (changed.clone(), SharedSet::from([value(2)]))]);
+            reference.remap_aliases(&all, state);
+            flow.remap_classes(&remapped, state);
+            assert_eq!(flow, reference);
+        });
+        assert!(flow.aliases[3].is_empty());
+        assert_eq!(flow.aliases[2], SharedSet::from([value(2)]));
+        assert_eq!(flow.contained[0], SharedSet::from([value(0), value(1), value(2)]));
+        let labels = |piece: &Piece| piece.predicates.keys().next().unwrap().labels.clone();
+        assert_eq!(labels(flow.tokens[2].pieces.iter().next().unwrap()), SharedSet::from([value(2)]));
+        assert_eq!(labels(flow.closed_inputs.iter().next().unwrap()), kept);
     }
 
     #[test]

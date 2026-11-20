@@ -304,6 +304,7 @@ impl<T: Clone + Eq> PerValue<T> {
 impl<T: Clone + Eq + AllocationSize> PerValue<T> {
     /// Stable last-write-wins assignment, merged with the old sorted directory.
     /// Unchanged entries need neither a search nor a new persistent path.
+    #[cfg(any(test, feature = "verifier-differential"))]
     pub fn assign_entries(&mut self, desired: Vec<(usize, T)>, charge: impl FnMut(usize) -> bool) {
         self.merge_entries(desired, true, charge);
     }
