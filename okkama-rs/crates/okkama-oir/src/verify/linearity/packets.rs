@@ -1235,6 +1235,8 @@ pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
 /// #877 (Fable): whether a value of `ty` can reach a Future other than as a FutureGroup's member, as SPB 17's
 /// `reaches_future` answers. A group starts every member it registers, so it holds no cold Future; its settle releases
 /// finished members' outcomes, whose types are known, and detaches running ones.
+// The precise domain includes this file too and has no use for it.
+#[allow(dead_code)]
 pub(crate) fn reaches_cold_futures(module: &Module, ty: TypeId) -> bool {
     reaches_futures(module, ty, false)
 }
