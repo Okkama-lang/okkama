@@ -301,7 +301,9 @@ def champ_outcome(mode, code, stderr):
                             "message": "okkama terminated by signal %d" % -code}}, 70
     if code == 0:
         return {"outcome": "completed", "stage_reached": "runtime", "exit_status": 0}, 0
-    if code == EXIT_OIR2_UNSUPPORTED or "unsupported in OIR-2 lowering" in head:
+    # The CLI's own status 4 comes with its `okkama: ` report; a silent 4 is main()'s result
+    # (L01.gram.test.inner-grammar-not-parsed returns 4).
+    if (code == EXIT_OIR2_UNSUPPORTED and head.startswith("okkama: ")) or "unsupported in OIR-2 lowering" in head:
         return {"outcome": "unsupported", "stage_reached": "check",
                 "unsupported_reason": head[len("okkama: "):] if head.startswith("okkama: ") else head,
                 "raw": stderr}, 3
