@@ -145,14 +145,9 @@ struct BodyInference {
 /// or stored. A bare Future input of an async body is borrowed (PR-N2), and a creation thunk forwards its entry whole
 /// to `fut.new`. The loader's `entry_carries_future` asks the same.
 ///
-/// This is wider than the loader for a FutureGroup: the classification reaches a group's members, which are Futures,
-/// so a function that takes a group counts here. A group starts every member it registers and holds no cold Future,
-/// so the loader skips it (`reaches_future`). Counting it here is sound (an envelope may be wider than the demand),
-/// only less precise; telling a group's members apart needs a path-aware classification (#877).
-pub(super) fn futures_in_entry(
-    module: &Module,
-    types: &BTreeMap<TypeId, TypeClassification>,
-) -> Result<BTreeSet<FuncId>, OwnError> {
+/// #877 (Fable): a FutureGroup's members do not count, as in the loader's `reaches_future`: a group starts every
+/// member it registers and holds no cold Future. Collectors store Futures that may be cold, and count.
+pub(super) fn futures_in_entry(module: &Module) -> Result<BTreeSet<FuncId>, OwnError> {
     let mut result = BTreeSet::new();
     for (id, function) in module.functions.iter() {
         let Some(body) = &function.body else { continue };
@@ -165,8 +160,7 @@ pub(super) fn futures_in_entry(
         let entry = body.blocks.get(body.entry).map_err(arena)?;
         let carries = entry.params.iter().any(|param| body.values.get(*param).is_ok_and(|value| {
             !(asynchronous && futures::is_future(module, value.ty))
-                && types.get(&value.ty).is_some_and(|facts| facts.service_types.iter()
-                    .any(|ty| matches!(module.types.get(*ty), Ok(Type::Future(_)))))
+                && crate::verify::reaches_cold_futures(module, value.ty)
         }));
         if carries {
             result.insert(id);
@@ -366,7 +360,7 @@ impl Universe {
             nodes: vec![], calls: BTreeMap::new(), strides: BTreeMap::new(), inventories, retained_roots,
             services: BTreeMap::new(), protocol_services: BTreeMap::new(), descriptors: BTreeMap::new(),
             creations: BTreeMap::new(), replacements: BTreeMap::new(),
-            entry_futures: futures_in_entry(module, types)?,
+            entry_futures: futures_in_entry(module)?,
             destroys: types.values().flat_map(|facts| facts.destroy_entries.iter().copied()).collect(),
         };
         let result_bound = module.functions.iter().map(|(_, function)| function.signature.results.len())

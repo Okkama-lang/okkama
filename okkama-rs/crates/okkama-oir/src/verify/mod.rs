@@ -50,6 +50,11 @@ pub fn holds_futures(module: &crate::Module, ty: crate::TypeId) -> bool {
     linearity::holds_futures(module, ty)
 }
 
+/// #877: whether a value of `ty` can reach a Future other than as a FutureGroup's member (`reaches_future` in SPB 17).
+pub fn reaches_cold_futures(module: &crate::Module, ty: crate::TypeId) -> bool {
+    linearity::reaches_cold_futures(module, ty)
+}
+
 /// Whether `fields` is a path through the substituted object fields of a parameter of type `ty`: the T4 rule on a
 /// summary's `field`/`path` selection, for producers of summaries (own's lent fields, PR-P).
 pub fn summary_path_follows(module: &crate::Module, ty: crate::TypeId, fields: &[crate::FieldRef]) -> bool {

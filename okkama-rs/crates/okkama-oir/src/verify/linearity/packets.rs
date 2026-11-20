@@ -1229,6 +1229,19 @@ fn retention_values(retention: &Retention) -> Vec<ValueId> {
 
 /// See `Engine::holds_futures`; also the OIR half of the cross test against SPB 17's `reaches_holder`.
 pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
+    reaches_futures(module, ty, true)
+}
+
+/// #877 (Fable): whether a value of `ty` can reach a Future other than as a FutureGroup's member, as SPB 17's
+/// `reaches_future` answers. A group starts every member it registers, so it holds no cold Future; its settle releases
+/// finished members' outcomes, whose types are known, and detaches running ones.
+// The precise domain includes this file too and has no use for it.
+#[allow(dead_code)]
+pub(crate) fn reaches_cold_futures(module: &Module, ty: TypeId) -> bool {
+    reaches_futures(module, ty, false)
+}
+
+fn reaches_futures(module: &Module, ty: TypeId, groups: bool) -> bool {
     let any_future = || module.types.iter().any(|(_, ty)| matches!(ty, Type::Future(_)));
     let fields = |decl: DeclId| -> Vec<TypeId> {
         match module.declarations.get(decl).map(|declaration| &declaration.kind) {
@@ -1256,7 +1269,10 @@ pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
                 if module.declarations.get(*decl).is_ok_and(|declaration| {
                     crate::catalogue::service_holder(&declaration.name)
                 }) {
-                    return true;
+                    if groups {
+                        return true;
+                    }
+                    continue;
                 }
                 pending.extend(fields(*decl));
             }
@@ -1277,7 +1293,10 @@ pub(crate) fn holds_futures(module: &Module, ty: TypeId) -> bool {
                     });
                     // A group behind the role holds its own entry (#810 review F3), as `reaches_holder` answers.
                     if implements && crate::catalogue::service_holder(&declaration.name) {
-                        return true;
+                        if groups {
+                            return true;
+                        }
+                        continue;
                     }
                     if implements {
                         pending.extend(fields(object));

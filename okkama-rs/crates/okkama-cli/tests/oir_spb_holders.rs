@@ -90,19 +90,24 @@ fn holds_futures_and_reaches_holder_agree() {
     let name = |ty: o::TypeId| -> String { label(&module, ty) };
     // Review of D25, answer 6: maps, variants, successors, closures and nested arrays of Futures, each with its
     // quiet twin where the language has one; and an object that keeps an Atomic over Futures (PR-A).
-    let expected = [("app.Plain", false), ("app.Holder", true), ("app.Pending", true), ("app.Waiting", true),
-        ("app.Quiet", false), ("app.Calm", false), ("app.Nested", true), ("[app.Holder]", true),
-        ("[app.Plain]", false), ("Any", true), ("%int:app.Holder", true), ("%int:app.Plain", false),
-        ("app.Slot", true), ("app.Mark", false), ("^app.Holder", true), ("^app.Plain", false),
-        ("(int) is int", true), ("[[future]]", true),
+    let expected = [
+        ("app.Plain", false, false), ("app.Holder", true, true), ("app.Pending", true, true),
+        ("app.Waiting", true, true), ("app.Quiet", false, false), ("app.Calm", false, false),
+        ("app.Nested", true, true), ("[app.Holder]", true, true), ("[app.Plain]", false, false), ("Any", true, true),
+        ("%int:app.Holder", true, true), ("%int:app.Plain", false, false), ("app.Slot", true, true),
+        ("app.Mark", false, false), ("^app.Holder", true, true), ("^app.Plain", false, false),
+        ("(int) is int", true, true), ("[[future]]", true, true),
         // PR-A: an Atomic borrows the Futures it stores, so a value that keeps one reaches no holder through it.
-        ("app.Kept", false),
-        // #810: a FutureGroup holds its own entry, also behind its role and in a field (review F3).
-        ("async.scope.FutureGroup_int", true), ("async/scope::Supervising<int>", true), ("app.GroupBox", true)];
+        ("app.Kept", false, false),
+        // #810: a FutureGroup holds its own entry, also behind its role and in a field (review F3). #877: it starts
+        // every member it registers, so it reaches no cold Future (the third column).
+        ("async.scope.FutureGroup_int", true, false), ("async/scope::Supervising<int>", true, false),
+        ("app.GroupBox", true, false),
+    ];
     let mut checked = Vec::new();
     for (ty, _) in module.types.iter() {
         let label = name(ty);
-        let Some(&(_, intended)) = expected.iter().find(|(name, _)| *name == label) else { continue };
+        let Some(&(_, intended, cold)) = expected.iter().find(|(name, _, _)| *name == label) else { continue };
         let Some(translated) = spb(&module, &program, ty) else { continue };
         if let s::Type::Object(id) | s::Type::Variant(id) | s::Type::Successor(id) = translated {
             assert_eq!(program.objects[id as usize].name, label.trim_start_matches('^'),
@@ -110,6 +115,9 @@ fn holds_futures_and_reaches_holder_agree() {
         }
         assert_eq!(o::verify::holds_futures(&module, ty), intended, "holds_futures {label}");
         assert_eq!(s::reaches_holder(&program, translated), intended, "reaches_holder {label}");
+        // #877 (Fable): own and the loader ask the same question of an entry packet (#875).
+        assert_eq!(o::verify::reaches_cold_futures(&module, ty), cold, "reaches_cold_futures {label}");
+        assert_eq!(s::reaches_future(&program, translated), cold, "reaches_future {label}");
         checked.push(label);
     }
     checked.sort();

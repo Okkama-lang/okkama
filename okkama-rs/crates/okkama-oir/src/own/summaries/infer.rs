@@ -605,10 +605,16 @@ impl Universe {
                             continue;
                         }
                         // #866 (Fable, §6.3c for a Future): a bare Future parameter the creation borrows goes back
-                        // beside the Future too; a bound local Future is not ruled yet, so only parameters count.
+                        // beside the Future too, as its parameter entry below. #874 (Fable, §6.3d with a Future as
+                        // the local): a bound local Future goes back beside it by a rehome of its own, with what its
+                        // cache holds; each of its creations is typed by what its site creates.
                         if !futures::is_future(module, data.ty) {
                             result.beside.extend(actual.fresh.iter()
                                 .map(|site| BesideEntry::Site { site: *site, ty: data.ty }));
+                        } else {
+                            result.beside.extend(actual.fresh.iter().map(|site| BesideEntry::Site {
+                                site: *site, ty: summaries::site_type(body, *site, stride).unwrap_or(data.ty),
+                            }));
                         }
                         result.beside.extend(actual.aliases.iter().filter_map(|alias| match alias {
                             SummarySelection::Parameter(parameter) => Some(BesideEntry::Parameter(*parameter)),

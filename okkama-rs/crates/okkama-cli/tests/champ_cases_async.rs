@@ -1367,6 +1367,26 @@ async main() is int {
 "#, "made\ndestroy passed\ndestroy boxed\n");
 }
 
+/// #874 (Fable, §6.3d with a Future as the local): `chain` returns a Future of `take(g)` over its bound local Future
+/// `g`, which goes back beside it by a rehome of its own; main settles it at its close. Before, Structural refused
+/// main (D18_EXECUTOR) and Full refused `chain` (B51). Tomato's output.
+#[test]
+fn a_returned_future_over_a_bound_local_future() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { Stdout().writeln("destroy " + l); } }
+object M { M(); async make(l is string) is Res { Stdout().writeln("make " + l); Res(l: l); } }
+object U { U(); async take(f is Future<Res>) is int { (await f).n(); } }
+object C { C(); chain() is Future<int> { let g = M().make("x"); U().take(g); } }
+async main() is int {
+    let h = C().chain();
+    Stdout().writeln("got " + (await h).string());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make x\ngot 1\nmain end\ndestroy x\n");
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
