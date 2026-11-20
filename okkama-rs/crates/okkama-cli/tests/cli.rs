@@ -187,32 +187,14 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
 }
 
 #[test]
-fn ocs_capabilities_follow_the_selected_engine() {
-    {
-        let engine = "sparrow";
-        let output = okkama()
-            .arg("--ocs-capabilities")
-            .env("OCS_RUST_ENGINE", engine)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(stdout(&output).contains(&format!("\"engine\": \"{engine}\"")));
-        // Все движки исполняют весь язык, включая режим тестов.
-        assert!(stdout(&output).contains("\"test\""), "{engine}");
-    }
-    let output = okkama()
-        .arg("--ocs-capabilities")
-        .env_remove("OCS_RUST_ENGINE")
-        .output()
-        .unwrap();
-    // Как `okkama run`: Sparrow по умолчанию.
+fn ocs_capabilities_report_sparrow_with_every_mode() {
+    // One engine (Tweed): the OCS adapter reports Sparrow, which runs the whole language, test mode included.
+    let output = okkama().arg("--ocs-capabilities").env_remove("OCS_RUST_ENGINE").output().unwrap();
+    assert!(output.status.success());
     assert!(stdout(&output).contains("\"engine\": \"sparrow\""));
-    let output = okkama()
-        .arg("--ocs-capabilities")
-        .env("OCS_RUST_ENGINE", "typo")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
+    for mode in ["\"parse\"", "\"check\"", "\"run\"", "\"test\""] {
+        assert!(stdout(&output).contains(mode), "{mode}");
+    }
 }
 
 #[test]
