@@ -322,10 +322,11 @@ impl Runtime {
         };
         let identity = self.resources.identities.get_mut(&future).expect("Future identity");
         if !identity.groups.contains(&owned) { identity.groups.push(owned); }
+        // Registration adds a lifetime rather than stealing one: the group lists the Future, and the scope that
+        // made it, bound or a temporary its region tracks, keeps it. When that scope closes, it hands the Future
+        // to the group with what the Future borrows from the scope (`region_close_until`), so a child keeps the
+        // values it borrows (#914; adopting a temporary here left them behind, closed under a running child).
         self.region_push(owned, future);
-        // A fresh temporary has no lexical owner yet. Bound Futures keep
-        // theirs, and registration adds a lifetime rather than stealing it.
-        self.region_add(owned, future, true);
     }
 
     fn queue_private(&self, object: Word, groups: &mut Vec<Word>, futures: &mut Vec<Word>) {
