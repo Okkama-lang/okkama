@@ -1526,3 +1526,30 @@ async main() is int {
         job 22\ntemp 22\nmain\n";
     assert_eq!((run.stdout.as_str(), run.result), (expected, Ok(0)));
 }
+
+/// An async method that returns a field of `self`: its summary names the field of its receiver. After coro the
+/// body's only parameter is its frame, and T4 checked the summary's field against the frame type and refused the
+/// program ("summary field does not belong to its parameter type"); it now reads the language signature,
+/// continuation 0's slots (C-2). std's `DbPreparedTransaction.rows` and `Query.rows` have this shape.
+#[test]
+fn an_async_method_returns_a_field_of_self() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Holder {
+    has inner is Res;
+    Holder(:inner);
+    async view() is Res { inner; }
+}
+async main() is int {
+    let h = Holder(inner: Res(name: "x"));
+    let r = await h.view();
+    Stdout().writeln("got " + r.label());
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("got x\ndestroy x\n", Ok(0)), "{mode:?}");
+    }
+}

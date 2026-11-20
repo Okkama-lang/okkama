@@ -449,7 +449,11 @@ pub(super) fn check<'a>(module: &'a Module, selected: Option<FuncId>, state: &mu
             state.error(R::T5, "invalid function attribute layout or signature");
         }
         if let Some(summary) = data.summary.and_then(|id| module.summaries.get(id).ok()) {
-            let params = language_slots(module, &data.signature.params, state);
+            // A summary speaks of the language parameters. An async body of coro/low has only its frame as a
+            // parameter; its language signature is continuation 0's slots (C-2).
+            let language = super::coro::language_signature(module, data);
+            let slots = language.as_ref().map_or(&data.signature.params, |signature| &signature.params);
+            let params = language_slots(module, slots, state);
             elaboration::summary_paths(module, summary, &params, state);
         }
         let Some(body) = &data.body else { continue; };

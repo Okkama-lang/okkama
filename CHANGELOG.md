@@ -20,6 +20,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An async method that returns a field of `self` compiles on Champ (#888).** Example:
+  `async view() is Res { inner; }`. After coro, the body's only parameter is its frame, and `verify_coro` checked
+  the summary's field against the frame type: T4 "summary field does not belong to its parameter type". It now reads
+  the language signature (continuation 0's slots). std's `Query.rows` and `DbPreparedTransaction.rows` have this
+  shape.
 - **coro no longer spends its budget on several loops that each suspend (#806).** The reaching-version fixed point
   of SSA repair oscillated (`join` is not monotone), so a `main` with three suspending loops ended at
   `coro: LimitExceeded("steps")`. A block that has merged now keeps its merge until the trivial merges are removed,
