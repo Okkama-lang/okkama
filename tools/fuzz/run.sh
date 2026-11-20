@@ -37,7 +37,7 @@ done
 mkdir -p corpus/spb
 (cd "$ROOT/okkama-rs" && cargo build --release -q -p okkama-cli)
 for file in "$ROOT/okkama-rs/examples"/*.ok "$FUZZ/seeds"/*.ok; do
-    "$ROOT/okkama-rs/target/release/okkama" build "$file" --target sparrow -o "corpus/spb/$(basename "$file" .ok).spb" 2>/dev/null || true
+    "$ROOT/okkama-rs/target/release/okkama" build "$file" -o "corpus/spb/$(basename "$file" .ok).spb" 2>/dev/null || true
 done
 
 # Build every target first: a build killed for memory must not be reported as

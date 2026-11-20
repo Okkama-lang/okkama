@@ -10,7 +10,7 @@
 
 ```sh
 cargo run --offline -p okkama-cli -- run examples/sparrow-control-flow.ok
-cargo run --offline -p okkama-cli -- build examples/sparrow-control-flow.ok --target sparrow -o out.spb
+cargo run --offline -p okkama-cli -- build examples/sparrow-control-flow.ok -o out.spb
 cargo run --offline -p okkama-cli -- exec out.spb
 cargo run --offline -p sparrow-cli -- check out.spb
 cargo run --offline -p sparrow-cli -- out.spb

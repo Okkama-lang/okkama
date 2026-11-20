@@ -333,7 +333,7 @@ def process(item, args, output, environments):
     for variant in variants:
         census = folder / (variant + '.census.json')
         env = dict(environments[variant], OKKAMA_OWNERSHIP_REPORT=str(census))
-        command = [ok, 'build', *flags, source, '--target', 'sparrow', '-o', folder / (variant + '.spb')]
+        command = [ok, 'build', *flags, source, '-o', folder / (variant + '.spb')]
         result['builds'][variant] = execute(command, env, cwd, folder / (variant + '.build'), args.build_timeout)
     builds = list(result['builds'].values())
     if item['rejected']:
