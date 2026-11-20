@@ -123,6 +123,33 @@ fn a_table_handle_is_identified_by_module_and_name() {
     }
 }
 
+/// #824: `runtime/database`'s natives take `@DbCellState`, which `runtime/db` declares. A table handle the native's
+/// module does not declare names the only runtime module's handle of that name, as Tomato matches it by name.
+#[test]
+fn a_table_handle_of_another_runtime_module_is_its_only_declaration() {
+    let name = "runtime/database@1::sqlite_execution_cells/3";
+    let declare = |cells: &[&str]| {
+        let mut builder = builder();
+        let state = handle(&mut builder, "runtime.database.SqliteState");
+        let reply = handle(&mut builder, "runtime.database.SqliteReplyState");
+        let string = builder.intern_type(ir::Type::Str).unwrap();
+        let mut types: Vec<_> = cells.iter().map(|cells| handle(&mut builder, cells)).collect();
+        let cells = builder.intern_type(ir::Type::Array(types.remove(0))).unwrap();
+        (builder, signature(vec![state, string, cells], vec![reply]))
+    };
+    let (builder, declared) = declare(&["runtime.db.DbCellState"]);
+    assert!(contract(builder.module(), name, true, &declared).is_ok());
+    // Two runtime modules declare it: the name alone is ambiguous.
+    let (builder, declared) = declare(&["runtime.db.DbCellState", "runtime.postgres.DbCellState"]);
+    assert!(contract(builder.module(), name, true, &declared).is_err());
+    // The native's own module declares it: that one, not another module's.
+    let (builder, declared) = declare(&["runtime.db.DbCellState", "runtime.database.DbCellState"]);
+    assert!(contract(builder.module(), name, true, &declared).is_err());
+    // Not a runtime module's handle.
+    let (builder, declared) = declare(&["app.DbCellState"]);
+    assert!(contract(builder.module(), name, true, &declared).is_err());
+}
+
 #[test]
 fn rejected_table_natives_name_their_reason() {
     let mut builder = builder();
