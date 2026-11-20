@@ -254,8 +254,15 @@ impl Driver<'_, '_> {
             // Ruling PR-N2 (#860): a call of an async callee is a creation; like `fut.new`, it borrows a bare Future
             // argument, which stays with its owner, and offers the rest.
             let creation = self.async_callee(&op);
-            let offered: Vec<_> = originals.iter().copied().filter(|original| !creation
-                || !self.high.values.get(*original).is_ok_and(|value| is_future(self.module, value.ty))).collect();
+            // #870 (Fable): an outcome view borrowed by the callee stays in its Future's cache; offering it would
+            // extract the cache's holder graph. A view the callee takes is still offered, and refused.
+            let parameters = &self.module.summaries.get(summary).map_err(arena)?.parameters;
+            let offered: Vec<_> = originals.iter().copied().enumerate().filter(|(index, original)| {
+                let future = self.high.values.get(*original).is_ok_and(|value| is_future(self.module, value.ty));
+                let borrowed = parameters.get(*index)
+                    .is_some_and(|effect| effect.convention == FreshConvention::Borrow);
+                !(creation && future) && !(borrowed && self.outcome_view(*original))
+            }).map(|(_, original)| original).collect();
             let (next, packet) = self.offered(point, &offered)?;
             point = next;
             Some(packet)

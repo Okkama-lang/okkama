@@ -370,6 +370,23 @@ fn a_future_group_is_a_holder() {
     assert!(!services::reaches_holder(&p, Type::Object(0)));
 }
 
+/// #875 (Fable): a FutureGroup starts every member it registers, so it never holds a cold Future whose settle could
+/// release inputs that no type names; its finished members' outcomes are reached through `holder_member_types`. So it
+/// reaches no Future for `entry_carries_future`, though it is a holder. An object of another name storing a Future,
+/// as a collector does, reaches one.
+#[test]
+fn a_future_group_reaches_no_cold_future() {
+    let mut p = returned(Make::Rehomed, Caller::Admit, None);
+    let mut group = super::async_tests::res();
+    group.name = "async.scope.FutureGroup_int".into();
+    group.layout.storage_fields = vec![FUTURE_INT];
+    p.objects.push(group);
+    assert!(services::reaches_holder(&p, Type::Object(0)));
+    assert!(!services::reaches_future(&p, Type::Object(0)));
+    p.objects[0].name = "async.scope.Collecting_int".into();
+    assert!(services::reaches_future(&p, Type::Object(0)));
+}
+
 // --- SPB_REHOME, state form (ABI C-4 with D25.3) --------------------------------------------------------------
 
 /// @pass's scope (the fourth function's).

@@ -1012,6 +1012,42 @@ fn f1_only_an_entry_that_carries_a_future_assumes_every_destroy_failure() {
     assert!(!failures.iter().all(|kind| peek.contains(kind)), "peek: {peek:?} has {failures:?}");
 }
 
+/// #870 (Fable): `relay` binds the outcome of a bound Future (`let r = await f`) and returns it; `local` lends such a
+/// view to a borrowing method, and `held` does so while the Future's cache holds a fresh resource input.
+const VIEWS: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object W { W(); async wrap(n is string) is Res { Res(l: n); } ",
+    "async over(r is Res) is Res { Res(l: \"out\" + r.n().string()); } } ",
+    "object R { R(); async relay() is Res { let f = W().wrap(\"in\"); let r = await f; r; } ",
+    "async local() is int { let f = W().wrap(\"in\"); let r = await f; r.n(); } ",
+    "async held() is int { let f = W().over(Res(l: \"in\")); let r = await f; r.n(); } } ",
+    "async main() is int { let r = await R().relay(); r.n() + await R().local() + await R().held(); }",
+);
+
+fn ownership_ops(module: &ir::Module, symbol: &str, wanted: fn(&ir::OwnershipOp) -> bool) -> usize {
+    let body = function(module, symbol).1.body.as_ref().unwrap();
+    let terminators = body.blocks.iter().filter_map(|(_, block)| match &block.term.kind {
+        ir::TermKind::InvokeOwn { op, .. } => Some(op.as_ref()),
+        _ => None,
+    });
+    body.insts.iter().map(|(_, instruction)| &instruction.op).chain(terminators)
+        .filter(|op| matches!(op, ir::Operation::Ownership(op) if wanted(op))).count()
+}
+
+/// #870: the outcome of a shared await stays in its Future's cache, so its view is bound and lent without a split,
+/// which would extract the cache's holder graph (B91). Returned, it leaves with the cache's rehome. Full accepts all
+/// three, `held` included: a call whose arguments cannot hold a Future has no input in what the cache holds.
+#[test]
+fn f1_an_outcome_view_is_bound_and_lent_without_a_split() {
+    let (own, _) = super::own_case_tests::own_stage(VIEWS, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(ownership_ops(&own, "app.R.relay#0", |op| matches!(op, ir::OwnershipOp::Bind { .. })), 0,
+        "the view's binding takes nothing");
+    assert_eq!(ownership_ops(&own, "app.R.local#1", |op| matches!(op, ir::OwnershipOp::ScopeSplit { .. })), 0,
+        "the borrowing call is offered nothing");
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",

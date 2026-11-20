@@ -243,7 +243,14 @@ impl Engine<'_, '_> {
             }
             let mut filter = self.graph_filter(before, graph.clone(), labels.clone(), true);
             filter.futures = futures;
-            let (_, selected) = self.partition_filter(&before.tokens[value.as_u32() as usize], filter);
+            // #870 (Fable): when no argument can hold a Future, what a cache holds is no input of this call. An
+            // argument that is a view of a cache's outcome reaches the cache's key, not its holder graph, which stays
+            // with the Future; scanning it here would read as an extraction (B91).
+            let mut token = before.tokens[value.as_u32() as usize].clone();
+            if !futures {
+                token.pieces.retain(|piece| piece.holder.is_none());
+            }
+            let (_, selected) = self.partition_filter(&token, filter);
             if !selected.pieces.is_empty() {
                 self.error(R::B51, "fresh call inputs must enter callee cleanup, including borrow parameters");
             }

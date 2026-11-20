@@ -51,6 +51,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function can bind the outcome of a bound Future and return it (#870).** Example:
+  `let f = Wrapper().wrap(…); let r = await f; r;`. Full refused it with B91.
+  - Following Fable's analysis, a shared await's outcome stays in the Future's cache, and the value is a view that
+    borrows it. Binding the view now takes nothing; before, a split extracted the cache's holder graph.
+  - A call that borrows the view is offered nothing.
+  - Returned, the view leaves with the cache's rehome to the caller, as `await f;` already did.
+  - The verifier no longer reads what a cache holds as an input of a call whose arguments cannot hold a Future.
+  - A callee that takes the view is still refused in Full (#878).
 - **A Future that arrives in an entry packet no longer crashes Champ when its input fails to destroy (#875).**
   A synchronous function given a cold Future over a resource, bare (`drop(f is Future<int>)`) or stored in an
   aggregate (`drop(h is Holder)`), settles that Future's cache at its close. If the resource's destroy failed,

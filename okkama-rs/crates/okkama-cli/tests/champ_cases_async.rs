@@ -1166,6 +1166,65 @@ fn both_modes_fail(source: &str, stdout: &str, failure: &str) {
     }
 }
 
+/// #870 (Fable): `relay` binds the outcome of a bound Future and returns it (`let f = …; let r = await f; r;`). The
+/// view's binding took a split that extracted the cache's holder graph, which Full refused (B91); the view now borrows
+/// the outcome, and the cache's rehome takes it to the caller. Tomato's output.
+#[test]
+fn a_bound_outcome_of_a_bound_future_is_returned() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Wrapper { Wrapper(); async wrap(r is Res) is Res { Res(name: "wrapped " + r.label()); } }
+object Relay { Relay(); async relay() is Res { let f = Wrapper().wrap(Res(name: "in")); let r = await f; r; } }
+async main() is int {
+    let r = await Relay().relay();
+    Stdout().writeln("got " + r.label());
+    Stdout().writeln("main end");
+    0;
+}
+"#, "destroy in\ngot wrapped in\nmain end\ndestroy wrapped in\n");
+}
+
+/// #870: outcome views lent to a borrowing method, one awaited once and one twice, then returned. A borrowing call
+/// is offered no view. Tomato's output.
+#[test]
+fn outcome_views_are_lent_to_borrowing_calls() {
+    both_modes(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Wrapper { Wrapper(); async wrap(n is string) is Res { Res(name: "wrapped " + n); } }
+object Relay {
+    Relay();
+    async local() is int { let f = Wrapper().wrap("local"); let r = await f; Stdout().writeln("read " + r.label()); 1; }
+    async twice() is Res {
+        let f = Wrapper().wrap("twice");
+        let a = await f;
+        let b = await f;
+        Stdout().writeln("read " + b.label());
+        a;
+    }
+}
+async main() is int {
+    let n = await Relay().local();
+    let r = await Relay().twice();
+    Stdout().writeln("got " + r.label());
+    Stdout().writeln("main end");
+    n - 1;
+}
+"#, concat!("read wrapped local\ndestroy wrapped local\nread wrapped twice\ngot wrapped twice\nmain end\n",
+        "destroy wrapped twice\n"));
+}
+
 /// #851 with #849: a `map` over an array whose body awaits a resource.
 #[test]
 fn a_map_body_awaits_a_destroyable_outcome() {
