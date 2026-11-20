@@ -13,6 +13,8 @@ esac
 records=$(mktemp -d "${TMPDIR:-/tmp}/okkama-verifier-differential.XXXXXX")
 trap 'rm -rf "$records"' EXIT HUP INT TERM
 export OKKAMA_634_DIFFERENTIAL=1
+# #803: every edge also checks the partition and the class remap against the full remap.
+export OKKAMA_803_EDGE_CHECK=1
 export OKKAMA_634_RESULTS="$records/results.tsv"
 export OKKAMA_634_RAISED="$records/raised.tsv"
 status=0

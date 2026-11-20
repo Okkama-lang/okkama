@@ -409,6 +409,7 @@ impl Flow {
         }).collect();
         token
     }
+    #[cfg(any(test, feature = "verifier-differential"))]
     pub fn remap_aliases(
         &mut self, classes: &BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>, state: &mut super::State<'_>,
     ) {
@@ -521,6 +522,137 @@ impl Flow {
         }
         self.aliases.assign_entries(aliases, |work| state.step(work));
     }
+    /// Renames the changed classes of a partitioned directory (#803). A label in an
+    /// old class takes that class's new members, every other label stays, and only
+    /// the members of the changed classes get new entries. On a partition this is
+    /// `remap_aliases` with every unchanged class mapped to itself.
+    pub fn remap_classes(
+        &mut self, classes: &BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>, state: &mut super::State<'_>,
+    ) {
+        #[cfg(any(test, feature = "verifier-differential"))]
+        let _work = super::super::work_profile::Operation::new("domain::remap_classes");
+        // Settled pieces enter the global set from the state before their operation,
+        // so their labels may miss members defined since; every label takes its whole
+        // class, as in `remap_aliases`. The set is one per flow, not one per value.
+        if self.closed_inputs.iter().any(|piece| !piece.predicates.is_empty())
+            && state.step(self.closed_inputs.work()) {
+            let directory = &self.aliases;
+            self.closed_inputs = self.closed_inputs.iter().map(|piece| {
+                let mut piece = piece.clone();
+                piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
+                    let mut labels = SharedSet::new();
+                    for label in &filter.labels {
+                        let class = &directory[label.as_u32() as usize];
+                        let members = classes.get(class).or((!class.is_empty()).then_some(class));
+                        if let Some(members) = members {
+                            labels.extend(members);
+                            filter.stale |= members.is_empty();
+                        }
+                    }
+                    filter.labels = labels;
+                    (filter, selected)
+                }).collect();
+                piece
+            }).collect();
+        }
+        if classes.is_empty() {
+            state.step(1);
+            return;
+        }
+        let mut renamed = BTreeMap::new();
+        let mut old = SharedSet::new();
+        for (class, members) in classes {
+            if !state.step(1 + class.len()) {
+                return;
+            }
+            for member in class {
+                renamed.insert(*member, members);
+            }
+            let (union, work) = old.difference_union(&SharedSet::new(), class);
+            state.step(work);
+            old = union;
+        }
+        // The new labels of a set that meets the changed classes, and whether one of
+        // its classes lost every member.
+        let relabel = |labels: &SharedSet<ValueId>, state: &mut super::State<'_>| {
+            let mut added = SharedSet::new();
+            let mut seen = BTreeSet::new();
+            let mut stale = false;
+            for label in labels {
+                state.step(1);
+                let Some(members) = renamed.get(label) else {
+                    continue;
+                };
+                if !seen.insert(members.root_id()) {
+                    continue;
+                }
+                stale |= members.is_empty();
+                let (union, work) = added.difference_union(&SharedSet::new(), members);
+                state.step(work);
+                added = union;
+            }
+            let (next, work) = labels.difference_union(&old, &added);
+            state.step(work);
+            (next, stale)
+        };
+        let meets = |labels: &SharedSet<ValueId>, state: &mut super::State<'_>| {
+            let (disjoint, work) = labels.disjoint_work(&old);
+            state.step(work);
+            !disjoint
+        };
+        let rewrite = |piece: &Piece, state: &mut super::State<'_>| {
+            let mut piece = piece.clone();
+            piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
+                if meets(&filter.labels, state) {
+                    let (labels, stale) = relabel(&filter.labels, state);
+                    filter.labels = labels;
+                    filter.stale |= stale;
+                }
+                (filter, selected)
+            }).collect();
+            piece
+        };
+        let affected = |piece: &Piece, state: &mut super::State<'_>| {
+            piece.predicates.keys().any(|filter| meets(&filter.labels, state))
+        };
+        for tokens in [&mut self.tokens, &mut self.journals] {
+            let work = tokens.rewrite_changed(|token| {
+                if !state.step(1) || !token.pieces.iter().any(|piece| affected(piece, state)) {
+                    return None;
+                }
+                let next = Token { pieces: token.pieces.iter().map(|piece| rewrite(piece, state)).collect(),
+                    ..token.clone() };
+                (next != *token).then_some(next)
+            });
+            state.step(work);
+        }
+        let mut cache = BTreeMap::new();
+        let work = self.contained.rewrite_changed(|contained| {
+            if !state.step(2 + cache.len().max(1).ilog2() as usize) {
+                return None;
+            }
+            cache.entry(contained.root_id()).or_insert_with(|| {
+                if !meets(contained, state) {
+                    return None;
+                }
+                let (next, _) = relabel(contained, state);
+                (next.root_id() != contained.root_id()).then_some(next)
+            }).clone()
+        });
+        state.step(work);
+        for class in classes.keys() {
+            for member in class {
+                state.step(2 + self.availability.len().max(1).ilog2() as usize);
+                self.aliases.set(member.as_u32() as usize, SharedSet::new());
+            }
+        }
+        for members in classes.values() {
+            for member in members {
+                state.step(2 + self.availability.len().max(1).ilog2() as usize);
+                self.aliases.set(member.as_u32() as usize, members.clone());
+            }
+        }
+    }
     pub fn add_contained(
         &mut self, roots: &SharedSet<ValueId>, child: &SharedSet<ValueId>, state: &mut super::State<'_>,
     ) {
@@ -558,6 +690,27 @@ impl Flow {
         self.tokens.rewrite_stored(add_token);
         self.journals.rewrite_stored(add_token);
         self.closed_inputs = self.closed_inputs.iter().map(add).collect();
+    }
+    /// The classes the members of a captured alias set are in now (#803). Each
+    /// distinct class is added once; `value` is being defined and keeps no class.
+    pub fn current_classes(
+        &self, aliases: &SharedSet<ValueId>, value: ValueId, state: &mut super::State<'_>,
+    ) -> SharedSet<ValueId> {
+        let mut source = aliases.clone();
+        let mut seen = BTreeSet::new();
+        for member in aliases {
+            let class = &self.aliases[member.as_u32() as usize];
+            if !state.step(2 + seen.len().max(1).ilog2() as usize) {
+                break;
+            }
+            if *member == value || class.root_id() == aliases.root_id() || !seen.insert(class.root_id()) {
+                continue;
+            }
+            let (union, work) = source.difference_union(&SharedSet::new(), class);
+            state.step(work);
+            source = union;
+        }
+        source
     }
     pub fn replace_aliases(
         &mut self, old: &SharedSet<ValueId>, new: &SharedSet<ValueId>, state: &mut super::State<'_>,

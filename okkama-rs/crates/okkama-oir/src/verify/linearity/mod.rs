@@ -649,21 +649,23 @@ impl Engine<'_, '_> {
         if successor(self.module, self.body, value) && flow.must_use[i] == 1 {
             self.error(R::B82, "successor incarnation overwritten before a permitted use");
         }
-        if slot.aliases != flow.aliases[i] || !slot.aliases.contains(&value) {
+        // A slot captured before an earlier result of the same operation was defined
+        // names its members' classes as they were; the source is their classes now.
+        let source = flow.current_classes(&slot.aliases, value, self.state);
+        if source != flow.aliases[i] || !source.contains(&value) {
             let old = flow.aliases[i].clone();
             let mut retained = old.clone();
             retained.remove(&value);
             flow.replace_aliases(&old, &retained, self.state);
         }
-        let source = slot.aliases.clone();
         let mut aliases = source.clone();
         aliases.insert(value);
         flow.replace_aliases(&source, &aliases, self.state);
         flow.aliases[i] = aliases.clone();
-        if !self.state.step(slot.contained.comparison_work(&source)) {
+        if !self.state.step(slot.contained.comparison_work(&slot.aliases)) {
             return;
         }
-        if slot.contained == source {
+        if slot.contained == slot.aliases {
             flow.contained.set(i, aliases.clone());
         } else {
             flow.contained[i] = slot.contained.clone();
@@ -928,46 +930,54 @@ impl Engine<'_, '_> {
             }
             let replaced: SharedSet<_> = block.params.iter().copied().collect();
             let originals: Vec<_> = saved.iter().map(|slot| slot.aliases.clone()).collect();
-            let mut roots = BTreeSet::new();
-            let mut classes = BTreeSet::new();
-            for aliases in next.aliases.stored() {
-                if !self.state.step(2 + next.aliases.stored_len().max(1).ilog2() as usize) {
+            // #803: the directory is a partition, so only the classes of the target's
+            // parameters and of the forwarded values change; every other class is kept.
+            let mut remapped = std::collections::BTreeMap::new();
+            let params = block.params.iter().map(|param| &next.aliases[param.as_u32() as usize]);
+            for class in params.chain(&originals) {
+                if !self.state.step(2 + class.len()) {
                     break;
                 }
-                if !aliases.is_empty() && roots.insert(aliases.root_id()) {
-                    if !self.state.step(aliases.len() * (2 + classes.len().max(1).ilog2() as usize)) {
-                        break;
-                    }
-                    classes.insert(aliases.clone());
+                if class.is_empty() || remapped.contains_key(class) {
+                    continue;
                 }
+                let mut members = class.without(&replaced);
+                for (index, aliases) in originals.iter().enumerate() {
+                    if aliases == class {
+                        members.insert(block.params[index]);
+                    }
+                }
+                remapped.insert(class.clone(), members);
             }
             if self.state.incomplete {
                 return (target, next);
             }
-            let mut remapped = std::collections::BTreeMap::new();
-            for class in classes {
-                let mut members = class.without(&replaced);
-                for (index, aliases) in originals.iter().enumerate() {
-                    if aliases == &class {
-                        members.insert(block.params[index]);
-                    }
-                }
-                remapped.insert(class, members);
+            #[cfg(any(test, feature = "verifier-differential"))]
+            let reference = std::env::var_os("OKKAMA_803_EDGE_CHECK").map(|_| self.reference_remap(&next, &remapped));
+            next.remap_classes(&remapped, self.state);
+            #[cfg(any(test, feature = "verifier-differential"))]
+            if let Some(reference) = reference {
+                assert!(reference == next, "#803: the class remap differs from the full remap in {}",
+                    self.declaration.symbol);
             }
-            next.remap_aliases(&remapped, self.state);
+            fn lookup<'a>(
+                remapped: &'a std::collections::BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>,
+                class: &'a SharedSet<ValueId>,
+            ) -> Option<&'a SharedSet<ValueId>> {
+                remapped.get(class).or((!class.is_empty()).then_some(class))
+            }
             for (index, slot) in saved.iter_mut().enumerate() {
                 if let Some(members) = remapped.get(&originals[index]) {
                     slot.aliases = members.clone();
                 }
                 slot.contained = slot.contained.iter().flat_map(|label| {
-                    remapped.get(&flow.aliases[label.as_u32() as usize]).into_iter().flatten().copied()
+                    lookup(&remapped, &flow.aliases[label.as_u32() as usize]).into_iter().flatten().copied()
                 }).collect();
                 slot.token.pieces = slot.token.pieces.iter().cloned().map(|mut piece| {
                     piece.predicates = piece.predicates.into_iter().map(|(mut filter, selected)| {
                         let mut labels = SharedSet::new();
                         for label in &filter.labels {
-                            let class = &flow.aliases[label.as_u32() as usize];
-                            if let Some(members) = remapped.get(class) {
+                            if let Some(members) = lookup(&remapped, &flow.aliases[label.as_u32() as usize]) {
                                 labels.extend(members);
                                 filter.stale |= members.is_empty();
                             }
@@ -996,6 +1006,29 @@ impl Engine<'_, '_> {
             }
         }
         (target, next)
+    }
+    /// #803 check: the directory is a partition, and renaming only the changed classes
+    /// equals the full remap of every class, the unchanged ones to themselves. The
+    /// reference is not charged to the function's budget.
+    #[cfg(any(test, feature = "verifier-differential"))]
+    fn reference_remap(
+        &mut self, flow: &Flow, remapped: &std::collections::BTreeMap<SharedSet<ValueId>, SharedSet<ValueId>>,
+    ) -> Flow {
+        for (index, class) in flow.aliases.indexed() {
+            assert!(class.is_empty() || class.contains(&ValueId::from_u32(index as u32))
+                && class.iter().all(|member| &flow.aliases[member.as_u32() as usize] == class),
+                "#803: the alias directory of {} is not a partition at {index}", self.declaration.symbol);
+        }
+        let (steps, incomplete) = (self.state.stats.steps, self.state.incomplete);
+        let mut reference = flow.clone();
+        let classes: BTreeSet<_> = flow.aliases.stored().filter(|class| !class.is_empty()).cloned().collect();
+        let all = classes.into_iter().map(|class| {
+            let members = remapped.get(&class).cloned().unwrap_or_else(|| class.clone());
+            (class, members)
+        }).collect();
+        reference.remap_aliases(&all, self.state);
+        (self.state.stats.steps, self.state.incomplete) = (steps, incomplete);
+        reference
     }
     fn discharge_must_use(&self, flow: &mut Flow, value: ValueId) {
         flow.must_use[value.as_u32() as usize] = 2;
