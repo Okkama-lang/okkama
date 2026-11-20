@@ -8,6 +8,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **`okkama build` has no target selection, and Blade has no engine (owner, 2026-11-20).**
+  - **CLI.** `--target` and `--backend` are gone: `okkama build FILE -o OUT.spb` always writes Sparrow
+    bytecode, and either flag is now an unknown option.
+  - **Blade.** `blade.toml` loses `[build] target` and `[run] engine`. Blade answers an old key with
+    "[build] target is gone: Sparrow is the only engine; remove the key". `blade new` no longer writes them,
+    and `blade build` calls `okkama build … -o`.
+  - **Docs.** The README, LLM-GUIDE, the Book, the Sparrow Book and the Bible (ch. 23) follow.
 - **Champ is removed (#911, owner's decision).** Tweed is built on Tomato's pipeline, so the static-ownership
   attempt goes, about 355k lines including fixtures:
   - **OIR-2:** the `okkama-oir` crate, `lowering/oir2` and `codegen/sparrow_oir2`.

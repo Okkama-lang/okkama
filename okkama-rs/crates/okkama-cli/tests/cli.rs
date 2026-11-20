@@ -100,8 +100,6 @@ fn native_stdio_preserves_bytes_in_source_and_bytecode_runs() {
         &[
             "build",
             source.path(),
-            "--target",
-            "sparrow",
             "-o",
             bytecode.path(),
         ],
@@ -201,7 +199,7 @@ fn ocs_capabilities_report_sparrow_with_every_mode() {
 fn sparrow_build_and_exec_need_neither_source_nor_java() {
     let artifact = TempFile::absent("sparrow-roundtrip.spb");
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+        &["build", "-", "-o", artifact.path()],
         b"module app v1.0.0; main() is int { let a = 20; a + 22; }",
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -435,30 +433,19 @@ fn uncaught_failure_prints_place_and_call_stack() {
 }
 
 #[test]
-fn legacy_backend_alias_is_supported_but_conflicts_are_errors() {
+fn build_has_no_target_selection() {
+    // One engine, one target (owner, 2026-11-20): `--target` and `--backend` are unknown options, and a failed
+    // build leaves the previous artifact as it was.
     let file = TempFile::new("target-alias.spb", b"previous");
-    let output = run_stdin(
-        &["build", "-", "--backend", "sparrow", "-o", file.path()],
-        HELLO.as_bytes(),
-    );
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    let previous = std::fs::read(&file.0).unwrap();
-    let output = run_stdin(
-        &[
-            "build",
-            "-",
-            "--target",
-            "unknown",
-            "--backend",
-            "sparrow",
-            "-o",
-            file.path(),
-        ],
-        HELLO.as_bytes(),
-    );
-    assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("conflicting target"));
-    assert_eq!(std::fs::read(&file.0).unwrap(), previous);
+    for flags in [&["--target", "sparrow"][..], &["--backend", "sparrow"], &["--target=sparrow"]] {
+        let mut args = vec!["build", "-"];
+        args.extend_from_slice(flags);
+        args.extend_from_slice(&["-o", file.path()]);
+        let output = run_stdin(&args, HELLO.as_bytes());
+        assert_eq!(output.status.code(), Some(2), "{flags:?}");
+        assert!(stderr(&output).contains("unknown option"), "{flags:?}: {}", stderr(&output));
+        assert_eq!(std::fs::read(&file.0).unwrap(), b"previous");
+    }
 }
 
 #[test]
@@ -488,14 +475,14 @@ fn native_run_does_not_ignore_arguments_or_fallback_to_java() {
 fn sparrow_build_failure_preserves_artifact() {
     let artifact = TempFile::new("sparrow-preserved.spb", b"previous artifact");
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+        &["build", "-", "-o", artifact.path()],
         b"module app v1.0.0; main() is int { missing_name; }",
     );
     assert_ne!(output.status.code(), Some(0));
     assert_eq!(std::fs::read(&artifact.0).unwrap(), b"previous artifact");
     // Float — часть языка Sparrow: та же программа собирается и исполняется.
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+        &["build", "-", "-o", artifact.path()],
         b"module app v1.0.0; main() is int { let x = 1.5; (x * 4.0).int(); }",
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -510,7 +497,7 @@ fn sparrow_exec_validates_file_and_exit_status() {
     assert!(stderr(&output).contains("SPB"));
     for value in ["0", "255", "256", "999999999999999999999999999999999"] {
         let output = run_stdin(
-            &["build", "-", "--target", "sparrow", "-o", artifact.path()],
+            &["build", "-", "-o", artifact.path()],
             format!("module app v1.0.0; main() is int {{ {value}; }}").as_bytes(),
         );
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -559,7 +546,7 @@ fn sparrow_cli_executes_control_flow_and_v2_function_calls() {
     let source =
         b"module app v1.0.0; main() is int { for 1..=5 -> i { if i < 4 { next; } i + 1; } }";
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", file.path()],
+        &["build", "-", "-o", file.path()],
         source,
     );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -638,7 +625,7 @@ fn help_and_version() {
         // One engine (Tweed): nothing to select.
         assert!(!stdout(&output).contains("--engine") && !stdout(&output).contains("OKKAMA_ENGINE"));
         assert!(stdout(&output).contains("okkama ir <FILE|->"));
-        assert!(stdout(&output).contains("okkama build <FILE|-> [--target sparrow] -o <FILE.spb>"));
+        assert!(stdout(&output).contains("okkama build <FILE|-> -o <FILE.spb>"));
         assert!(stderr(&output).is_empty());
     }
     let output = run(&["help", "ast"]);
@@ -657,7 +644,7 @@ fn help_and_version() {
     for args in [&["help", "build"][..], &["build", "--help"]] {
         let output = run(args);
         assert_eq!(output.status.code(), Some(0));
-        assert!(stdout(&output).contains("--target sparrow"));
+        assert!(!stdout(&output).contains("--target") && !stdout(&output).contains("--backend"));
         assert!(stdout(&output).contains("--output"));
         assert!(stdout(&output).contains("verified SPB"));
         assert!(stderr(&output).is_empty());
@@ -915,13 +902,12 @@ fn build_dispatches_file_and_stdin_to_sparrow_and_writes_bytecode() {
     for output in [
         run(&["build", &source, "-o", target.path()]),
         run_stdin(
-            &["build", "--target=sparrow", "--output", target.path(), "-"],
+            &["build", "--output", target.path(), "-"],
             HELLO.as_bytes(),
         ),
         run(&[
             "build",
             &source,
-            "--target=sparrow",
             &format!("--output={}", target.path()),
         ]),
     ] {
@@ -938,7 +924,7 @@ fn build_dispatches_file_and_stdin_to_sparrow_and_writes_bytecode() {
 fn failed_build_preserves_an_existing_output_file() {
     let target = TempFile::new("build-preserved.spb", b"previous artifact");
     let output = run_stdin(
-        &["build", "-", "--target", "sparrow", "-o", target.path()],
+        &["build", "-", "-o", target.path()],
         b"module app v1.0.0; import \"missing\" take X; main() is int { 1; }",
     );
     assert_eq!(output.status.code(), Some(1));
@@ -966,7 +952,7 @@ fn build_reports_frontend_errors_before_invoking_the_backend() {
         ),
     ] {
         let output = run_stdin(
-            &["build", "-", "--target", "sparrow", "-o", target.path()],
+            &["build", "-", "-o", target.path()],
             source.as_bytes(),
         );
         assert_eq!(output.status.code(), Some(1));
@@ -981,27 +967,21 @@ fn build_reports_frontend_errors_before_invoking_the_backend() {
 fn build_option_errors_are_usage_errors() {
     for args in [
         &["build"][..],
-        &["build", "input.ok", "--target", "sparrow"],
-        &["build", "--target", "sparrow", "-o", "out.spb"],
-        &["build", "input.ok", "--target"],
-        &["build", "input.ok", "--target", "sparrow", "-o"],
-        &["build", "input.ok", "--target", "native", "-o", "out.spb"],
-        &["build", "input.ok", "--target", "sparrow", "--output="],
+        &["build", "input.ok"],
+        &["build", "-o", "out.spb"],
+        &["build", "input.ok", "-o"],
+        &["build", "input.ok", "--output="],
         // Файлы одного модуля можно перечислить, но не вместе со stdin.
         &[
             "build",
             "input.ok",
             "-",
-            "--target",
-            "sparrow",
             "-o",
             "out.spb",
         ],
         &[
             "build",
             "input.ok",
-            "--target",
-            "sparrow",
             "-o",
             "out.spb",
             "--spans",
@@ -1009,8 +989,6 @@ fn build_option_errors_are_usage_errors() {
         &[
             "build",
             "input.ok",
-            "--target",
-            "sparrow",
             "-o",
             "out.spb",
             "--format",
@@ -1037,8 +1015,6 @@ fn build_reports_input_io_errors() {
     let output = run(&[
         "build",
         "/nonexistent/okkama/input.ok",
-        "--target",
-        "sparrow",
         "-o",
         target.path(),
     ]);
@@ -1056,8 +1032,6 @@ fn build_reports_output_write_errors() {
         &[
             "build",
             "-",
-            "--target",
-            "sparrow",
             "-o",
             path.to_str().unwrap(),
         ],

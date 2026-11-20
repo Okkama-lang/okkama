@@ -18,7 +18,7 @@ book and the specification disagree, the specification and the test suite
 
 ```sh
 okkama run test.ok
-okkama build test.ok --target sparrow -o out.spb
+okkama build test.ok -o out.spb
 sparrow out.spb
 ```
 
@@ -27,9 +27,8 @@ with `run -t`. Sparrow is the only Okkama engine (#584); the IR interpreter
 and its REPL were removed, and the JVM backend was removed in 0.6.0 (#585;
 0.5.8 is the last release with it).
 `build` emits Sparrow
-bytecode (`--target sparrow` is the default); the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
-version is called Tomato). `--backend` remains an alias
-for `--target`. `sparrow check out.spb` verifies without execution.
+bytecode, the only target; the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
+version is called Tomato). `sparrow check out.spb` verifies without execution.
 See the [Rust implementation guide](../okkama-rs/README.md) for building the
 tools and current runtime coverage.
 

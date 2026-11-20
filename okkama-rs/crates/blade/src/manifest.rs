@@ -277,7 +277,7 @@ name = "app"
 version = "1.0.0"
 
 [build]
-target = "sparrow"
+output = "target/app.spb"
 
 [dependencies]
 web = "12.3.0"

@@ -44,10 +44,8 @@ its own. `blade install` is now `blade sync`, `blade install SOURCE` is now
 blade.toml, build and run (all keys optional, defaults shown):
     [build]
     entry = \"src/main.ok\"       # or a list of the root module's files
-    target = \"sparrow\"          # sparrow
     output = \"target/NAME.spb\"  # Sparrow bytecode
     [run]
-    engine = \"sparrow\"          # sparrow (default: the target)
     args = []
     env = {}
 Blade runs the okkama next to it (or on PATH; BLADE_OKKAMA overrides).
@@ -168,7 +166,6 @@ main() is int {{
             version = "1.0.0"
             
             [build]
-            target = "sparrow"
             output = "hello"
 
             [dependencies]
@@ -180,11 +177,9 @@ version = "1.0.0"
 
 [build]
 entry = "src/main.ok"
-target = "sparrow"
 output = "target/{project_name}.spb"
 
 [run]
-engine = "sparrow"
 args = []
 env = {{}}
 

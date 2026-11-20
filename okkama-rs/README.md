@@ -34,7 +34,7 @@ cargo run -p okkama-cli -- ir examples/arithmetic.ok
 cargo run -p okkama-cli -- ir examples/arithmetic.ok --format text
 
 # сборка SPB-артефакта
-cargo run -p okkama-cli -- build examples/arithmetic.ok --target sparrow -o out.spb
+cargo run -p okkama-cli -- build examples/arithmetic.ok -o out.spb
 sparrow out.spb
 # Код завершения процесса: 2 (результат main).
 
@@ -75,7 +75,7 @@ cargo run -p okkama-cli -- --help
 ```sh
 cargo run --offline -p okkama-cli -- run examples/arithmetic.ok
 cargo run --offline -p okkama-cli -- run examples/arithmetic.ok
-cargo run --offline -p okkama-cli -- build examples/arithmetic.ok --target sparrow -o out.spb
+cargo run --offline -p okkama-cli -- build examples/arithmetic.ok -o out.spb
 cargo run --offline -p okkama-cli -- exec out.spb
 ```
 
@@ -144,18 +144,18 @@ IR сохраняет имя и версию модуля, импорты и с�
 Исходник не сокращается до первого выражения, неподдерживаемый код не пропускается.
 Только успешное преобразование всего модуля печатает IR в stdout.
 
-### Выбор backend и сборка
+### Сборка
 
 ```sh
-cargo run -p okkama-cli -- build examples/arithmetic.ok --target sparrow -o out.spb
-cargo run -p okkama-cli -- build examples/arithmetic.ok --target=sparrow --output=out.spb
-cat examples/arithmetic.ok | cargo run -p okkama-cli -- build - --target sparrow -o out.spb
+cargo run -p okkama-cli -- build examples/arithmetic.ok -o out.spb
+cargo run -p okkama-cli -- build examples/arithmetic.ok --output=out.spb
+cat examples/arithmetic.ok | cargo run -p okkama-cli -- build - -o out.spb
 cargo run -p okkama-cli -- build --help
 ```
 
-В `build` обязательны входной файл (или `-`), `-o`/`--output`; `--target sparrow` необязателен.
-`--backend` остаётся алиасом `--target`. Разные цели в двух ключах дают ошибку.
-Команда выполняет цепочку `source → AST → module IR → backend → файл`.
+В `build` обязательны входной файл (или `-`) и `-o`/`--output`. Цель одна — байткод Sparrow, ключей выбора
+цели нет.
+Команда выполняет цепочку `source → AST → module IR → байткод Sparrow → файл`.
 Backend получает готовый модуль IR и возвращает байты артефакта; файловый ввод
 и вывод остаются в CLI. Неизвестное имя backend считается ошибкой аргументов.
 
