@@ -856,6 +856,9 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
     // D18 is checked against reconstructed inventories below. Cleanup failure states are bounded
     // by this function's verified close envelopes, including when unrelated module destroys fail.
     let destroy_mask = f.proofs.envelopes.iter().fold(0, |mask, envelope| mask | envelope.failures);
+    // #889: every mask only grows, so the union of all of them is kept as they change instead of folded on each
+    // failure edge of an exit dispatch.
+    let mut union = masks.values().fold(0, |mask, value| mask | value);
     loop {
         let mut changed = false;
         for &pc in &reachable {
@@ -868,6 +871,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                 let entry = masks.entry(Location::Register(*output)).or_default();
                 changed |= *entry | mask != *entry;
                 *entry |= mask;
+                union |= *entry;
             }
             for (ordinal, edge) in allocation::outgoing(inst).iter().enumerate() {
                 let produced = if let Instruction::Champ { op, arguments, flow: Flow::Outcomes(outcomes) } = inst {
@@ -887,9 +891,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                                     .map_or(15, |entry| entry.failures)), _ => None,
                             }).unwrap_or(15)
                         }
-                        (Opcode::ExitDispatch, Tag::Failure) => f.proofs.envelopes.iter()
-                            .fold(0, |mask, envelope| mask | envelope.failures)
-                            | masks.values().fold(0, |mask, value| mask | value),
+                        (Opcode::ExitDispatch, Tag::Failure) => destroy_mask | union,
                         (Opcode::FailureDispatch, Tag::Some) => destroy_mask,
                         // An awaited Future fails with whatever its body published.
                         (Opcode::Await, Tag::Unwind) => 15,
@@ -908,6 +910,7 @@ fn check_failure_mask(p: &Program, f: &Function) -> Check {
                     let entry = masks.entry(assignment.destination).or_default();
                     changed |= *entry | mask != *entry;
                     *entry |= mask;
+                    union |= *entry;
                 }
             }
         }

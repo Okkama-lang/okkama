@@ -27,6 +27,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **An array of Events compiles on Champ (#891).** Example: `has events is @Event`. own keeps such an array as a
   managed collection of capabilities (references with deps), the loader as closed plain data, and codegen refused it.
   `L08.collect.completions-consumers` and `L08.collect.settlement-order` now print their expected output on Champ.
+- **Compiling large async bodies on Champ is about twice as fast (#889).** `L11.sqlite.round-trip` took about
+  180 s to compile in a debug build. Now: coro 55 → 4.7 s (one use index per repair series, worklists), low
+  52 → 17 s (a close's inventory finds only the blocks it asks for), codegen and the load check 104 → 52 s
+  (the composite table is built once for the sunk module, block and root indexes in the evidence pass, a running
+  union of failure masks). Register allocation and SPB 17 verification remain the largest parts.
 - **An async defer that awaits a method of a captured binding compiles on Champ (#890).** Example:
   `defer await connection.settled()`, in every SQLite program. The defer call's summary kept the capture's
   retention while the async entry's contract retains nothing, and the SPB 17 load check refused the program. With

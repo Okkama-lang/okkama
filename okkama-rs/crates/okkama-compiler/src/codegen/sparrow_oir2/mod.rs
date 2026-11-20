@@ -105,7 +105,12 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
             undef::sink_undef_params(body)?;
         }
     }
-    let module = &sunk;
+    // #889: the composite table is keyed by the module's address; the sunk copy builds its own once, instead of
+    // once per `translate_type`.
+    with_composites(&sunk, || translate_sunk(&sunk, layouts))
+}
+
+fn translate_sunk(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result<s::Program, GenerateError> {
     // The test profile carries its tests table; a tests table needs `requires test` and nothing else.
     // Plain async (#601 V7) is part of SPB 17; process workers are not.
     let profile = |feature: &o::Feature| matches!(feature, o::Feature::Core | o::Feature::Async)
