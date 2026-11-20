@@ -8,8 +8,7 @@ itself, so it runs from any directory:
     okkama run examples/fs/file/read_lines.ok
 
 Next to each program, `NAME.expected` holds its output. `examples/check.py`
-runs every program on IR and Sparrow (or the engines given with `--engine`)
-and compares the output.
+runs every program on Sparrow and compares the output.
 
 ## fs/file
 

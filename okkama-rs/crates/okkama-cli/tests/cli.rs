@@ -92,7 +92,7 @@ fn native_stdio_preserves_bytes_in_source_and_bytecode_runs() {
     let bytecode = TempFile::absent("native-stdio.spb");
     let input = b"one\r\nabtail\n";
     let expected = [input.as_slice(), &[0, 255]].concat();
-    let source_run = run_stdin(&["run", "--engine", "sparrow", source.path()], input);
+    let source_run = run_stdin(&["run", source.path()], input);
     assert_eq!(source_run.status.code(), Some(0), "{}", stderr(&source_run));
     assert_eq!(source_run.stdout, expected);
     assert_eq!(source_run.stderr, b"E\n");
@@ -117,7 +117,7 @@ fn native_stdio_preserves_bytes_in_source_and_bytecode_runs() {
 #[test]
 fn standard_stdout_uses_real_native_providers_on_sparrow() {
     let source = TempFile::new("stdlib-stdout.ok", "module app v1.0.0; import \"io/stdout\" take Stdout, Stderr; main() is int { Stdout().writeln(\"Aé🙂\"); Stderr().write(\"error\"); 0; }".as_bytes());
-    let output = run_stdin(&["run", "--engine", "sparrow", source.path()], b"");
+    let output = run_stdin(&["run", source.path()], b"");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "Aé🙂\n");
     assert_eq!(stderr(&output), "error");
@@ -187,32 +187,14 @@ fn ocs_native_engines_report_execution_and_limitations_without_java() {
 }
 
 #[test]
-fn ocs_capabilities_follow_the_selected_engine() {
-    {
-        let engine = "sparrow";
-        let output = okkama()
-            .arg("--ocs-capabilities")
-            .env("OCS_RUST_ENGINE", engine)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(stdout(&output).contains(&format!("\"engine\": \"{engine}\"")));
-        // Все движки исполняют весь язык, включая режим тестов.
-        assert!(stdout(&output).contains("\"test\""), "{engine}");
-    }
-    let output = okkama()
-        .arg("--ocs-capabilities")
-        .env_remove("OCS_RUST_ENGINE")
-        .output()
-        .unwrap();
-    // Как `okkama run`: Sparrow по умолчанию.
+fn ocs_capabilities_report_sparrow_with_every_mode() {
+    // One engine (Tweed): the OCS adapter reports Sparrow, which runs the whole language, test mode included.
+    let output = okkama().arg("--ocs-capabilities").env_remove("OCS_RUST_ENGINE").output().unwrap();
+    assert!(output.status.success());
     assert!(stdout(&output).contains("\"engine\": \"sparrow\""));
-    let output = okkama()
-        .arg("--ocs-capabilities")
-        .env("OCS_RUST_ENGINE", "typo")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
+    for mode in ["\"parse\"", "\"check\"", "\"run\"", "\"test\""] {
+        assert!(stdout(&output).contains(mode), "{mode}");
+    }
 }
 
 #[test]
@@ -234,42 +216,24 @@ fn sparrow_build_and_exec_need_neither_source_nor_java() {
     assert!(output.stderr.is_empty());
 }
 
-/// Sparrow-only statistics distinguish the selected engine from identical
-/// program output. No servers, workers or external runtime are involved.
+/// One engine (Tweed, 2026-11-20): every form of `run` executes on Sparrow, and a stale `OKKAMA_ENGINE` in the
+/// environment changes nothing. Sparrow's statistics tell it ran.
 #[test]
-fn sparrow_default_and_explicit_engine_overrides() {
+fn every_run_form_executes_on_sparrow_whatever_the_environment() {
     let source = TempFile::new(
         "default-engine.ok",
         br#"module app v1.0.0; main() is int { 0; } test "default" { test.ok(true); }"#,
     );
     for prefix in [&[][..], &["run"][..], &["run", "-t"][..], &["-t"][..]] {
-        for (environment, explicit, sparrow) in [
-            (None, None, true),
-            (Some(""), None, true),
-            (Some("typo"), None, true),
-            (Some("sparrow"), None, true),
-            (Some("ir"), Some("sparrow"), true),
-        ] {
+        for environment in [None, Some(""), Some("typo"), Some("ir"), Some("jvm")] {
             let mut command = okkama();
-            command.args(prefix);
-            if let Some(engine) = explicit {
-                if prefix.is_empty() {
-                    continue; // Engine flags belong to the run subcommand.
-                }
-                command.args(["--engine", engine]);
-            }
-            command.arg(source.path()).env("SPARROW_CORE_STATS", "1").env_remove("OKKAMA_ENGINE");
+            command.args(prefix).arg(source.path()).env("SPARROW_CORE_STATS", "1").env_remove("OKKAMA_ENGINE");
             if let Some(engine) = environment {
                 command.env("OKKAMA_ENGINE", engine);
             }
             let output = command.output().unwrap();
-            assert!(output.status.success(), "{}", stderr(&output));
-            assert_eq!(
-                stderr(&output).contains("heap bytes allocated"),
-                sparrow,
-                "{prefix:?}, env={environment:?}, flag={explicit:?}: {}",
-                stderr(&output)
-            );
+            assert!(output.status.success(), "{prefix:?}, env={environment:?}: {}", stderr(&output));
+            assert!(stderr(&output).contains("heap bytes allocated"), "{prefix:?}, env={environment:?}");
             if prefix.contains(&"-t") {
                 assert!(stdout(&output).contains("--- PASS: default"), "{}", stdout(&output));
             }
@@ -293,9 +257,8 @@ fn native_run_engines_execute_source_without_java() {
     assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
     assert!(output.stderr.is_empty());
     {
-        let engine = "sparrow";
         let output = okkama()
-            .args(["run", "--engine", engine, source.path()])
+            .args(["run", source.path()])
             .env("PATH", "")
             .output()
             .unwrap();
@@ -304,12 +267,12 @@ fn native_run_engines_execute_source_without_java() {
         assert!(output.stderr.is_empty());
     }
     let output = run_stdin(
-        &["run", "--engine", "sparrow", "-"],
+        &["run", "-"],
         b"module app v1.0.0; main() is int { let xs = [[1, 2], [40]]; xs[0][1] + xs[1][0]; }",
     );
     assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
     let output = run_stdin(
-        &["run", "--engine", "sparrow", "-"],
+        &["run", "-"],
         b"module app v1.0.0; main() is int { let xs = [1]; xs[2]; }",
     );
     assert_eq!(output.status.code(), Some(1));
@@ -336,7 +299,7 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
     );
     {
         let engine = "sparrow";
-        let output = run(&["run", "--engine", engine, "-t", source.path()]);
+        let output = run(&["run", "-t", source.path()]);
         assert_eq!(output.status.code(), Some(1), "{engine}: {}", stderr(&output));
         assert_eq!(
             stdout(&output),
@@ -348,7 +311,7 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
             "{engine}"
         );
         let output = run(&[
-            "run", "--engine", engine, "-t", "--filter", "skip", "--filter", "private", source.path(),
+            "run", "-t", "--filter", "skip", "--filter", "private", source.path(),
         ]);
         assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
         assert_eq!(
@@ -357,7 +320,7 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
              === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n",
             "{engine}"
         );
-        let output = run(&["run", "--engine", engine, "-t", "--filter", "nothing", source.path()]);
+        let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
     }
@@ -405,7 +368,7 @@ fn failed_checks_show_objects_and_variants_by_value() {
     let source = TempFile::new("shown.ok", SHOWN_VALUES.as_bytes());
     let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let output = okkama()
-        .args(["run", "--engine", "sparrow", "-t", source.path()])
+        .args(["run", "-t", source.path()])
         .env("OKKAMA_STDLIB_DIR", &std)
         .output()
         .unwrap();
@@ -427,7 +390,7 @@ fn channel_examples_print_their_expected_output() {
         let expected = std::fs::read_to_string(path.with_extension("expected")).unwrap();
         {
             let engine = "sparrow";
-            let output = run(&["run", "--engine", engine, "--timeout", "30", path.to_str().unwrap()]);
+            let output = run(&["run", "--timeout", "30", path.to_str().unwrap()]);
             assert_eq!(output.status.code(), Some(0), "{} {engine}: {}", path.display(), stderr(&output));
             assert_eq!(stdout(&output), expected, "{} {engine}", path.display());
         }
@@ -442,7 +405,7 @@ fn uncaught_failure_prints_place_and_call_stack() {
     // Every engine reports the place and the call stack (the core since #10).
     {
         let engine = "sparrow";
-        let output = run_stdin(&["run", "--engine", engine, "-"], source);
+        let output = run_stdin(&["run", "-"], source);
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
         assert!(
@@ -500,16 +463,16 @@ fn legacy_backend_alias_is_supported_but_conflicts_are_errors() {
 
 #[test]
 fn native_run_does_not_ignore_arguments_or_fallback_to_java() {
+    // `--engine` is gone with the other engines: an unknown option, a usage error.
     for args in [
         vec!["run", "--engine"],
-        vec!["run", "--engine", "unknown", "-"],
+        vec!["run", "--engine", "sparrow", "-"],
     ] {
         assert_eq!(run(&args).status.code(), Some(2));
     }
     {
-        let engine = "sparrow";
         let output = run_stdin(
-            &["run", "--engine", engine, "-"],
+            &["run", "-"],
             b"module runtime/unlinked v1.0.0; native nothing() is int; main() is int { nothing(); }",
         );
         assert_eq!(output.status.code(), Some(1));
@@ -671,8 +634,9 @@ fn help_and_version() {
         let output = run(args);
         assert_eq!(output.status.code(), Some(0));
         assert!(stdout(&output).contains("okkama ast <FILE|->"));
-        assert!(stdout(&output).contains("Compile to Sparrow and execute it with JIT (default)"));
-        assert!(stdout(&output).contains("OKKAMA_ENGINE=sparrow"));
+        assert!(stdout(&output).contains("Run a program on Sparrow (JIT)"));
+        // One engine (Tweed): nothing to select.
+        assert!(!stdout(&output).contains("--engine") && !stdout(&output).contains("OKKAMA_ENGINE"));
         assert!(stdout(&output).contains("okkama ir <FILE|->"));
         assert!(stdout(&output).contains("okkama build <FILE|-> [--target sparrow] -o <FILE.spb>"));
         assert!(stderr(&output).is_empty());
@@ -1490,7 +1454,7 @@ fn functions_with_huge_frames_are_refused_by_sparrow() {
         values.join(", ")
     );
     let file = TempFile::new("wide-frame.ok", source.as_bytes());
-    let output = okkama().args(["run", "--engine", "sparrow"]).arg(&file.0).output().unwrap();
+    let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(
         stderr(&output).contains("Wide.sum: compiling it would take more than 256 MiB"),
@@ -1536,7 +1500,7 @@ fn an_uncaught_error_text_keeps_its_payload_on_one_line() {
     {
         let engine = "sparrow";
         let mut command = okkama();
-        command.args(["run", "--engine", engine, "-"]).env("OKKAMA_TRACE", "off");
+        command.args(["run", "-"]).env("OKKAMA_TRACE", "off");
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn().unwrap();
         child.stdin.take().unwrap().write_all(source).unwrap();
@@ -1575,7 +1539,7 @@ fn a_cancelled_worker_stops_before_its_future_settles() {
     {
         let engine = "sparrow";
         let started = std::time::Instant::now();
-        let output = okkama().args(["run", "--engine", engine]).arg(&file.0).output().unwrap();
+        let output = okkama().args(["run"]).arg(&file.0).output().unwrap();
         assert_eq!(output.status.code(), Some(0), "{engine}: {}", stderr(&output));
         assert_eq!(stdout(&output), "-1 -1 true true\nend\n", "{engine}");
         assert!(started.elapsed() < std::time::Duration::from_secs(20), "{engine}");

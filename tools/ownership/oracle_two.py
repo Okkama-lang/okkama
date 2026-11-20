@@ -12,7 +12,7 @@ import oracle
 
 DEFAULT_COMMANDS = {
     'build': ['{prefix}/bin/okkama', 'build', '{source}', '--target', 'sparrow', '-o', '{binary}'],
-    'run': ['{prefix}/bin/okkama', 'run', '--engine', 'sparrow', '{source}'],
+    'run': ['{prefix}/bin/okkama', 'run', '{source}'],
     'exec': ['{prefix}/bin/sparrow', '{binary}'],
 }
 

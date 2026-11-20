@@ -59,7 +59,7 @@ python3 run.py --image okkama-dev \
   --toolchain /path/to/frozen-linux-install \
   --stdlib /path/to/matching-stdlib \
   --okkama /toolchain/bin/okkama \
-  --engines sparrow,ir,jvm --runs 7 --n 10000 --warmup 10000 \
+  --engines sparrow --runs 7 --n 10000 --warmup 10000 \
   --label candidate-unique-id --build-profile "release fat-LTO" --revision COMMIT
 ```
 
@@ -69,7 +69,8 @@ an explicit std directory; it must be a complete matching installation, not a
 host macOS binary. The runner does not silently borrow std from `okkama-new`.
 Crypto-dependent programs also require the matching native library in that installation.
 
-`--engines tomato` remains an alias for Sparrow. `--only NAME,NAME` validates all
+`--engines tomato` remains an alias for Sparrow. Since 0.6.0 Sparrow is the only engine and `okkama run` has no
+`--engine`; the runner passes it only to an older toolchain that knows it (whose default before #584 was IR). `--only NAME,NAME` validates all
 names; `--plan` prints the selection without executing it. `--n` is now one positive
 integer, not the old per-engine assignment string. JVM artifacts are built once
 per campaign inside the same limited environment. IR/Sparrow source setup occurs

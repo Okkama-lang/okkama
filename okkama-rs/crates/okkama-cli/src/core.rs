@@ -1,5 +1,5 @@
-//! The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run
-//! --engine sparrow` and the OCS adapter. Process workers run the program's
+//! The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
+//! and the OCS adapter. Process workers run the program's
 //! bytecode in `okkama --worker FILE.spb`; a program compiled in memory gets
 //! a temporary file for them when it spawns workers.
 use std::ffi::OsString;

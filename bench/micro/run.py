@@ -117,7 +117,7 @@ def main():
     p.add_argument('--toolchain');p.add_argument('--stdlib')
     p.add_argument('--build-profile',help='declared build flags/profile, e.g. release fat-LTO; recorded, not inferred')
     p.add_argument('--revision',help='source revision of the candidate toolchain')
-    p.add_argument('--engines',default='sparrow,ir,jvm');p.add_argument('--only',default='')
+    p.add_argument('--engines',default='sparrow');p.add_argument('--only',default='')
     p.add_argument('--runs',type=positive,default=7);p.add_argument('--n',type=positive,default=10000)
     p.add_argument('--warmup',type=positive,default=10000)
     p.add_argument('--timeout',type=positive,default=120);p.add_argument('--output-bytes',type=positive,default=65536)
@@ -161,6 +161,13 @@ def main():
             if a.stdlib:result['environment']['stdlib_hashes']={str(f.relative_to(a.stdlib)):digest(f) for f in sorted(Path(a.stdlib).rglob('*.ok'))}
             if a.toolchain:result['toolchain']['installation_hashes']={str(f.relative_to(a.toolchain)):digest(f) for f in sorted(Path(a.toolchain).rglob('*')) if f.is_file()}
             if 'jvm' in engines:result['toolchain']['java']=docker.run(['java','-version'])[1].strip()
+            # Since 0.6.0 (Tweed) Sparrow is the only engine and `run` has no --engine; a toolchain from before
+            # that still takes it (and before #584 defaulted to IR), so pass it only where the binary knows it.
+            def legacy_flag():
+                if any(e!='sparrow' for e in engines):return True
+                try:return '--engine' in docker.run([a.okkama,'run','--help'])[0]
+                except (RuntimeError,ValueError,OSError):return False
+            legacy=legacy_flag()
             commands={}
             for name,e in jobs:
                 source='/suite/'+manifest[name]['path']
@@ -168,7 +175,7 @@ def main():
                     artifact='/work/'+name.replace('-','_')+'.jar'
                     docker.run([a.okkama,'build',source,'--target','jvm','-o',artifact])
                     commands[name,e]=['java','--enable-native-access=ALL-UNNAMED','-jar',artifact]
-                else:commands[name,e]=[a.okkama,'run','--engine',e,source]
+                else:commands[name,e]=[a.okkama,'run',*(['--engine',e] if legacy else []),source]
             samples={key:[] for key in jobs};broken=set();rng=random.Random(a.seed)
             # Short independent-oracle checks exercise more than one iteration count.
             for name,e in jobs:

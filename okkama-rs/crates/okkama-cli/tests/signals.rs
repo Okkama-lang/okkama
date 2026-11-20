@@ -45,7 +45,7 @@ impl App {
             .port();
         let mut command = Command::new(env!("CARGO_BIN_EXE_okkama"));
         command
-            .args(["run", "--engine", engine])
+            .args(["run"])
             .arg(here.join("tests/signals/serve.ok"))
             .arg(port.to_string())
             .arg(delay.to_string());

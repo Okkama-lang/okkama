@@ -154,7 +154,6 @@ USAGE:
     okkama build <FILE|-> [--target sparrow] -o <FILE.spb>
     okkama exec [BUDGETS] <FILE.spb>
     okkama run [-t [--filter TEXT]...] <FILE> [FILE.ok...] [ARGS...]
-    okkama run --engine sparrow <FILE> [FILE.ok...]
     okkama <FILE.ok> [FILE.ok...]
     okkama help [COMMAND]
     okkama --version
@@ -203,10 +202,6 @@ BUILD OPTIONS:
 RUN OPTIONS:
     --verify-ownership    Full OIR-2 ownership verification (champ-abi);
                           also enabled by OKKAMA_VERIFY_OWNERSHIP=1
-    --engine sparrow      Compile to Sparrow and execute it with JIT (default)
-                          Place engine options before FILE; Sparrow runs
-                          tests (-t), program arguments and `spawn` workers.
-                          OKKAMA_ENGINE=sparrow sets the default.
     --filter TEXT         With -t: run only the tests whose name contains
                           TEXT (literally, case-sensitive); repeated, the
                           tests that contain any of the texts
@@ -1469,7 +1464,6 @@ fn build_command(args: &[String]) -> Outcome {
     }
     let backend = match line.backend.as_deref() {
         None | Some("sparrow") => Backend::Sparrow,
-        Some("jvm") => return Outcome::usage("the JVM backend was removed in 0.6.0 (#585); Sparrow is the only Okkama engine"),
         Some(name) => return Outcome::usage(&format!("unknown backend `{name}` (use sparrow)")),
     };
     let output = match line.output.as_deref() {
@@ -1541,7 +1535,7 @@ fn build_command(args: &[String]) -> Outcome {
     }
 }
 
-/// `okkama run`: Sparrow (JIT) в процессе; `OKKAMA_ENGINE` меняет умолчание;
+/// `okkama run`: Sparrow (JIT) в процессе, единственный движок (Tweed, 2026-11-20).
 /// Файлы модуля — первый и следующие
 /// за ним существующие `.ok`; остальное (после необязательного `--`) —
 /// аргументы программы.
@@ -1551,14 +1545,7 @@ fn run_command(args: &[String]) -> Outcome {
     #[cfg(feature = "champ-abi")]
     let mut verify_ownership = false;
     let mut filters: Vec<String> = Vec::new();
-    let default = std::env::var("OKKAMA_ENGINE").unwrap_or_default();
     let mut limits = sparrow_core::budget::Limits::default();
-    let mut engine = match default.as_str() {
-        "sparrow" => "sparrow",
-        "ir" => "ir",
-        "jvm" => "jvm",
-        _ => "sparrow",
-    };
     while let Some(first) = rest.first() {
         match first.as_str() {
             // Служебный ключ процесса-воркера `spawn`: корень std родителя.
@@ -1567,22 +1554,6 @@ fn run_command(args: &[String]) -> Outcome {
                     return Outcome::usage("--stdlib needs a directory");
                 };
                 let _ = STDLIB_OVERRIDE.set(PathBuf::from(value));
-                rest = &rest[1..];
-            }
-            "--engine" => {
-                let Some(value) = rest.get(1) else {
-                    return Outcome::usage("--engine needs a value: sparrow");
-                };
-                if value == "ir" {
-                    return Outcome::usage("the IR engine was removed (#584); Sparrow is the only Okkama engine (use --engine sparrow)");
-                }
-                if value == "jvm" {
-                    return Outcome::usage("the JVM backend was removed in 0.6.0 (#585); Sparrow is the only Okkama engine");
-                }
-                if value != "sparrow" {
-                    return Outcome::usage("unknown engine (use sparrow)");
-                }
-                engine = value;
                 rest = &rest[1..];
             }
             "-t" | "--tests" => tests = true,
@@ -1617,12 +1588,6 @@ fn run_command(args: &[String]) -> Outcome {
             _ => break,
         }
         rest = &rest[1..];
-    }
-    if engine == "ir" {
-        return Outcome::usage("the IR engine was removed (#584); Sparrow is the only Okkama engine (use --engine sparrow)");
-    }
-    if engine == "jvm" {
-        return Outcome::usage("the JVM backend was removed in 0.6.0 (#585); Sparrow is the only Okkama engine");
     }
     if !filters.is_empty() && !tests {
         return Outcome::usage("--filter selects tests: use it with -t");

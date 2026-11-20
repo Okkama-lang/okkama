@@ -12,7 +12,7 @@ engines disagree is minimized (delta debugging over the statements of
 `main`) and kept in DIR/<seed>/: the program, the minimized program and every
 engine's output. Exit status 1 when some seed disagreed.
 
-Programs run through `okkama run --engine E` (OKKAMA, default the release
+Programs run through `okkama run` (OKKAMA, default the release
 build). The reference is Sparrow with IR passes off, or OKKAMA_REFERENCE
 when comparing two builds; a whole campaign belongs in a container (`make gate`'s image) or CI.
 """
@@ -161,7 +161,7 @@ def run(text, engine, directory, reference=False):
         if reference and not REFERENCE:
             env["OKKAMA_IR_PASSES"] = "none"
         binary = REFERENCE if reference and REFERENCE else OKKAMA
-        p = subprocess.run([binary, "run", "--engine", engine, path], capture_output=True, text=True, timeout=120, cwd=directory, env=env)
+        p = subprocess.run([binary, "run", path], capture_output=True, text=True, timeout=120, cwd=directory, env=env)
         return (p.returncode, p.stdout, p.stderr.strip().splitlines()[:1])
     except subprocess.TimeoutExpired:
         return ("timeout", "", [])

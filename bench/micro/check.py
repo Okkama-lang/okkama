@@ -30,7 +30,7 @@ WARMUP = 3
 
 
 def check(name, source, args):
-    command = [args.okkama, "run", "--engine", "sparrow", "--timeout", str(args.timeout), str(source)]
+    command = [args.okkama, "run", "--timeout", str(args.timeout), str(source)]
     env = dict(os.environ, OKKAMA_STDLIB_DIR=args.stdlib, OKKAMA_TRACE="off")
     if args.pipeline:
         env["OKKAMA_PIPELINE"] = args.pipeline

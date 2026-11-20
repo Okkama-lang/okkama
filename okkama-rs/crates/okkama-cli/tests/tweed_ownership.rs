@@ -267,7 +267,7 @@ async main() is int {
     std::fs::write(&file, program).unwrap();
     let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["run", "--engine", "sparrow", file.to_str().unwrap()])
+        .args(["run", file.to_str().unwrap()])
         .env("OKKAMA_STDLIB_DIR", std)
         .output()
         .unwrap();

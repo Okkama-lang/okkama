@@ -5,7 +5,7 @@
 
 Every file under t/ (or the ones given) runs on every configuration:
 
-    sparrow         okkama run --engine sparrow
+    sparrow         okkama run
     sparrow-passes-off Sparrow with OKKAMA_IR_PASSES=none
     sparrow-gc-stress  Sparrow with SPARROW_CORE_GC_STRESS=1 (a collection
                     at every safepoint, freed cells poisoned)
@@ -91,7 +91,7 @@ def tap(stdout):
 def run(job, args):
     path, config = job
     engine, extra, binary = CONFIGS[config]
-    command = [getattr(args, binary), "run", "--engine", engine, "--timeout", str(args.timeout),
+    command = [getattr(args, binary), "run", "--timeout", str(args.timeout),
                "--max-memory", args.max_memory, path]
     if args.cage:
         command = [sys.executable, CAGE, "--cpu-seconds", str(args.timeout), "--timeout", str(args.timeout + 30),

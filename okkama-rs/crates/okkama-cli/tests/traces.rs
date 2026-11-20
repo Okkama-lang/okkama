@@ -37,7 +37,7 @@ fn sparrow_reports_failures_causes_and_cleanup() {
     // failures keep their text-only entries.
     for name in REPORTED {
         let path = program(name);
-        let core = okkama(&["run", "--engine", "sparrow"], &path, true);
+        let core = okkama(&["run"], &path, true);
         assert_eq!(core.status.code(), Some(1), "{name}: {}", stderr(&core));
         let core = stderr(&core);
         assert!(core.contains("Stack trace (most recent call first):\n"), "{name}:\n{core}");
@@ -52,9 +52,9 @@ fn sparrow_reports_failures_causes_and_cleanup() {
             }
         }
     }
-    let cause = stderr(&okkama(&["run", "--engine", "sparrow"], &program("cause"), false));
+    let cause = stderr(&okkama(&["run"], &program("cause"), false));
     assert!(cause.starts_with("OrderError: OrderError.failed(7)\nCaused by:\n  StoreError: StoreError.closed\n"), "{cause}");
-    let cleanup = stderr(&okkama(&["run", "--engine", "sparrow"], &program("cleanup"), false));
+    let cleanup = stderr(&okkama(&["run"], &program("cleanup"), false));
     assert!(
         cleanup.starts_with(
             "JobError: JobError.broken\nSecondary cleanup failure:\n  CloseError: CloseError.stuck(\"b\")\n\
@@ -65,7 +65,7 @@ fn sparrow_reports_failures_causes_and_cleanup() {
     // AllFutures: the first failure observed stays primary, the rest follow
     // in input order, a failure given twice once (#443, #445); siblings
     // woken before the cancellation fail on their own (#546).
-    let collect = stderr(&okkama(&["run", "--engine", "sparrow"], &program("collect"), true));
+    let collect = stderr(&okkama(&["run"], &program("collect"), true));
     assert!(
         collect.starts_with(
             "Broken: Broken.broken(\"f3\")\nSecondary cleanup failure:\n  Broken: Broken.broken(\"f1\")\n\
@@ -74,7 +74,7 @@ fn sparrow_reports_failures_causes_and_cleanup() {
         ),
         "{collect}"
     );
-    let core = stderr(&okkama(&["run", "--engine", "sparrow"], &program("recursion"), true));
+    let core = stderr(&okkama(&["run"], &program("recursion"), true));
     let stack = &core[core.find("Stack trace").unwrap()..];
     let frames: Vec<&str> = stack.lines().skip(1).map(|line| line.split(" (").next().unwrap()).collect();
     assert_eq!(frames, ["  at Worker.fail", "  at Worker.fail", "  at main"], "{core}");
@@ -105,7 +105,7 @@ fn bytecode_runs_print_the_stack_in_sparrow_terms() {
 #[test]
 fn cause_stacks_preserve_each_origin() {
     for (name, entries) in [("chain", 3), ("rethrow", 1), ("cause", 2), ("cause_callee", 2)] {
-        let output = okkama(&["run", "--engine", "sparrow"], &program(name), true);
+        let output = okkama(&["run"], &program(name), true);
         let text = stderr(&output);
         assert_eq!(output.status.code(), Some(1), "{text}");
         println!("=== {name} ===\n{text}");
@@ -142,7 +142,7 @@ fn cause_stacks_preserve_each_origin() {
             assert_eq!(text.matches("Broken: Broken.broken").count(), 1, "{text}");
             assert!(!text.contains("rethrow.ok:10:"), "{text}");
         }
-        let plain = stderr(&okkama(&["run", "--engine", "sparrow"], &program(name), false));
+        let plain = stderr(&okkama(&["run"], &program(name), false));
         assert_eq!(plain.matches("Caused by:").count(), entries - 1, "{plain}");
         assert!(!plain.contains("Stack trace") && !plain.contains("-->"), "{plain}");
     }

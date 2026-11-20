@@ -1,0 +1,99 @@
+module bench/ownership v1.0.0;
+
+// Владение (#9): 100000 записей в массиве и те же записи на 1000 полках
+// словаря; часть записей ведёт к объекту с `destroy`, поэтому регионы
+// учитывают значения, которые на них ссылаются. Цикл 300 раз строит такое
+// значение и закрывает регион шага с ресурсом: стоимость учёта не должна
+// расти с размером структуры, на которую ссылается значение.
+import "io/stdout" take Stdout, Stderr;
+import "runtime/process" take process_arguments;
+import "runtime/time" take monotonic_clock;
+
+role Ledger {
+    balance() is int;
+}
+
+object Account does Ledger {
+    has amount is int;
+    Account(:amount);
+    balance() is int { amount; }
+}
+
+object Vault does Ledger {
+    has amount is int;
+    Vault(:amount);
+    balance() is int { amount * 2; }
+    destroy { amount; }
+}
+
+object Record {
+    has id is int;
+    has ledger is Ledger;
+    Record(:id, :ledger);
+    total() is int { id % 97 + ledger.balance(); }
+}
+
+object View {
+    has records is @Record;
+    has shelves is %int:@Record;
+    has at is int;
+    View(:records, :shelves, :at);
+    total() is int {
+        let shelf = shelves[at % shelves.size()] else records;
+        records[at].total() + shelf[at % shelf.size()].total();
+    }
+}
+
+object Store {
+    has records is @Record;
+    has shelves is %int:@Record;
+    Store(racks is int) {
+        let all = (0..racks * 100).map() -> i {
+            let ledger is Ledger = if i % 1000 == 0 { Vault(amount: i % 13); } else { Account(amount: i % 13); };
+            Record(id: i, ledger: ledger);
+        };
+        let first is %int:@Record = [0: all.slice(0, 100)];
+        records = all;
+        shelves = (1..racks).reduce(first) -> found, shelf {
+            found + [shelf: all.slice(shelf * 100, shelf * 100 + 100)];
+        };
+    }
+    sum(rounds is int) is int {
+        (0..rounds).reduce(0) -> sum, round {
+            let fee = Vault(amount: round % 5);
+            let view = View(records: records, shelves: shelves, at: (round * 7919) % records.size());
+            sum + view.total() + fee.balance();
+        };
+    }
+}
+
+// #236: a first program argument N repeats the work N times in one process
+// and prints the time of each run to stderr ("iteration <nanoseconds>");
+// stdout gets the result once, as with a single run. The harness must not
+// change the measured program, so it uses the runtime's own primitives:
+// os/environment would bring a destroy into the program and change how its
+// closures and tail calls compile (#285, #292), and cli/arguments,
+// strings/parse and time/clock cost milliseconds of start-up. A cold run
+// (no argument) never reads the clock.
+object Repeat {
+    Repeat();
+    run(work is () is string) is string {
+        let arguments = process_arguments();
+        if arguments.size() == 0 { return work(); }
+        let count = arguments[0].reduce(0) -> number, digit { number * 10 + digit.int() - 48; };
+        (0..count).reduce("") -> previous, index {
+            let started = monotonic_clock();
+            let result = work();
+            Stderr().writeln("iteration " + (monotonic_clock() - started).string());
+            result;
+        };
+    }
+}
+
+main() is int {
+    Stdout().writeln(Repeat().run(() is string {
+        let store = Store(1000);
+        store.sum(300).string();
+    }));
+    0;
+}

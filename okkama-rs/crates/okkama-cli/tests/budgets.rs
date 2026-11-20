@@ -17,7 +17,7 @@ fn run(engine: &str, source: &str, budget: &[&str]) -> Output {
     std::fs::write(&path, source).unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["run", "--engine", engine])
+        .args(["run"])
         .args(budget)
         .arg(&path)
         .env("OKKAMA_STDLIB_DIR", root.join("std"))
@@ -101,7 +101,7 @@ fn deep_recursion_is_bounded_and_its_trace_is_cheap() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let started = std::time::Instant::now();
         let output = Command::new(env!("CARGO_BIN_EXE_okkama"))
-            .args(["run", "--engine", engine, "--timeout", "60"])
+            .args(["run", "--timeout", "60"])
             .arg(&path)
             .env("OKKAMA_STDLIB_DIR", root.join("std"))
             .env_remove("OKKAMA_TRACE")
