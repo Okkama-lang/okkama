@@ -409,7 +409,7 @@ subcommand that users run once and save.
 
 During development a tool runs from source, with its arguments after the
 file: `okkama run tally.ok --top 5 notes.txt`. To ship it, `okkama build
-tally.ok --target sparrow -o tally.spb` compiles it into a bytecode file that
+tally.ok -o tally.spb` compiles it into a bytecode file that
 `okkama exec` runs without recompiling (Chapter 19 covers modules, packages
 and their versions). The program is the same either way. Its behaviour does
 not depend on how it was started.
