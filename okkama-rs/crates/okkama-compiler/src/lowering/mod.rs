@@ -857,9 +857,11 @@ mod param_adopts_tests {
 
     #[test]
     fn prototype_off_keeps_printed_oir_byte_identical() {
+        // Two resources share main's region, so the static pass (#909 2b, one resource per region) leaves their
+        // adopts for the prototype to elide. When that pass takes several, give this test another dynamic adopt.
         let source = SourceFile::new("test.ok", "module app v1.0.0; \
             object Res { Res(); read() is int { 1; } destroy {} } \
-            main() is int { let r = Res(); r.read(); }").expect("source");
+            main() is int { let r = Res(); let q = Res(); r.read() + q.read(); }").expect("source");
         let program = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).expect("parse");
         let module = lower_program(&program).expect("lower");
         let before = module.to_string();
