@@ -7549,9 +7549,120 @@ object Handle {
   использует: `let log = if verbose { File.create(a); } else { File.create(b); };`
   (#308; до 0.4.2 последний `let` ветви жил до конца внешней области).
 
-Набор соответствия закрепляет эти правила:
+Одна программа проходит по правилам по порядку. Каждый `Tag` сообщает, когда
+его уничтожают, поэтому по выводу видно, какая область им владела:
 
-Набор проверок соответствия проверяет заимствование через псевдонимы, возвращаемые ресурсы, независимость преемников, области ветвей и ресурсы, собранные через `reduce`.
+```okkama
+module bible/owners v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Tag {
+    has name is string;
+
+    Tag(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("  destroy " + name); }
+}
+
+object Desk {
+    Desk();
+
+    // A parameter borrows: the caller's tag outlives this action.
+    look(tag is Tag) is int { tag.label().length(); }
+
+    // A fresh argument is adopted, and destroyed when the action returns.
+    adopt(tag is Tag) is int { tag.label().length(); }
+
+    // A returned object moves to the caller.
+    make(name is string) is Tag { Tag(name: name); }
+}
+
+main() is int {
+    let out = Stdout();
+    let desk = Desk();
+    out.writeln("alias");
+    {
+        let a = Tag(name: "a");
+        let alias = a;
+        out.writeln("  " + alias.label() + " has one owner");
+    }
+    out.writeln("parameter");
+    let kept = Tag(name: "kept");
+    desk.look(kept);
+    out.writeln("  still here: " + kept.label());
+    out.writeln("fresh argument");
+    desk.adopt(Tag(name: "adopted"));
+    out.writeln("returned");
+    {
+        let made = desk.make("made");
+        out.writeln("  main owns " + made.label());
+    }
+    out.writeln("aggregate");
+    {
+        let tags = [Tag(name: "first"), Tag(name: "second")];
+        out.writeln("  " + tags.size().string() + " in the array");
+    }
+    out.writeln("loop");
+    for ["x", "y"] -> name {
+        let t = Tag(name: name);
+        out.writeln("  iteration " + t.label());
+    }
+    out.writeln("branch");
+    if kept.label().length() > 0 {
+        let b = Tag(name: "branch");
+        out.writeln("  inside " + b.label());
+    }
+    out.writeln("end");
+    0;
+}
+```
+
+Вывод:
+
+```text
+alias
+  a has one owner
+  destroy a
+parameter
+  still here: kept
+fresh argument
+  destroy adopted
+returned
+  main owns made
+  destroy made
+aggregate
+  2 in the array
+  destroy second
+  destroy first
+loop
+  iteration x
+  destroy x
+  iteration y
+  destroy y
+branch
+  inside branch
+  destroy branch
+end
+  destroy kept
+```
+
+- `alias` даёт `a` второе имя; `a` уничтожается один раз, когда кончается его
+  блок.
+- `look` заимствует `kept`: после вызова он на месте и живёт до конца `main`.
+- `adopt` получает метку, которой ещё никто не владел, и уничтожает её при
+  возврате.
+- `make` возвращает свою метку, поэтому `made` принадлежит блоку `main` и
+  уничтожается там.
+- Массив владеет обеими метками и уничтожает их в порядке, обратном созданию.
+- Каждая итерация цикла и ветвь `if` уничтожают то, чем владеют, когда
+  заканчиваются.
+
+Набор проверок соответствия закрепляет те же правила: заимствование через
+псевдонимы, возвращаемые ресурсы, независимость преемников, области ветвей и
+ресурсы, собранные через `reduce`.
 
 ## 11.6 Ресурсы в коллекциях и замыканиях
 

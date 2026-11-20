@@ -1,0 +1,24 @@
+alias
+  a has one owner
+  destroy a
+parameter
+  still here: kept
+fresh argument
+  destroy adopted
+returned
+  main owns made
+  destroy made
+aggregate
+  2 in the array
+  destroy second
+  destroy first
+loop
+  iteration x
+  destroy x
+  iteration y
+  destroy y
+branch
+  inside branch
+  destroy branch
+end
+  destroy kept

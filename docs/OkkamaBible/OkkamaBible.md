@@ -7461,9 +7461,117 @@ identities, not names.
   (#308; before 0.4.2 the last `let` of a branch lived until the enclosing
   scope ended).
 
-The conformance suite pins these rules:
+One program walks through the rules in order. Every `Tag` says when it is
+destroyed, so the output shows which scope owned it:
 
-The conformance suite checks alias borrowing, returned resources, independent successors, branch scopes and resources gathered by `reduce`.
+```okkama
+module bible/owners v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Tag {
+    has name is string;
+
+    Tag(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("  destroy " + name); }
+}
+
+object Desk {
+    Desk();
+
+    // A parameter borrows: the caller's tag outlives this action.
+    look(tag is Tag) is int { tag.label().length(); }
+
+    // A fresh argument is adopted, and destroyed when the action returns.
+    adopt(tag is Tag) is int { tag.label().length(); }
+
+    // A returned object moves to the caller.
+    make(name is string) is Tag { Tag(name: name); }
+}
+
+main() is int {
+    let out = Stdout();
+    let desk = Desk();
+    out.writeln("alias");
+    {
+        let a = Tag(name: "a");
+        let alias = a;
+        out.writeln("  " + alias.label() + " has one owner");
+    }
+    out.writeln("parameter");
+    let kept = Tag(name: "kept");
+    desk.look(kept);
+    out.writeln("  still here: " + kept.label());
+    out.writeln("fresh argument");
+    desk.adopt(Tag(name: "adopted"));
+    out.writeln("returned");
+    {
+        let made = desk.make("made");
+        out.writeln("  main owns " + made.label());
+    }
+    out.writeln("aggregate");
+    {
+        let tags = [Tag(name: "first"), Tag(name: "second")];
+        out.writeln("  " + tags.size().string() + " in the array");
+    }
+    out.writeln("loop");
+    for ["x", "y"] -> name {
+        let t = Tag(name: name);
+        out.writeln("  iteration " + t.label());
+    }
+    out.writeln("branch");
+    if kept.label().length() > 0 {
+        let b = Tag(name: "branch");
+        out.writeln("  inside " + b.label());
+    }
+    out.writeln("end");
+    0;
+}
+```
+
+Output:
+
+```text
+alias
+  a has one owner
+  destroy a
+parameter
+  still here: kept
+fresh argument
+  destroy adopted
+returned
+  main owns made
+  destroy made
+aggregate
+  2 in the array
+  destroy second
+  destroy first
+loop
+  iteration x
+  destroy x
+  iteration y
+  destroy y
+branch
+  inside branch
+  destroy branch
+end
+  destroy kept
+```
+
+- `alias` names `a` a second time; `a` is destroyed once, when its block ends.
+- `look` borrows `kept`, which is still there after the call and lives until
+  `main` ends.
+- `adopt` receives a tag nobody owned yet and destroys it when it returns.
+- `make` returns its tag, so `main`'s block owns `made` and destroys it there.
+- The array owns both tags and destroys them in reverse order of creation.
+- Each loop iteration and the `if` branch destroy what they own when they end.
+
+The conformance suite pins the same rules: alias borrowing, returned
+resources, independent successors, branch scopes and resources gathered by
+`reduce`.
 
 ## 11.6 Resources in collections and closures
 

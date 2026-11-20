@@ -172,9 +172,22 @@ identities, not names.
   (#308; before 0.4.2 the last `let` of a branch lived until the enclosing
   scope ended).
 
-The conformance suite pins these rules:
+One program walks through the rules in order. Every `Tag` says when it is
+destroyed, so the output shows which scope owned it:
 
-The conformance suite checks alias borrowing, returned resources, independent successors, branch scopes and resources gathered by `reduce`.
+{{example:11-owners}}
+
+- `alias` names `a` a second time; `a` is destroyed once, when its block ends.
+- `look` borrows `kept`, which is still there after the call and lives until
+  `main` ends.
+- `adopt` receives a tag nobody owned yet and destroys it when it returns.
+- `make` returns its tag, so `main`'s block owns `made` and destroys it there.
+- The array owns both tags and destroys them in reverse order of creation.
+- Each loop iteration and the `if` branch destroy what they own when they end.
+
+The conformance suite pins the same rules: alias borrowing, returned
+resources, independent successors, branch scopes and resources gathered by
+`reduce`.
 
 ## 11.6 Resources in collections and closures
 
