@@ -1179,6 +1179,105 @@ fn f1_a_returned_family_of_several_identities_is_no_fresh_singleton() {
     }
 }
 
+/// #874 (Fable, §6.3d with a Future as the local): `chain` returns a Future of `take(g)` over its bound local Future
+/// `g`, which goes back beside it by a rehome of its own; in `over`, `g`'s cache holds a fresh `Res` input.
+const LOCAL_FUTURE: &str = concat!(
+    "module app v1.0.0; ",
+    "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
+    "object M { M(); async make(l is string) is Res { Res(l: l); } ",
+    "async over(r is Res) is Res { Res(l: \"made\" + r.n().string()); } } ",
+    "object U { U(); async take(f is Future<Res>) is int { (await f).n(); } } ",
+    "object C { C(); chain() is Future<int> { let g = M().make(\"x\"); U().take(g); } ",
+    "over() is Future<int> { let g = M().over(Res(l: \"in\")); U().take(g); } } ",
+    "async main() is int { (await C().chain()) + (await C().over()); }",
+);
+
+/// The types `relation` declares beside its Future.
+fn beside_types(module: &ir::Module, relation: &ir::ResultRelation) -> Vec<&'static str> {
+    let mut kinds: Vec<_> = relation.beside.iter().map(|entry| match entry {
+        ir::BesideEntry::Site { ty, .. } => match module.types.get(*ty) {
+            Ok(ir::Type::Future(_)) => "future",
+            Ok(ir::Type::Object { .. }) => "object",
+            _ => "other",
+        },
+        ir::BesideEntry::Parameter(_) => "parameter",
+    }).collect();
+    kinds.sort();
+    kinds
+}
+
+/// #874: `g` goes back beside the returned Future, its creation typed as a Future and, in `over`, what its cache
+/// holds typed as itself. Full accepts both exits.
+#[test]
+fn f1_a_bound_local_future_goes_back_beside_the_future_over_it() {
+    let (own, _) = super::own_case_tests::own_stage(LOCAL_FUTURE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, chain) = relation_of(&own, "app.C.chain#0");
+    assert_eq!(beside_types(&own, chain), ["future"], "{chain:?}");
+    let (_, over) = relation_of(&own, "app.C.over#1");
+    assert_eq!(beside_types(&own, over), ["future", "object"], "{over:?}");
+}
+
+/// #874: without its marker the local Future is a creation beside the returned one that the relation does not
+/// declare (#872's check); without its own rehome, the returned Future depends on a cache its owner closes.
+#[test]
+fn f1_a_bound_local_future_beside_a_future_needs_its_marker_and_its_rehome() {
+    let (own, _) = super::own_case_tests::own_stage(LOCAL_FUTURE, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (summary, _) = relation_of(&own, "app.C.chain#0");
+    let mut cleared = own.clone();
+    cleared.summaries.get_mut(summary).unwrap().results[0].beside.clear();
+    let report = full_report(&cleared);
+    assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B51
+        && d.message == "a returned Future's packet holds creations beside it other than its relation declares"),
+        "{report:?}");
+    let cut = ir::text::parse(&without_local_rehome(&ir::text::print(&own).unwrap())).unwrap();
+    let report = full_report(&cut);
+    assert!(report.diagnostics.iter().any(|d| d.rule == ir::verify::RuleId::B9BorrowedFutureLeft), "{report:?}");
+}
+
+/// #874 and #871 (fail-closed): a function that returns `chain`'s Future further has no name for the local Future that
+/// came beside it, so own refuses the escape in both modes.
+#[test]
+fn f1_a_future_with_a_local_future_beside_it_is_not_returned_further() {
+    let source = LOCAL_FUTURE.replace("async main() is int { (await C().chain()) + (await C().over()); }",
+        "object P { P(); pass() is Future<int> { C().chain(); } } async main() is int { await P().pass(); }");
+    for mode in [ir::verify::VerifyMode::Structural, ir::verify::VerifyMode::Full] {
+        let Err(error) = super::own_case_tests::own_stage(&source, None, mode) else {
+            panic!("the escape is refused");
+        };
+        assert!(error.contains("UnsupportedAsync") && error.contains("(#871)"), "{error}");
+    }
+}
+
+/// `chain` of LOCAL_FUTURE's own text without the rehome of `g` (the one of a `future<app.Res>`): its state and
+/// reserve results read its operands.
+fn without_local_rehome(text: &str) -> String {
+    let start = text.find("func @app.C.chain#0").unwrap();
+    let end = start + text[start..].find("\n}\n").unwrap();
+    let body = &text[start..end];
+    let locals: Vec<&str> = body.split(|c: char| c == '(' || c == ',' || c == '\n').filter_map(|part| {
+        let part = part.trim();
+        part.strip_suffix(": future<app.Res>").or_else(|| part.split_once(": future<app.Res> ").map(|(name, _)| name))
+    }).filter(|name| name.starts_with('%')).collect();
+    let line = body.lines().find(|line| line.contains("= cache.rehome")
+        && locals.iter().any(|name| line.contains(&format!("future {name},")))).expect("chain rehomes g");
+    let (results, operands) = line.split_once(" = cache.rehome ").unwrap();
+    let names = |part: &str| -> Vec<String> {
+        part.split(|c: char| c == ',' || c == '(' || c == ')' || c == ' ').filter(|word| word.starts_with('%'))
+            .map(|word| word.trim_end_matches(':').to_string()).collect()
+    };
+    let (results, operands) = (names(results), names(operands));
+    let mut edited = body.replacen(&format!("{line}\n"), "", 1);
+    for (from, to) in [(&results[0], &operands[0]), (&results[1], &operands[1])] {
+        edited = edited.split(' ').map(|word| {
+            let stripped = word.trim_end_matches([',', ')']);
+            if stripped == from { word.replacen(from.as_str(), to, 1) } else { word.to_string() }
+        }).collect::<Vec<_>>().join(" ");
+    }
+    format!("{}{}{}", &text[..start], edited, &text[end..])
+}
+
 /// #866 (Fable, §6.3c for a Future): `chain` returns a Future of `take(f)` over its Future parameter `f`.
 const CHAIN: &str = concat!(
     "module app v1.0.0; ",

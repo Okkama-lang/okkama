@@ -51,6 +51,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function can return a Future over its bound local Future (#874).** Example:
+  `chain() is Future<int> { let g = M().make("x"); U().take(g); }`. Structural refused the caller
+  (`D18_EXECUTOR`) and Full refused `chain` (B51).
+  - Following Fable's ruling (§6.3d with a Future as the local), `g` goes back beside the returned Future by a
+    rehome of its own. The relation declares each of its creations beside, typed by what its site creates, so
+    what `g`'s cache holds reaches the caller's envelope too.
+  - Returning such a Future further stays refused, as for a local resource (#871).
 - **A function can return a call's fresh object that holds another fresh one (#879).** Example:
   `relay() is Box { Mk().make(); }` where `make` returns `Box(r: Res(...))`. Champ refused it at load
   (`FRESH_ORIGIN`): own collapses a callee's fresh family into the one site of the call, so `relay` looked like it
