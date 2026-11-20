@@ -1611,3 +1611,32 @@ async main() is int {
         assert_eq!((run.stdout.as_str(), run.result), ("passed 1\npassed 0\n", Ok(0)), "{mode:?}");
     }
 }
+
+/// An array of objects that hold an Event and reach no resource (std's `TcpRaceAttempt` keeps its gates this way).
+/// own keeps the array as references with deps; the loader takes it as closed plain data. Codegen admitted only an
+/// array of the capabilities themselves (#891) and refused this one.
+#[test]
+fn an_array_of_objects_holding_events() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+object Door {
+    has number is int;
+    has gate is Event;
+    Door(:number, :gate);
+    async pass() is string { await gate.wait(); "door " + number.string(); }
+}
+async main() is int {
+    let open = Event(ready: true);
+    let doors is @Door = (1..=3).map() -> number { Door(number: number, gate: open); };
+    for doors -> door {
+        Stdout().writeln(await door.pass());
+    }
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("door 1\ndoor 2\ndoor 3\n", Ok(0)), "{mode:?}");
+    }
+}

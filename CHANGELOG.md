@@ -24,7 +24,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   "async test … (#570)", although the async lowering already took test bodies as fixed roots. The gate is gone:
   `L04.fakes.typed-state` and `L07.test-runner.all-pass-async` pass on Champ (Structural). A silent exit status 4
   from `main` is no longer read by the Champ adapter as an unsupported program (`L01.gram.test.inner-grammar-not-parsed`).
-- **An array of Events compiles on Champ (#891).** Example: `has events is @Event`. own keeps such an array as a
+- **An array of Events, or of objects that hold one, compiles on Champ (#891).** Example: `has events is @Event`,
+  or std's `@TcpRaceAttempt`, whose attempts keep their gates. own keeps such an array as a
   managed collection of capabilities (references with deps), the loader as closed plain data, and codegen refused it.
   `L08.collect.completions-consumers` and `L08.collect.settlement-order` now print their expected output on Champ.
 - **Compiling large async bodies on Champ is about twice as fast (#889).** `L11.sqlite.round-trip` took about
