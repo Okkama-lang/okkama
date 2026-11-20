@@ -1582,3 +1582,32 @@ async main() is int {
         assert_eq!((run.stdout.as_str(), run.result), ("body\nclose c\nsettled c\ndestroy c\n", Ok(0)), "{mode:?}");
     }
 }
+
+/// An array of Events (`L08.collect.*` keep their gates in `has events is @Event`). own classifies a builtin
+/// capability without destroy (Atomic, Event) as a reference with deps, so the array is managed; the loader sees
+/// closed plain data (the runtime cell is outside the value). Codegen accepted neither and refused the program
+/// ("plain array or map requires own ClosedGraph certificate").
+#[test]
+fn an_array_of_events_keeps_its_gates() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+object Gates {
+    has events is @Event;
+    Gates() { events = [Event(), Event(ready: true)]; }
+    open(index is int) is void { events[index].set(); }
+    async pass(index is int) is string { await events[index].wait(); "passed " + index.string(); }
+}
+async main() is int {
+    let gates = Gates();
+    Stdout().writeln(await gates.pass(1));
+    gates.open(0);
+    Stdout().writeln(await gates.pass(0));
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("passed 1\npassed 0\n", Ok(0)), "{mode:?}");
+    }
+}

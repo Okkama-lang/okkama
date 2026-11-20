@@ -184,6 +184,10 @@ class ChampTranslationTests(unittest.TestCase):
         # Only status 1 carries a report: other statuses are main()'s result.
         fields, code = self.outcome(2, "Warning: careful\n")
         self.assertEqual((fields["outcome"], code), ("completed", 2))
+        # A silent 4 is main()'s result, not the CLI's unsupported status, which always comes with its report
+        # (L01.gram.test.inner-grammar-not-parsed).
+        fields, code = self.outcome(4, "")
+        self.assertEqual((fields["outcome"], code), ("completed", 4))
 
     def test_lowering_limit_is_unsupported(self):
         fields, code = self.outcome(4, "okkama: 10..20: unsupported in OIR-2 lowering: closure capture of x\n")

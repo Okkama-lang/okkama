@@ -349,14 +349,19 @@ fn champ_test_mode_shows_objects_and_variants_by_value() {
     assert_eq!(run.stdout, SHOWN_VALUES_REPORT);
 }
 
-/// Async execution is #570: a test profile with an async test stops with a diagnostic naming it.
+/// Async tests run on Champ beside the synchronous ones, as on Tomato: one awaits and passes, one fails after its
+/// await (#570; `L04.fakes.typed-state`, `L07.test-runner.all-pass-async`).
 #[test]
-fn champ_test_mode_async_tests_are_unsupported() {
+fn champ_test_mode_runs_async_tests() {
     let source = Source::new("async.ok", "module app v1.0.0;\n\
+        import \"async/event\" take Event;\n\
         test \"sync\" { test.ok(true); }\n\
-        async test \"later\" { test.ok(true); }\n");
-    let error = run_tests(std::slice::from_ref(&source.0)).err().unwrap();
-    assert!(error.contains("unsupported in OIR-2 lowering: async test \"later\" (#570)"), "{error}");
+        async test \"later\" { let e = Event(ready: true); await e.wait(); test.ok(true); }\n\
+        async test \"fails\" { await Event(ready: true).wait(); test.ok(false); }\n");
+    let run = run_tests(std::slice::from_ref(&source.0)).unwrap();
+    assert_eq!((run.code, run.error.as_deref()), (1, None));
+    assert_eq!(run.stdout, "=== RUN   sync\n--- PASS: sync\n=== RUN   later\n--- PASS: later\n=== RUN   fails\n\
+        --- FAIL: fails\n    expected true, got false\nFAIL\n");
 }
 
 /// Inline tests of std modules that the OIR-2 pipeline compiles today.
@@ -405,10 +410,11 @@ fn champ_test_mode_cli_run_build_and_exec() {
     let output = okkama(&[os("exec"), artifact.0.as_os_str()]);
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
     assert_eq!(text(&output.stdout), SKIPS_REPORT);
+    // An async test runs (#570).
     let asynchronous = Source::new("cli-async.ok", "module app v1.0.0;\nasync test \"later\" { test.ok(true); }\n");
     let output = okkama(&[os("run"), os("-t"), asynchronous.0.as_os_str()]);
-    assert_eq!(output.status.code(), Some(4));
-    assert!(text(&output.stderr).contains("async test \"later\" (#570)"), "{}", text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(text(&output.stdout), "=== RUN   later\n--- PASS: later\nPASS\n");
     let empty = Source::new("cli-empty.ok", "module app v1.0.0;\nmain() is int { 0; }\n");
     let output = okkama(&[os("run"), os("-t"), empty.0.as_os_str()]);
     assert_eq!(output.status.code(), Some(1));

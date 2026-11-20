@@ -102,13 +102,6 @@ fn lower_linked_mode(roots: &[RootFile<'_>], loader: &mut dyn ModuleLoader, test
     let analysis = analysis::analyze_mode(sources, roots.len(), test_mode)
         .map_err(|error| phase("analysis", error))?;
     stages.mark("analysis");
-    // Async execution is #570: an async test stops the whole test profile before lowering, by name.
-    let asynchronous = analysis.registry.tests.iter().filter(|test| test.is_async).collect::<Vec<_>>();
-    if let Some(first) = asynchronous.first() {
-        let names = asynchronous.iter().map(|test| format!("{:?}", test.name)).collect::<Vec<_>>().join(", ");
-        let message = format!("async test {names} (#570)");
-        return Err(PipelineError::Lower(super::LowerError::unsupported(first.span, message)));
-    }
     let high = lower_to_oir2(&analysis).map_err(PipelineError::Lower);
     stages.mark("high");
     high
