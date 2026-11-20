@@ -2,13 +2,15 @@
 
 use okkama_compiler::SourceFile;
 use okkama_compiler::ir::{self, InstKind, TermKind};
-use okkama_compiler::lowering::{LoweringError, lower_program};
+use okkama_compiler::lowering::{self, LoweringError, lower_program};
 use okkama_compiler::syntax::{self, ParseOptions, prune};
 
+/// The lowering's regions as the passes after it leave them, without the static pass (#909 2b: it replaces the
+/// regions of local resources, and tests/statics.rs covers it).
 fn lower(text: &str) -> Result<ir::Module, LoweringError> {
     let source = SourceFile::new("test.ok", text).expect("small source");
     let program = syntax::parse(&source, &ParseOptions::default()).expect("valid syntax");
-    lower_program(&prune::strip_test_items(program))
+    lowering::with_passes("regions,tail-calls,fold,hoist,undef,jumps", || lower_program(&prune::strip_test_items(program)))
 }
 
 fn module(text: &str) -> ir::Module {

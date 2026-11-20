@@ -41,12 +41,15 @@ pub fn make_static(module: &mut Module) -> usize {
             .map(|creation| ValueId(creation.value))
             .collect();
         for value in candidates {
-            if let Err(reason) = eligible(module, &plain, &module.functions[found.function], value) {
-                okkama_devtrace::count!("lower", format!("statics: not static ({reason})"));
-                continue;
-            }
+            let others = match eligible(module, &plain, &module.functions[found.function], value) {
+                Ok(others) => others,
+                Err(reason) => {
+                    okkama_devtrace::count!("lower", format!("statics: not static ({reason})"));
+                    continue;
+                }
+            };
             split_after_definition(&mut module.functions[found.function], value);
-            let Some(plan) = plan(&module.functions[found.function], value) else {
+            let Some(plan) = plan(&module.functions[found.function], value, &others) else {
                 okkama_devtrace::count!("lower", "statics: not static (control flow)");
                 // The split alone changes nothing: the value stays dynamic.
                 continue;
@@ -85,7 +88,7 @@ fn region_of(function: &Function, value: ValueId) -> Option<ValueId> {
 }
 
 /// The type and region conditions (no control flow yet).
-fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId) -> Result<(), &'static str> {
+fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId) -> Result<Vec<ValueId>, &'static str> {
     let Some((block, index)) = definition(function, value) else { return Err("no definition") };
     if !matches!(function.blocks[block].insts[index].kind, InstKind::Call { .. }) {
         return Err("not a call");
@@ -102,14 +105,16 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
         return Err("a field may hold a resource");
     }
     let Some(region) = region_of(function, value) else { return Err("no single region") };
-    // R holds only this value, closes without keeping a resource, and is used by nothing but its own operations.
+    // R closes without keeping a resource and is used by nothing but its own operations. Its other members, if
+    // any, must be newer than the value (checked with the control flow).
+    let mut others = Vec::new();
     for block in &function.blocks {
         for inst in &block.insts {
             match &inst.kind {
                 InstKind::RegionEnter => {}
                 InstKind::RegionTrack { region: r, value: v } | InstKind::RegionAdopt { region: r, value: v } => {
-                    if *r == region && *v != value {
-                        return Err("region shared");
+                    if *r == region && *v != value && !others.contains(v) {
+                        others.push(*v);
                     }
                 }
                 InstKind::RegionTransfer { from, to, .. } => {
@@ -142,7 +147,7 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
             return Err("region passed");
         }
     }
-    Ok(())
+    Ok(others)
 }
 
 /// Split the creating block right after the creation, so the creation's own failure keeps the old handler.
@@ -161,6 +166,8 @@ fn split_after_definition(function: &mut Function, value: ValueId) {
 
 struct Plan {
     region: ValueId,
+    /// R keeps newer members: they close first, then the value.
+    shared: bool,
     /// Blocks whose `region.leave R` the value reaches.
     leaves: Vec<usize>,
     /// Blocks whose unwind edge enters a handler of R.
@@ -178,7 +185,7 @@ fn has(block: &Block, region: ValueId, leave: bool) -> bool {
 }
 
 /// The control-flow conditions, after the split: the blocks to rewrite, or `None`.
-fn plan(function: &Function, value: ValueId) -> Option<Plan> {
+fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Option<Plan> {
     let region = region_of(function, value)?;
     let (start, _) = definition(function, value)?;
     let edges: Vec<Vec<usize>> = (0..function.blocks.len())
@@ -200,7 +207,30 @@ fn plan(function: &Function, value: ValueId) -> Option<Plan> {
         Some(InstKind::RegionUnwind { region: r, .. }) if *r == region);
     // The creating block's own successor is the split-off rest; the walk starts there.
     let TermKind::Br(first) = &function.blocks[start].term.kind else { return None };
-    let mut plan = Plan { region, leaves: Vec::new(), unwinds: Vec::new(), branches: Vec::new() };
+    let shared = !others.is_empty();
+    // Every other member is made after the value (so it dies first): defined by an instruction the value's
+    // creation dominates.
+    for &other in others {
+        let (block, _) = definition(function, other)?;
+        if block == start || !dominates(start, block) {
+            return None;
+        }
+    }
+    // With other members, a handler is copied with the value's close after R's: only the simple shape.
+    let simple = |block: usize| {
+        let body = &function.blocks[block];
+        let Some(Inst { result: Some(closed), kind: InstKind::RegionUnwind { region: r, .. }, .. }) = body.insts.first()
+        else {
+            return false;
+        };
+        *r == region && body.insts.len() == 1 && match &body.term.kind {
+            TermKind::Raise(raised) => raised == closed,
+            TermKind::Br(target) => target.args.last() == Some(closed),
+            _ => false,
+        }
+    };
+    let closes_first = |block: usize| closes_first(block) && (!shared || simple(block));
+    let mut plan = Plan { region, shared, leaves: Vec::new(), unwinds: Vec::new(), branches: Vec::new() };
     let mut seen = HashSet::new();
     let mut stack = vec![first.block.0];
     while let Some(block) = stack.pop() {
@@ -215,7 +245,7 @@ fn plan(function: &Function, value: ValueId) -> Option<Plan> {
             // Nothing before `region.leave R` may fail into a handler that does not close R.
             let first_leave = body.insts.iter().position(|inst| matches!(&inst.kind,
                 InstKind::RegionLeave { region: r, .. } if *r == region)).expect("leave");
-            if first_leave > 0 && !body.unwind.as_ref().is_some_and(|unwind| handler(unwind.block.0)) {
+            if first_leave > 0 && (shared || !body.unwind.as_ref().is_some_and(|unwind| handler(unwind.block.0))) {
                 return None;
             }
             // The value is dead after `resource.leave`: what fails later in the block is not its concern.
@@ -272,6 +302,10 @@ fn apply(function: &mut Function, value: ValueId, plan: Plan) {
         block.insts = kept;
     }
     for &block in &plan.leaves {
+        if plan.shared {
+            leave_after(function, block, region, value);
+            continue;
+        }
         let insts = &mut function.blocks[block].insts;
         let at = insts.iter().position(|inst| matches!(&inst.kind,
             InstKind::RegionLeave { region: r, .. } if *r == region)).expect("leave");
@@ -282,6 +316,11 @@ fn apply(function: &mut Function, value: ValueId, plan: Plan) {
     let mut forwarders: Vec<(usize, usize)> = Vec::new();
     let mut forwarder = |function: &mut Function, handler: usize| -> usize {
         if let Some(&(_, made)) = forwarders.iter().find(|(of, _)| *of == handler) {
+            return made;
+        }
+        if plan.shared {
+            let made = handler_after(function, handler, value);
+            forwarders.push((handler, made));
             return made;
         }
         let params: Vec<ValueId> = function.blocks[handler].params.iter().map(|param| {
@@ -325,3 +364,79 @@ fn apply(function: &mut Function, value: ValueId, plan: Plan) {
         }
     }
 }
+
+fn fresh(function: &mut Function, ty: Type) -> ValueId {
+    function.values.push(ty);
+    ValueId(function.values.len() - 1)
+}
+
+/// With newer members in R: the value closes after `region.leave R`, in a block of its own. A failing leave goes
+/// through a block that closes the value (its failure secondary), then wherever the leave's failure went.
+fn leave_after(function: &mut Function, block: usize, region: ValueId, value: ValueId) {
+    let at = function.blocks[block].insts.iter().position(|inst| matches!(&inst.kind,
+        InstKind::RegionLeave { region: r, .. } if *r == region)).expect("leave");
+    let span = function.blocks[block].insts[at].span;
+    let mut rest = function.blocks[block].insts.split_off(at + 1);
+    rest.insert(0, Inst { result: None, kind: InstKind::ResourceLeave { value }, span });
+    let outer = function.blocks[block].unwind.clone();
+    let failure = fresh(function, Type::Failure);
+    let closed = fresh(function, Type::Failure);
+    let term = match &outer {
+        Some(target) => {
+            let mut args = target.args.clone();
+            args.push(closed);
+            TermKind::Br(Target { block: target.block, args })
+        }
+        None => TermKind::Raise(closed),
+    };
+    let close = BlockId(function.blocks.len());
+    function.blocks.push(Block {
+        params: vec![failure],
+        unwind: None,
+        insts: vec![Inst { result: Some(closed), kind: InstKind::ResourceUnwind { value, failure }, span }],
+        term: Terminator { kind: term, span },
+    });
+    let after = BlockId(function.blocks.len());
+    let term = std::mem::replace(
+        &mut function.blocks[block].term,
+        Terminator { kind: TermKind::Br(Target::new(after)), span },
+    );
+    function.blocks[block].unwind = Some(Target::new(close));
+    function.blocks.push(Block { params: Vec::new(), unwind: outer, insts: rest, term });
+}
+
+/// With newer members in R: a copy of the simple handler `[region.unwind R; raise | br]` that closes the value
+/// right after R, so the value dies after what R held.
+fn handler_after(function: &mut Function, handler: usize, value: ValueId) -> usize {
+    let source = function.blocks[handler].clone();
+    let params: Vec<ValueId> = source.params.iter().map(|param| {
+        let ty = function.values[param.0].clone();
+        fresh(function, ty)
+    }).collect();
+    let rename = |v: ValueId| source.params.iter().position(|p| *p == v).map_or(v, |i| params[i]);
+    let Inst { result: Some(old), kind: InstKind::RegionUnwind { region, failure }, span } = source.insts[0].clone()
+    else {
+        unreachable!("checked simple");
+    };
+    let closed = fresh(function, Type::Failure);
+    let both = fresh(function, Type::Failure);
+    let swap = |v: ValueId| if v == old { both } else { rename(v) };
+    let term = match &source.term.kind {
+        TermKind::Raise(_) => TermKind::Raise(both),
+        TermKind::Br(target) => TermKind::Br(Target { block: target.block, args: target.args.iter().map(|&a| swap(a)).collect() }),
+        _ => unreachable!("checked simple"),
+    };
+    let unwind = source.unwind.as_ref().map(|target| Target { block: target.block, args: target.args.iter().map(|&a| rename(a)).collect() });
+    let insts = vec![
+        Inst { result: Some(closed), kind: InstKind::RegionUnwind { region, failure: rename(failure) }, span },
+        Inst { result: Some(both), kind: InstKind::ResourceUnwind { value, failure: closed }, span },
+    ];
+    function.blocks.push(Block {
+        params: params.clone(),
+        unwind,
+        insts,
+        term: Terminator { kind: term, span: source.term.span },
+    });
+    function.blocks.len() - 1
+}
+

@@ -602,3 +602,33 @@ fn factory_and_async_local_resources_close_once_with_their_scope() {
     // run: 2·10 + 0 = 20, its vault closes (log 3); later: 2·10 + 3 = 23, its vault closes (log 34).
     support::assert_value(&module, "20264");
 }
+
+/// #909 2b with a shared region: the static vault is the oldest member, newer dynamic ones share its scope. At the
+/// scope's end they close first, then the vault: reverse creation order, also on the failure path.
+#[test]
+fn a_static_resource_sharing_its_region_closes_after_its_newer_neighbours() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        enum Stop is Error = (now(code is int));
+        object Probe {
+            Probe();
+            run(log is Log, stop is bool) is int {
+                let vault = Vault(log: log, id: 3);
+                let record = Record(ledger: Vault(log: log, id: 4));
+                confirm !stop else throw Stop.now(9);
+                vault.balance() + record.total();
+            }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let normal = Probe().run(log, false);
+            let after_normal = log.value();
+            let failed = try { Probe().run(log, true); } catch Stop.now(code) { code; };
+            normal * 100000 + after_normal * 100 + failed * 10 + log.value() % 10;
+        }
+    "#));
+    let run = module.functions.iter().find(|function| function.symbol == "Probe.run").unwrap();
+    assert!(ir::print::function_text(&module, run).contains("resource.leave"), "the oldest vault is static");
+    // Normal exit: 2 + 2 = 4, the newer vault (4) closes first, then the static one (3): log 43. Failure: the same
+    // order again (log 4343), the catch sees 9.
+    support::assert_value(&module, "404393");
+}

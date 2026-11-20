@@ -57,6 +57,7 @@ once, used only while open and closed exactly once on every path (failure paths 
 `OKKAMA_VERIFY_OWNERSHIP=1` only. Its first find: an early return's defers tracked fresh values in a nested scope
 the return had already closed (fixed in `exit_scopes`).
 
-**Next.** The static pass (#909 2b) takes one resource per region; several, drop flags for conditional
-creation and direct JIT destroy calls are the next steps. One linearity checker runs in debug
+**Next.** The static pass (#909 2b) takes a resource alone in its region or the oldest member of one (newer
+members close first). Several static resources per region, drop flags for conditional creation and direct JIT
+destroy calls are the next steps. One linearity checker runs in debug
 and CI only (#910). Late edges stay conservative (#907).

@@ -781,6 +781,20 @@ pub const PASSES: [&str; 7] = ["statics", "regions", "tail-calls", "fold", "hois
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
+thread_local! {
+    /// The passes of lowerings on this thread only (`with_passes`), ahead of `select_passes` and the environment.
+    static THREAD_PASSES: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with the IR passes `spec` (as `OKKAMA_IR_PASSES`) for lowerings on this thread only: a test that looks
+/// at one stage's output without changing the passes of tests running beside it.
+pub fn with_passes<T>(spec: &str, f: impl FnOnce() -> T) -> T {
+    let previous = THREAD_PASSES.with(|passes| passes.replace(Some(spec.to_string())));
+    let result = f();
+    THREAD_PASSES.with(|passes| *passes.borrow_mut() = previous);
+    result
+}
+
 /// Select the IR passes of later lowerings in this process, as
 /// `OKKAMA_IR_PASSES` does (`okkama ir --passes`, `--after`).
 pub fn select_passes(spec: &str) {
@@ -789,7 +803,8 @@ pub fn select_passes(spec: &str) {
 
 impl Passes {
     fn from_env() -> Self {
-        let selected = SELECTED.read().expect("pass selection").clone();
+        let selected = THREAD_PASSES.with(|passes| passes.borrow().clone())
+            .or_else(|| SELECTED.read().expect("pass selection").clone());
         let spec = selected.unwrap_or_else(|| std::env::var("OKKAMA_IR_PASSES").unwrap_or_default());
         Self::from_spec(&spec, std::env::var("OKKAMA_OWNERSHIP_PROTOTYPE").ok().as_deref())
     }
@@ -888,13 +903,12 @@ mod param_adopts_tests {
 
     #[test]
     fn prototype_off_keeps_printed_oir_byte_identical() {
-        // Two resources share main's region, so the static pass (#909 2b, one resource per region) leaves their
-        // adopts for the prototype to elide. When that pass takes several, give this test another dynamic adopt.
+        // Without the static pass (#909 2b), which would take the local resource's adopt for itself.
         let source = SourceFile::new("test.ok", "module app v1.0.0; \
             object Res { Res(); read() is int { 1; } destroy {} } \
-            main() is int { let r = Res(); let q = Res(); r.read() + q.read(); }").expect("source");
+            main() is int { let r = Res(); r.read(); }").expect("source");
         let program = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).expect("parse");
-        let module = lower_program(&program).expect("lower");
+        let module = with_passes("regions,tail-calls,fold,hoist,undef,jumps", || lower_program(&program)).expect("lower");
         let before = module.to_string();
         for switch in [None, Some("0"), Some("true"), Some(""), Some(" 1")] {
             for spec in ["", "all", "none", "param-adopts"] {
