@@ -34,6 +34,21 @@ regions, and the runtime tracks resource identities. Tweed (#903) keeps that des
 | driver inputs (#845) | a fresh Future a collector's own sequence makes (`item`) is owned by the driver frame's private region; taking the driver's outcome releases only the outcome's package, and the inputs close with the driver | `driver_input`, `take_outcome`, `drivers::collect_start` |
 | close | destroys the owned identities in reverse serial order, owner before fields; async destroys are awaited (`rt_region_settle`) | `region_close`, `tasks.rs` |
 
+## Late edges (#907)
+
+A summary says "this immutable container reaches no free identity". Values that gain references after they are
+built could break that; each one is handled:
+
+| Late edge | Why a summary stays true | Test |
+|---|---|---|
+| `Atomic.replace` | An Atomic names, it does not own: a resource stored in it keeps its owner, so nothing becomes free; a walk stops at an owned Atomic | `an_atomic_in_a_summarized_container_borrows_a_late_resource` |
+| A Future's outcome | Frames are never summarized (a walk counts them as an event), and an adopted array holding Futures is not summarized either; the outcome lives in the frame's private region, and taking it calls `freed`, which drops every summary | the #817/#845 tests |
+| Builders and other in-place payloads | Only maps and `any` boxes are indexed or summarized; other payloads change in place and are walked each time. Builders are internal to lowering and never stored in a container | — |
+| `obj.init` | An object whose reference field is still unbound when it is created gets an identity (`fields_may_reach_identity`), so a later store is walked | #905 tests |
+| `once let` | The compiler refuses a `once` value that can keep a resource | lowering |
+
+A summary inherited at birth (#529) only comes from summarized parts, so it obeys the same rules.
+
 **Measuring.** `OKKAMA_DEV=runtime` counts identities requested and skipped by type, region helpers, walks by
 caller and steps, and structure indexes. `bench/ownership/run.py` compares against CPython (#908).
 

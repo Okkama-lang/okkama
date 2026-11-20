@@ -509,3 +509,36 @@ async main() is int {
 "#);
     assert_eq!(output, "item 0\nitem 1\nmake m0\nmake m1\nwon m0\ndestroy m1\ndestroy m0\nafter\n");
 }
+
+/// #907, late edges: an Atomic inside a big summarized container gains a resource after the container was built.
+/// An Atomic names, it does not own: the resource closes once, with the scope that made it. (A `once let` slot
+/// cannot keep a resource at all: the compiler refuses it.)
+#[test]
+fn an_atomic_in_a_summarized_container_borrows_a_late_resource() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Slot {
+            has cell is Atomic<Ledger>;
+            Slot(:cell);
+            put(ledger is Ledger) is void { cell.replace(ledger); }
+        }
+        object Probe {
+            Probe();
+            fill(n is int) is @Slot {
+                (0..n).map() -> i { let plain is Ledger = Account(); Slot(cell: Atomic(plain)); };
+            }
+            late(log is Log, slots is @Slot) is int {
+                let fee = Vault(log: log, id: 3);
+                slots[5].put(fee);
+                log.value();
+            }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let slots = Probe().fill(100);
+            let during = Probe().late(log, slots);
+            100 + during * 10 + log.value();
+        }
+    "#));
+    // The fee is alive inside `late` (log 0) and closes once when `late` ends (log 3), whatever holds its name.
+    support::assert_value(&module, "103");
+}

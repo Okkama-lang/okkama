@@ -685,6 +685,10 @@ impl Runtime {
         self.heap.watch(container);
     }
 
+    /// Late edges (#907, docs/map/ownership.md): an Atomic only names what it holds, frames are never summarized,
+    /// in-place payloads are never indexed, an object with an unbound reference field gets an identity, and a
+    /// `once` slot cannot keep a resource; so a summary, once true, stays true until `freed` drops them all.
+    ///
     /// #529: a container made from parts (`arr.slice`, `arr.concat`, `map.new`, `map.merge`) reaches what they
     /// reach and nothing else. When a part is a summarized container and no part may reach a free identity, the
     /// result is summarized at birth: no walk ever needs to look inside it. A summary is undone for all at once
@@ -977,6 +981,10 @@ impl Runtime {
             && header & (heap::SUMMARY | heap::PACKED) == 0
             && Repr::from_bits((header >> 9) & 3) == Repr::Ref
             && self.heap.array_length(value) >= SUMMARY_STEPS
+            // As the walk itself never summarizes over a Future (its state moves on), neither does this.
+            && !self.heap.elements(value).iter().any(|&element| {
+                element != UNBOUND && element & 1 == 0 && heap::kind(self.heap.header_of(element)) == heap::FRAME
+            })
         {
             self.summarize(value);
         }
