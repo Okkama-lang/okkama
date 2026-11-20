@@ -342,6 +342,16 @@ impl Driver<'_, '_> {
     /// PR-B1 (#784): an admitted Future, whose duty is an entry of its scope's admission journal at run time: the
     /// result of a synchronous call (D25.1) or a value a nested scope's exit rehomed (a block parameter after the
     /// exit). Neither a Future created here nor a parameter of this function is one.
+    /// #870: whether the High value is the outcome of a shared await, a view of the outcome its Future's cache keeps
+    /// (OIR-2 §10.2). An await of a temporary takes the outcome instead (`take_future`).
+    pub(super) fn outcome_view(&self, original: ValueId) -> bool {
+        let Ok(Definition::InstResult { inst, .. }) = self.high.values.get(original).map(|value| value.def) else {
+            return false;
+        };
+        matches!(self.high.insts.get(inst).map(|instruction| &instruction.op),
+            Ok(Operation::Async(AsyncOp::Await { future, .. })) if !self.temporaries.contains(future))
+    }
+
     pub(super) fn admitted_future(&self, original: ValueId) -> bool {
         match self.high.values.get(original).map(|value| value.def) {
             Ok(Definition::InstResult { .. }) => !self.created_by_call(original),

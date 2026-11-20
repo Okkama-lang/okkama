@@ -825,6 +825,10 @@ impl Driver<'_, '_> {
                 // binding` already marks it bound, and a split would add an unwind edge to an infallible creation.
                 // A Future parameter is borrowed from the caller (OIR-2 §10.2): its binding takes nothing either.
                 let borrowed = super::futures::is_future(self.module, ty) && !self.admitted_future(original);
+                // #870 (Fable): the outcome of a shared await stays in the Future's cache (OIR-2 §10.2); the value is
+                // a view that borrows it, so its binding takes nothing either. A split here would extract the cache's
+                // holder graph; a view that leaves the function goes with the cache's rehome to the caller (C-4).
+                let borrowed = borrowed || self.outcome_view(original);
                 if self.managed(ty) && !borrowed && point.env.scopes.contains_key(&owner) {
                     let packet;
                     if point.env.scopes.len() == 1 {
