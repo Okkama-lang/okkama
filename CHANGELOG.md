@@ -8,6 +8,21 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Tweed 2a, fast paths of the ownership runtime (#909).**
+  - **Identity bit.** An object with a resource identity carries a header bit (`IDENTITY`). Region adds,
+    resource walks and structure indexes test it before looking the identity up, so values that are not
+    resources (12 of every 13 region adds in `examples/`) skip the hash map.
+  - **Small closes.** A region that fits its inline slots sorts its entries on the stack.
+  - **Measured on the host, same build A/B:**
+
+    | Benchmark | Before | After |
+    |---|---|---|
+    | micro `destroy` | 130 ns | 112 ns |
+    | `destroy-observed` | 124 ns | 103 ns |
+    | 11-ownership | 26.1 ms | 24.7 ms |
+
+  - **What remains** is the identity map itself. Moving the identity into the object is #528 (OH-04), a
+    representation for the owner to approve.
 - **`okkama build` has no target selection, and Blade has no engine (owner, 2026-11-20).**
   - **CLI.** `--target` and `--backend` are gone: `okkama build FILE -o OUT.spb` always writes Sparrow
     bytecode, and either flag is now an unknown option.

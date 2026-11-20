@@ -243,6 +243,7 @@ impl Runtime {
         if resources.enabled && resources.flags[descriptor] {
             resources.serial += 1;
             resources.identities.insert(object, Identity { serial: resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
+            self.heap.mark_identity(object);
             self.heap.watch(object);
         }
     }
@@ -258,7 +259,7 @@ impl Runtime {
             };
             let header = self.heap.header_of(pointer);
             match heap::kind(header) {
-                heap::OBJECT => self.resources.identities.contains_key(&pointer),
+                heap::OBJECT => header & heap::IDENTITY != 0,
                 heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
                 heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
                 _ => false,
@@ -425,6 +426,9 @@ impl Runtime {
                 heap::OBJECT if !self.resources.flags[heap::payload(header) as usize] => continue,
                 heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => continue,
                 heap::OBJECT => {
+                    if header & heap::IDENTITY == 0 {
+                        continue;
+                    }
                     let Some(identity) = self.resources.identities.get(&object) else {
                         continue;
                     };
@@ -598,8 +602,7 @@ impl Runtime {
             let Some(pointer) = repr.pointer(word) else { return false };
             let header = self.heap.header_of(pointer);
             match heap::kind(header) {
-                heap::OBJECT => self.resources.flags[heap::payload(header) as usize]
-                    && self.resources.identities.contains_key(&pointer),
+                heap::OBJECT => header & heap::IDENTITY != 0,
                 heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref
                     && self.resources.structure.get(&pointer).is_none_or(|index| !index.is_empty()),
                 heap::CLOSURE | heap::PAYLOAD | heap::FRAME => true,
@@ -617,7 +620,7 @@ impl Runtime {
         let header = self.heap.header_of(value);
         match heap::kind(header) {
             heap::OBJECT => {
-                self.resources.flags[heap::payload(header) as usize]
+                header & heap::IDENTITY != 0
                     && self.resources.identities.get(&value).is_some_and(|i| i.owner == Owner::Free)
             }
             heap::ARRAY => header & heap::PACKED == 0 && Repr::from_bits((header >> 9) & 3) == Repr::Ref,
@@ -985,11 +988,26 @@ impl Runtime {
         if !keep.is_empty() {
             kept.extend(self.resource_graph(keep, Some(region)));
         }
-        let mut entries: Vec<Word> = (0..self.region_len(region)).map(|i| self.region_get(region, i)).collect();
-        entries.sort_unstable_by_key(|object| self.serial_of(*object));
-        self.region_clear(region);
-        for object in entries {
-            self.region_push(region, object);
+        // Destroy order is reverse creation: sort the entries by serial. A region that fits its inline slots
+        // (the common close) sorts on the stack (#909 step 2a).
+        let length = self.region_len(region);
+        if length <= REGION_SLOTS {
+            let mut entries = [UNBOUND; REGION_SLOTS];
+            for (index, entry) in entries.iter_mut().enumerate().take(length) {
+                *entry = self.region_get(region, index);
+            }
+            entries[..length].sort_unstable_by_key(|object| self.serial_of(*object));
+            self.region_clear(region);
+            for &object in &entries[..length] {
+                self.region_push(region, object);
+            }
+        } else {
+            let mut entries: Vec<Word> = (0..length).map(|i| self.region_get(region, i)).collect();
+            entries.sort_unstable_by_key(|object| self.serial_of(*object));
+            self.region_clear(region);
+            for object in entries {
+                self.region_push(region, object);
+            }
         }
         // The region and the primary failure stay alive while destroys run.
         self.roots.push((region, Repr::Ref));

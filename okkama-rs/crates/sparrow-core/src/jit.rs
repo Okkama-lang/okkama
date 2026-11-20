@@ -452,11 +452,11 @@ fn leaders(source: &okkama_sparrow::Function) -> Vec<bool> {
 
 
 pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
-    let _span = okkama_devtrace::span!("jit", "compile");
-    okkama_devtrace::count!("jit", "functions compiled");
     if runtime.invocations[function].code != 0 {
         return Ok(runtime.invocations[function].code);
     }
+    let _span = okkama_devtrace::span!("jit", "compile");
+    okkama_devtrace::count!("jit", "functions compiled");
     let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
     let resources = &runtime.resources;
     let started = stats.is_some().then(std::time::Instant::now);

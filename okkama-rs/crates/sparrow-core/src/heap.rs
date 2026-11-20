@@ -73,6 +73,9 @@ pub const REPLACED: u64 = 1 << 25;
 /// A flat array made by prepending to an array of at least [`CHAIN_MIN`]
 /// elements (`[x] + items`): prepending to it again is a chain (#247).
 pub const PREPENDED: u64 = 1 << 26;
+/// An object with a resource identity (`Runtime::created`, Tweed #909 step 2a): the resource walks and region
+/// adds test this bit before they look the identity up. Objects only; an identity is dropped only with its object.
+pub const IDENTITY: u64 = 1 << 27;
 /// Arrays shorter than this are copied by `replaced`, as before.
 pub const TRIE_MIN: usize = 64;
 const TRIE_BITS: u32 = 5;
@@ -602,6 +605,13 @@ impl Heap {
         unsafe { *(object as *mut u64) &= !VISITED }
     }
     /// Set or clear the [`SUMMARY`] bit of `object`.
+    /// Mark `object` as having a resource identity ([`IDENTITY`]).
+    pub fn mark_identity(&mut self, object: Word) {
+        // SAFETY: as in `visit`.
+        unsafe {
+            *(object as *mut u64) |= IDENTITY;
+        }
+    }
     pub fn summarized(&mut self, object: Word, on: bool) {
         // SAFETY: as in `visit`.
         unsafe {

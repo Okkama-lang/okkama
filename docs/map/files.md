@@ -103,18 +103,18 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1130 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 1930 lines
+## ownership-runtime — 2 files, 1946 lines
 
-- `sparrow-core/src/failures.rs` 1319 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 1335 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 611 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30079 lines
+## sparrow — 63 files, 30085 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
 - `sparrow-core/src/drivers.rs` 1093 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/heap.rs` 2039 — Non-moving precise heap (decision R1). Every object starts with a header:
+- `sparrow-core/src/heap.rs` 2045 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 997 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2443 — Whole-function compilation to machine code (Cranelift), lazily on first call.
