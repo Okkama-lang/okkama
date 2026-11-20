@@ -410,10 +410,11 @@ fn champ_test_mode_cli_run_build_and_exec() {
     let output = okkama(&[os("exec"), artifact.0.as_os_str()]);
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
     assert_eq!(text(&output.stdout), SKIPS_REPORT);
+    // An async test runs (#570).
     let asynchronous = Source::new("cli-async.ok", "module app v1.0.0;\nasync test \"later\" { test.ok(true); }\n");
     let output = okkama(&[os("run"), os("-t"), asynchronous.0.as_os_str()]);
-    assert_eq!(output.status.code(), Some(4));
-    assert!(text(&output.stderr).contains("async test \"later\" (#570)"), "{}", text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(text(&output.stdout), "=== RUN   later\n--- PASS: later\nPASS\n");
     let empty = Source::new("cli-empty.ok", "module app v1.0.0;\nmain() is int { 0; }\n");
     let output = okkama(&[os("run"), os("-t"), empty.0.as_os_str()]);
     assert_eq!(output.status.code(), Some(1));
