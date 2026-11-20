@@ -6,6 +6,12 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-20. Tweed is built on Tomato's pipeline**, keeping every Tomato optimization (persistent
+  collections, reduce/map fast paths, JIT). Only the ownership tracking is replaced, in phases (#903). Tomato's
+  async bugs are fixed on the way: #587, #797, #817, #845, #846. The board was cleaned the same day:
+  - 95 Champ/OIR-2 tickets were closed as not planned;
+  - the 0.6.0 milestone was renamed to "Tweed";
+  - 30 Tomato tickets were kept: the OH-* ownership roadmap #523 and the JIT, GC and startup items.
 - **2026-11-20. The next engine is named Tweed** (Sparrow's next version, after Tomato; "Champ" is retired:
   the static-ownership attempt). Tweed is the next release's engine. Its ownership has one implementation:
   lowering holds the rules, one elaboration pass (static where proven locally, otherwise dynamic), a runtime

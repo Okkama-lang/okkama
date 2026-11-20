@@ -88,9 +88,29 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
   - Late edges (Atomic, Future outcomes, builders, `obj.init`) keep a conservative path.
   - Expected on 11-ownership: about plain (≈5 ms) against Python's 30 ms.
 
+## Board (2026-11-20, after the cleanup)
+
+- **Milestone 21: "0.6.0 — Tweed".** 30 Tomato tickets are open, and the Tweed epic is **#903**.
+- **#903's sub-issues:**
+
+  | Ticket | Item | State |
+  |---|---|---|
+  | #904 | phase 0 | done |
+  | #905 | per-instance managed bit | open |
+  | #906 | walks follow managed fields only | open |
+  | #907 | late edges | open |
+  | #908 | ownership benchmark gate against Python | open |
+  | #909 | phase 2 elaboration pass | open |
+  | #910 | debug-only checker | open |
+  | #911 | retire Champ | open |
+  | #912 | devtrace for Tomato's pipeline | open |
+  | #913 | naming | open |
+
+  Also linked: #523 (the OH-* roadmap), and the Tomato async fixes #587, #769, #797, #817, #845 and #846.
+- **Closed as not planned:** 95 Champ/OIR-2 tickets, among them the corpora buckets #895–#902.
+
 ## Next
 
 1. Merge wave/79 (devtrace + maps) after a green CI.
-2. Tweed phase 1 on Tomato's pipeline (owner to confirm the base): per-instance managed bit and summaries.
-3. Meanwhile: work through the bulk buckets that do not depend on the ownership model (#895 diagnostics,
-   #900 Atomic, #902 builtins, #896 closure identity).
+2. #911 step 1: drop the Champ jobs from the Wave CI (saves CI time).
+3. #912: devtrace in Tomato's pipeline, then #905 and #906 (phase 1), measured with #908.
