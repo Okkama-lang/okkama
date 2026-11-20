@@ -9,7 +9,7 @@
 //! OKKAMA_DEV=all                       every category
 //! OKKAMA_DEV=lower,runtime              these categories
 //! OKKAMA_DEV=lower:main,dump           lower, only for functions whose name contains "main"; plus dumps
-//! OKKAMA_DEV_OUT=DIR                   output directory (default: $TMPDIR/okkama-dev/<pid>)
+//! OKKAMA_DEV_OUT=DIR                   output directory (default: $TMPDIR/okkama-dev/<pid>; `{pid}` is replaced)
 //! ```
 //!
 //! Output, written by [`finish`] (the CLI calls it before it exits) and as it goes:
@@ -118,7 +118,10 @@ fn config() -> Option<&'static Config> {
         CONFIG.get_or_init(|| {
             let spec = std::env::var("OKKAMA_DEV").ok().filter(|spec| !spec.trim().is_empty() && spec != "0")?;
             START.get_or_init(Instant::now);
-            Some(Config::parse(&spec, std::env::var_os("OKKAMA_DEV_OUT").map(PathBuf::from)))
+            // `{pid}` in the directory gives each process its own (a corpus run, #909).
+            let out = std::env::var("OKKAMA_DEV_OUT").ok()
+                .map(|out| PathBuf::from(out.replace("{pid}", &std::process::id().to_string())));
+            Some(Config::parse(&spec, out))
         }).as_ref()
     }
 }

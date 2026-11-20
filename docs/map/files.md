@@ -103,9 +103,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1130 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 1905 lines
+## ownership-runtime — 2 files, 1930 lines
 
-- `sparrow-core/src/failures.rs` 1294 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 1319 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 611 — Stackless async: the heap frame of an async call is also its Future.
 
 ## sparrow — 63 files, 30079 lines
@@ -174,9 +174,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_json/mod.rs` 739 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 341 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 
-## devtrace — 1 files, 310 lines
+## devtrace — 1 files, 312 lines
 
-- `okkama-devtrace/src/lib.rs` 310 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
+- `okkama-devtrace/src/lib.rs` 312 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
 ## cli — 7 files, 3535 lines
 

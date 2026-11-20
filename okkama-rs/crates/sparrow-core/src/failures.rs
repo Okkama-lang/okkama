@@ -55,6 +55,9 @@ pub struct Resources {
     /// identity, found once. Structure, not ownership: it never goes stale, since the container never changes
     /// and an object that is not an identity never becomes one (#905). Dropped when the container is reclaimed.
     structure: HashMap<Word, Box<[(Word, Repr)]>>,
+    /// Development measurement (OKKAMA_DEV=runtime, #909): per identity, the region that first owned it and
+    /// whether it ever moved to another owner. Empty unless the category is on.
+    origins: HashMap<Word, (Word, bool)>,
     /// `SPARROW_TRACE_DESTROY=FILE`: one line per destroyed identity, type and
     /// creation serial, the oracle for static ownership (#555).
     trace: Option<std::fs::File>,
@@ -148,6 +151,7 @@ impl Resources {
         for object in released {
             self.identities.remove(object);
             self.summaries.remove(object);
+            self.origins.remove(object);
             self.structure.remove(object);
         }
     }
@@ -557,6 +561,28 @@ impl Runtime {
         self.resources.summarized = 0;
     }
 
+    /// #909 measurement: `object` is now owned by `region`. The first owner is its birth region; any later
+    /// owner is a move.
+    fn dev_owned(&mut self, object: Word, region: Word) {
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+        if !GATE.on() {
+            return;
+        }
+        self.resources.origins.entry(object).and_modify(|origin| origin.1 |= origin.0 != region)
+            .or_insert((region, false));
+    }
+
+    /// #909 measurement: `object` is destroyed by `region`'s close; was it local all its life?
+    fn dev_destroyed(&mut self, object: Word, region: Word) {
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+        if !GATE.on() {
+            return;
+        }
+        let local = self.resources.origins.get(&object).is_some_and(|&(born, moved)| born == region && !moved);
+        okkama_devtrace::count("runtime", if local { "destroyed: never left its first owner" }
+            else { "destroyed: moved (returned, stored, captured, handed on)" }, 1);
+    }
+
     /// Keep a container's index until the collector reclaims the container (`forget`): a watched address
     /// reports its release, so a reused address never inherits an old index.
     fn remember_structure(&mut self, container: Word, index: Box<[(Word, Repr)]>) {
@@ -749,6 +775,7 @@ impl Runtime {
         if let Some(object) = self.lone_free(value) {
             if own || self.resources.identities[&object].cache_rehomed {
                 self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
+                self.dev_owned(object, region);
             } else if self.region_contains(region, object) {
                 return;
             }
@@ -762,6 +789,7 @@ impl Runtime {
         for object in self.resource_graph_into(&[value], None, known) {
             if own || self.resources.identities[&object].cache_rehomed {
                 self.resources.identities.get_mut(&object).expect("identity").owner = Owner::Region(region);
+                self.dev_owned(object, region);
             }
             self.region_push(region, object);
         }
@@ -777,6 +805,7 @@ impl Runtime {
             if identity.owner == Owner::Region(from) {
                 identity.owner = Owner::Region(to);
                 self.region_push(to, object);
+                self.dev_owned(object, to);
             }
         }
     }
@@ -929,6 +958,7 @@ impl Runtime {
                 for child in self.resource_graph(&[object], Some(region)) {
                     self.resources.identities.get_mut(&child).expect("identity").owner = Owner::Region(home);
                     self.region_push(home, child);
+                    self.dev_owned(child, home);
                 }
                 continue;
             }
@@ -942,6 +972,7 @@ impl Runtime {
                         identity.owner = Owner::Region(region);
                         identity.cache_rehomed = true;
                         self.region_push(region, child);
+                        self.dev_owned(child, region);
                         self.queue_private(child, &mut groups, &mut futures);
                     }
                 }
@@ -971,6 +1002,7 @@ impl Runtime {
                 }
                 CloseAction::Destroy(object, serial) => (object, serial),
             };
+            self.dev_destroyed(object, region);
             let descriptor = heap::payload(self.heap.header_of(object)) as usize;
             let Some(destroy) = self.loaded.program.objects[descriptor].destroy else { continue };
             if let Some(trace) = &mut self.resources.trace {
