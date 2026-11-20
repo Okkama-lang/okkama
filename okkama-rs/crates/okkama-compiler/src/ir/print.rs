@@ -701,6 +701,9 @@ fn write_inst(
         InstKind::FailSecondary { primary, cleanup } => {
             write!(f, "fail.secondary {primary}, {cleanup}")
         }
+        InstKind::ResourcePin { value } => write!(f, "resource.pin {value}"),
+        InstKind::ResourceLeave { value } => write!(f, "resource.leave {value}"),
+        InstKind::ResourceUnwind { value, failure } => write!(f, "resource.unwind {value}, {failure}"),
         InstKind::EnumCompare { op, left, right } => {
             write!(f, "enum.{} {left}, {right}", op.suffix())
         }

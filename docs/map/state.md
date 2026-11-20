@@ -96,4 +96,6 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 4. #914: a temporary child in a group reads a lent resource after its destroy (Tomato bug).
 5. #909 step 2a merged (044ce1979 = release/0.6.0): the IDENTITY header bit; small closes sort on the stack.
 6. #528 (OH-04), in-object identity: **+16 chosen by the owner (2026-11-20)**, the packed variant removed.
-   Numbers: okkama-docs/runtime/identity-layout-528.md. Next: 2b (static destroy) on top of it.
+   Numbers: okkama-docs/runtime/identity-layout-528.md (merged: 0e29d87d0).
+7. #909 2b: the `statics` pass (feature/909-phase2). micro destroy 80 → ~50 ns on the host; first cut takes one
+   resource per region. Next: the ownership comparison with CPython and Go (owner, 2026-11-20).

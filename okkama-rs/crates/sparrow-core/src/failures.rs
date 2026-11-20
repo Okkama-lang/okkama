@@ -18,24 +18,39 @@ enum Owner {
     Free,
     Region(Word),
     Dead,
+    /// #909 2b: a static resource, destroyed by its scope's `resource.leave`/`resource.unwind`; no walk takes it.
+    Static,
 }
 
 /// The owner word of an inline identity (#528): free, dead, or a region's address (aligned, so never 0 or 1).
 const OWNER_FREE: u64 = 0;
 const OWNER_DEAD: u64 = 1;
+const OWNER_STATIC: u64 = 2;
 
 fn encode_owner(owner: Owner) -> u64 {
     match owner {
         Owner::Free => OWNER_FREE,
         Owner::Dead => OWNER_DEAD,
+        Owner::Static => OWNER_STATIC,
         Owner::Region(region) => region,
     }
+}
+
+/// What a region close does after one destroy.
+enum DestroyStep {
+    /// Go on with this failure so far.
+    Next(Option<Word>),
+    /// An async destroy to await (only when the close awaits).
+    Async(Option<Word>),
+    /// The run stopped (fatal or cancelled); close nothing more.
+    Stop(Option<Word>),
 }
 
 fn decode_owner(word: u64) -> Owner {
     match word {
         OWNER_FREE => Owner::Free,
         OWNER_DEAD => Owner::Dead,
+        OWNER_STATIC => Owner::Static,
         region => Owner::Region(region),
     }
 }
@@ -940,6 +955,87 @@ impl Runtime {
         fresh
     }
 
+    /// Run the destroy of `object` (identity `serial`, already marked dead), with `primary` the failure so far:
+    /// a destroy's failure becomes primary or is linked to it as secondary. One rule for region closes and static
+    /// resources (#909 2b).
+    fn destroy_one(&mut self, ctx: *mut Ctx, object: Word, serial: u64, mut primary: Option<Word>, awaits: bool) -> DestroyStep {
+        let descriptor = heap::payload(self.heap.header_of(object)) as usize;
+        let Some(destroy) = self.loaded.program.objects[descriptor].destroy else { return DestroyStep::Next(primary) };
+        if let Some(trace) = &mut self.resources.trace {
+            use std::io::Write;
+            let _ = writeln!(trace, "{} {serial}", self.loaded.program.objects[descriptor].name);
+        }
+        if self.loaded.program.functions[destroy.0 as usize].is_async {
+            if awaits {
+                return DestroyStep::Async(primary);
+            }
+            if let Some(primary) = primary {
+                self.roots.push((primary, Repr::Ref));
+            }
+            let failure = self.failure_new(FailureKind::Program(
+                "an object with an async destroy was released in a synchronous scope".into(),
+            ));
+            if primary.is_some() {
+                self.roots.pop();
+            }
+            return DestroyStep::Next(Some(match primary {
+                Some(primary) => self.failure_link(primary, failure, true),
+                None => failure,
+            }));
+        }
+        let code = match crate::jit::compile(self, destroy.0 as usize) {
+            Ok(code) => code,
+            Err(error) => {
+                crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
+                return DestroyStep::Stop(primary);
+            }
+        };
+        if let Some(primary) = primary {
+            self.roots.push((primary, Repr::Ref));
+        }
+        // SAFETY: a destroy body takes its receiver.
+        unsafe { crate::jit::invoke(code, ctx, &[object]) };
+        if primary.is_some() {
+            self.roots.pop();
+        }
+        let ctx = unsafe { &mut *ctx };
+        if ctx.status == FAILED {
+            ctx.status = OK;
+            let failure = ctx.failure;
+            primary = Some(match primary {
+                Some(primary) => self.failure_link(primary, failure, true),
+                None => failure,
+            });
+        } else if ctx.status != OK {
+            return DestroyStep::Stop(primary);
+        }
+        DestroyStep::Next(primary)
+    }
+
+    /// #909 2b: pin a static resource; from now on only its scope's `resource.leave`/`resource.unwind` end it.
+    pub(crate) fn resource_pin(&mut self, object: Word) {
+        if self.owner_of(object) == Some(Owner::Free) {
+            self.set_owner(object, Owner::Static);
+        }
+    }
+
+    /// #909 2b: a static resource's scope ends (`primary`: the failure on the failure path). Destroys it once and
+    /// returns the failure to continue with.
+    pub(crate) fn resource_close(&mut self, ctx: *mut Ctx, object: Word, primary: Option<Word>) -> Option<Word> {
+        if self.owner_of(object) != Some(Owner::Static) {
+            return primary;
+        }
+        self.set_owner(object, Owner::Dead);
+        let serial = self.serial_of(object);
+        self.dev_destroyed(object, 0);
+        self.roots.push((object, Repr::Ref));
+        let primary = match self.destroy_one(ctx, object, serial, primary, false) {
+            DestroyStep::Next(primary) | DestroyStep::Stop(primary) | DestroyStep::Async(primary) => primary,
+        };
+        self.roots.pop();
+        primary
+    }
+
     /// Close `region`, keeping `keep` (and its graph) alive, running destroys.
     /// Returns the primary failure (the given one, a destroy's, or none).
     fn region_close(&mut self, ctx: *mut Ctx, region: Word, keep: &[Word], primary: Option<Word>) -> Option<Word> {
@@ -1090,57 +1186,16 @@ impl Runtime {
                 CloseAction::Destroy(object, serial) => (object, serial),
             };
             self.dev_destroyed(object, region);
-            let descriptor = heap::payload(self.heap.header_of(object)) as usize;
-            let Some(destroy) = self.loaded.program.objects[descriptor].destroy else { continue };
-            if let Some(trace) = &mut self.resources.trace {
-                use std::io::Write;
-                let _ = writeln!(trace, "{} {serial}", self.loaded.program.objects[descriptor].name);
-            }
-            if self.loaded.program.functions[destroy.0 as usize].is_async {
-                if awaits {
+            match self.destroy_one(ctx, object, serial, primary, awaits) {
+                DestroyStep::Next(next) => primary = next,
+                DestroyStep::Async(next) => {
                     self.roots.pop();
-                    return Closed::Async(object, primary);
+                    return Closed::Async(object, next);
                 }
-                if let Some(primary) = primary {
-                    self.roots.push((primary, Repr::Ref));
-                }
-                let failure = self.failure_new(FailureKind::Program(
-                    "an object with an async destroy was released in a synchronous scope".into(),
-                ));
-                if primary.is_some() {
-                    self.roots.pop();
-                }
-                primary = Some(match primary {
-                    Some(primary) => self.failure_link(primary, failure, true),
-                    None => failure,
-                });
-                continue;
-            }
-            let code = match crate::jit::compile(self, destroy.0 as usize) {
-                Ok(code) => code,
-                Err(error) => {
-                    crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
+                DestroyStep::Stop(next) => {
+                    primary = next;
                     break;
                 }
-            };
-            if let Some(primary) = primary {
-                self.roots.push((primary, Repr::Ref));
-            }
-            // SAFETY: a destroy body takes its receiver.
-            unsafe { crate::jit::invoke(code, ctx, &[object]) };
-            if primary.is_some() {
-                self.roots.pop();
-            }
-            let ctx = unsafe { &mut *ctx };
-            if ctx.status == FAILED {
-                ctx.status = OK;
-                let failure = ctx.failure;
-                primary = Some(match primary {
-                    Some(primary) => self.failure_link(primary, failure, true),
-                    None => failure,
-                });
-            } else if ctx.status != OK {
-                break;
             }
         }
         self.roots.pop();
@@ -1349,6 +1404,27 @@ pub extern "C" fn rt_region_leave(ctx_ptr: *mut Ctx, region: Word, keep: *const 
     }
 }
 
+/// #909 2b: pin a static resource.
+#[inline(never)]
+pub extern "C" fn rt_resource_pin(ctx_ptr: *mut Ctx, object: Word) {
+    okkama_devtrace::count!("runtime", "rt_resource_pin");
+    let (_, runtime) = unsafe { parts(ctx_ptr) };
+    runtime.resource_pin(object);
+}
+
+/// #909 2b: a static resource's scope ends; its destroy's failure fails the instruction.
+#[inline(never)]
+pub extern "C" fn rt_resource_leave(ctx_ptr: *mut Ctx, object: Word) {
+    okkama_devtrace::count!("runtime", "rt_resource_leave");
+    let (_, runtime) = unsafe { parts(ctx_ptr) };
+    runtime.count(|_| "resource leave".into());
+    if let Some(failure) = runtime.resource_close(ctx_ptr, object, None) {
+        let ctx = unsafe { &mut *ctx_ptr };
+        ctx.failure = failure;
+        ctx.status = FAILED;
+    }
+}
+
 /// Resource identity of a new object with a destroy-reaching descriptor.
 #[inline(never)]
 pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
@@ -1415,6 +1491,10 @@ pub extern "C" fn rt_failure_op(ctx_ptr: *mut Ctx, function: u64, pc: u64, uses:
             let primary = value(failure);
             let kept = runtime.failure_payloads(primary);
             runtime.region_close(ctx_ptr, value(region), &kept, Some(primary)).unwrap_or(primary)
+        }
+        I::ResourceUnwind { value: v, failure, .. } => {
+            let primary = value(failure);
+            runtime.resource_close(ctx_ptr, value(v), Some(primary)).unwrap_or(primary)
         }
         I::FailSecondary { primary, cleanup, .. } => runtime.failure_link(value(primary), value(cleanup), true),
         I::FailCaused { new, handled, .. } => runtime.failure_link(value(new), value(handled), false),

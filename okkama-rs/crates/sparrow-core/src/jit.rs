@@ -126,6 +126,8 @@ helpers! {
     created = crate::failures::rt_created as (ctx, descriptor: u64, object: Word); [];
     region_add = crate::failures::rt_region_add as (ctx, region: Word, value: Word, own: u64); [];
     region_leave = crate::failures::rt_region_leave as (ctx, region: Word, keep: *const Word, count: u64); [Allocates, Collects, Reenters, Fails];
+    resource_pin = crate::failures::rt_resource_pin as (ctx, object: Word); [];
+    resource_leave = crate::failures::rt_resource_leave as (ctx, object: Word); [Allocates, Collects, Reenters, Fails];
     builder_push = crate::ops::rt_builder_push as (ctx, builder: Word, item: Word) -> Word; [];
     builder_new = crate::ops::rt_builder_new as (ctx, repr: u64) -> Word; [Allocates, Collects];
     builder_finish = crate::ops::rt_builder_finish as (ctx, builder: Word, packed: u64) -> Word; [Allocates, Collects];
@@ -2048,6 +2050,15 @@ impl Emitter<'_, '_> {
                 let own = self.iconst(i64::from(matches!(instruction, I::RegionAdopt { .. })));
                 self.helper(|h| h.region_add, &[ctx, region, value, own]);
             }
+            I::ResourcePin { value } => {
+                let value = self.word(value);
+                self.helper(|h| h.resource_pin, &[ctx, value]);
+            }
+            I::ResourceLeave { value } => {
+                let value = self.word(value);
+                self.helper(|h| h.resource_leave, &[ctx, value]);
+                self.check(pc);
+            }
             I::RegionLeave { region, .. } => {
                 // A region that tracked nothing closes without a call.
                 let cell = self.get(region);
@@ -2597,6 +2608,7 @@ fn failure_or_region(instruction: &I) -> bool {
             | I::RegionTransfer { .. }
             | I::RegionLeave { .. }
             | I::RegionUnwind { .. }
+            | I::ResourceUnwind { .. }
             | I::FailSecondary { .. }
             | I::FailCaused { .. }
             | I::Raise { .. }

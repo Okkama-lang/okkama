@@ -15,6 +15,7 @@ pub mod hoist;
 pub mod ownership;
 pub mod param_adopts;
 pub mod regions;
+pub mod statics;
 pub mod print;
 pub mod recursion;
 pub mod verify;
@@ -1288,6 +1289,19 @@ pub enum InstKind {
         region: ValueId,
         failure: ValueId,
     },
+    /// #909 2b: a resource whose identity never leaves this scope (static): no region walk adopts it.
+    ResourcePin {
+        value: ValueId,
+    },
+    /// Destroy a pinned resource at its scope's exit, once; a destroy failure is raised.
+    ResourceLeave {
+        value: ValueId,
+    },
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceUnwind {
+        value: ValueId,
+        failure: ValueId,
+    },
     /// Отказ cleanup `cleanup` при идущем отказе `primary`: вторичный.
     FailSecondary {
         primary: ValueId,
@@ -1579,6 +1593,8 @@ impl InstKind {
             InstKind::RegionUnwind { region, failure }
             | InstKind::RegionSettleUnwind { region, failure } => vec![*region, *failure],
             InstKind::FailSecondary { primary, cleanup } => vec![*primary, *cleanup],
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } => vec![*value],
+            InstKind::ResourceUnwind { value, failure } => vec![*value, *failure],
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![*value],
             InstKind::Bits { value, count, .. } => std::iter::once(*value)
                 .chain(count.iter().copied())
@@ -1706,6 +1722,8 @@ impl InstKind {
             InstKind::RegionUnwind { region, failure }
             | InstKind::RegionSettleUnwind { region, failure } => vec![region, failure],
             InstKind::FailSecondary { primary, cleanup } => vec![primary, cleanup],
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } => vec![value],
+            InstKind::ResourceUnwind { value, failure } => vec![value, failure],
             InstKind::ByteNot(value) | InstKind::ByteFrom { value, .. } => vec![value],
             InstKind::Bits { value, count, .. } => {
                 std::iter::once(value).chain(count.iter_mut()).collect()

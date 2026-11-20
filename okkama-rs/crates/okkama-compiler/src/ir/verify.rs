@@ -878,6 +878,14 @@ impl<'a> FunctionVerifier<'a> {
         })
     }
 
+    /// #909 2b: `resource.*` take an object whose type has a destroy of its own.
+    fn static_resource(&self, value: ValueId) -> std::result::Result<(), String> {
+        match self.ty(value)? {
+            Type::Object(id) if self.module.objects.get(id.0).is_some_and(|object| object.destroy.is_some()) => Ok(()),
+            other => Err(format!("{value} of type {other} is not a resource with a destroy of its own")),
+        }
+    }
+
     fn expect_type(&self, value: ValueId, expected: &Type) -> std::result::Result<(), String> {
         let actual = self.ty(value)?;
         if actual == expected {
@@ -1727,6 +1735,18 @@ impl<'a> FunctionVerifier<'a> {
             InstKind::FailSecondary { primary, cleanup } => {
                 self.expect_type(*primary, &Type::Failure)?;
                 self.expect_type(*cleanup, &Type::Failure)?;
+                Type::Failure
+            }
+            InstKind::ResourcePin { value } | InstKind::ResourceLeave { value } => {
+                self.static_resource(*value)?;
+                return match result {
+                    None => Ok(()),
+                    Some(_) => Err("`resource.pin`/`resource.leave` define no value".to_string()),
+                };
+            }
+            InstKind::ResourceUnwind { value, failure } => {
+                self.static_resource(*value)?;
+                self.expect_type(*failure, &Type::Failure)?;
                 Type::Failure
             }
             InstKind::EnumCase { ty, case } => {

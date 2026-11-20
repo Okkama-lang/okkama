@@ -286,3 +286,95 @@ async main() is int {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "lend ends\nreads lent\nmain ends\noff: lent\n",
         "stderr: {}", String::from_utf8_lossy(&output.stderr));
 }
+
+/// #909 2b: whether `symbol` destroys its resources directly (no region operations left).
+fn is_static(module: &ir::Module, symbol: &str) -> bool {
+    let function = module.functions.iter().find(|function| function.symbol == symbol).expect(symbol);
+    let text = ir::print::function_text(module, function);
+    text.contains("resource.leave") && !text.contains("region.")
+}
+
+#[test]
+fn a_local_resource_closes_once_when_its_scope_ends_before_the_caller_reads_the_log() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        object Probe {
+            Probe();
+            run(log is Log) is int {
+                let vault = Vault(log: log, id: 3);
+                let before = log.value();
+                vault.balance() * 10 + before;
+            }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            let result = Probe().run(log);
+            result * 10 + log.value();
+        }
+    "#));
+    assert!(is_static(&module, "Probe.run"), "the vault never leaves run");
+    // Inside run the vault is alive (log 0): 2·10 + 0 = 20; it closed when run's scope ended: log 3.
+    support::assert_value(&module, "203");
+}
+
+const BRITTLE: &str = r#"
+    enum Stop is Error = (now(code is int));
+    object Brittle {
+        has id is int;
+        Brittle(:id);
+        id() is int { id; }
+        destroy { throw Stop.now(id); }
+    }
+"#;
+
+#[test]
+fn a_local_resource_closes_on_the_failure_path_before_the_caller_catches() {
+    let module = lower(&format!("{LEDGERS}{}", r#"
+        enum Stop is Error = (now(code is int));
+        object Probe {
+            Probe();
+            run(log is Log) is int {
+                let vault = Vault(log: log, id: 3);
+                confirm log.value() > 0 else throw Stop.now(4);
+                vault.balance();
+            }
+        }
+        main() is int {
+            let log = Log(n: Atomic(0));
+            try { Probe().run(log); } catch Stop.now(code) { code * 10 + log.value(); };
+        }
+    "#));
+    assert!(is_static(&module, "Probe.run"));
+    // The throw leaves run with the vault alive; it closes on the way out (log 3) before the catch reads the log.
+    support::assert_value(&module, "43");
+}
+
+#[test]
+fn a_failing_destroy_of_a_local_resource_fails_its_scope() {
+    let module = lower(&format!("{BRITTLE}{}", r#"
+        object Probe {
+            Probe();
+            run() is int { let brittle = Brittle(id: 5); brittle.id() * 10; }
+        }
+        main() is int { try { Probe().run(); } catch Stop.now(code) { code; }; }
+    "#));
+    assert!(is_static(&module, "Probe.run"));
+    support::assert_value(&module, "5");
+}
+
+#[test]
+fn a_destroy_failing_on_the_failure_path_stays_secondary_to_the_failure_in_flight() {
+    let module = lower(&format!("{BRITTLE}{}", r#"
+        object Probe {
+            Probe();
+            run(stop is bool) is int {
+                let brittle = Brittle(id: 5);
+                confirm !stop else throw Stop.now(7);
+                brittle.id();
+            }
+        }
+        main() is int { try { Probe().run(true); } catch Stop.now(code) { code; }; }
+    "#));
+    assert!(is_static(&module, "Probe.run"));
+    // The catch sees the primary failure (7); the destroy's own (5) rides along as secondary.
+    support::assert_value(&module, "7");
+}

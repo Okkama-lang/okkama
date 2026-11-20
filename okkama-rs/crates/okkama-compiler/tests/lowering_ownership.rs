@@ -268,7 +268,8 @@ fn async_destroys_are_settled_in_async_functions() {
     assert_eq!(count(run, |kind| matches!(kind, InstKind::RegionLeave { .. } | InstKind::RegionUnwind { .. })), 0);
     let work = function(&settled, "Job.work");
     assert_eq!(count(work, |kind| matches!(kind, InstKind::RegionSettle { .. } | InstKind::RegionSettleUnwind { .. })), 0);
-    assert!(count(work, |kind| matches!(kind, InstKind::RegionLeave { .. })) >= 1, "{text}");
+    // A synchronous close: through its region, or directly for a static resource (#909 2b).
+    assert!(count(work, |kind| matches!(kind, InstKind::RegionLeave { .. } | InstKind::ResourceLeave { .. })) >= 1, "{text}");
 
     let plain = module(&format!(
         "{RES} object Job {{ Job(); async run() is int {{ let r = Res(n: 1); 1; }} }} async main() is int {{ await Job().run(); }}"

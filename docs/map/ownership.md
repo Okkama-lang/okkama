@@ -26,10 +26,13 @@ regions, and the runtime tracks resource identities. Tweed (#903) keeps that des
 | resource walk | finds the free identities a value reaches (adopt, transfer, keep at close) | `resource_graph_into` |
 | structure index (#906) | per immutable container, the children that may hold an identity; found once, dropped with the container (watched) | `structure_of`, `remember_structure` |
 | summary | an ownership-state cache of a container that reached no free identity; reset when an old identity becomes free | `summarize`, `freed` |
+| identity storage (#528) | an object with a destroy of its own keeps serial and owner in two hidden words after its fields; frames and destroy-less carriers stay in the identity map | `Heap::object_words`, `owner_of`/`set_owner`/`serial_of` |
+| static resource (#909 2b) | a constructor result the census places in its scope, of a leaf type (own sync destroy, plain fields), alone in its region, all reachable code dominated by the creation: `resource.pin` instead of track/adopt, `resource.leave`/`resource.unwind` at the scope's exits, no region | `ir/statics.rs` (pass `statics`), `resource_pin`/`resource_close` in `failures.rs` |
 | close | destroys the owned identities in reverse serial order, owner before fields; async destroys are awaited (`rt_region_settle`) | `region_close`, `tasks.rs` |
 
 **Measuring.** `OKKAMA_DEV=runtime` counts identities requested and skipped by type, region helpers, walks by
 caller and steps, and structure indexes. `bench/ownership/run.py` compares against CPython (#908).
 
-**Next.** One elaboration pass makes provably local resources static (#909). One linearity checker runs in debug
+**Next.** The static pass (#909 2b) takes one resource per region; several, drop flags for conditional
+creation and direct JIT destroy calls are the next steps. One linearity checker runs in debug
 and CI only (#910). Late edges stay conservative (#907).

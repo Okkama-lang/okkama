@@ -354,6 +354,9 @@ impl FunctionGen<'_> {
                 I::RegionSettleUnwind { dst: dst()?, region: reg(*region), failure: reg(*failure) }
             }
             K::FailSecondary { primary, cleanup } => I::FailSecondary { dst: dst()?, primary: reg(*primary), cleanup: reg(*cleanup) },
+            K::ResourcePin { value } => I::ResourcePin { value: reg(*value) },
+            K::ResourceLeave { value } => I::ResourceLeave { value: reg(*value) },
+            K::ResourceUnwind { value, failure } => I::ResourceUnwind { dst: dst()?, value: reg(*value), failure: reg(*failure) },
             K::EnumCase { ty, case } => I::EnumCase { dst: dst()?, ty: EnumRef(ty.0 as u32), case: *case as u32 },
             K::EnumCompare { op, left, right } => I::EnumCmp { op: cmp(*op), dst: dst()?, left: reg(*left), right: reg(*right) },
             K::Float { op, args } => {

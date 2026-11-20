@@ -408,6 +408,12 @@ instructions! {
     RegionSettleUnwind = 139, "region.settle_unwind" { dst: Dst, region: Register, failure: Register }
     FailSecondary = 136, "fail.secondary" { dst: Dst, primary: Register, cleanup: Register }
     FailCaused = 137, "fail.caused" { dst: Dst, new: Register, handled: Register }
+    /// #909 2b: a static resource (its identity never leaves the scope); no region walk adopts it.
+    ResourcePin = 158, "resource.pin" { value: Register }
+    /// Destroy a pinned resource at its scope's exit, once; a destroy failure fails the instruction.
+    ResourceLeave = 159, "resource.leave" { value: Register }
+    /// The same on the failure path; the result is `failure` with the destroy's failure as secondary.
+    ResourceUnwind = 160, "resource.unwind" { dst: Dst, value: Register, failure: Register }
 
     Jump = 140, "jmp" { target: Target }
     Branch = 141, "br" { condition: Register, then_target: Target, else_target: Target }

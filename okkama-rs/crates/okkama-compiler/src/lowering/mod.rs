@@ -518,6 +518,12 @@ fn lower_analyzed(
     let passes = if optimize { Passes::from_env() } else { Passes { enabled: Some(Vec::new()), sabotage: false, param_adopts: false } };
     dev_ir("ir lowered", &module);
     let param_adopts_removed = passes.elide_param_adopts(&mut module);
+    // Resources that live and die in one scope are destroyed directly, without regions (#909 2b); their emptied
+    // regions go with the next pass.
+    if passes.on("statics") {
+        let _span = okkama_devtrace::span!("lower", "pass statics");
+        ir::statics::make_static(&mut module);
+    }
     // Регионы, которые ничем не владеют, не открываются и не закрываются.
     // Раньше хвостовых вызовов: в программе с `destroy` пустой `region.leave`
     // после вызова иначе оставляет его вызовом (#285).
@@ -740,7 +746,7 @@ pub fn inspect(
 }
 
 /// The IR passes of a build (H-09): `OKKAMA_IR_PASSES` is `all` (the
-/// default), `none` or a comma list of `regions`, `tail-calls`, `fold`, `hoist`,
+/// default), `none` or a comma list of `statics`, `regions`, `tail-calls`, `fold`, `hoist`,
 /// `undef`, `jumps`. Every engine runs the passed OIR, so only a run with the
 /// passes off shows whether a pass changed meaning; the release gate runs the
 /// IR conformance suite both ways. `sabotage-int-add` turns the first
@@ -753,7 +759,7 @@ struct Passes {
 }
 
 /// The IR passes in pipeline order.
-pub const PASSES: [&str; 6] = ["regions", "tail-calls", "fold", "hoist", "undef", "jumps"];
+pub const PASSES: [&str; 7] = ["statics", "regions", "tail-calls", "fold", "hoist", "undef", "jumps"];
 
 static SELECTED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
