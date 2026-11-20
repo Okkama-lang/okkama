@@ -2098,14 +2098,54 @@ impl Emitter<'_, '_> {
                     self.builder.switch_to_block(done);
                 }
             }
-            I::ResourcePin { value } => {
-                let value = self.word(value);
-                self.helper(|h| h.resource_pin, &[ctx, value]);
+            I::ResourcePin { value: register } => {
+                let offset = self.static_identity(register);
+                let value = self.word(register);
+                match offset {
+                    // #909: pin in machine code: a free owner word becomes static (`Runtime::resource_pin`).
+                    Some(offset) => {
+                        let owner = self.builder.ins().load(types::I64, MEMORY, value, offset + 8);
+                        let free = self.builder.ins().icmp_imm_u(IntCC::Equal, owner, 0);
+                        let (pin, done) = (self.builder.create_block(), self.builder.create_block());
+                        self.builder.ins().brif(free, pin, &[], done, &[]);
+                        self.builder.switch_to_block(pin);
+                        let pinned = self.iconst(2);
+                        self.builder.ins().store(MEMORY, pinned, value, offset + 8);
+                        self.builder.ins().jump(done, &[]);
+                        self.builder.switch_to_block(done);
+                    }
+                    None => {
+                        self.helper(|h| h.resource_pin, &[ctx, value]);
+                    }
+                }
             }
-            I::ResourceLeave { value } => {
-                let value = self.word(value);
-                self.helper(|h| h.resource_leave, &[ctx, value]);
-                self.check(pc);
+            I::ResourceLeave { value: register } => {
+                let offset = self.static_identity(register);
+                let destroy = match self.register_type(register) {
+                    Some(Type::Object(object)) => program.objects[object.0 as usize].destroy.map(|f| f.0 as usize),
+                    _ => None,
+                };
+                let value = self.word(register);
+                match (offset, destroy) {
+                    // #909: a static resource still static dies here: mark it dead, then call its destroy directly
+                    // (`Runtime::resource_close`); a destroy failure fails this instruction like any call.
+                    (Some(offset), Some(destroy)) if !program.functions[destroy].is_async => {
+                        let owner = self.builder.ins().load(types::I64, MEMORY, value, offset + 8);
+                        let pinned = self.builder.ins().icmp_imm_u(IntCC::Equal, owner, 2);
+                        let (close, done) = (self.builder.create_block(), self.builder.create_block());
+                        self.builder.ins().brif(pinned, close, &[], done, &[]);
+                        self.builder.switch_to_block(close);
+                        let dead = self.iconst(1);
+                        self.builder.ins().store(MEMORY, dead, value, offset + 8);
+                        self.call(pc, CallTarget::Static(destroy), &[value]);
+                        self.builder.ins().jump(done, &[]);
+                        self.builder.switch_to_block(done);
+                    }
+                    _ => {
+                        self.helper(|h| h.resource_leave, &[ctx, value]);
+                        self.check(pc);
+                    }
+                }
             }
             I::RegionLeave { region, .. } => {
                 // A region that tracked nothing closes without a call.
@@ -2622,6 +2662,24 @@ impl Emitter<'_, '_> {
         self.helper(|h| h.dev_site, &[ctx, kind, function, pc]);
     }
 
+    /// #909: the offset of the hidden identity words of `descriptor` when machine code may handle them itself: an
+    /// inline identity (#528) and nothing that observes each step (no stats, no devtrace, no destroy trace).
+    fn inline_identity(&self, descriptor: usize) -> Option<i32> {
+        static GATE: okkama_devtrace::Gate = okkama_devtrace::Gate::new("runtime");
+        if self.count_helpers || self.plain || GATE.on() || !self.resources.inline_ownership() {
+            return None;
+        }
+        self.resources.inline[descriptor].map(|offset| offset as i32)
+    }
+
+    /// `inline_identity` of a static resource register's object type.
+    fn static_identity(&self, register: &okkama_sparrow::Register) -> Option<i32> {
+        match self.register_type(register) {
+            Some(Type::Object(object)) => self.inline_identity(object.0 as usize),
+            _ => None,
+        }
+    }
+
     /// The words of a new object (#528: the heap adds its identity words).
     fn object_words(&self, descriptor: usize, fields: usize) -> usize {
         self.heap.object_words(descriptor as u32, fields)
@@ -2710,6 +2768,21 @@ impl Emitter<'_, '_> {
             return;
         }
         self.dev_site(0);
+        if let Some(offset) = self.inline_identity(descriptor) {
+            // #909: an object with a destroy of its own numbers its identity in machine code: serial + 1, the
+            // serial and a free owner in its hidden words, the identity bit in its header (`Runtime::created`).
+            let counter = self.iconst(self.resources.serial_address() as i64);
+            let serial = self.builder.ins().load(types::I64, MEMORY, counter, 0);
+            let serial = self.builder.ins().iadd_imm_u(serial, 1);
+            self.builder.ins().store(MEMORY, serial, counter, 0);
+            self.builder.ins().store(MEMORY, serial, object, offset);
+            let free = self.iconst(0);
+            self.builder.ins().store(MEMORY, free, object, offset + 8);
+            let header = self.builder.ins().load(types::I64, MEMORY, object, 0);
+            let header = self.builder.ins().bor_imm_u(header, heap::IDENTITY as i64);
+            self.builder.ins().store(MEMORY, header, object, 0);
+            return;
+        }
         let resources = &self.resources;
         let layout = self.heap.layouts().objects[descriptor].clone();
         // #529: an object without its own destroy gets an identity only when a field reaches one
