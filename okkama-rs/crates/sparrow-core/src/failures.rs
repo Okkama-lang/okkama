@@ -1156,6 +1156,8 @@ pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
     okkama_devtrace::count!("runtime", "rt_created");
     let (_, runtime) = unsafe { parts(ctx) };
     runtime.count(|r| format!("resource {}", r.loaded.program.objects[descriptor as usize].name));
+    okkama_devtrace::count!("runtime", format!("identity created: {}",
+        runtime.loaded.program.objects[descriptor as usize].name));
     runtime.created(descriptor as usize, object);
 }
 
