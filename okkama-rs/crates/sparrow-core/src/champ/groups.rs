@@ -250,6 +250,12 @@ fn start(ctx: *mut Ctx, function: usize, io: *mut CallOwn, group: Word, future: 
         all.append(offered.clone());
         super::helpers::validate(runtime, &all)?;
         owner_preflight(runtime, &offered, owner)?;
+        // #882: a temporary Future started here leaves the starter for the group's owner; it borrows what it
+        // reaches of every other owner.
+        let futures: Vec<Word> = offered.services.iter()
+            .filter(|service| service.kind == SERVICE_CACHE).map(|service| service.holder).collect();
+        let reached = super::cleanup::reached_from(runtime, &futures)?;
+        super::cleanup::register_borrowers(runtime, &futures, &reached, owner.0)?;
         let moved = owner_transition(runtime, offered, owner);
         runtime.champ_group_mut(group)?.registered.append(moved);
         Ok(())

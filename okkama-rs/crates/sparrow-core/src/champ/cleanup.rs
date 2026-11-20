@@ -145,6 +145,40 @@ fn leaf(ctx: *mut Ctx, body: impl FnOnce(&mut Runtime) -> Result<(), Error>) -> 
         Err(failure) => stop(ctx, failure),
     }
 }
+/// #882 (Fable's direction on #881): a Future that leaves its owner, detached at an inner close or started into the
+/// group of another owner, borrows what `reached` holds of every other owner. Each such owner registers the Futures
+/// as borrowers; its close walks them as its own detached Futures (`resolve_deferred`). `except` is the owner the
+/// Futures leave for or the closing one; the root closes at shutdown and registers nothing.
+pub(super) fn register_borrowers(runtime: &mut Runtime, frames: &[Word], reached: &std::collections::BTreeSet<Word>,
+    except: u64) -> Result<(), Error>
+{
+    if frames.is_empty() || reached.is_empty() {
+        return Ok(());
+    }
+    let root = runtime.champ_root_owner()?;
+    let owners: std::collections::BTreeSet<u64> = reached.iter()
+        .filter_map(|&object| runtime.heap.champ_identity(object))
+        .map(|identity| identity.owner_id)
+        .filter(|&id| id != 0 && id != except && id != root.0).collect();
+    for id in owners {
+        let borrowers = runtime.champ.borrowers.entry(id).or_default();
+        for &frame in frames {
+            if !borrowers.contains(&frame) {
+                borrowers.push(frame);
+            }
+        }
+    }
+    Ok(())
+}
+/// What a Future's body can still use: the language slots of each frame, below its tail (not its waiters or task).
+pub(super) fn reached_from(runtime: &Runtime, frames: &[Word]) -> Result<std::collections::BTreeSet<Word>, Error> {
+    let mut starts = Vec::new();
+    for &frame in frames {
+        let tail = runtime.champ_tail(frame)?;
+        starts.extend(runtime.heap.frame_fields_below(frame, tail));
+    }
+    Ok(if starts.is_empty() { Default::default() } else { runtime.heap.reachable(&starts) })
+}
 /// #881 (Fable's ruling (a), agreed by the owner): a Future that is running at its owner's close detaches to the root
 /// (draft 3 §6.2), and everything of that owner it can still reach goes with it. The close's settle steps run in
 /// creation order, so a release of this owner's duty waits (`deferred`) until the close knows which of its Futures
@@ -164,13 +198,15 @@ fn resolve_deferred(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), 
     let mut running = std::mem::take(&mut cleanup.detached);
     running.extend(cleanup.remainder.services.iter().filter(|service| service.kind != SERVICE_GROUP
         && get(service.holder, STATE) == RUNNING && mine(runtime, service.holder)).map(|service| service.holder));
-    // What a running body can still use: its language slots, below the frame's tail (not its waiters or its task).
-    let mut starts = Vec::new();
-    for &frame in &running {
-        let tail = runtime.champ_tail(frame)?;
-        starts.extend(runtime.heap.frame_fields_below(frame, tail));
+    // #882: Futures detached at an inner close that reach this owner's identities are walked as its own.
+    if let Some(frames) = runtime.champ.borrowers.remove(&owner.0) {
+        for frame in frames {
+            if get(frame, STATE) == RUNNING && !running.contains(&frame) {
+                running.push(frame);
+            }
+        }
     }
-    let reached = if starts.is_empty() { Default::default() } else { runtime.heap.reachable(&starts) };
+    let reached = reached_from(runtime, &running)?;
     for (duty, kind) in std::mem::take(&mut cleanup.deferred) {
         if reached.contains(&duty) {
             // A task duty of a reached Future settles to nothing: its cache detaches with it.
@@ -197,6 +233,7 @@ fn resolve_deferred(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), 
     if reached.is_empty() {
         return Ok(());
     }
+    register_borrowers(runtime, &running, &reached, owner.0)?;
     let caches: Vec<Word> = cleanup.remainder.services.iter().filter(|service| service.kind == SERVICE_CACHE
         && !running.contains(&service.holder) && reached.contains(&service.holder) && mine(runtime, service.holder))
         .map(|service| service.holder).collect();

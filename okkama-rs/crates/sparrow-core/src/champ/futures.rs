@@ -454,6 +454,8 @@ impl Runtime {
                 return Ok(None);
             }
             let mut outcome = Packet::default();
+            // #882: every open owner has closed; the borrowers registered with them are done.
+            self.champ.borrowers.clear();
             // #881: what detached Futures kept of the owners they left closes with their outcomes.
             for record in std::mem::take(&mut self.champ.kept) {
                 outcome.append(packet(self, record)?);
