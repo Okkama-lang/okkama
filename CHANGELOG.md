@@ -8,6 +8,48 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Ownership on par with CPython, measured against Go too (#903).** The container gate (`bench/ownership/run.py`,
+  1 CPU, now with a Go 1.23 column) after #528 and #909 2b:
+
+  | | Tomato | Tweed | CPython | Go |
+  |---|---:|---:|---:|---:|
+  | 11-ownership, ms | 116.3 | 24.4 | 29.8 | 5.0 |
+  | micro `destroy`, ns | 118.5 | 47.1 | 212.2 | 3.2 |
+
+  The plain twin runs in 5.2 ms against Go's 5.0, so what separates Tweed from Go was the ownership tax, which
+  #529 then cut by more than half (11-ownership on the host: 21.7 → 9.5 ms).
+- **Fast paths and inherited summaries (#529).** Machine code decides `region.track`/`adopt` and the
+  per-instance identity of `obj.new` from the object header, and calls the runtime only when the value may
+  reach a free identity (per 11-ownership round: 604k region-add calls → 2.8k, 100.7k identity calls → 801). An
+  adopted big array is summarized at once, and slices, concatenations and map merges of summarized parts are
+  summarized at birth, so the versions of a map grown by `reduce` are not walked again (walk steps 111k → 15k).
+  `SPARROW_CORE_PLAIN` keeps the helper path. #526 (fusing track and adopt) is closed as not needed.
+- **Static resources (#909 2b).** A resource created, used and dying in one scope of one function is destroyed
+  directly at the scope's exits, with no region. The new pass `statics` (in `OKKAMA_IR_PASSES`) reuses the
+  ownership census (`ir/ownership.rs`) for the escape question and adds only type, region and dominance
+  conditions. New Sparrow instructions `resource.pin`, `resource.leave` and `resource.unwind` (opcodes 158–160,
+  SPB 16). micro `destroy`: 117 → 47 ns.
+- **Resource identity inside the object (#528, layout chosen by the owner: +16 bytes).** An object with a
+  destroy of its own keeps its serial and owner in two hidden words after its fields, instead of a hash map with
+  a watched entry per resource. Frames and objects without a destroy of their own keep the map. micro `destroy`
+  −24%, peak memory with 100 000 live resources 158 → 106 MB. The +8-byte packed layout was measured and
+  rejected (okkama-docs/runtime/identity-layout-528.md).
+- **Late edges (#907).** Each value that gains a reference after it is built (`Atomic.replace`, a Future's
+  outcome, in-place payloads, `obj.init`, `once` slots) is accounted for, so a container summary stays true
+  (docs/map/ownership.md). An adopted array holding Futures is not summarized.
+
+### Fixed
+
+- **Futures that outlive their owners (#817).** A Future still running when its owner closes detaches to a root
+  region instead of being lost, and a member started into a group whose owner already closed settles on its
+  own: closed at the call if it finished, detached otherwise. After shutdown, a root closer destroys the
+  detached outcomes. Before, those outcomes were never destroyed.
+- **Futures a collector's sequence makes (#845).** The fresh Futures a user `Sequencing`'s `item` returns to
+  `Raced`, `Settled` and the other collectors belong to the collector's driver. Their outcomes are destroyed
+  once, newest first, when the awaiting scope ends; before, never.
+- **#797:** a driver's program failure reaching the caller through `await` passes a `catch e is Error`, as the
+  language spec says (9.5). It already did; a test now pins it.
+
 - **Tweed 2a, fast paths of the ownership runtime (#909).**
   - **Identity bit.** An object with a resource identity carries a header bit (`IDENTITY`). Region adds,
     resource walks and structure indexes test it before looking the identity up, so values that are not

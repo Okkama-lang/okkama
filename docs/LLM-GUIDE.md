@@ -379,7 +379,9 @@ Sparrow owns those mechanisms in `sparrow-core`. Source trace rendering is in
 
 **IR passes** (`lowering/mod.rs`, after lowering, before `ir::verify`), each
 on verified OIR and keeping it verifiable and meaning-preserving, in this
-order: `regions` (plainness is recomputed over the whole module — objects
+order: `statics` (#909 2b: a resource the ownership census places in its
+scope, of a leaf type and alone in its region, is pinned and destroyed by
+`resource.leave`/`resource.unwind` instead of a region), `regions` (plainness is recomputed over the whole module — objects
 without `destroy` and with plain fields, roles done only by plain objects,
 function values when no closure captures a non-plain value — and region ops
 on plain values are dropped, #292; then regions that own nothing are not
