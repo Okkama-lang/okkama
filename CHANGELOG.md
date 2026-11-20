@@ -51,6 +51,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A running Future detached at its owner's close keeps what it borrows (#881).** A Future that `go` starts in its
+  caller's group and that borrows `go`'s locals (a bound Future, a resource) kept running after `go` closed, while
+  that close destroyed what it borrowed, and the body read it afterwards. Tomato keeps them alive until shutdown.
+  - Following Fable's ruling, agreed by the owner, a running Future that detaches at its owner's close takes with it
+    to the root everything of that owner it can still reach. A cache detaches with it, and an identity goes to a
+    kept packet of the root. The root closer releases them at shutdown, in Tomato's order.
+  - A close releases its Futures' duties only once it knows which of them detach: before its dynamic step or its
+    first plan. The walk starts from the detached bodies' language slots and follows what the collector traces.
+  - Known limit: something a detached body reads later from a shared holder (an Atomic, a channel) is not kept.
 - **A function can return a new object that stores a FutureGroup it made (#820).** Champ refused it at load
   (`FRESH_ORIGIN`). The group's entry was an identity of the constructor's family that no site of the function
   showed, so the function looked like it returned one fresh identity. Its relation now says `several` (#879).

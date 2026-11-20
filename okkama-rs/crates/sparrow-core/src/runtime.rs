@@ -290,6 +290,11 @@ impl Runtime {
         let (ready, spawned, running) = (&self.ready, &self.spawned, &self.running);
         let (timers, requests) = (&self.timers, &self.io.requests);
         let states = &self.states;
+        // #881: the packets detached Futures kept, until the root closer closes them.
+        #[cfg(feature = "champ-abi")]
+        let kept: &[Word] = &self.champ.kept;
+        #[cfg(not(feature = "champ-abi"))]
+        let kept: &[Word] = &[];
         self.heap.collect_with(|visit| {
             // A group's tasks are kept only while the group is reachable some
             // other way (#503); running and parked tasks are roots of their own.
@@ -305,6 +310,9 @@ impl Runtime {
                 visit(word, repr);
             }
             visit(ctx.failure, Repr::Ref);
+            for &record in kept {
+                visit(record, Repr::Ref);
+            }
             let tasks = ready.iter().chain(spawned).chain(running);
             for &task in tasks.chain(timers.iter().map(|(_, frame)| frame)).chain(requests.keys()) {
                 visit(task, Repr::Ref);

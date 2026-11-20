@@ -494,6 +494,10 @@ pub(super) struct Cleanup {
     pub invoked: bool,
     pub captured: Word,
     pub failure: Word,
+    /// #881: the duties of this owner whose release waits until the close knows which of its Futures detach,
+    /// with their service kinds, and the running Futures it detached so far.
+    pub deferred: Vec<(Word, u64)>,
+    pub detached: Vec<Word>,
 }
 #[derive(Debug, Clone)]
 pub(super) enum Data {
@@ -523,6 +527,12 @@ impl Payload for Record {
             }
             Data::Cleanup(cleanup) => {
                 cleanup.remainder.trace(visit);
+                for &(duty, _) in &cleanup.deferred {
+                    visit(duty, Repr::Ref);
+                }
+                for &duty in &cleanup.detached {
+                    visit(duty, Repr::Ref);
+                }
                 cleanup.stream.trace(visit);
                 if let Some(pending) = &cleanup.pending {
                     pending.reserve.trace(visit);

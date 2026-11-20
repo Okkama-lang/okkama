@@ -145,6 +145,91 @@ fn leaf(ctx: *mut Ctx, body: impl FnOnce(&mut Runtime) -> Result<(), Error>) -> 
         Err(failure) => stop(ctx, failure),
     }
 }
+/// #881 (Fable's ruling (a), agreed by the owner): a Future that is running at its owner's close detaches to the root
+/// (draft 3 §6.2), and everything of that owner it can still reach goes with it. The close's settle steps run in
+/// creation order, so a release of this owner's duty waits (`deferred`) until the close knows which of its Futures
+/// detach: before its dynamic step, or before its first plan. Then the walk follows what the collector traces from
+/// those Futures. A deferred or listed cache it reaches detaches by the same row as a running one; every other
+/// deferred duty is released as its step would have released it; an identity of the inventory it reaches leaves
+/// the close for a kept packet of the root, which the root closer closes at shutdown. A close with no detached
+/// Future walks nothing.
+fn resolve_deferred(runtime: &mut Runtime, cleanup: &mut Cleanup) -> Result<(), Error> {
+    use super::futures::CacheSettle;
+    use crate::tasks::{get, RUNNING, STATE};
+    let Some(owner) = cleanup.owner else {
+        return Ok(());
+    };
+    let mine = |runtime: &Runtime, holder: Word| runtime.champ_cache(holder)
+        .is_ok_and(|cache| cache.owner == owner && cache.flags & super::RELEASED == 0);
+    let mut running = std::mem::take(&mut cleanup.detached);
+    running.extend(cleanup.remainder.services.iter().filter(|service| service.kind != SERVICE_GROUP
+        && get(service.holder, STATE) == RUNNING && mine(runtime, service.holder)).map(|service| service.holder));
+    // What a running body can still use: its language slots, below the frame's tail (not its waiters or its task).
+    let mut starts = Vec::new();
+    for &frame in &running {
+        let tail = runtime.champ_tail(frame)?;
+        starts.extend(runtime.heap.frame_fields_below(frame, tail));
+    }
+    let reached = if starts.is_empty() { Default::default() } else { runtime.heap.reachable(&starts) };
+    for (duty, kind) in std::mem::take(&mut cleanup.deferred) {
+        if reached.contains(&duty) {
+            // A task duty of a reached Future settles to nothing: its cache detaches with it.
+            if kind == SERVICE_CACHE {
+                runtime.champ_cache_settle(duty, CacheSettle::Detach)?;
+            }
+            continue;
+        }
+        let settle = if kind == SERVICE_TASK {
+            runtime.champ_task_settlement(duty, cleanup.owner)?
+        } else {
+            runtime.champ_cache_settlement(duty, cleanup.owner)?
+        };
+        let mut plan = Vec::new();
+        let mut released = Packet::default();
+        let service = Service { holder: duty, kind, target: None };
+        runtime.champ_plan_duty(service, settle, cleanup.owner, &mut plan, &mut released)?;
+        let mut all = inventory(cleanup);
+        all.append(released.clone());
+        validate(runtime, &all)?;
+        runtime.champ_apply_services(plan)?;
+        cleanup.remainder.append(released);
+    }
+    if reached.is_empty() {
+        return Ok(());
+    }
+    let caches: Vec<Word> = cleanup.remainder.services.iter().filter(|service| service.kind == SERVICE_CACHE
+        && !running.contains(&service.holder) && reached.contains(&service.holder) && mine(runtime, service.holder))
+        .map(|service| service.holder).collect();
+    for &cache in &caches {
+        runtime.champ_cache_settle(cache, CacheSettle::Detach)?;
+    }
+    let mut kept = Packet::default();
+    for (index, runs) in cleanup.remainder.journals.iter_mut().enumerate() {
+        for run in runs.iter_mut() {
+            if !run.words().any(|object| reached.contains(&object)) {
+                continue;
+            }
+            let (taken, left): (Vec<Word>, Vec<Word>) = run.words().partition(|object| reached.contains(object));
+            let rebuild = |words: Vec<Word>| Run {
+                holder: run.holder, owner: run.owner, length: words.len(),
+                chunks: if words.is_empty() { Default::default() } else { [words.into()].into() },
+            };
+            kept.journals[index].push_back(rebuild(taken));
+            *run = rebuild(left);
+        }
+        runs.retain(|run| run.length != 0);
+    }
+    if kept.is_empty() {
+        return Ok(());
+    }
+    let root = runtime.champ_root_owner()?;
+    super::helpers::owner_preflight(runtime, &kept, root)?;
+    let kept = super::helpers::owner_transition(runtime, kept, root);
+    runtime.champ.kept_identities.extend(kept.words());
+    let record = store(runtime, Data::Packet(kept));
+    runtime.champ.kept.push(record);
+    Ok(())
+}
 pub extern "C" fn rt_cleanup_begin(ctx: *mut Ctx, inputs: *const CloseInputs,
     post: *mut CleanupSlot) -> Outcome
 {
@@ -308,6 +393,19 @@ pub extern "C" fn rt_service_settle(ctx: *mut Ctx, this: Word, input: *mut Clean
             } else {
                 runtime.champ_cache_settlement(duty, cleanup.owner)?
             };
+            // #881: a release waits until the close knows which of its Futures detach (`resolve_deferred`).
+            if cleanup.owner.is_some() && matches!(settle, super::futures::CacheSettle::Release { .. }) {
+                if cleanup.deferred.contains(&(duty, kind)) {
+                    return Err(error("cache duty settled twice"));
+                }
+                cleanup.deferred.push((duty, kind));
+                cleanup.settlements -= 1;
+                cleanup.settled = cleanup.settlements == 0;
+                return Ok(());
+            }
+            if settle == super::futures::CacheSettle::Detach {
+                cleanup.detached.push(duty);
+            }
             // The released packets' own entries settle first (draft 3 §6.3); their identities join the run.
             let mut plan = Vec::new();
             let mut released = Packet::default();
@@ -344,6 +442,7 @@ pub extern "C" fn rt_cleanup_settle_dynamic(ctx: *mut Ctx, this: Word, input: *m
             if cleanup.planned || cleanup.dynamic || cleanup.settlements != 0 {
                 return Err(error("one dynamic settle per close, after its static duties and before its plan"));
             }
+            resolve_deferred(runtime, cleanup)?;
             let mut remainder = std::mem::take(&mut cleanup.remainder);
             settle_services(runtime, cleanup, &mut remainder)?;
             cleanup.remainder = remainder;
@@ -432,6 +531,7 @@ pub extern "C" fn rt_cleanup_plan(ctx: *mut Ctx, input: *mut CleanupSlot, plan: 
             if plan.direct && plan.may_fail && !reserve_empty {
                 return Err(error("B2: fallible direct plan with nonempty reserve"));
             }
+            resolve_deferred(runtime, cleanup)?;
             plan_remainder(runtime, cleanup)?;
             cleanup.planned = true;
             Ok(())
@@ -771,6 +871,15 @@ pub extern "C" fn rt_destroy_direct(ctx: *mut Ctx, state: *mut CleanupSlot, key:
     let runtime = unsafe { &mut *(*ctx).runtime };
     if !matches!(read_cleanup(runtime, unsafe { (*state).record }), Ok(cleanup) if cleanup.planned) {
         return stop(ctx, error("direct destroy before plan"));
+    }
+    // #881: an identity a detached Future still reaches left this close for the root; the direct plan skips it.
+    if runtime.champ.kept_identities.contains(&key.object()) {
+        let record = unsafe { (*state).record };
+        unsafe {
+            (*state).record = 0;
+            post.write(DestroyPost { state: CleanupSlot { record }, ..DestroyPost::default() });
+        }
+        return NORMAL;
     }
     let Some(identity) = runtime.heap.champ_identity(key.object()) else {
         return stop(ctx, error("direct identity"));
