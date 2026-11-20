@@ -96,6 +96,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A child started into the caller's group as a temporary keeps what it borrows (#914).** `group.start(
+  Reader().later(lamp, gate))` closed `lamp` when the starting action returned, and the child read it after its
+  destroy; `let child = …; group.start(child)` was right. `FutureGroup.start` adopted a fresh Future into the
+  group, so the closing scope no longer handed the group the values the Future borrows. Now the group only lists
+  the Future, the scope that made it keeps it, and its close hands both to the group, as for a bound child. The
+  Bible's 20.9 states the rule for both forms.
 - **A scope's close envelope covers what settling the function's Futures may release (L13, #847).** On Champ,
   `L13.migration-and-restart` (awaits in a branch, over SQLite) stopped at `D18_EXECUTOR: merge envelope omits
   destroy failures`. A close that settles a Future's duty, or entries admitted at run time, may release the outcome
