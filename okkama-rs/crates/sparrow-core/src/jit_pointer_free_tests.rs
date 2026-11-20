@@ -54,7 +54,6 @@ fn sync_definitions_calls_captures_and_failure_match_without_analysis() {
 }
 
 // Asserts Tomato destroy order; champ-abi compiles resource identities out (`created` is a no-op).
-#[cfg(not(feature = "champ-abi"))]
 #[test]
 fn async_suspension_results_and_cleanup_match_in_both_root_modes() {
     crate::on_vm_thread(|| {
@@ -95,7 +94,6 @@ fn async_suspension_results_and_cleanup_match_in_both_root_modes() {
 }
 
 // Asserts Tomato destroy order; champ-abi compiles resource identities out (`created` is a no-op).
-#[cfg(not(feature = "champ-abi"))]
 #[test]
 fn sync_and_async_unwind_cleanup_preserve_failure_and_destroy_log() {
     crate::on_vm_thread(|| {

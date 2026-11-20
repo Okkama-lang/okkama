@@ -1,6 +1,0 @@
-# invalid/B6-block-local-unwind
-profile own
-scope.begin s
-label body
-new a A
-unwind.use a

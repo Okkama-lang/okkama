@@ -48,9 +48,6 @@ pub struct Ctx {
 #[derive(Debug)]
 pub struct Failure {
     pub kind: FailureKind,
-    /// Cleanup origin is orthogonal to kind/catchability; capturing keeps the exact carrier.
-    #[cfg(feature = "champ-abi")]
-    pub cleanup_origin: bool,
     /// (function, pc) of each activation it unwound through, innermost first.
     pub trace: Vec<(u32, u32)>,
     pub cause: Option<Word>,
@@ -128,8 +125,6 @@ pub struct Runtime {
     /// The last failure `describe` reported, as the OCS protocol sees it.
     pub uncaught: Option<crate::Uncaught>,
     pub resources: crate::failures::Resources,
-    #[cfg(feature = "champ-abi")]
-    pub(crate) champ: crate::champ::State,
     /// Async frames ready to resume; spawned tasks; frames running on the
     /// machine stack (innermost last). All are roots.
     pub ready: std::collections::VecDeque<Word>,
@@ -200,23 +195,9 @@ impl Runtime {
         Self::assemble(loaded)
     }
 
-    /// The runtime of a Champ program's declaration view (#601 Q1). Tomato's load-time intrinsic contracts describe
-    /// SPB 16 layouts; the SPB 17 loader has proved the layouts the std async primitives' drivers read from the
-    /// trusted catalogue (`spb17::drivers`), so they are not checked again here.
-    #[cfg(feature = "champ-abi")]
-    pub(crate) fn new_champ_view(loaded: Loaded) -> Result<Self, Error> {
-        Self::assemble(loaded)
-    }
 
     fn assemble(loaded: Loaded) -> Result<Self, Error> {
-        #[cfg(not(feature = "champ-abi"))]
         let mut heap = Heap::new(loaded.layouts());
-        #[cfg(feature = "champ-abi")]
-        let mut heap = {
-            let layouts = loaded.layouts();
-            let objects = loaded.champ_object_layouts(&layouts)?;
-            Heap::new_champ(layouts, objects)
-        };
         heap.set_stress(std::env::var_os("SPARROW_CORE_GC_STRESS").is_some_and(|value| value == "1"));
         if std::env::var_os("SPARROW_CORE_STATS").is_some() {
             heap.allocations = Some(Box::default());
@@ -236,8 +217,6 @@ impl Runtime {
             .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name)))
             .collect();
         Ok(Self {
-            #[cfg(feature = "champ-abi")]
-            champ: crate::champ::State::new(),
             resources,
             ready: std::collections::VecDeque::new(),
             spawned: Vec::new(),
@@ -291,14 +270,8 @@ impl Runtime {
         let (timers, requests) = (&self.timers, &self.io.requests);
         let states = &self.states;
         // #881: the packets detached Futures kept, until the root closer closes them.
-        #[cfg(feature = "champ-abi")]
-        let kept: &[Word] = &self.champ.kept;
-        #[cfg(not(feature = "champ-abi"))]
         let kept: &[Word] = &[];
         // #882: the detached Futures registered as borrowers of open owners, until those owners close.
-        #[cfg(feature = "champ-abi")]
-        let borrowers: Vec<Word> = self.champ.borrowers.values().flatten().copied().collect();
-        #[cfg(not(feature = "champ-abi"))]
         let borrowers: Vec<Word> = Vec::new();
         self.heap.collect_with(|visit| {
             // A group's tasks are kept only while the group is reachable some
@@ -417,8 +390,6 @@ impl Runtime {
     pub fn failure_new(&mut self, kind: FailureKind) -> Word {
         self.heap.allocate_payload(Box::new(Failure {
             kind,
-            #[cfg(feature = "champ-abi")]
-            cleanup_origin: false,
             trace: Vec::new(),
             cause: None,
             secondary: Vec::new(),
@@ -827,10 +798,6 @@ impl Runtime {
             scratch: UNBOUND,
         };
         // A Champ async entry runs its own root Future through the same scheduler (draft 3 §3).
-        #[cfg(feature = "champ-abi")]
-        if self.champ_async_body(entry) {
-            return self.champ_run_async_main(&mut ctx, entry, arguments);
-        }
         let result = if asynchronous {
             // The root Future, its task tree, then shutdown of spawned tasks.
             let root = self.future_new(entry, arguments);
@@ -858,16 +825,6 @@ impl Runtime {
             if ctx.status != OK {
                 return Err(Error(self.fatal.clone().unwrap_or_default()));
             }
-            #[cfg(feature = "champ-abi")]
-            if self.champ.machine.as_ref().is_some_and(|machine| {
-                machine.source.functions[entry].entry_abi != okkama_sparrow::spb17::EntryAbi::Observation
-            }) {
-                self.champ_run_owned(&mut ctx, entry, arguments)?
-            } else {
-                // SAFETY: an observation entry has the ordinary parameter ABI.
-                unsafe { crate::jit::invoke(code, &mut ctx, arguments) }
-            }
-            #[cfg(not(feature = "champ-abi"))]
             // SAFETY: compiled functions take the context and their parameters.
             unsafe { crate::jit::invoke(code, &mut ctx, arguments) }
         };

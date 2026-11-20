@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The Okkama Bible's examples: every NAME.ok against NAME.expected.
 
-    examples/bible/check.py --okkama BIN [--pipeline oir2] [--jobs N] [--cage] [--stdlib DIR] [NAME ...]
+    examples/bible/check.py --okkama BIN [--jobs N] [--cage] [--stdlib DIR] [NAME ...]
 
 The examples are copied from the Bible's sources (docs/OkkamaBible/examples on
 the Bible's branch, where build.py --check runs them for the book); this copy
@@ -10,8 +10,8 @@ runs them on every engine in CI. The expected text is the stdout, then
 report is the output); a `-rejected` example is compared by its diagnostic
 (stderr), with this folder's path removed. Subfolders and data files are what
 the examples import or read; each example runs in its own copy of the folder,
-so examples that write files can run in parallel. `--pipeline oir2` runs Champ
-(a champ-abi build). On a personal machine use `--cage`. Exit status 0 when
+so examples that write files can run in parallel. On a personal machine use
+`--cage`. Exit status 0 when
 every example printed what it should.
 """
 import argparse
@@ -39,8 +39,6 @@ def check(stem, args):
             command = [sys.executable, CAGE, "--cpu-seconds", str(args.timeout), "--timeout", str(args.timeout + 30),
                        "--memory-mb", "1024", "--writable", work, "--"] + command
         env = dict(os.environ, OKKAMA_STDLIB_DIR=args.stdlib, OKKAMA_TRACE="off")
-        if args.pipeline:
-            env["OKKAMA_PIPELINE"] = args.pipeline
         try:
             p = subprocess.run(command, cwd=work, env=env, capture_output=True, text=True, timeout=args.timeout + 60)
         except subprocess.TimeoutExpired:
@@ -61,7 +59,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("names", nargs="*")
     parser.add_argument("--okkama", required=True)
-    parser.add_argument("--pipeline", choices=["oir2"], help="oir2: Champ (a champ-abi build)")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--cage", action="store_true")
@@ -101,7 +98,7 @@ def main():
         print(f"Failed {len(failed)}/{len(results)} examples")
     else:
         print("All examples print what the Bible says.")
-    print(f"Examples={len(results)}, pipeline={args.pipeline or 'sparrow'}")
+    print(f"Examples={len(results)}, engine=sparrow")
     return 1 if failed else 0
 
 

@@ -1,8 +1,0 @@
-oir 2 high
-module concrete_role
-role Package<T> {
-    value() -> T
-}
-role Factory {
-    open() -> ^Package<int>
-}

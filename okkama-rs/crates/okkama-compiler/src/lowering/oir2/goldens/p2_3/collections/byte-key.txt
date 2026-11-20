@@ -1,1 +1,0 @@
-frontend: Map key type byte is not a scalar key type

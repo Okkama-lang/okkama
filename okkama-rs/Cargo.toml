@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/okkama-oir", "crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace"]
+members = ["crates/okkama-compiler", "crates/okkama-cli", "crates/okkama-native", "crates/okkama-sparrow", "crates/okkama-runtime-core", "crates/okkama-runtime-abi", "crates/sparrow-cli", "crates/blade", "crates/blade-cli", "crates/sparrow-core", "crates/okkama-persistent", "crates/okkama-devtrace"]
 
 [workspace.package]
 version = "0.5.8"
@@ -36,7 +36,7 @@ inherits = "release"
 lto = "off"
 codegen-units = 16
 
-# Отладочные сборки (тесты, адаптер conformance) запускают JIT Champ, и
+# Отладочные сборки (тесты, адаптер conformance) запускают JIT Sparrow, и
 # неоптимизированный Cranelift занимает в них большую часть прогона кейса
 # (#761). Оптимизируем только Cranelift и regalloc2; крейты Okkama остаются
 # отладочными, с их проверками.

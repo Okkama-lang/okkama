@@ -20,7 +20,7 @@ pub const UNBOUND: Word = 0;
 /// or scalar value uses).
 pub const UNBOUND_RAW: Word = 0x7ff8_dead_beef_0001;
 
-pub use okkama_sparrow::spb17::layout::Repr;
+pub use okkama_sparrow::layout::Repr;
 
 /// Largest and smallest integers stored inline.
 pub const SMALL_MAX: i64 = (1 << 62) - 1;

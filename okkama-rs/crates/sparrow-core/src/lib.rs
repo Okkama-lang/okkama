@@ -23,8 +23,6 @@
 // the context as a raw pointer and are sound for the code that calls them.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-#[cfg(feature = "champ-abi")]
-pub mod champ;
 pub mod budget;
 mod code_memory;
 mod contracts;
@@ -68,8 +66,6 @@ pub fn check(bytes: &[u8]) -> Result<(), Error> {
     let program = decode_runtime(bytes).map_err(|e| Error(e.to_string()))?;
     match program {
         DecodedProgram::Legacy(program) => contracts::check(&program::Loaded::new(program)),
-        #[cfg(feature = "champ-abi")]
-        DecodedProgram::Champ(verified) => runtime::Runtime::new_champ_verified(&verified).map(|_| ()),
     }
 }
 
@@ -115,37 +111,8 @@ pub fn run_described(
     })
 }
 
-/// A bounded P1 run with the same stdout and destroy formatter as source/bytecode execution.
-/// Captures belong to the VM thread; no process-wide environment mutation is necessary.
-#[cfg(feature = "champ-abi")]
-#[derive(Debug)]
-pub struct CapturedRun {
-    pub result: Result<i64, Error>,
-    pub stdout: Vec<u8>,
-    pub destroy_trace: Vec<u8>,
-}
 
-#[cfg(feature = "champ-abi")]
-pub fn run_captured(bytes: Vec<u8>, limits: budget::Limits) -> Result<CapturedRun, Error> {
-    run_captured_with_arguments(bytes, Vec::new(), limits)
-}
 
-/// [`run_captured`] with program arguments, as the CLI passes them after the program (#757).
-#[cfg(feature = "champ-abi")]
-pub fn run_captured_with_arguments(bytes: Vec<u8>, arguments: Vec<Vec<u8>>, limits: budget::Limits)
-    -> Result<CapturedRun, Error> {
-    on_vm_thread(move || {
-        let program = decode_runtime(&bytes).map_err(|error| Error(error.to_string()))?;
-        if !matches!(program, DecodedProgram::Champ(_)) {
-            return Err(Error("P1 capture requires SPB 17".into()));
-        }
-        let mut runtime = configured_runtime(program, arguments, false, Vec::new(), limits)?;
-        runtime.champ.captured_trace = Some(Vec::new());
-        let (result, stdout) = stdout::capture(|| runtime.run_entry(STACK_BYTES));
-        let destroy_trace = runtime.champ.captured_trace.take().unwrap_or_default();
-        Ok(CapturedRun { result, stdout, destroy_trace })
-    })
-}
 
 /// CLI execution result. Loading failures remain the outer `Err`; runtime
 /// failures carry the report prefix and an already rendered Sparrow trace
@@ -247,8 +214,6 @@ fn configured_runtime(
 ) -> Result<Box<runtime::Runtime>, Error> {
     let mut runtime = match program {
         DecodedProgram::Legacy(program) => Box::new(runtime::Runtime::new(program::Loaded::new(program))?),
-        #[cfg(feature = "champ-abi")]
-        DecodedProgram::Champ(verified) => runtime::Runtime::new_champ_verified(&verified)?,
     };
     runtime.worker_command = worker_command;
     runtime.limits = limits;
@@ -369,28 +334,11 @@ pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<
     })
 }
 
-/// `run_tests` of an SPB 17 test profile under execution budgets, with the report and the program's
-/// output captured together, in order, as `run_captured` captures a run.
-#[cfg(feature = "champ-abi")]
-pub fn run_tests_captured(bytes: Vec<u8>, limits: budget::Limits) -> Result<(Result<bool, Error>, Vec<u8>), Error> {
-    on_vm_thread(move || {
-        let program = decode_runtime(&bytes).map_err(|error| Error(error.to_string()))?;
-        let DecodedProgram::Champ(verified) = program else {
-            return Err(Error("test capture requires SPB 17".into()));
-        };
-        let out = Box::new(okkama_runtime_core::stdout::Buffered);
-        Ok(stdout::capture(|| champ::testing::run_verified_suite(&verified, out, limits)))
-    })
-}
 
 // Private: only a decoded, verified program reaches test execution.
 fn test_profile(program: DecodedProgram, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
     match program {
         DecodedProgram::Legacy(program) => test_program(program, out),
-        #[cfg(feature = "champ-abi")]
-        DecodedProgram::Champ(verified) => {
-            champ::testing::run_verified_suite(&verified, out, budget::Limits::default())
-        }
     }
 }
 
@@ -525,42 +473,28 @@ impl std::error::Error for Error {}
 #[derive(Debug)]
 enum DecodedProgram {
     Legacy(okkama_sparrow::Program),
-    #[cfg(feature = "champ-abi")]
-    /// Decoding an SPB 17 file runs the loader once; everything after shares the verified program.
-    Champ(champ::machine::Verified),
 }
 
 impl DecodedProgram {
     fn legacy(self) -> Result<okkama_sparrow::Program, Error> {
         match self {
             Self::Legacy(program) => Ok(program),
-            #[cfg(feature = "champ-abi")]
-            Self::Champ(_) => Err(Error("test profiles and workers are outside P1".into())),
         }
     }
 
     fn has_tests(&self) -> bool {
         match self {
             Self::Legacy(program) => program.tests.is_some(),
-            #[cfg(feature = "champ-abi")]
-            Self::Champ(verified) => verified.source().tests.is_some(),
         }
     }
 
     fn function_count(&self) -> usize {
         match self {
             Self::Legacy(program) => program.functions.len(),
-            #[cfg(feature = "champ-abi")]
-            Self::Champ(verified) => verified.source().functions.len(),
         }
     }
 }
 
 fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecError> {
-    #[cfg(feature = "champ-abi")]
-    if bytes.get(..6) == Some(&[b'S', b'P', b'R', b'W', 0, 17]) {
-        let program = okkama_sparrow::spb17::decode(bytes)?;
-        return Ok(DecodedProgram::Champ(champ::machine::Verified::load(program)?));
-    }
     okkama_sparrow::decode(bytes).map(DecodedProgram::Legacy)
 }

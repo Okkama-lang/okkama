@@ -41,7 +41,7 @@ the session's memory; older rulings live in the commits and tickets named.
 - **The parity reference is Tomato built from the same tree** (#794), never an installed or released binary.
 - **The JVM backend was removed** (#585), and the IR engine before it (#584).
 
-## Ownership model rulings (OIR-2; valid while it lives)
+## Ownership model rulings (OIR-2): historical — OIR-2 and Champ were removed on 2026-11-20 (#911)
 
 - **2026-11-20, L13** (6d466cae8). A close's envelope covers the destroy failures that settling any of the
   function's Futures may run (outcome and unstarted inputs). Own adds them to every scope of such a function.

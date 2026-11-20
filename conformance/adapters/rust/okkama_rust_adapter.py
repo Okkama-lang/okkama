@@ -16,18 +16,8 @@ the modes it declares. Everything else is reported as UNSUPPORTED with the
 observed evidence. It never fabricates parse/check/run results, and it never
 treats a parser as a runtime.
 
-Engines (`OCS_RUST_ENGINE`):
-
-* `sparrow` (default): the default build (Tomato runtime); every mode is
-  forwarded to the native endpoint.
-* `champ`: `okkama-cli` built with `--features champ-abi` into its own target
-  directory. The native endpoint has no OIR-2 path, so parse/check (the shared
-  front end) are forwarded to it, while run/test go through the CLI exactly as
-  a user runs a program on Champ: `OKKAMA_PIPELINE=oir2 okkama run [-t] ...`.
-  A run first asks the native endpoint to *check* the same sources, which
-  attributes front-end rejections to their stage and category; the CLI's
-  streams pass through unchanged and its exit status and failure report are
-  translated into the protocol (see `champ_outcome`).
+Sparrow is the only engine (Tweed, 2026-11-20): every mode is forwarded to
+the binary's native endpoint.
 """
 
 import json
@@ -43,17 +33,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SPARROW_BUILD = ["cargo", "build", "--quiet", "--offline"]
 # Each engine is its own build: its own cargo features, its own target
 # directory (artifacts are never shared) and its own probe cache entry.
-# Champ builds with the `gate` profile (release optimizations without LTO, as the Wave CI's crate tests): the
-# OIR-2 pipeline of a std-heavy program (the SQLite cases) takes about 90 s to compile in a debug build, over a
-# case's 60 s budget (owner, 2026-11-20).
 ENGINES = {
-    "sparrow": {"build": SPARROW_BUILD, "target_subdir": None, "pipeline": None, "profile": "debug"},
-    "champ": {"build": SPARROW_BUILD + ["--profile", "gate", "-p", "okkama-cli", "--features", "champ-abi"],
-              "target_subdir": "engine-champ", "pipeline": "oir2", "profile": "gate"},
+    "sparrow": {"build": SPARROW_BUILD, "target_subdir": None, "profile": "debug"},
 }
-REMOVED_ENGINES = ("ir", "jvm")
-# Exit status of `okkama run` when OIR-2 lowering cannot handle the program.
-EXIT_OIR2_UNSUPPORTED = 4
+REMOVED_ENGINES = ("ir", "jvm", "champ")
 
 
 def impl_root():
@@ -84,15 +67,7 @@ def build_command(engine):
 
 def binary_env(engine):
     """Environment of the implementation binary; None means "inherit unchanged"."""
-    pipeline = ENGINES[engine]["pipeline"]
-    if pipeline is None:
-        return None
-    env = dict(os.environ)
-    env["OKKAMA_PIPELINE"] = pipeline
-    # The binary's own OCS_RUST_ENGINE names its code generator family
-    # (Sparrow); Champ is selected by OKKAMA_PIPELINE, not by this variable.
-    env["OCS_RUST_ENGINE"] = "sparrow"
-    return env
+    return None
 
 
 def run(cmd, cwd=None, timeout=600, env=None):
@@ -236,194 +211,6 @@ def probe_uncached(engine="sparrow"):
     return ev
 
 
-# ---- Champ: run/test through the CLI ---------------------------------------
-
-# Messages of a champ-abi `okkama` that refuses to run at all (driver missing,
-# or the SPB 16 refusal when OKKAMA_PIPELINE is not oir2).
-CHAMP_DRIVER_REFUSALS = ("Champ OIR-2 driver is not yet available", "Champ driver requires",
-                         "runs only SPB 17")
-# A load-gate rule code (spb17::Error.rule): upper case with underscores.
-LOADER_RULE = re.compile(r'rule: "([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)"|^(?:okkama: )?([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+): ')
-GENERATION_GAP = re.compile(r"not yet in S\d")
-# The root line of a runtime failure report (sparrow_core failures.rs).
-REPORT_HEADERS = (
-    (re.compile(r"^RuntimeError: (.*)$"), "runtime", None),
-    (re.compile(r"^Panic: (.*)$"), "panic", None),
-    (re.compile(r"^Cancelled: (.*)$"), "runtime", None),
-    (re.compile(r"^NativeFailure: (.*)$"), "runtime", "NativeFailure"),
-    (re.compile(r"^(Execution (?:budget exhausted|interrupted).*)$"), "runtime", None),
-    (re.compile(r"^Uncaught ([A-Za-z_][A-Za-z0-9_]*)()$"), "uncaught-error", 1),
-    (re.compile(r"^([A-Z][A-Za-z0-9_]*): (.*)$"), "uncaught-error", 1),
-)
-REPORT_LABELS = ("Caused by:", "Secondary cleanup failure:")
-
-
-def first_line(text):
-    for line in text.splitlines():
-        if line.strip():
-            return line.strip()
-    return ""
-
-
-def report_header(stderr):
-    """(category, error_type, message, line) of the failure report ending `stderr`, or None.
-
-    The report is the last thing the CLI writes; the program's own stderr comes
-    before it. Lines after a cause/secondary label belong to nested entries.
-    """
-    lines = []
-    for line in stderr.splitlines():
-        if line in REPORT_LABELS:
-            break
-        lines.append(line)
-    for line in reversed(lines):
-        if LOADER_RULE.match(line):
-            continue
-        for pattern, category, error_type in REPORT_HEADERS:
-            m = pattern.match(line)
-            if not m:
-                continue
-            if error_type == 1:
-                return category, m.group(1), m.group(2) or "", line
-            return category, error_type, m.group(1), line
-    return None
-
-
-# Errors of the test runner itself (spec 14: an empty root suite is an error).
-CHAMP_TEST_RUNNER_ERRORS = ("Test run requires at least one test",)
-
-
-def champ_outcome(mode, code, stderr):
-    """Translate one `okkama run` on Champ into (response fields, adapter exit).
-
-    `code` is the CLI's exit status (negative: killed by that signal).
-    """
-    head = first_line(stderr)
-    if code is not None and code < 0:
-        return {"outcome": "internal-error", "stage_reached": "runtime",
-                "failure": {"stage": "runtime", "category": "internal", "raw": stderr,
-                            "message": "okkama terminated by signal %d" % -code}}, 70
-    if code == 0:
-        return {"outcome": "completed", "stage_reached": "runtime", "exit_status": 0}, 0
-    # The CLI's own status 4 comes with its `okkama: ` report; a silent 4 is main()'s result
-    # (L01.gram.test.inner-grammar-not-parsed returns 4).
-    if (code == EXIT_OIR2_UNSUPPORTED and head.startswith("okkama: ")) or "unsupported in OIR-2 lowering" in head:
-        return {"outcome": "unsupported", "stage_reached": "check",
-                "unsupported_reason": head[len("okkama: "):] if head.startswith("okkama: ") else head,
-                "raw": stderr}, 3
-    runner = head[len("okkama: "):] if head.startswith("okkama: ") else head
-    if mode == "test" and runner in CHAMP_TEST_RUNNER_ERRORS:
-        # The test runner's own language-level errors, reported as the native
-        # endpoint reports them on Tomato (sparrow_core::run_tests).
-        failure = {"stage": "runtime", "category": "runtime", "message": runner, "raw": stderr}
-        return {"outcome": "failed", "stage_reached": "runtime", "failure": failure}, code if code else 1
-    if head.startswith("okkama: ") or any(text in head for text in CHAMP_DRIVER_REFUSALS):
-        # The front end accepted the program: what follows is the OIR-2
-        # pipeline (lowering, verifiers, SPB 17 generation, load gate) or the
-        # driver, never a language rejection.
-        message = head[len("okkama: "):] if head.startswith("okkama: ") else head
-        if GENERATION_GAP.search(message):
-            return {"outcome": "unsupported", "stage_reached": "check",
-                    "unsupported_reason": message, "raw": stderr}, 3
-        return {"outcome": "internal-error", "stage_reached": "check",
-                "failure": {"stage": "check", "category": "internal", "message": message, "raw": stderr}}, 70
-    # A failure report always ends the process with status 1; any other
-    # status is main()'s own result, whatever the program wrote to stderr.
-    found = report_header(stderr) if code == 1 else None
-    lines = [line for line in stderr.splitlines() if line.strip()]
-    if code == 1 and lines and LOADER_RULE.match(lines[-1]) and found is None:
-        return {"outcome": "internal-error", "stage_reached": "runtime",
-                "failure": {"stage": "runtime", "category": "internal", "message": lines[-1], "raw": stderr}}, 70
-    if found is None:
-        if code is None or not 0 <= code <= 255:
-            return {"outcome": "internal-error", "stage_reached": "runtime",
-                    "failure": {"stage": "runtime", "category": "internal", "raw": stderr,
-                                "message": "unexpected exit status %r" % (code,)}}, 70
-        # main() returned this status (or a test run reported failures).
-        return {"outcome": "completed", "stage_reached": "runtime", "exit_status": code}, code
-    category, error_type, message, line = found
-    failure = {"stage": "runtime", "category": category, "message": message, "raw": stderr}
-    if error_type:
-        failure["error_type"] = error_type
-    return {"outcome": "failed", "stage_reached": "runtime", "failure": failure}, code
-
-
-def champ_command(binary, mode, req):
-    cmd = [binary, "run"]
-    if mode == "test":
-        cmd.append("-t")
-    if req.get("stdlib_root"):
-        cmd += ["--stdlib", req["stdlib_root"]]
-    return cmd + list(req["sources"]) + ["--"] + list(req.get("args", []))
-
-
-def champ_frontend(ev, req, resp_path):
-    """Check the sources with the shared front end; returns (response, exit) or None when accepted."""
-    scratch = os.path.dirname(os.path.abspath(resp_path))
-    check_req = dict(req, mode="check")
-    check_req_path = os.path.join(scratch, "request.champ-frontend.json")
-    check_resp_path = os.path.join(scratch, "response.champ-frontend.json")
-    with open(check_req_path, "w") as fh:
-        json.dump(check_req, fh, indent=2, sort_keys=True)
-    try:
-        p = subprocess.run([ev["binary"], "--ocs-request", check_req_path, "--ocs-response", check_resp_path],
-                           cwd=req.get("cwd"), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, env=binary_env("champ"))
-        with open(check_resp_path) as fh:
-            resp = json.load(fh)
-    except Exception as exc:
-        return {"outcome": "internal-error", "stage_reached": "none",
-                "failure": {"stage": "check", "category": "internal",
-                            "message": "front-end check failed: %s" % exc}}, b"", 70
-    if resp.get("outcome") == "accepted":
-        return None
-    resp = dict(resp)
-    resp["mode"] = req["mode"]
-    return resp, p.stderr, p.returncode if resp.get("outcome") != "unsupported" else 3
-
-
-def champ_execute(ev, req, resp_path, started):
-    mode = req["mode"]
-    evidence = {"engine": "champ", "pipeline": ENGINES["champ"]["pipeline"], "binary": ev.get("binary"),
-                "root": ev.get("root"), "git_head": ev.get("git_head")}
-    if mode == "run":
-        front = champ_frontend(ev, req, resp_path)
-        if front is not None:
-            doc, stderr, code = front
-            doc.update({"protocol": PROTOCOL, "adapter": {"name": "okkama-rust", "version": "1"}})
-            doc["evidence"] = dict(evidence, stage="frontend")
-            doc["elapsed_ms"] = int((time.time() - started) * 1000)
-            with open(resp_path, "w") as fh:
-                json.dump(doc, fh, indent=2, sort_keys=True)
-            if stderr:
-                sys.stderr.buffer.write(stderr)
-                sys.stderr.flush()
-            return code
-    cmd = champ_command(ev["binary"], mode, req)
-    env = dict(os.environ)
-    env["OKKAMA_PIPELINE"] = ENGINES["champ"]["pipeline"]
-    # stdin and stdout pass through untouched; stderr is read to classify the
-    # outcome and then written through unchanged.
-    try:
-        p = subprocess.Popen(cmd, cwd=req.get("cwd"), stderr=subprocess.PIPE, env=env)
-        _, err = p.communicate()
-        code = p.returncode
-    except OSError as exc:
-        err, code = str(exc).encode(), 127
-    text = err.decode("utf-8", "replace")
-    fields, exit_code = champ_outcome(mode, code, text)
-    doc = {"protocol": PROTOCOL, "adapter": {"name": "okkama-rust", "version": "1"}, "mode": mode}
-    doc.update(fields)
-    doc["evidence"] = dict(evidence, stage="cli", command=cmd, cli_exit=code)
-    doc["elapsed_ms"] = int((time.time() - started) * 1000)
-    with open(resp_path, "w") as fh:
-        json.dump(doc, fh, indent=2, sort_keys=True)
-    if err:
-        sys.stderr.buffer.write(err)
-        sys.stderr.flush()
-    return exit_code
-
-
 def main(argv):
     if argv == ["--info"]:
         ev = probe()
@@ -459,8 +246,6 @@ def main(argv):
             json.dump(doc, fh, indent=2, sort_keys=True)
         return 3
     engine = ev.get("engine") or "sparrow"
-    if ENGINES.get(engine, {}).get("pipeline") and mode in ("run", "test"):
-        return champ_execute(ev, req, resp_path, started)
     # The implementation speaks the protocol natively: forward unchanged.
     p = subprocess.run([ev["binary"], "--ocs-request", req_path, "--ocs-response", resp_path], cwd=req["cwd"],
                        env=binary_env(engine))

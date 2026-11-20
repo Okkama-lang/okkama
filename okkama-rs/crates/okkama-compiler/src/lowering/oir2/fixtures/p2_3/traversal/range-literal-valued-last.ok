@@ -1,6 +1,0 @@
-module app;
-main() is int {
-    for 1..=2 -> x {
-        last 9;
-    }
-}

@@ -1,4 +1,0 @@
-oir 2 high
-// spec: 15.1;15.2; status: v2; expected-rule: -
-module 15-header
-requires core

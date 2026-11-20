@@ -1,7 +1,0 @@
-# Owner-dependent view retains A; claiming another source cannot extend its lifetime.
-profile own
-scope.begin outer
-scope.begin inner
-new a A
-deps.view view a
-scope.transfer outer outer view

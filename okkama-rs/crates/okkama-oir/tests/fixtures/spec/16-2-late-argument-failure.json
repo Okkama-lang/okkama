@@ -1,7 +1,0 @@
-{
-  "take_entered": false,
-  "failure_destroy": [
-    "defer",
-    "A"
-  ]
-}

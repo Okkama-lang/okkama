@@ -349,10 +349,6 @@ impl Runtime {
 
     pub fn group_mut(&mut self, object: Word) -> Option<&mut Group> {
         // A Champ group keeps its record in its runtime cell, not in this table (ruling PR-C, #810).
-        #[cfg(feature = "champ-abi")]
-        if self.champ.machine.is_some() {
-            return self.champ_group_state(object);
-        }
         match self.states.get_mut(&object) {
             Some(State::Group(group)) => Some(group),
             _ => None,
@@ -384,10 +380,6 @@ impl Runtime {
 
     pub fn stream_mut(&mut self, object: Word) -> Option<&mut Stream> {
         // A Champ FutureCompletions keeps its stream in its runtime word (ruling PR-C item 1, #810 G1 step 4).
-        #[cfg(feature = "champ-abi")]
-        if self.champ.machine.is_some() {
-            return self.champ_stream(object);
-        }
         match self.states.get_mut(&object) {
             Some(State::Stream(stream)) => Some(stream),
             _ => None,

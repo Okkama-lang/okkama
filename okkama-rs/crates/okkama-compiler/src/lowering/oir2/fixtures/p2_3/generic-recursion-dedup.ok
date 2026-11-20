@@ -1,9 +1,0 @@
-module app;
-object Box<T> {
-    has value is T;
-    Box(:value);
-    get(n is int) is T {
-        if n == 0 { value; } else { self.get(n - 1); }
-    }
-}
-main() is int { Box(value: 1).get(3); }

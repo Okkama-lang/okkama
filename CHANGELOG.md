@@ -8,6 +8,19 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Champ is removed (#911, owner's decision).** Tweed is built on Tomato's pipeline, so the static-ownership
+  attempt goes, about 355k lines including fixtures:
+  - **OIR-2:** the `okkama-oir` crate, `lowering/oir2` and `codegen/sparrow_oir2`.
+  - **SPB 17:** the loader and its proofs, `okkama-sparrow/src/spb17`. The word representation it shared with
+    Tomato (`Repr`, `TraceSlot`, `OBJECT_KIND`) is now `okkama_sparrow::layout`.
+  - **The Champ runtime and JIT** (`sparrow-core/src/champ`, `jit/champ`), and the `champ-abi` feature with
+    every block it gated.
+  - **Tools and tests:** the Champ tests and harnesses; the conformance adapter's `champ` engine, its blocker
+    ranking and container script; the verifier differential; the P1 two-toolchain ownership oracle; the OIR-2
+    reference model. The corpus runners lose `--pipeline oir2` and the `champ` configuration.
+
+  The code maps now describe Tomato's pipeline. No rule is implemented in more than one ownership layer any more
+  (`docs/map/rules.md`).
 - **One engine, no `--engine` (owner, 2026-11-20).** Sparrow is the only engine: the IR interpreter (#584) and
   the JVM backend (#585) are gone.
   - **CLI.** `okkama run` no longer takes `--engine`, which is now an unknown option and a usage error.

@@ -39,8 +39,7 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
   binaries, flags, environment variables and the benchmark engine id
   `tomato` keep their names.
 - **Benchmarks**: each release gets the micro A/B report against the previous
-  release. Champ (0.6.0) is not measured until it reaches a production state
-  (§1.1, #651).
+  release, and 0.6.0 also the ownership gate against CPython (#908).
 - **Limitations and deferred work**: file a GitHub issue right away
   (`gh issue create`, `gh` is logged in) and give the link — not just a line
   in a report.
@@ -55,50 +54,35 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
 - **Restoring files**: `git checkout`-style reverts may be blocked; keep a
   copy in the scratchpad before temporary instrumentation and restore from it.
 
-### 1.1 The 0.6.0 Rebuild: how work runs (owner, 2026-11-15)
+### 1.1 The 0.6.0 Tweed release: how work runs (owner, 2026-11-20)
 
 Re-read this section at the start of every session and after every context
 summary.
 
-- **Goal.** Within two weeks of 2026-11-15, Champ (OIR-2 → SPB 17 → Champ JIT)
-  reaches Tomato's production level: the language, std and conformance. After
-  that it must be faster: parity on the micro suite, and ≥10× where Tomato
-  pays for dynamic ownership (destroy, resources, successors, unwind with
-  cleanup). Champ is not measured until then (#651).
-- **Roles.**
-  - **Claude (the lead session).** Manager and main worker: plans waves,
-    writes task specifications, reviews every diff, merges, and keeps the
-    board and the CHANGELOG.
-  - **Implementers.** Anthropic subagents (Opus), and Codex when its quota
-    allows. Before every Codex launch check its usage; above ~85% give it
-    only short single-item tasks.
-  - **Fable.** The principal expert for independent audits.
-- **Subagent effort.** High by default (owner, 2026-11-15: better code
-  costs less review later). Only purely mechanical chores may go lower.
-- **Fable with purpose.** The owner extended the quota (2026-11-15). Use it
-  for audits of verifier or loader rule changes, once per wave or per
-  risky slice, and for reviews of key design documents. Claude reviews
-  routine code.
-- **Waves, not per-change testing.** Group tickets into logical waves.
-  - **Per ticket:** the implementer runs only the targeted tests of the
-    crates it touched, on the host.
-  - **Per wave:** one Docker run of the affected suites and one
-    conformance-on-Champ run (at most once a day). Then merge the wave into
-    `release/0.6.0` and push.
-  - No Docker or conformance runs for small changes.
-  - **Before pushing a `wave/*` branch** (owner, 2026-11-15): locally only a
-    build and both clippy runs (`cargo clippy --workspace --all-targets` and
-    the champ-abi one, `-D warnings`), about 5–8 minutes. Tests, the Champ
-    end-to-end harnesses, the verifier differential and conformance run in
-    the `Wave` CI, in parallel with further work; a red CI is fixed forward
-    on the wave. A wave merges into `release/0.6.0` only after a green CI.
-- **Parallel lanes.** Every agent builds on this machine (12 cores, 32 GB; no
-  remote agents), so run at most 3–4 lanes with Rust builds at once.
-  - Split lanes along crate boundaries.
+- **Goal.** Tweed is Sparrow's next version on Tomato's pipeline. It keeps
+  every Tomato optimization and replaces the ownership tracking (#903). The
+  ownership overhead must be at least on par with CPython
+  (`bench/ownership/run.py`, #908). Champ (OIR-2, SPB 17) was retired on
+  2026-11-20 and removed (#911).
+- **Before and after every task:** follow the code maps' protocol
+  (`docs/map/README.md`). Locate a problem with `OKKAMA_DEV` (§9), never
+  with throwaway prints.
+- **One rule, one place.** An ownership rule lives in the lowering, in one
+  elaboration pass and in the runtime; a checker runs in debug and CI only,
+  and nothing re-derives it (`docs/map/rules.md` shows any duplication).
+- **Roles.** Claude writes the code (owner, 2026-11-16: no implementer
+  agents). Fable is consulted only for a new model rule or a runtime design
+  question, in one compact message (owner, 2026-11-20).
+- **Tests locally: only the change's own** (owner, 2026-11-17): `cargo
+  check`, `cargo test -p <crate> --lib <filter>`, or at most two `--test`
+  files. Whole suites and clippy run in the Wave CI; a hook refuses broad
+  local runs. A red CI is fixed forward on the wave, and a wave merges into
+  `release/0.6.0` only after a green CI.
+- **Parallel lanes.** Every build runs on this machine (12 cores, 32 GB).
   - Each lane gets its own branch and its own worktree under
     `../okkama-work`.
-  - Remove the worktree and its Docker volume `okkama-gate-target-<name>`
-    after the merge. Never put worktrees inside the repository.
+  - Remove the worktree and its Docker volumes after the merge. Never put
+    worktrees inside the repository.
 - **Tests encode intended behaviour (owner, 2026-11-15).**
   - **What a test states.** A test states what the program should do: the
     spec, a conformance `case.json`, or Tomato's observable behaviour. It
@@ -108,29 +92,23 @@ summary.
     decision changed the intent, cite the decision in the commit.
   - **Known gaps.** No test may pin a known gap ("still unsupported",
     "stops at X"). A gap is a ticket. A test of the intended behaviour may
-    be `#[ignore]`d with the ticket number, or written so it becomes a full
-    check once the gap closes (the `through_low` pattern of the Champ
-    harnesses).
+    be `#[ignore]`d with the ticket number.
   - **Unit tests with every change.** Every new rule gets a positive test
     and a negative test, and the negative test must fail without the rule;
-    check that on the old code. Every new function or pass gets unit tests
-    of its contract. End-to-end and conformance runs do not replace unit
-    tests.
+    check that on the old code (mutation). End-to-end and conformance runs
+    do not replace unit tests.
 - **Board.** Every slice is a sub-issue of its epic, with the milestone and
   Release v0.6.0. Set it In Progress when taken and Done with its commit.
   Deferred items become Todo sub-issues right away.
-- **Champ builds.** The `champ-abi` feature compiles Tomato's resource
-  tracking out, so such a build runs only SPB 17 (`OKKAMA_PIPELINE=oir2`).
-  Anything about Tomato is measured or tested with a default build.
 - **Docker disk.** Per-worktree target volumes take several GB each. When a
   build fails on space, run `docker system df`.
 - **Heavy runs on GitHub's runners.** The repository is public, so Actions
   minutes are free. Push a branch named `wave/<name>` at the commit to test.
-  The `Wave` workflow (`.github/workflows/wave.yml`) runs the crate suites
-  (seven jobs in parallel) and conformance on Tomato and Champ, then the
-  blocker ranking (artifact `champ-blockers`). Delete the `wave/*` branch
-  afterwards. Use local Docker only when a result is needed faster than the
-  runners give it.
+  The `Wave` workflow (`.github/workflows/wave.yml`) runs the crate suites,
+  conformance and the corpora (t/, micro programs, examples, the Bible's
+  examples) on Tomato's pipeline, and checks the code maps. Delete the
+  `wave/*` branch afterwards. Timing runs stay local: the runners are
+  bimodal.
 - **Cloud Claude sessions** (routines, `RemoteTrigger`): 4 CPUs and 15 GB
   each, Rust 1.97 and crates.io available, push through the Claude GitHub
   App. `okkama-docs` stays local, so give the cloud only tasks whose context
@@ -209,8 +187,6 @@ times and work/capacity counters on stderr, #540; includes the baseline busy
 set clones and the final function clone separately). This is compiler
 diagnostics, separate from JIT machine-register allocation or runtime timing;
 keep it out of timed samples.
-`OKKAMA_PROFILE_PIPELINE=1` (OIR-2 pipeline: one `pipeline <stage> <ms>` line
-on stderr per stage, from imports to codegen with its `verify_load`, #701).
 Other runtime diagnostics:
 `SPARROW_CORE_DUMP`/`SPARROW_CORE_UNOPTIMIZED`/`SPARROW_CORE_PLAIN=symbol,…|*`
 (§9), `SPARROW_CORE_OLD_DISPATCH=symbol,…|*` (keep reference lazy dispatch
@@ -286,12 +262,6 @@ zsh does not split `$var`; use `${=var}` or a function when passing commands.
 
 ## 5. Tests
 
-For the #634 verifier differential gate, run `./tools/verifier-differential.sh` from `okkama-rs/`.
-It runs the full OIR test corpus and compiler `oir2` tests with `verifier-differential` and
-`OKKAMA_634_DIFFERENTIAL=1`, offline with four cargo jobs. It prints compared runs, precise completions,
-precise rejections, both-Incomplete runs and mismatches, and fails on a mismatch or a candidate
-Incomplete when the precise solver completes; steps and memory limits remain unchanged.
-
 For every 0.6.0 ownership rebuild step, use the [ownership oracle](../tools/ownership/README.md): `tools/ownership/oracle-docker.sh engines|ab|stats|tap` (bounded Docker runs, A/B census and traces, TAP, JSON reports).
 
 | What | How | Notes |
@@ -314,7 +284,7 @@ the compiler's intermediate representation. The IR-dependent REPL was removed.
 Benchmarks live outside the repository in `../okkama-docs/benchmarks`
 (`OKKAMA_REPO` points the runner at a checkout; default `../okkama-new`).
 
-- Micro-benchmarks (#244, protocol v2; in the repository since #894, `bench/micro`): `python3 bench/micro/run.py --image okkama-dev --toolchain TC --stdlib TC/lib/okkama/std --okkama /toolchain/bin/okkama --engines sparrow --n N --warmup W --runs 5 --build-profile P --revision REV --label L --results ../okkama-docs/benchmarks/micro/results` (the results archive stays in okkama-docs) runs each program in a limited Linux container (TC is a Linux installation built in Docker); gross ns/iteration, independent checksum oracles, VALID/INCONCLUSIVE cells, result files never overwritten. `bench/micro/report.py TEXTS --old A.json… --new B.json… -o micro.html` makes the release page. Required before every release and, when quick, after a ticket (Sparrow N=4M). Correctness without timing, on Tomato or Champ: `bench/micro/check.py --okkama BIN [--pipeline oir2] --cage`; the Wave CI runs it with t/ (`tools/t/run.py --configs champ --champ-okkama BIN`), `examples/check.py` and the Bible's examples (`examples/bible/check.py`, a copy of the Bible branch's `docs/OkkamaBible/examples`: copy again when they change)
+- Micro-benchmarks (#244, protocol v2; in the repository since #894, `bench/micro`): `python3 bench/micro/run.py --image okkama-dev --toolchain TC --stdlib TC/lib/okkama/std --okkama /toolchain/bin/okkama --engines sparrow --n N --warmup W --runs 5 --build-profile P --revision REV --label L --results ../okkama-docs/benchmarks/micro/results` (the results archive stays in okkama-docs) runs each program in a limited Linux container (TC is a Linux installation built in Docker); gross ns/iteration, independent checksum oracles, VALID/INCONCLUSIVE cells, result files never overwritten. `bench/micro/report.py TEXTS --old A.json… --new B.json… -o micro.html` makes the release page. Required before every release and, when quick, after a ticket (Sparrow N=4M). Correctness without timing: `bench/micro/check.py --okkama BIN --cage`; the Wave CI runs it with t/ (`tools/t/run.py --configs sparrow`), `examples/check.py` and the Bible's examples (`examples/bible/check.py`, a copy of the Bible branch's `docs/OkkamaBible/examples`: copy again when they change)
 - Engine ladder: `python3 run.py --runs 10 [--only 03-float] [--engines tomato,go,java,kotlin,python]`
   — the reference languages are Go, Java, Kotlin and Python (#363). Go, Java
   and Kotlin are built before measuring, and their build time is kept apart.
@@ -474,7 +444,6 @@ not needed (#292).
 | SPB (`SPRW` + u16) | `okkama-sparrow::encode`, assembler | `okkama-sparrow::decode`, Sparrow VM | 16 |
 | Кадры process worker (`OKW2`) | `sparrow-core` workers | `sparrow-core` worker reader | OKW2 |
 | Дамп OIR-1 (`oir 1 high`) | `okkama-compiler/src/ir/print.rs` | только чтение человеком, парсера нет | 1; удаляется с OIR-1 (#576) |
-| Текст OIR-2 (`oir 2 <profile>`) | `okkama-oir` (#563) | парсер `okkama-oir` | 2 |
 | OCS cases, contracts, profiles, fixtures, adapter protocol/config и run/coverage/gate/diff/mutation reports | `conformance/runner/ocs`, suite files и `tools/write_schemas.py` | OCS runner/validators и consumers | schema/protocol 2 |
 | Ownership census JSON (`schema`) | `tools/ownership/oracle.py` | oracle report consumers | 2 |
 | Blade manifests и lockfiles | `okkama-rs/crates/blade` | Blade | не изменялось: формат относится к package workflow |
@@ -542,12 +511,11 @@ drivers `std/db/sqlite.ok` (worker thread in Rust) and `std/db/postgres.ok`
 ## 9. Debugging recipes
 
 - **Development instrumentation first** (owner, 2026-11-20; crate `okkama-devtrace`): `OKKAMA_DEV=all,dump`
-  (or `own:connection,loader,runtime,…`; `OKKAMA_DEV=help` lists the categories) and `OKKAMA_DEV_OUT=DIR`.
-  The run writes `events.jsonl`, with the own decisions and their reasons (`dynamic owner`), every rejection
-  naming the function and the check, and budget exhaustion. It writes `dumps/NNNN-<stage>/<function>.txt`:
-  OIR after high, own, coro and low, and the SPB 17 listing of each function the loader checks. It also writes
-  `summary.txt`/`counters.json`: stage times and sizes, the time of each loader check, verifier steps, emitted
-  own operations by kind, runtime helper calls, allocation, GC and JIT. Release builds (`make build`,
+  (or `lower:main,runtime,gc,…`; `OKKAMA_DEV=help` lists the categories) and `OKKAMA_DEV_OUT=DIR`.
+  The run writes `events.jsonl` and `dumps/NNNN-<stage>/<function>.txt`: the IR of each function as lowered
+  and after the IR passes. It also writes `summary.txt`/`counters.json`: IR sizes and region operations by
+  kind before and after the passes, pass timers, identities requested and skipped by type, resource walks by
+  caller and their steps, structure indexes, region helper calls, allocation, GC and JIT. Release builds (`make build`,
   `install-pgo`, packages) pass `--cfg okkama_release`, which compiles it out. Add a hook (`count!`, `span!`,
   `event!`, `dump!`) wherever you would add a temporary `eprintln!`; do not write throwaway debug prints.
 - Runtime event counts: `sparrow --stats x.spb` or `SPARROW_CORE_STATS=1` —

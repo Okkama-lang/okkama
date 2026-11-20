@@ -143,7 +143,7 @@ in `okkama-docs/benchmarks/micro/results`, which `--results` names. Do not commi
 generated JAR/SPB artifacts or machine caches.
 
 `check.py` runs the programs as correctness tests without timing or Docker: N=17
-and N=31 against the oracles, on Tomato or (`--pipeline oir2`) Champ. The Wave CI
+and N=31 against the oracles on Sparrow. The Wave CI
 runs it on both engines; locally use `--cage`.
 
 ## Verification and coverage

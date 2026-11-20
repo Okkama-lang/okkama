@@ -1,8 +1,0 @@
-module app;
-main() is int {
-    let xs = 1..=2;
-    xs.map() -> x {
-        x + 1;
-    };
-    0;
-}

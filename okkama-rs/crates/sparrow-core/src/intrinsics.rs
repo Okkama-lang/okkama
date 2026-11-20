@@ -238,31 +238,6 @@ pub extern "C" fn rt_intrinsic(ctx: *mut Ctx, function: u64, arguments: *const W
     }
 }
 
-/// A synchronous intrinsic of a Champ program (#601 Q1): `rt_intrinsic` without its safepoint, since the Champ
-/// adapter that calls it keeps its own roots. A failure is left in the context.
-#[cfg(feature = "champ-abi")]
-pub(crate) fn champ_call(ctx: *mut Ctx, function: usize, args: &[Word]) -> Word {
-    let runtime = unsafe { &mut *(*ctx).runtime };
-    let outcome = match runtime.intrinsics[function] {
-        Some(intrinsic) => call(ctx, runtime, function, intrinsic, args),
-        None => Fatal(format!("intrinsic of {} is not available", runtime.loaded.program.functions[function].symbol)),
-    };
-    let ctx = unsafe { &mut *ctx };
-    match outcome {
-        Value(result, _) => result,
-        Fail(kind) => {
-            ctx.failure = runtime.failure_new(kind);
-            ctx.status = FAILED;
-            0
-        }
-        Raise(failure) => {
-            ctx.failure = failure;
-            ctx.status = FAILED;
-            0
-        }
-        Fatal(message) => crate::runtime::fatal(ctx, runtime, message),
-    }
-}
 
 /// The object descriptors an intrinsic names (results and thrown errors).
 fn related(runtime: &Runtime, function: usize, index: usize) -> u32 {
@@ -280,15 +255,6 @@ pub(crate) fn thrown(runtime: &mut Runtime, function: usize, index: usize, field
 /// first case, whose payload values go into one-element arrays.
 fn raised(runtime: &mut Runtime, descriptor: u32, values: &[Word]) -> Word {
     // A Champ Error enum is the object of its first case: its case number, then its payload (#601 Q1).
-    #[cfg(feature = "champ-abi")]
-    if let Some(machine) = runtime.champ.machine.as_ref() {
-        let object = &machine.source.objects[descriptor as usize];
-        if object.fields.is_empty() && object.layout.storage_fields == [okkama_sparrow::spb17::Type::Int] {
-            let tag = runtime.heap.int(0);
-            return runtime.heap.object_new(descriptor, &[tag]);
-        }
-        return runtime.heap.object_new(descriptor, values);
-    }
     let program = &runtime.loaded.program;
     let fields = &program.objects[descriptor as usize].fields;
     if fields.first().is_none_or(|(name, _)| name != "$tag") {
@@ -818,10 +784,6 @@ fn stream_init(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, receiver: 
     if runtime.stream_mut(receiver).is_some() {
         return Ok(());
     }
-    #[cfg(feature = "champ-abi")]
-    if runtime.champ.machine.is_some() {
-        return champ_stream_init(ctx, runtime, receiver);
-    }
     let program = &runtime.loaded.program;
     let source = &program.functions[function];
     let Some(Type::Object(owner)) = program.ty(source.registers[source.params[0].0 as usize]) else {
@@ -866,42 +828,6 @@ fn stream_init(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, receiver: 
     Ok(())
 }
 
-/// `stream_init` on Champ (#810 G1 step 4): the stream lives in the receiver's runtime word, and the origins are read
-/// through the sequence's own `size` and `item`, refusing a callee that returns obligations (ruling Q2).
-#[cfg(feature = "champ-abi")]
-fn champ_stream_init(ctx: *mut Ctx, runtime: &mut Runtime, receiver: Word) -> Result<(), Outcome> {
-    let Some((sequence, size, item)) = runtime.champ_sequence(ctx, receiver) else {
-        return Err(Fatal(runtime.fatal.clone().unwrap_or_default()));
-    };
-    if !runtime.champ_stream_new(receiver) {
-        return Err(Fatal("FutureCompletions without its runtime word".into()));
-    }
-    let failed = |ctx: *mut Ctx, runtime: &mut Runtime| {
-        runtime.champ_stream_drop(receiver);
-        let ctx = unsafe { &mut *ctx };
-        if ctx.status == FAILED {
-            ctx.status = OK;
-            return Err(Raise(std::mem::replace(&mut ctx.failure, UNBOUND)));
-        }
-        Err(Fatal(runtime.fatal.clone().unwrap_or_default()))
-    };
-    let Some(count) = runtime.champ_plain_call(ctx, size, &[sequence]) else {
-        return failed(ctx, runtime);
-    };
-    let count = runtime.small_or_big(count).unwrap_or(0).max(0);
-    for index in 0..count {
-        let sequence = runtime.heap.field(receiver, 0);
-        let position = runtime.heap.int(index);
-        let Some(origin) = runtime.champ_plain_call(ctx, item, &[sequence, position]) else {
-            return failed(ctx, runtime);
-        };
-        runtime.stream_mut(receiver).expect("stream").entries.push(origin);
-    }
-    let stream = runtime.stream_mut(receiver).expect("stream");
-    stream.emitted = vec![false; stream.entries.len()];
-    stream.cancelled = vec![false; stream.entries.len()];
-    Ok(())
-}
 
 /// Call method `slot` of `role` on `receiver` through its witness; None
 /// when it failed or stopped (the context says which).
@@ -1166,24 +1092,5 @@ mod sort_tests {
         let mut items: Vec<(u32, u32)> = (0..10_000u32).map(|i| (i % 7, i)).collect();
         sort_or_stop(&mut items, |a, b| Ok::<_, ()>(a.0.cmp(&b.0))).expect("no stop");
         assert!(items.windows(2).all(|w| w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 < w[1].1)));
-    }
-}
-
-#[cfg(test)]
-mod holder_rows {
-    use super::Intrinsic;
-    use okkama_sparrow::spb17::drivers;
-
-    /// #601 B3: every SPB 17 row of Q2 and G1 names one of Tomato's intrinsics, the one its runtime slice (A3, A4)
-    /// binds; a row without its suffix is Tomato's name. The Q1 rows likewise.
-    #[test]
-    fn every_catalogue_row_names_a_tomato_intrinsic() {
-        for template in drivers::HOLDERS {
-            assert!(Intrinsic::resolve(template.name).is_some(), "{}", template.name);
-            assert!(Intrinsic::resolve(&drivers::specialized(template, &["int"])).is_none(), "{}", template.name);
-        }
-        for row in drivers::CATALOGUE {
-            assert!(Intrinsic::resolve(row.name).is_some(), "{}", row.name);
-        }
     }
 }

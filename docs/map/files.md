@@ -40,53 +40,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 37 files, 10418 lines
-
-- `okkama-compiler/src/lowering/oir2/anonymous.rs` 129 — Anonymous action snapshots. Ownership adapters and retention elaboration belong to `own`.
-- `okkama-compiler/src/lowering/oir2/any.rs` 122 — #569 C6: `any` boundaries. `Coercion::Box` becomes `any.box` at every
-- `okkama-compiler/src/lowering/oir2/async.rs` 209 — P2.5 V5 and R3 (#601): async in the High producer.
-- `okkama-compiler/src/lowering/oir2/body.rs` 920
-- `okkama-compiler/src/lowering/oir2/bound.rs` 92 — Bound receivers are SSA snapshots. Invocation guards live at the concrete method entry.
-- `okkama-compiler/src/lowering/oir2/builders.rs` 231 — Linear High buffers. Synthetic environment slots follow the ordinary CFG;
-- `okkama-compiler/src/lowering/oir2/builtin_roles.rs` 492 — Concrete builtin evidence uses C3 objects/witnesses, never an external body.
-- `okkama-compiler/src/lowering/oir2/callables.rs` 101 — Producer facts only. No callable contract, summary, ownership decision or IR operation is emitted.
-- `okkama-compiler/src/lowering/oir2/caps.rs` 85 — Capability snapshots retain the complete concrete owner, including unread resource fields.
-- `okkama-compiler/src/lowering/oir2/collections.rs` 458 — C4 collection construction and projections. Contracts name retention; high
-- `okkama-compiler/src/lowering/oir2/construction.rs` 346 — Independent producer self-check. This is not the semantic verifier from #564.
-- `okkama-compiler/src/lowering/oir2/declarations.rs` 821
-- `okkama-compiler/src/lowering/oir2/defer.rs` 247 — Lazy defer entries. Binding captures are supplied at execution, after snapshots. A deferred expression
-- `okkama-compiler/src/lowering/oir2/drivers.rs` 203 — #601 Q1, async ABI D22: the std async primitives whose state the runtime keeps (Event, Lock, Semaphore,
-- `okkama-compiler/src/lowering/oir2/failures.rs` 341 — High failure continuations. Cleanup and failure-view lifetime belong to `own`.
-- `okkama-compiler/src/lowering/oir2/functional.rs` 212 — Arrow blocks stay in the enclosing action. Publication follows the body
-- `okkama-compiler/src/lowering/oir2/globals.rs` 88 — Module constants (#153) that are arrays or maps: one OIR-2 global each, with a
-- `okkama-compiler/src/lowering/oir2/high.rs` 121 — Additional producer restrictions for failure dispatch and lexical catch bindings.
-- `okkama-compiler/src/lowering/oir2/iteration.rs` 438 — C6 traversal CFG. Every iteration is re-entered through its parent scope.
-- `okkama-compiler/src/lowering/oir2/mod.rs` 250 — Developer-only THIR -> OIR-2 high producer for #566 and #567 S1–S3.
-- `okkama-compiler/src/lowering/oir2/native_summaries.rs` 465 — Trusted, finite synchronous P1 boundary catalog. No generic fallback contracts.
-- `okkama-compiler/src/lowering/oir2/objects.rs` 422 — Object references and lexical construction intents; ownership is left to `own`.
-- `okkama-compiler/src/lowering/oir2/once.rs` 170 — Plain once slots use the ordinary concrete Maybe layout and failure CFG.
-- `okkama-compiler/src/lowering/oir2/open_calls.rs` 106 — #569 C3b: open action invocation. An invocation is open exactly where own
-- `okkama-compiler/src/lowering/oir2/operators.rs` 302 — Numeric, bit and text operators and scalar builtins, as the OIR-2 core ops of the same
-- `okkama-compiler/src/lowering/oir2/pipeline.rs` 412 — Source-facing experimental pipeline. Builds use structural gates; tests can request full ownership gates.
-- `okkama-compiler/src/lowering/oir2/roles.rs` 281 — Concrete role signatures, ordered witness targets and result adapters.
-- `okkama-compiler/src/lowering/oir2/scalar.rs` 245 — S1 instruction allowlist. Unsupported THIR variants have no OIR-1 fallback.
-- `okkama-compiler/src/lowering/oir2/sorting.rs` 90 — Stable sorting (`ordering()`) is one runtime operation, as in Tomato (#678); scalar order helpers.
-- `okkama-compiler/src/lowering/oir2/specialize.rs` 1030 — Demand-driven concrete THIR specialization for the high producer.
-- `okkama-compiler/src/lowering/oir2/streams.rs` 74 — `sink <- source` (#569) as the ordinary THIR it means, before specialization walks it:
-- `okkama-compiler/src/lowering/oir2/structure.rs` 61 — Producer normalization and checks in addition to independent High verification.
-- `okkama-compiler/src/lowering/oir2/test_profile.rs` 67 — C8a uses the existing core observation contracts and ordinary desugared fake objects.
-- `okkama-compiler/src/lowering/oir2/timeouts.rs` 188 — The helpers of the timeout drivers (#810, G1 step 2): `Within.outcome` and `Before.outcome` read the clock and
-- `okkama-compiler/src/lowering/oir2/walk.rs` 174 — Reuse THIR traversal for finite call specialization discovery.
-- `okkama-compiler/src/lowering/oir2/coverage/p2_4.rs` 246 — C1 inventory checks. These do not claim source lowering or runtime acceptance.
-- `okkama-compiler/src/lowering/oir2/coverage/p2_5.rs` 179 — P2.5 (#601) coverage inventory: one row per L08 case and per async case elsewhere (plan §1.3),
-
-## lower-oir1 — 14 files, 11549 lines
+## lower — 14 files, 11548 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1583 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 126 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 345 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
-- `okkama-compiler/src/lowering/mod.rs` 726 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
+- `okkama-compiler/src/lowering/mod.rs` 725 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
 - `okkama-compiler/src/lowering/body/adapters.rs` 790 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
@@ -97,172 +57,8 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3080 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 375 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## own — 32 files, 10150 lines
+## ir — 10 files, 6749 lines
 
-- `okkama-oir/src/own/analyze.rs` 632 — Forward worklist over the original cyclic CFG. Emit/diagnose only after fixpoint.
-- `okkama-oir/src/own/arrays.rs` 136 — Collection and variant helpers for the synchronous rewrite (spec §4.1, §4.2).
-- `okkama-oir/src/own/bindings.rs` 131 — Predeclared block-parameter SSA. Parameters remain explicit (including
-- `okkama-oir/src/own/census.rs` 66 — Static emitted-site census, collected after dead landings are removed.
-- `okkama-oir/src/own/classify.rs` 451
-- `okkama-oir/src/own/construction.rs` 120
-- `okkama-oir/src/own/domain.rs` 323 — Finite site equations and the uncorrelated product lattice used by Own.
-- `okkama-oir/src/own/driver.rs` 1127 — Synchronous High normalization through the contract-driven outcome emitter.
-- `okkama-oir/src/own/edges.rs` 189 — Static lexical transitions. H1 is checked before planning any edge.
-- `okkama-oir/src/own/emit.rs` 527 — A single contract-driven path for consuming instructions and all outcomes.
-- `okkama-oir/src/own/entries.rs` 217 — Materialize memoized known entry specializations before freezing equations.
-- `okkama-oir/src/own/futures.rs` 167 — Commit 5a, plain async (#601 V2): the async rules of own that hold for the
-- `okkama-oir/src/own/inventory.rs` 164 — A finite pre-solve may-offer inventory, not the ownership domain/rewrite.
-- `okkama-oir/src/own/mod.rs` 410 — Ownership elaboration, independent of the verifier's implementation.
-- `okkama-oir/src/own/normal.rs` 229
-- `okkama-oir/src/own/origins.rs` 108 — Finite callable origins, propagated through simultaneous CFG parameters.
-- `okkama-oir/src/own/routing.rs` 316 — Exhaustive classification/rewrite routing. New opcodes must choose a path.
-- `okkama-oir/src/own/scopes.rs` 462
-- `okkama-oir/src/own/stored.rs` 289 — Async ABI D25.2, revision of 2026-11-16 (#771, #758), ruling "How a stored Future leaves".
-- `okkama-oir/src/own/summaries.rs` 762 — The universe is frozen before SCC solving. Implicit cleanup edges are
-- `okkama-oir/src/own/driver/buffers.rs` 215 — Builder buffers: the unique buffer and its element journal travel together.
-- `okkama-oir/src/own/driver/calls.rs` 309
-- `okkama-oir/src/own/driver/construction.rs` 155
-- `okkama-oir/src/own/driver/control.rs` 279
-- `okkama-oir/src/own/driver/defers.rs` 247
-- `okkama-oir/src/own/driver/exits.rs` 249
-- `okkama-oir/src/own/driver/finalize.rs` 185
-- `okkama-oir/src/own/driver/futures.rs` 496 — Commit 5a, plain async (#601 V2): Future creation, shared await, the final
-- `okkama-oir/src/own/driver/protocols.rs` 89 — Snapshot wrappers preserve the full graph independently of their packet.
-- `okkama-oir/src/own/summaries/adapters.rs` 73
-- `okkama-oir/src/own/summaries/annotate.rs` 105
-- `okkama-oir/src/own/summaries/infer.rs` 922
-
-## verify — 45 files, 22549 lines
-
-- `okkama-oir/src/verify/authority.rs` 120
-- `okkama-oir/src/verify/construction.rs` 407
-- `okkama-oir/src/verify/contracts.rs` 107
-- `okkama-oir/src/verify/coro.rs` 602 — Structural rules of the async ABI assigned to slice V1 (D20, D21, D22, C-2, C-6).
-- `okkama-oir/src/verify/coro_flow.rs` 710 — B9.5 rules of the suspension form in coro/low (async ABI D20, D21, C-1; slice V3).
-- `okkama-oir/src/verify/diagnostic.rs` 178
-- `okkama-oir/src/verify/differential.rs` 141 — Opt-in test oracle. The original dense domain and accounting are kept in
-- `okkama-oir/src/verify/dominance.rs` 126
-- `okkama-oir/src/verify/effects.rs` 434
-- `okkama-oir/src/verify/elaboration_types.rs` 192 — Commit-0 structural checks. Cleanup protocol proofs belong to #564 commit 4.
-- `okkama-oir/src/verify/entry_packets.rs` 203 — Structural call-entry packets (B5.1, audit #668 F5).
-- `okkama-oir/src/verify/expressions.rs` 90
-- `okkama-oir/src/verify/graph.rs` 185
-- `okkama-oir/src/verify/high.rs` 397
-- `okkama-oir/src/verify/high_defer.rs` 117
-- `okkama-oir/src/verify/index.rs` 180
-- `okkama-oir/src/verify/later.rs` 344
-- `okkama-oir/src/verify/limits.rs` 78
-- `okkama-oir/src/verify/low_phases.rs` 81 — Close provenance checks supplement the relational cleanup automaton.
-- `okkama-oir/src/verify/low_roots.rs` 233 — Independent boundary liveness and dependency closure; no producer plans are trusted.
-- `okkama-oir/src/verify/mod.rs` 480 — Independent, read-only verification of OIR-2.
-- `okkama-oir/src/verify/operands.rs` 1541
-- `okkama-oir/src/verify/own_async.rs` 256 — Own-profile rules of plain async (commit 5a, #601 V2), checked on the
-- `okkama-oir/src/verify/read.rs` 487 — Read-only reference traversal; expression DAGs are followed separately.
-- `okkama-oir/src/verify/structure.rs` 539
-- `okkama-oir/src/verify/summaries.rs` 367
-- `okkama-oir/src/verify/type_inventory.rs` 280
-- `okkama-oir/src/verify/types.rs` 1391
-- `okkama-oir/src/verify/work_profile.rs` 67 — Opt-in exclusive charged-work counters. Never used by production verification.
-- `okkama-oir/src/verify/linearity/async_rules.rs` 830
-- `okkama-oir/src/verify/linearity/cleanup.rs` 1198
-- `okkama-oir/src/verify/linearity/defer.rs` 295
-- `okkama-oir/src/verify/linearity/descriptors.rs` 95
-- `okkama-oir/src/verify/linearity/domain.rs` 1468
-- `okkama-oir/src/verify/linearity/history.rs` 817 — A deliberately narrow quotient: isolated, unused scalar constant slots only.
-- `okkama-oir/src/verify/linearity/metadata.rs` 643
-- `okkama-oir/src/verify/linearity/mod.rs` 1086 — Bounded relational worklist. Diagnostics are emitted only by replaying the
-- `okkama-oir/src/verify/linearity/packets.rs` 1234
-- `okkama-oir/src/verify/linearity/per_value.rs` 610 — Logical fixed-length arrays with implicit defaults and shared immutable entries.
-- `okkama-oir/src/verify/linearity/scopes.rs` 303
-- `okkama-oir/src/verify/linearity/shared.rs` 999 — Persistent ordered AVL relations. Cloning a root is constant time; changing
-- `okkama-oir/src/verify/linearity/storage.rs` 73
-- `okkama-oir/src/verify/linearity/summaries.rs` 1065
-- `okkama-oir/src/verify/precise_linearity/domain.rs` 612
-- `okkama-oir/src/verify/precise_linearity/mod.rs` 888 — Bounded relational worklist. Diagnostics are emitted only by replaying the
-
-## coro — 6 files, 2247 lines
-
-- `okkama-oir/src/coro/body.rs` 1354 — The rewrite of one function body.
-- `okkama-oir/src/coro/graph.rs` 196 — Control-flow edges of a terminator, in edge order.
-- `okkama-oir/src/coro/layout.rs` 38 — D21 slot assignment: one type per slot, reused across continuations.
-- `okkama-oir/src/coro/liveness.rs` 138 — Backward liveness of SSA values, with the implicit uses of schedule duties at close sites.
-- `okkama-oir/src/coro/mod.rs` 62 — Own → Coro for async bodies without resources across suspension (async ABI D20, D21, C-1…C-3).
-- `okkama-oir/src/coro/repair.rs` 459 — SSA repair after suspension: a value saved at a site is redefined by every resume of that site, the
-
-## low — 10 files, 2701 lines
-
-- `okkama-oir/src/low/cleanup.rs` 376
-- `okkama-oir/src/low/compact.rs` 91 — Drop the instructions that the narrowing took out of their blocks, and their results.
-- `okkama-oir/src/low/eligibility.rs` 256
-- `okkama-oir/src/low/graph.rs` 85 — Bounded iterative expression and CFG utilities for the producer.
-- `okkama-oir/src/low/layout.rs` 133 — D20 §2.6, review D: Low recomputes the D21 frame layout after the cleanup expansion.
-- `okkama-oir/src/low/mod.rs` 122 — Own → Low and Coro → Low cleanup specialization.
-- `okkama-oir/src/low/narrow.rs` 190 — D20 §2.6: Low replaces the continuation of a suspending close with continuations of its suspending
-- `okkama-oir/src/low/plans.rs` 789 — Conservative finite inventories. Cyclic state equations and ambiguous joins stay with the executor.
-- `okkama-oir/src/low/roots.rs` 140
-- `okkama-oir/src/low/services.rs` 519 — D16, review B4: the service duties that each close settles.
-
-## oir — 28 files, 10297 lines
-
-- `okkama-oir/src/builder.rs` 667 — Structural construction and editing, without ownership inference or semantic
-- `okkama-oir/src/catalogue.rs` 286 — Trusted runtime catalogue for the open synchronous callable ABI (#569 O1;
-- `okkama-oir/src/census.rs` 24
-- `okkama-oir/src/cfg.rs` 279 — Structural enumeration. Dominance, linearity and protocol validation are #564.
-- `okkama-oir/src/cleanup_model.rs` 123 — Semantic cleanup schemas. These IDs are function-local, never wire/runtime offsets.
-- `okkama-oir/src/contracts.rs` 1147 — Declarative contracts shared by construction, analysis and verification.
-- `okkama-oir/src/ids.rs` 121
-- `okkama-oir/src/lib.rs` 44 — OIR-2 is Okkama's typed SSA representation with explicit ownership.
-- `okkama-oir/src/module.rs` 193
-- `okkama-oir/src/types.rs` 103
-- `okkama-oir/src/value.rs` 211
-- `okkama-oir/src/visit.rs` 377 — Mutable structural visitors. They rewrite references, never infer facts or
-- `okkama-oir/src/ops/async_ops.rs` 194
-- `okkama-oir/src/ops/cleanup.rs` 77
-- `okkama-oir/src/ops/core.rs` 462
-- `okkama-oir/src/ops/lexical.rs` 25
-- `okkama-oir/src/ops/mod.rs` 154
-- `okkama-oir/src/ops/ownership.rs` 77
-- `okkama-oir/src/text/coro.rs` 259 — Text forms of the async ABI (D20–D25): publication outcomes, rehome
-- `okkama-oir/src/text/declarations.rs` 730
-- `okkama-oir/src/text/diagnostic.rs` 44
-- `okkama-oir/src/text/elaboration.rs` 115
-- `okkama-oir/src/text/lexer.rs` 182
-- `okkama-oir/src/text/mod.rs` 1743 — Canonical OIR-2 text. This codec checks representation, not ownership,
-- `okkama-oir/src/text/parser.rs` 1007
-- `okkama-oir/src/text/print.rs` 782
-- `okkama-oir/src/text/surface.rs` 556
-- `okkama-oir/src/text/types.rs` 315
-
-## codegen — 8 files, 5710 lines
-
-- `okkama-compiler/src/codegen/sparrow_oir2/calls.rs` 1548 — S2 transport. Machine payloads and outcome ordinals come from the shared SPB registry.
-- `okkama-compiler/src/codegen/sparrow_oir2/cleanup.rs` 931 — Relocation of verified Low cleanup evidence. No runtime signatures are invented here.
-- `okkama-compiler/src/codegen/sparrow_oir2/dead.rs` 198 — Code the emitter itself disconnects (#702).
-- `okkama-compiler/src/codegen/sparrow_oir2/futures.rs` 346 — Async in SPB 17 (#601 V7, R4): async bodies with their D21 frame layout, Future creation, await and its
-- `okkama-compiler/src/codegen/sparrow_oir2/mod.rs` 1473 — Low OIR-2 → SPB 17: scalar/object/control, owning calls and the cleanup automaton.
-- `okkama-compiler/src/codegen/sparrow_oir2/roles.rs` 590 — Role values and callable values (#676).
-- `okkama-compiler/src/codegen/sparrow_oir2/successors.rs` 458 — Own carries reference aliases independently of the successor's must-use permission.
-- `okkama-compiler/src/codegen/sparrow_oir2/undef.rs` 166 — Unbound construction fields never travel along edges in SPB 17 (#677).
-
-## codegen-oir1 — 4 files, 1297 lines
-
-- `okkama-compiler/src/codegen/mod.rs` 80 — Выбор backend и генерация выходного артефакта из IR.
-- `okkama-compiler/src/codegen/sparrow/check.rs` 225 — Независимая проверка распределения регистров (H-10): `registers` красит
-- `okkama-compiler/src/codegen/sparrow/mod.rs` 725 — Проверенный IR → программа Sparrow (SPB 9).
-- `okkama-compiler/src/codegen/sparrow/registers.rs` 267 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
-
-## compiler — 23 files, 12310 lines
-
-- `okkama-compiler/src/lib.rs` 13 — Okkama compiler library.
-- `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
-- `okkama-compiler/src/doc/mod.rs` 566 — The documentation model (#512): what a module says about itself in its
-- `okkama-compiler/src/doc/render.rs` 612 — Reference pages from the documentation model (#512): terminal text and
-- `okkama-compiler/src/ide/complete.rs` 950 — Дополнение и подсказка сигнатуры.
-- `okkama-compiler/src/ide/index.rs` 1195 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
-- `okkama-compiler/src/ide/lint.rs` 907 — Линтер (`okkama lint`, предупреждения в редакторе): корректный код, который,
-- `okkama-compiler/src/ide/mod.rs` 279 — Сведения о программе для редактора (сервер языка, `okkama lsp`).
-- `okkama-compiler/src/ide/outline.rs` 288 — Структура файла по синтаксическому дереву (без анализа).
-- `okkama-compiler/src/ide/std_paths.rs` 362 — Дополнение путей `std.…` в редакторе (`okkama lsp`, §5.2.1).
 - `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
@@ -273,77 +69,64 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
 - `okkama-compiler/src/ir/regions.rs` 257 — Регионы, которые никогда не владеют идентичностями, — убираются.
 - `okkama-compiler/src/ir/verify.rs` 1868 — Верификатор OIR-1 (§17 спецификации).
+
+## codegen — 4 files, 1296 lines
+
+- `okkama-compiler/src/codegen/mod.rs` 79 — Выбор backend и генерация выходного артефакта из IR.
+- `okkama-compiler/src/codegen/sparrow/check.rs` 225 — Независимая проверка распределения регистров (H-10): `registers` красит
+- `okkama-compiler/src/codegen/sparrow/mod.rs` 725 — Проверенный IR → программа Sparrow (SPB 9).
+- `okkama-compiler/src/codegen/sparrow/registers.rs` 267 — Регистры Sparrow: значения IR, которые никогда не живут одновременно,
+
+## compiler — 12 files, 5559 lines
+
+- `okkama-compiler/src/lib.rs` 12 — Okkama compiler library.
+- `okkama-compiler/src/diagnostics/mod.rs` 213 — Structured diagnostics.
+- `okkama-compiler/src/doc/mod.rs` 566 — The documentation model (#512): what a module says about itself in its
+- `okkama-compiler/src/doc/render.rs` 612 — Reference pages from the documentation model (#512): terminal text and
+- `okkama-compiler/src/ide/complete.rs` 950 — Дополнение и подсказка сигнатуры.
+- `okkama-compiler/src/ide/index.rs` 1195 — Индекс корневого файла: обход THIR (локальные, поля, вызовы,
+- `okkama-compiler/src/ide/lint.rs` 907 — Линтер (`okkama lint`, предупреждения в редакторе): корректный код, который,
+- `okkama-compiler/src/ide/mod.rs` 279 — Сведения о программе для редактора (сервер языка, `okkama lsp`).
+- `okkama-compiler/src/ide/outline.rs` 288 — Структура файла по синтаксическому дереву (без анализа).
+- `okkama-compiler/src/ide/std_paths.rs` 362 — Дополнение путей `std.…` в редакторе (`okkama lsp`, §5.2.1).
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
-- `okkama-compiler/src/oir2/mod.rs` 1 — OIR-2 data model; the production pipeline still uses [`crate::ir`].
 - `okkama-compiler/src/source/mod.rs` 175 — Source text, byte spans and human-facing positions.
 
-## loader — 15 files, 11769 lines
-
-- `okkama-sparrow/src/spb17/allocation.rs` 1109 — Virtual locations stay SSA in SPB. This checked plan assigns typed frame slots and lowers
-- `okkama-sparrow/src/spb17/allocation_reference.rs` 203 — The liveness and the allocator as they were before #755, kept verbatim as the oracle the new ones are
-- `okkama-sparrow/src/spb17/automaton.rs` 556 — Cleanup phase and exactly-once checks over concrete SPB edges.
-- `okkama-sparrow/src/spb17/codec.rs` 1003 — Canonical ULEB, bounded allocation and one explicit version gate.
-- `okkama-sparrow/src/spb17/drivers.rs` 555 — #601 Q1, async ABI D22: the trusted catalogue of the std async primitives (Event, Lock, Semaphore, Barrier and
-- `okkama-sparrow/src/spb17/evidence.rs` 927 — Independent finite inventory and creation-origin reconstruction for the loader.
-- `okkama-sparrow/src/spb17/layout.rs` 235 — Pure final OBJECT layout computation, shared by emission and runtime consumers.
-- `okkama-sparrow/src/spb17/load.rs` 849 — Executable load gate. Structural verification is always performed first.
-- `okkama-sparrow/src/spb17/mod.rs` 1007 — Champ SPB 17 data transformations. Never selected by the default runtime.
-- `okkama-sparrow/src/spb17/p1.rs` 410 — Closed P1 host contracts, constructed independently of artifact function declarations.
-- `okkama-sparrow/src/spb17/registry.rs` 590
-- `okkama-sparrow/src/spb17/services.rs` 1168 — Service duties inside packets in SPB 17 (async ABI D25, Champ draft 3 §§6, 15).
-- `okkama-sparrow/src/spb17/suspension.rs` 491 — Async bodies in SPB 17 (#601 V6, plain await): frame layouts, the entry and exit protocol, suspension
-- `okkama-sparrow/src/spb17/take.rs` 253 — The temporary take of a Future's cached outcome in SPB 17 (#601 R4). `await.take` moves the outcome packet out
-- `okkama-sparrow/src/spb17/verify.rs` 2413 — Structural, type, SSA/CFG and registry result-schema verification.
-
-## spb — 7 files, 4593 lines
+## spb — 8 files, 4623 lines
 
 - `okkama-sparrow/src/asm.rs` 779 — Текстовая форма Sparrow (ассемблер): [`disassemble`] печатает программу,
 - `okkama-sparrow/src/codec.rs` 634 — SPB 9: магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
+- `okkama-sparrow/src/layout.rs` 30 — Word representations shared by the code generator and the runtime: how a word of a static type is traced
 - `okkama-sparrow/src/lib.rs` 499 — Программа Sparrow — регистровый байткод Okkama (SPB 9), независимый от
 - `okkama-sparrow/src/liveness.rs` 523 — Registers live before each instruction of a function.
 - `okkama-sparrow/src/operand.rs` 518 — Операнды инструкций: двоичная и текстовая форма и обход для проверки.
 - `okkama-sparrow/src/typing.rs` 1130 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## champ — 15 files, 7247 lines
+## ownership-runtime — 2 files, 1906 lines
 
-- `sparrow-core/src/champ/abi.rs` 409 — Record layouts used by the helper registry and future service-slot stack-map lowering.
-- `sparrow-core/src/champ/bridge.rs` 125 — The driver call bridge (memo OIR-2-async-remaining §6.4, #810 G1 step 2): a driver of Tomato's catalogue (a
-- `sparrow-core/src/champ/cleanup.rs` 1137 — One serial-ordered cleanup executor for static, journal, settled and rejection packets.
-- `sparrow-core/src/champ/collections.rs` 485 — SPB 17 maps, collection operations and unique builders on Tomato's heap payloads.
-- `sparrow-core/src/champ/futures.rs` 1171 — Champ Futures (draft 3 §§2–7, plan decision C3): a Future is a Tomato `FRAME` with Champ words appended.
-- `sparrow-core/src/champ/groups.rs` 268 — D23 FutureGroup on Champ (#810; memo OIR-2-async-remaining §6, rulings PR-B, PR-C, PR-E).
-- `sparrow-core/src/champ/helpers.rs` 1141 — P1 L/G helpers. Preflight never mutates inputs; the following publication batch has no safepoint.
-- `sparrow-core/src/champ/layout.rs` 24 — Runtime adapter for legacy declarations and final intrinsic storage overrides.
-- `sparrow-core/src/champ/machine.rs` 977 — Verified SPB 17 loading and small machine-ABI adapters. Control flow stays in Cranelift.
-- `sparrow-core/src/champ/mod.rs` 258 — Champ G1 identity, packet/journal ABI and common cleanup executor.
-- `sparrow-core/src/champ/ordering.rs` 123 — `ordering()` on Champ (#678): Tomato's `ordering` intrinsic as runtime operations, not as a loop in OIR.
-- `sparrow-core/src/champ/p1.rs` 211 — Finite P1 adapters. Plain Atomic values carry no resource obligations.
-- `sparrow-core/src/champ/records.rs` 527 — Fixed machine records. A service handle is a traced PAYLOAD reference, never an address of Rust storage.
-- `sparrow-core/src/champ/streams.rs` 144 — FutureCompletions on Champ (#810 G1 step 4, ruling Q4 of the steps 3–4 review). The stream Tomato keeps in
-- `sparrow-core/src/champ/testing.rs` 247 — The test profile on Champ (§14, OIR-2 §7.4): assertions, the test intrinsics and the runner.
+- `sparrow-core/src/failures.rs` 1295 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/tasks.rs` 611 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 68 files, 35211 lines
+## sparrow — 63 files, 30079 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
-- `sparrow-core/src/drivers.rs` 1128 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
-- `sparrow-core/src/failures.rs` 1311 — Failures, resource regions and the text of a failure that reaches the top.
-- `sparrow-core/src/heap.rs` 2132 — Non-moving precise heap (decision R1). Every object starts with a header:
-- `sparrow-core/src/intrinsics.rs` 1082 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
+- `sparrow-core/src/drivers.rs` 1093 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
+- `sparrow-core/src/heap.rs` 2039 — Non-moving precise heap (decision R1). Every object starts with a header:
+- `sparrow-core/src/intrinsics.rs` 997 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 2905 — Whole-function compilation to machine code (Cranelift), lazily on first call.
-- `sparrow-core/src/lib.rs` 425 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
+- `sparrow-core/src/jit.rs` 2443 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/lib.rs` 365 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 301 — Native providers. Arguments and results are words whose representation
 - `sparrow-core/src/ops.rs` 1738 — Exact semantics of value instructions without an inline fast path.
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
-- `sparrow-core/src/primitives.rs` 375 — State of the async primitives (Atomic, Event and Cancellation, Lock and
+- `sparrow-core/src/primitives.rs` 367 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 185 — Static facts about a loaded SPB program: the machine representation of every
-- `sparrow-core/src/runtime.rs` 941 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 903 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
-- `sparrow-core/src/tasks.rs` 671 — Stackless async: the heap frame of an async call is also its Future.
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB
 - `sparrow-core/src/worker.rs` 420 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
 - `sparrow-core/src/worker_process.rs` 352 — Process ownership and pipe I/O are delegated to Tokio. Cancellation kills and
@@ -390,25 +173,22 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/process_host.rs` 387 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
 - `sparrow-core/src/host/native_json/mod.rs` 739 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 341 — Iterative JSON parser. Completed nodes are emitted in postorder; child
-- `sparrow-core/src/jit/champ.rs` 1872 — SPB 17 lowering with typed frame slots and precise liveness maps.
-- `sparrow-core/src/jit/champ/futures.rs` 329 — Async bodies (Champ draft 3 §§3, 13; ABI D20 §2.2; plan decision C4). A body runs in the same stack storage
-- `sparrow-core/src/jit/champ/roots.rs` 168 — Typed allocation is checked independently before its physical offsets enter Cranelift maps.
 
-## devtrace — 1 files, 318 lines
+## devtrace — 1 files, 310 lines
 
-- `okkama-devtrace/src/lib.rs` 318 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
+- `okkama-devtrace/src/lib.rs` 310 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 7 files, 3704 lines
+## cli — 7 files, 3550 lines
 
 - `okkama-cli/src/core.rs` 64 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 868 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
-- `okkama-cli/src/main.rs` 1642 — `okkama` — command-line front end for the Okkama compiler library.
+- `okkama-cli/src/main.rs` 1488 — `okkama` — command-line front end for the Okkama compiler library.
 - `okkama-cli/src/man.rs` 247 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 
-## other — 87 files, 36754 lines
+## other — 87 files, 36745 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 379 — Core library for the Blade command-line tool.
@@ -496,4 +276,4 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/xml.rs` 434 — `runtime/xml` (#144): a bounded, non-validating tokenizer of a whole XML
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
 - `okkama-runtime-core/src/native/compression/zstd_codec.rs` 117 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
-- `sparrow-cli/src/main.rs` 262 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a
+- `sparrow-cli/src/main.rs` 253 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a

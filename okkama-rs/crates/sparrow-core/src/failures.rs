@@ -41,7 +41,6 @@ pub struct Resources {
     /// Per descriptor (#905): may a program-built instance (`obj.new`, `obj.next`, `variant.new`) be a leaf when
     /// its fields reach no identity? Not with a destroy of its own, a builtin (a runtime cell that changes in
     /// place) or a `once let` slot (filled after construction).
-    #[cfg_attr(feature = "champ-abi", allow(dead_code))]
     leaf_capable: Vec<bool>,
     serial: u64,
     identities: HashMap<Word, Identity>,
@@ -135,10 +134,7 @@ impl Resources {
 
     pub fn new(program: &Program) -> Self {
         Self {
-            // Champ owns its outcomes and identities (draft 3 §3): Tomato's tracking never runs on its declaration
-            // view, whose destroys would otherwise make `settle` take a driver Future's cache word for an outcome
-            // region (#601 Q1 audit).
-            enabled: !cfg!(feature = "champ-abi") && program.objects.iter().any(|o| o.destroy.is_some()),
+            enabled: program.objects.iter().any(|o| o.destroy.is_some()),
             flags: descriptor_flags(program),
             leaf_capable: program.objects.iter().map(|object| object.destroy.is_none() && !object.builtin
                 && !object.fields.iter().any(|(name, _)| name.starts_with("$once"))).collect(),
@@ -238,7 +234,6 @@ pub(crate) fn descriptor_flags(program: &Program) -> Vec<bool> {
 
 impl Runtime {
     /// A new object of `descriptor` gets a resource identity if it can matter.
-    #[cfg(not(feature = "champ-abi"))]
     pub fn created(&mut self, descriptor: usize, object: Word) {
         let resources = &mut self.resources;
         if resources.enabled && resources.flags[descriptor] {
@@ -250,7 +245,6 @@ impl Runtime {
 
     /// Whether a field of a new object of `descriptor` may reach a resource identity (#905): an object that is an
     /// identity, a container that may hold one, or a reference field not yet initialized.
-    #[cfg(not(feature = "champ-abi"))]
     fn fields_may_reach_identity(&self, descriptor: usize, object: Word) -> bool {
         let layout = &self.heap.layouts().objects[descriptor];
         layout.iter().enumerate().any(|(index, &repr)| {
@@ -274,7 +268,6 @@ impl Runtime {
     /// its whole life, since its fields never change. A field not yet initialized (escaped construction,
     /// `obj.init`) or a container keeps the old answer; so do builtins and `once` slots (`leaf_capable`), and
     /// objects the runtime makes (groups, driver results), which go through [`Runtime::created`].
-    #[cfg(not(feature = "champ-abi"))]
     pub fn created_built(&mut self, descriptor: usize, object: Word) {
         if self.resources.enabled && self.resources.flags[descriptor] && self.resources.leaf_capable[descriptor]
             && !self.fields_may_reach_identity(descriptor, object)
@@ -285,9 +278,6 @@ impl Runtime {
         self.created(descriptor, object);
     }
 
-    /// Legacy allocation hooks must not commit incomplete Champ construction.
-    #[cfg(feature = "champ-abi")]
-    pub fn created(&mut self, _descriptor: usize, _object: Word) {}
 
     /// A Future must be tracked even before its result exists.
     pub(crate) fn future_created(&mut self, frame: Word) {
@@ -1058,11 +1048,6 @@ impl Runtime {
         for &failure in &order {
             if let Some(FailureKind::Thrown(object)) = self.failure(failure).map(|f| &f.kind) {
                 let object = *object;
-                #[cfg(feature = "champ-abi")]
-                if let Some(text) = crate::champ::machine::error_text(self, object) {
-                    messages.insert(failure, text);
-                    continue;
-                }
                 if let Some(function) = self.error_text_method(object)
                     && let Ok(code) = crate::jit::compile(self, function) {
                         // SAFETY: Error.text takes its receiver and returns a string.
@@ -1120,8 +1105,6 @@ impl Runtime {
     }
 
     fn reported_error_name(&self, object: Word) -> String {
-        #[cfg(feature = "champ-abi")]
-        if let Some(name) = crate::champ::machine::error_name(self, object) { return name; }
         let full = &self.loaded.program.objects[heap::payload(self.heap.header_of(object)) as usize].name;
         full.rsplit("::").next().unwrap_or(full).to_owned()
     }
@@ -1254,10 +1237,7 @@ pub extern "C" fn rt_created(ctx: *mut Ctx, descriptor: u64, object: Word) {
     runtime.count(|r| format!("resource {}", r.loaded.program.objects[descriptor as usize].name));
     okkama_devtrace::count!("runtime", format!("identity requested: {}",
         runtime.loaded.program.objects[descriptor as usize].name));
-    #[cfg(not(feature = "champ-abi"))]
     runtime.created_built(descriptor as usize, object);
-    #[cfg(feature = "champ-abi")]
-    runtime.created(descriptor as usize, object);
 }
 
 /// Region instructions and failure links of instruction `pc` (uses at `uses`).

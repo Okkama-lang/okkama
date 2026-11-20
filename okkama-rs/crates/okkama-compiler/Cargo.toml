@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 okkama-devtrace = { path = "../okkama-devtrace" }
-okkama-oir = { path = "../okkama-oir" }
 okkama-runtime-core = { path = "../okkama-runtime-core" }
 okkama-sparrow = { path = "../okkama-sparrow" }
 # Doc comments are a CommonMark subset (#512).
@@ -24,6 +23,3 @@ sparrow-core = { path = "../sparrow-core" }
 
 [lints]
 workspace = true
-
-[features]
-verifier-differential = ["okkama-oir/verifier-differential"]

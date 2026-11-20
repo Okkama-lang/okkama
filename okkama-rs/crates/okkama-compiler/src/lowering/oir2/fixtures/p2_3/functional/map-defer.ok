@@ -1,8 +1,0 @@
-module app;
-main() is int {
-    [1, 2].map() -> x {
-        defer x % 1;
-        x + 1;
-    };
-    0;
-}
