@@ -51,6 +51,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A Future with a parameter beside it can be returned a second time (#871).** Example:
+  `pass(r is Res) is Future<int> { Starter().start(r); }`, where `start(r)` leaves `r` beside its Future. Structural
+  destroyed `r` at `pass`'s close before the Future read it, and since #865 both modes refused the escape.
+  - In the model the owner kept with #868, `r` is `pass`'s own parameter, so `pass` carries it beside the Future too,
+    as a creation over a bound parameter does (#862). Its caller settles it at its close.
+  - A creation or a local beside a returned Future still has no name in the caller and stays refused.
 - **A running Future detached at its owner's close keeps what it borrows (#881).** A Future that `go` starts in its
   caller's group and that borrows `go`'s locals (a bound Future, a resource) kept running after `go` closed, while
   that close destroyed what it borrowed, and the body read it afterwards. Tomato keeps them alive until shutdown.

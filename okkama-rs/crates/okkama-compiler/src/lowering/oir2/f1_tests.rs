@@ -795,11 +795,12 @@ fn f1_a_future_with_a_local_beside_it_is_not_returned_further() {
     }
 }
 
-/// #871 (fail-closed): `start(r)` leaves its parameter beside the Future; `pass(r)` gets both back and returns the
-/// Future further, which it cannot carry `r` out with yet. Structural compiled it and destroyed `r` at `pass`'s close,
-/// before the Future read it; own now refuses the escape in both modes.
+/// #871 (§6.3c, in the model the owner kept with #868): `start(r)` leaves its parameter beside the Future, and
+/// `pass(r)` returns that Future further: `r` is `pass`'s own parameter, so `pass` carries it beside the Future too,
+/// as a creation over a bound parameter does. Structural destroyed `r` at `pass`'s close before the Future read it,
+/// and the fail-closed guard refused the escape since; Full now accepts it, and the relation says so.
 #[test]
-fn f1_a_future_with_a_parameter_beside_it_is_not_returned_further() {
+fn f1_a_future_with_a_parameter_beside_it_is_returned_further_with_it() {
     let source = concat!(
         "module app v1.0.0; ",
         "object Res { has l is string; Res(:l); n() is int { l.length(); } destroy { } } ",
@@ -808,12 +809,10 @@ fn f1_a_future_with_a_parameter_beside_it_is_not_returned_further() {
         "object Passer { Passer(); pass(r is Res) is Future<int> { Starter().start(r); } } ",
         "async main() is int { await Passer().pass(Res(l: \"on\")); }",
     );
-    for mode in [ir::verify::VerifyMode::Structural, ir::verify::VerifyMode::Full] {
-        let Err(error) = super::own_case_tests::own_stage(source, None, mode) else {
-            panic!("the escape is refused");
-        };
-        assert!(error.contains("UnsupportedAsync") && error.contains("(#871)"), "{error}");
-    }
+    let (own, _) = super::own_case_tests::own_stage(source, None, ir::verify::VerifyMode::Full)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (_, relation) = relation_of(&own, "app.Passer.pass#0");
+    assert!(matches!(relation.beside.as_slice(), [ir::BesideEntry::Parameter(_)]), "{relation:?}");
 }
 
 /// #872 (Fable, §6.3d): the `beside` marker is checked against the exit. A creation thunk forwards its entry into the
