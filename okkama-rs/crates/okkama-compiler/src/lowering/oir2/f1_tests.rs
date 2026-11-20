@@ -1256,7 +1256,7 @@ fn without_local_rehome(text: &str) -> String {
     let start = text.find("func @app.C.chain#0").unwrap();
     let end = start + text[start..].find("\n}\n").unwrap();
     let body = &text[start..end];
-    let locals: Vec<&str> = body.split(|c: char| c == '(' || c == ',' || c == '\n').filter_map(|part| {
+    let locals: Vec<&str> = body.split(['(', ',', '\n']).filter_map(|part| {
         let part = part.trim();
         part.strip_suffix(": future<app.Res>").or_else(|| part.split_once(": future<app.Res> ").map(|(name, _)| name))
     }).filter(|name| name.starts_with('%')).collect();
@@ -1264,7 +1264,7 @@ fn without_local_rehome(text: &str) -> String {
         && locals.iter().any(|name| line.contains(&format!("future {name},")))).expect("chain rehomes g");
     let (results, operands) = line.split_once(" = cache.rehome ").unwrap();
     let names = |part: &str| -> Vec<String> {
-        part.split(|c: char| c == ',' || c == '(' || c == ')' || c == ' ').filter(|word| word.starts_with('%'))
+        part.split([',', '(', ')', ' ']).filter(|word| word.starts_with('%'))
             .map(|word| word.trim_end_matches(':').to_string()).collect()
     };
     let (results, operands) = (names(results), names(operands));
