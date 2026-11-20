@@ -34,12 +34,29 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   a watched entry per resource. Frames and objects without a destroy of their own keep the map. micro `destroy`
   −24%, peak memory with 100 000 live resources 158 → 106 MB. The +8-byte packed layout was measured and
   rejected (okkama-docs/runtime/identity-layout-528.md).
+- **Static resources reach further (#909 2b).**
+  - **Scope.** A resource from a factory (not only a constructor), in an async body, or as the oldest member of
+    a region whose newer members close first is static too.
+  - **Machine code.** It numbers inline identities, pins and calls a static resource's destroy directly. Stats,
+    devtrace and a destroy trace keep the runtime path.
+  - **Measured.** Static resources over t/, examples and bench: 13 → 35. micro `destroy` on the host: 50 → 31 ns.
+  - **Devtrace.** `OKKAMA_DEV=lower` counts why a value stays dynamic.
+- **One ownership linearity check (#910).** After the IR passes, every region and static resource is opened once,
+  used only while open and closed exactly once on every path, failure paths included. It runs in debug builds and
+  with `OKKAMA_VERIFY_OWNERSHIP=1`, never in release.
+- **Big async bodies keep their registers in their frame (#552).** No copy per `await`: compiling an action with
+  300 awaits goes from 2.8 s to 0.22 s.
+- **Devtrace by site (#912).** `OKKAMA_DEV=runtime` counts identity requests and region adds by `function:pc`; the
+  lowering counts ownership operations per function. `OKKAMA_DEV=jit` reports machine-code memory: bytes requested
+  and pages finalized (#457).
 - **Late edges (#907).** Each value that gains a reference after it is built (`Atomic.replace`, a Future's
   outcome, in-place payloads, `obj.init`, `once` slots) is accounted for, so a container summary stays true
   (docs/map/ownership.md). An adopted array holding Futures is not summarized.
 
 ### Fixed
 
+- **A fresh value made by a `defer` on an early return.** It was tracked in a nested scope the return had already
+  closed, so it was never destroyed. The linearity check (#910) found it.
 - **Futures that outlive their owners (#817).** A Future still running when its owner closes detaches to a root
   region instead of being lost, and a member started into a group whose owner already closed settles on its
   own: closed at the call if it finished, detached otherwise. After shutdown, a root closer destroys the
