@@ -17578,11 +17578,14 @@ the same value. A server that starts one detached child per request and lets
 each borrow a large value keeps all of them alive. Wait for the children
 (`await group.wait()`, a `FutureScope`) when that matters.
 
-Two cases are not covered yet. A child created in the same expression that
-starts it (`group.start(Reader().later(lamp, gate))`), and a child that
-borrows from a scope enclosing the one it outlives, can still see the value
-destroyed under it (issue #882). Bind the child first, as `lend` does, and
-start it from the scope that owns what it reads.
+The rule does not depend on where the child is bound or whose value it reads
+(issue #882). A child created in the same expression that starts it,
+`group.start(Reader().later(lamp, gate))`, leaves its starter at that moment,
+so the starter keeps what the child borrows. A child bound in an inner block,
+`{ let child = Reader().later(lamp, gate); group.start(child); }`, can borrow
+`lamp` from the action around the block: when that action ends, the child is
+still running, and `lamp` waits for the end of the program as well. Every
+owner the child borrows from keeps the value, not only the one it leaves.
 
 ## 20.10 Streams: `for await`
 
