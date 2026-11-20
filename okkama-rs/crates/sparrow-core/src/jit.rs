@@ -517,8 +517,12 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     // of the code. A synchronous function keeps Cranelift's stack maps, which
     // cost a third less in call-heavy code such as recursion (#362).
     let explicit = source.is_async && !jit.frontend_maps.has(symbol);
-    let frame_live = source.is_async.then(|| okkama_sparrow::live_sets(source).map(std::sync::Arc::new)).flatten();
-    let root_live = if explicit { frame_live.clone() } else { None };
+    // #552: a big async body keeps every register in its heap frame (stored at definition, loaded at use), so a
+    // suspension copies nothing; otherwise each await saves and reloads every register, O(awaits × registers).
+    let suspensions = source.code.iter().filter(|instruction| suspends(instruction)).count();
+    let resident = frame_resident(source.is_async, suspensions, source.registers.len(), plain);
+    let frame_live = (source.is_async && !resident).then(|| okkama_sparrow::live_sets(source).map(std::sync::Arc::new)).flatten();
+    let root_live = if explicit && !resident { frame_live.clone() } else { None };
     let config = jit.module.target_config();
     let mut context = jit.module.make_context();
     context.func.signature = jit.signature(params);
@@ -553,6 +557,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             plain,
             root_live,
             frame_live,
+            resident,
             roots: None,
             call_sites: [0; 3],
         };
@@ -748,6 +753,8 @@ struct Emitter<'a, 'b> {
     root_live: Option<std::sync::Arc<okkama_sparrow::LiveSets>>,
     /// Live registers at suspension, independently of the stack-map strategy.
     frame_live: Option<std::sync::Arc<okkama_sparrow::LiveSets>>,
+    /// #552: every register lives in the heap frame (a big async body).
+    resident: bool,
     roots: Option<Roots>,
 }
 
@@ -862,10 +869,30 @@ impl Emitter<'_, '_> {
     }
 
     fn get(&mut self, register: &okkama_sparrow::Register) -> Value {
+        if self.resident {
+            let word = self.frame_register(register.0 as usize);
+            return if self.kinds[register.0 as usize] == Kind::Float {
+                self.builder.ins().bitcast(types::F64, MemFlagsData::new(), word)
+            } else {
+                word
+            };
+        }
         self.builder.use_var(self.vars[register.0 as usize])
     }
 
     fn set(&mut self, register: &okkama_sparrow::Register, value: Value) {
+        if self.resident {
+            // Stored when defined, the value is rooted by the frame from now on.
+            let word = if self.kinds[register.0 as usize] == Kind::Float {
+                self.builder.ins().bitcast(types::I64, MemFlagsData::new(), value)
+            } else {
+                value
+            };
+            let frame = self.builder.use_var(self.frame.expect("frame"));
+            let offset = crate::tasks::REGISTERS as i32 + register.0 as i32 * 8;
+            self.builder.ins().store(MEMORY, word, frame, offset);
+            return;
+        }
         self.builder.def_var(self.vars[register.0 as usize], value);
         // If liveness exceeds its analysis budget, keep the heap snapshot
         // current at every pointer definition instead. Saving an unrooted old
@@ -1212,7 +1239,8 @@ impl Emitter<'_, '_> {
             self.roots = Some(Roots { slot, word: words, frame, reported: frame.into_iter().collect() });
         }
         // Registers start unbound; the verifier proves defined use.
-        for (register, kind) in self.kinds.iter().enumerate() {
+        let resident = self.resident;
+        for (register, kind) in self.kinds.iter().enumerate().filter(|_| !resident) {
             let value = if *kind == Kind::Float {
                 self.builder.ins().f64const(f64::from_bits(word::UNBOUND_RAW))
             } else {
@@ -1356,7 +1384,8 @@ impl Emitter<'_, '_> {
         }
         switch.emit(self.builder, resume, start);
         self.builder.switch_to_block(start);
-        for register in &source.params {
+        let resident = self.resident;
+        for register in source.params.iter().filter(|_| !resident) {
             let value = self.frame_register(register.0 as usize);
             self.set_word(register, value);
         }
@@ -1364,7 +1393,7 @@ impl Emitter<'_, '_> {
         self.builder.ins().jump(first, &[]);
         for (pc, block) in reloads {
             self.builder.switch_to_block(block);
-            for register in 0..self.kinds.len() {
+            for register in (0..self.kinds.len()).filter(|_| !resident) {
                 let value = self.frame_register(register);
                 self.set_word(&okkama_sparrow::Register(register as u32), value);
             }
@@ -1394,7 +1423,8 @@ impl Emitter<'_, '_> {
         // must never be published back into a precisely traced heap frame.
         self.builder.switch_to_block(suspend);
         let frame = self.builder.use_var(self.frame.expect("frame"));
-        for register in 0..self.kinds.len() {
+        let resident = self.resident;
+        for register in (0..self.kinds.len()).filter(|_| !resident) {
             let live = self.frame_live.as_ref().is_none_or(|sets|
                 sets[pc].get(register / 64).is_some_and(|word| word >> (register % 64) & 1 != 0));
             let value = if live { self.word(&okkama_sparrow::Register(register as u32)) } else { self.iconst(0) };
@@ -2717,6 +2747,29 @@ impl Emitter<'_, '_> {
         self.set_word(&register, word);
         let block = self.block(target.pc as usize);
         self.builder.ins().jump(block, &[]);
+    }
+}
+
+/// #552: above this many (suspensions × registers), an async body keeps its registers in its frame.
+const RESIDENT_LIMIT: usize = 40_000;
+
+/// #552: does an async body keep its registers in its frame? Only a big one: a small body is faster with machine
+/// registers saved at its few suspensions. `SPARROW_CORE_PLAIN` keeps the classic path.
+fn frame_resident(is_async: bool, suspensions: usize, registers: usize, plain: bool) -> bool {
+    is_async && !plain && suspensions.saturating_mul(registers) > RESIDENT_LIMIT
+}
+
+#[cfg(test)]
+mod frame_resident_tests {
+    /// The fixture of #552 (300 awaits, about 600 registers) goes to the frame; a usual async action does not,
+    /// nor a synchronous one, nor a plain compile.
+    #[test]
+    fn only_a_big_async_body_keeps_its_registers_in_its_frame() {
+        assert!(super::frame_resident(true, 300, 600, false));
+        assert!(!super::frame_resident(true, 5, 60, false));
+        assert!(!super::frame_resident(false, 300, 600, false));
+        assert!(!super::frame_resident(true, 300, 600, true));
+        assert!(!super::frame_resident(true, 200, 200, false), "exactly the limit stays classic");
     }
 }
 

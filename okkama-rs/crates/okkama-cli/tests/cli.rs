@@ -1883,3 +1883,55 @@ fn devtrace_counts_ownership_by_site_and_function() {
     assert_eq!(count("identity requested at Res.new#0:"), Some(2), "{summary}");
     assert!(count("ir after passes: ownership ops in Maker.make").is_some_and(|n| n > 0), "{summary}");
 }
+
+/// #552: an async body with many awaits keeps its registers in its frame (no copy per await). Ints, strings (heap
+/// values), floats (bit-cast in the frame), a loop and a failure caught across an await keep their values, also
+/// when the collector runs at every chance.
+#[test]
+fn a_big_async_body_keeps_its_values_in_its_frame() {
+    let mut body = String::new();
+    for i in 0..150 {
+        body += &format!("        let v{i} = await self.leaf({i});\n");
+    }
+    for i in 0..20 {
+        body += &format!("        let s{i} = await self.text({i});\n");
+    }
+    for i in 0..10 {
+        body += &format!("        let x{i} is float = {i}.5;\n");
+    }
+    // Groups of 50 stay under the expression nesting limit.
+    let ints: Vec<String> = (0..3)
+        .map(|g| format!("({})", (g * 50..g * 50 + 50).map(|i| format!("v{i}")).collect::<Vec<_>>().join(" + ")))
+        .collect();
+    let floats: Vec<String> = (0..10).map(|i| format!("x{i}")).collect();
+    let source = format!(
+        "module app v1.0.0;\nimport \"io/stdout\" take Stdout;\nenum Stop is Error = (now(code is int));\n\
+         object Wide {{\n    Wide();\n    async leaf(i is int) is int {{ i; }}\n\
+             async text(i is int) is string {{ \"t\" + i.string(); }}\n\
+             async fails(i is int) is int {{ confirm i < 0 else throw Stop.now(i); i; }}\n\
+             async run() is int {{\n{body}\
+                 let caught = try {{ await self.fails(7); }} catch Stop.now(code) {{ code; }};\n\
+                 let looped = (0..5).reduce(0) -> acc, i {{ acc + i; }};\n\
+                 let same = if s3 + s19 == \"t3t19\" {{ 1; }} else {{ 0; }};\n\
+                 {} + ({}).int() + caught + looped + same;\n    }}\n}}\n\
+         async main() is int {{ Stdout().writeln((await Wide().run()).string()); 0; }}\n",
+        ints.join(" + "),
+        floats.join(" + ")
+    );
+    // Σ0..150 = 11175, Σ(i + .5) over 0..10 = 50, caught 7, looped 10, same 1.
+    for stress in ["0", "1"] {
+        let mut child = okkama()
+            .args(["run", "-"])
+            .env("OKKAMA_STDLIB_DIR", std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std"))
+            .env("SPARROW_CORE_GC_STRESS", stress)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "stress {stress}: {}", stderr(&output));
+        assert_eq!(stdout(&output), "11243\n", "stress {stress}");
+    }
+}

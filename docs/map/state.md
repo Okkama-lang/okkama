@@ -106,3 +106,4 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 10. #845 and #797 merged (74f704764). #769 and #846 wait for the owner (std contract); #587 needs a channel and
    group handoff on the region runtime (large).
 11. #907 (late edges), #912 (devtrace by site), #910 (linearity checker + an exit_scopes fix it found): wave/92.
+12. #552: big async bodies keep their registers in their frame (fixture 2.8 s → 0.22 s).
