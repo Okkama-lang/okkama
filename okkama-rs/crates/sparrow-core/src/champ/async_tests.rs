@@ -2002,8 +2002,9 @@ fn cache_settle_rows(engine: Engine) {
     assert_eq!(rt_cleanup_begin(&mut ctx, &inputs, &mut cleanup), NORMAL);
     runtime.roots.push((cleanup.record, Repr::Ref));
     assert_eq!(rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 0, foreign, &mut cleanup), NORMAL);
+    // #881: the release waits for the close's plan, when the close knows which of its Futures detach.
     let snapshot = (get(foreign, tasks::STATE), runtime.champ_cache(foreign).unwrap().flags);
-    assert_eq!(snapshot, (tasks::FAILURE_STATE, RELEASED));
+    assert_eq!(snapshot, (tasks::COLD, 0));
     assert_eq!(rt_service_settle(&mut ctx, 0, &mut cleanup, schedule, 1, foreign, &mut cleanup), OUTCOME_STOP);
     assert!(runtime.fatal.as_deref().unwrap().contains("settled twice"));
     ctx.status = OK;

@@ -741,3 +741,126 @@ async main() is int {
 }
 "#, "make pre\nwrap end\nmake post\nmain end\ndestroy post\ndestroy pre\n");
 }
+
+/// #881 (Fable's ruling (a), agreed by the owner): `go` starts in the caller's group a Future that borrows its bound
+/// Future `g`, done, and closes while that Future is still running. It detaches to the root, and `g`'s cache goes
+/// with it instead of being released at `go`'s close; the root closer releases it at shutdown. Before, Champ
+/// destroyed the outcome at `go`'s close and the detached body read it afterwards. Tomato's output.
+#[test]
+fn a_detached_member_keeps_a_borrowed_future_its_close_would_settle() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Maker { Maker(); async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); } }
+object Reader {
+    Reader();
+    async read(g is Future<Res>, gate is Event) is string {
+        await gate.wait();
+        let label = (await g).label();
+        Stdout().writeln("read " + label);
+        label;
+    }
+}
+object Helper {
+    Helper();
+    async go(group is FutureGroup<string>, gate is Event) is void {
+        let g = Maker().make("x");
+        let seen = await g;
+        Stdout().writeln("seen " + seen.label());
+        let f = Reader().read(g, gate);
+        group.start(f);
+        Stdout().writeln("helper end");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let group is FutureGroup<string> = FutureGroup();
+    await Helper().go(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make x\nseen x\nhelper end\nread x\nmain end\ndestroy x\n");
+}
+
+/// #881: the same with a bound resource: it leaves `go`'s close for a kept packet of the root. Tomato's output.
+#[test]
+fn a_detached_member_keeps_a_borrowed_resource_its_close_would_destroy() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Reader {
+    Reader();
+    async read(r is Res, gate is Event) is string {
+        await gate.wait();
+        Stdout().writeln("read " + r.label());
+        r.label();
+    }
+}
+object Helper {
+    Helper();
+    async go(group is FutureGroup<string>, gate is Event) is void {
+        let r = Res(name: "x");
+        let f = Reader().read(r, gate);
+        group.start(f);
+        Stdout().writeln("helper end");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let group is FutureGroup<string> = FutureGroup();
+    await Helper().go(group, gate);
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#, "helper end\nread x\nmain end\ndestroy x\n");
+}
+
+/// #881: two detached Futures borrow one resource, kept once and destroyed once at shutdown; a resource neither
+/// reaches is destroyed at the close as before. Tomato's output.
+#[test]
+fn two_detached_members_share_a_kept_resource_and_an_unrelated_one_closes() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Reader {
+    Reader();
+    async read(tag is string, r is Res, gate is Event) is string {
+        await gate.wait();
+        Stdout().writeln(tag + " reads " + r.label());
+        r.label();
+    }
+}
+object Helper {
+    Helper();
+    async go(group is FutureGroup<string>, gate is Event) is void {
+        let r = Res(name: "shared");
+        let other = Res(name: "unrelated");
+        let f = Reader().read("a", r, gate);
+        let g = Reader().read("b", r, gate);
+        group.start(f);
+        group.start(g);
+        Stdout().writeln("helper end " + other.label());
+    }
+}
+async main() is int {
+    let gate = Event();
+    let group is FutureGroup<string> = FutureGroup();
+    await Helper().go(group, gate);
+    Stdout().writeln("after go");
+    gate.set();
+    await group.wait();
+    Stdout().writeln("main end");
+    0;
+}
+"#, "helper end unrelated\ndestroy unrelated\nafter go\na reads shared\nb reads shared\nmain end\ndestroy shared\n");
+}

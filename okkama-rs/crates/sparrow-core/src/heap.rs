@@ -1533,15 +1533,61 @@ impl Heap {
     /// Mark everything reachable from the worklist.
     fn mark_reachable(&self, worklist: &mut Vec<Word>) {
         while let Some(object) = worklist.pop() {
-            // SAFETY: every queued word is a live object pointer, marked when
-            // it was queued; the header's other bits are read without it.
-            let header = unsafe { *(object as *const u64) } & !MARK;
             let mut push = |word: Word, repr: Repr| {
                 if let Some(pointer) = repr.pointer(word) {
                     // SAFETY: a traced field holds a live object pointer.
                     unsafe { mark_and_queue(pointer, worklist) };
                 }
             };
+            self.trace_object(object, &mut push);
+        }
+    }
+
+    /// #881: every object reachable from the values `starts` by the collector's layouts, without marking anything:
+    /// a borrow is a reference, so the walk follows what the collector traces. A frame is reached but not entered:
+    /// a Future the walk reaches is kept whole by its cache.
+    pub fn reachable(&self, starts: &[(Word, Repr)]) -> std::collections::BTreeSet<Word> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut worklist: Vec<Word> = starts.iter().filter_map(|&(word, repr)| repr.pointer(word)).collect();
+        while let Some(object) = worklist.pop() {
+            if !seen.insert(object) {
+                continue;
+            }
+            // SAFETY: a queued word is a live object pointer.
+            if kind(unsafe { *(object as *const u64) } & !MARK) == FRAME {
+                continue;
+            }
+            let mut push = |word: Word, repr: Repr| {
+                if let Some(pointer) = repr.pointer(word) {
+                    worklist.push(pointer);
+                }
+            };
+            self.trace_object(object, &mut push);
+        }
+        seen
+    }
+
+    /// #881: the traced fields of a live frame below the byte offset `limit` (its language slots, below the tail),
+    /// with their representations.
+    pub fn frame_fields_below(&self, frame: Word, limit: u64) -> Vec<(Word, Repr)> {
+        // SAFETY: `frame` is a live frame pointer; the mark bit is masked out.
+        let header = unsafe { *(frame as *const u64) } & !MARK;
+        if kind(header) != FRAME {
+            return Vec::new();
+        }
+        self.trace_layouts.frames[payload(header) as usize].iter()
+            .filter(|slot| 8 + slot.index as u64 * 8 < limit)
+            // SAFETY: the index comes from this frame's layout.
+            .map(|slot| (unsafe { *((frame + 8 + slot.index as Word * 8) as *const u64) }, slot.repr))
+            .collect()
+    }
+
+    /// The traced fields of one live object, as the collector reads them.
+    fn trace_object(&self, object: Word, push: &mut dyn FnMut(Word, Repr)) {
+        {
+            // SAFETY: `object` is a live object pointer; the mark bit is masked out.
+            let header = unsafe { *(object as *const u64) } & !MARK;
+            let mut push = |word: Word, repr: Repr| push(word, repr);
             let fields = |layout: &[TraceSlot], push: &mut dyn FnMut(Word, Repr)| {
                 for &TraceSlot { index, repr } in layout {
                     push(

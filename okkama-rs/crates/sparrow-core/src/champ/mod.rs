@@ -115,6 +115,11 @@ pub(crate) struct State {
     schedules: Vec<Vec<u64>>,
     /// The owner of caches detached to the root (draft 3 §6.2).
     root_owner: Option<OwnerId>,
+    /// #881 (Fable's ruling (a), agreed by the owner): the packets of identities that a running Future detached at
+    /// its owner's close still reaches. The root closer closes them at shutdown; the collector traces them.
+    pub(crate) kept: Vec<Word>,
+    /// The identities of `kept`: a direct plan of the close they left skips them.
+    pub(crate) kept_identities: std::collections::BTreeSet<Word>,
     #[cfg(test)]
     pub(crate) future_events: Vec<futures::FutureEvent>,
     /// The receipts `await.unwind` consumed, with the function of the frame that consumed each.

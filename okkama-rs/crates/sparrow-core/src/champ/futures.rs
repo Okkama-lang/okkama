@@ -237,7 +237,7 @@ impl Runtime {
         self.champ_frame_map(self.function_of(frame)).ok_or_else(|| error("Future of a function without a frame"))
     }
 
-    fn champ_tail(&self, frame: Word) -> Result<u64, Error> {
+    pub(super) fn champ_tail(&self, frame: Word) -> Result<u64, Error> {
         Ok(self.champ_body(frame)?.tail)
     }
 
@@ -454,6 +454,11 @@ impl Runtime {
                 return Ok(None);
             }
             let mut outcome = Packet::default();
+            // #881: what detached Futures kept of the owners they left closes with their outcomes.
+            for record in std::mem::take(&mut self.champ.kept) {
+                outcome.append(packet(self, record)?);
+                consume(self, record);
+            }
             for task in self.spawned.clone() {
                 if !self.champ_retained(task) {
                     continue;
