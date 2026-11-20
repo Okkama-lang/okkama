@@ -2045,10 +2045,26 @@ impl Emitter<'_, '_> {
                 }
                 self.set(&dst.0, cell);
             }
-            I::RegionAdopt { region, value } | I::RegionTrack { region, value } => {
-                let (region, value) = (self.get(region), self.word(value));
+            I::RegionAdopt { region, value: register } | I::RegionTrack { region, value: register } => {
+                // A scalar never reaches an identity.
+                if !self.kinds[register.0 as usize].traced() && !self.plain {
+                    return Ok(false);
+                }
+                let (region, value) = (self.get(region), self.word(register));
                 let own = self.iconst(i64::from(matches!(instruction, I::RegionAdopt { .. })));
-                self.helper(|h| h.region_add, &[ctx, region, value, own]);
+                if self.plain {
+                    self.helper(|h| h.region_add, &[ctx, region, value, own]);
+                } else {
+                    // #529: `region_add` returns at once unless the value may reach a free identity
+                    // (`Runtime::may_reach_free`); most adds are objects without an identity, decided here.
+                    let call = self.builder.create_block();
+                    let done = self.builder.create_block();
+                    self.may_reach_identity(value, call, done);
+                    self.builder.switch_to_block(call);
+                    self.helper(|h| h.region_add, &[ctx, region, value, own]);
+                    self.builder.ins().jump(done, &[]);
+                    self.builder.switch_to_block(done);
+                }
             }
             I::ResourcePin { value } => {
                 let value = self.word(value);
@@ -2567,14 +2583,110 @@ impl Emitter<'_, '_> {
         self.heap.object_words(descriptor as u32, fields)
     }
 
+    /// Branch to `maybe` when `value` may reach a free identity, else to `never`: the header test of
+    /// `Runtime::may_reach_free` without the owner lookup (an object with an identity goes to `maybe`).
+    fn may_reach_identity(&mut self, value: Value, maybe: Block, never: Block) {
+        // UNBOUND (0) and tagged immediates hold no pointer.
+        let pointer = self.builder.create_block();
+        let tag = self.builder.ins().band_imm_u(value, 1);
+        let low = self.builder.ins().icmp_imm_u(IntCC::NotEqual, tag, 0);
+        let zero = self.builder.ins().icmp_imm_u(IntCC::Equal, value, 0);
+        let none = self.builder.ins().bor(low, zero);
+        self.builder.ins().brif(none, never, &[], pointer, &[]);
+        self.builder.switch_to_block(pointer);
+        self.pointer_may_reach_identity(value, maybe, never, true);
+    }
+
+    /// The header part of the test above, for a word known to be a heap pointer. With `summaries`, a summarized
+    /// container goes to `never`: it reaches no free identity (a walk from no region stops at it).
+    fn pointer_may_reach_identity(&mut self, value: Value, maybe: Block, never: Block, summaries: bool) {
+        let header = self.builder.ins().load(types::I64, MEMORY, value, 0);
+        let kind = self.builder.ins().band_imm_u(header, 0xff);
+        let is_object = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::OBJECT as i64);
+        let (object, rest) = (self.builder.create_block(), self.builder.create_block());
+        self.builder.ins().brif(is_object, object, &[], rest, &[]);
+        self.builder.switch_to_block(object);
+        let identity = self.builder.ins().band_imm_u(header, heap::IDENTITY as i64);
+        self.builder.ins().brif(identity, maybe, &[], never, &[]);
+        self.builder.switch_to_block(rest);
+        if summaries {
+            let summarized = self.builder.ins().band_imm_u(header, heap::SUMMARY as i64);
+            let open = self.builder.create_block();
+            self.builder.ins().brif(summarized, never, &[], open, &[]);
+            self.builder.switch_to_block(open);
+        }
+        // A reference array (not packed) or a closure, payload or frame may reach one; nothing else can.
+        let is_array = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::ARRAY as i64);
+        let (array, other) = (self.builder.create_block(), self.builder.create_block());
+        self.builder.ins().brif(is_array, array, &[], other, &[]);
+        self.builder.switch_to_block(array);
+        // Repr bits 9–10: 2 and 3 are Ref (`Repr::from_bits`); a packed array holds bytes.
+        let bits = self.builder.ins().band_imm_u(header, (heap::PACKED | (2 << 9)) as i64);
+        let reference = self.builder.ins().icmp_imm_u(IntCC::Equal, bits, (2 << 9) as i64);
+        self.builder.ins().brif(reference, maybe, &[], never, &[]);
+        self.builder.switch_to_block(other);
+        let closure = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::CLOSURE as i64);
+        let payload = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::PAYLOAD as i64);
+        let frame = self.builder.ins().icmp_imm_u(IntCC::Equal, kind, heap::FRAME as i64);
+        let either = self.builder.ins().bor(closure, payload);
+        let any = self.builder.ins().bor(either, frame);
+        self.builder.ins().brif(any, maybe, &[], never, &[]);
+    }
+
+    /// Branch to `maybe` when field `word` of representation `repr` may reach an identity, as
+    /// `Runtime::fields_may_reach_identity` decides it (an unbound reference field may: it is set later).
+    fn field_may_reach_identity(&mut self, word: Value, repr: Repr, maybe: Block, never: Block) {
+        let pointer = self.builder.create_block();
+        match repr {
+            Repr::Raw => {
+                self.builder.ins().jump(never, &[]);
+                return;
+            }
+            Repr::Int => {
+                let tag = self.builder.ins().band_imm_u(word, 1);
+                let low = self.builder.ins().icmp_imm_u(IntCC::NotEqual, tag, 0);
+                let zero = self.builder.ins().icmp_imm_u(IntCC::Equal, word, 0);
+                let none = self.builder.ins().bor(low, zero);
+                self.builder.ins().brif(none, never, &[], pointer, &[]);
+            }
+            Repr::Ref => {
+                let zero = self.builder.ins().icmp_imm_u(IntCC::Equal, word, 0);
+                self.builder.ins().brif(zero, maybe, &[], pointer, &[]);
+            }
+        }
+        self.builder.switch_to_block(pointer);
+        // Here any identity counts, owned or not (`created_built`): summaries do not answer that.
+        self.pointer_may_reach_identity(word, maybe, never, false);
+    }
+
     /// Give a new object a resource identity when its type can reach a destroy.
     fn created(&mut self, descriptor: usize, object: Value) {
         let resources = &self.resources;
-        if resources.enabled && resources.flags[descriptor] {
-            let ctx = self.ctx();
-            let descriptor = self.iconst(descriptor as i64);
-            self.helper(|h| h.created, &[ctx, descriptor, object]);
+        if !resources.enabled || !resources.flags[descriptor] {
+            return;
         }
+        let layout = self.heap.layouts().objects[descriptor].clone();
+        // #529: an object without its own destroy gets an identity only when a field reaches one
+        // (`Runtime::created_built`); with few fields that is decided here, without the call.
+        let inline = resources.leaf_capable[descriptor] && layout.len() <= 8 && !self.plain;
+        let ctx = self.ctx();
+        let descriptor_value = self.iconst(descriptor as i64);
+        if !inline {
+            self.helper(|h| h.created, &[ctx, descriptor_value, object]);
+            return;
+        }
+        let (call, done) = (self.builder.create_block(), self.builder.create_block());
+        for (index, repr) in layout.into_iter().enumerate() {
+            let next = self.builder.create_block();
+            let word = self.builder.ins().load(types::I64, MEMORY, object, ((index + 1) * 8) as i32);
+            self.field_may_reach_identity(word, repr, call, next);
+            self.builder.switch_to_block(next);
+        }
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(call);
+        self.helper(|h| h.created, &[ctx, descriptor_value, object]);
+        self.builder.ins().jump(done, &[]);
+        self.builder.switch_to_block(done);
     }
 
     /// Jump to `target` after its edge moves, then define `register` as `word`.

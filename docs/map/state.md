@@ -98,4 +98,6 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 6. #528 (OH-04), in-object identity: **+16 chosen by the owner (2026-11-20)**, the packed variant removed.
    Numbers: okkama-docs/runtime/identity-layout-528.md (merged: 0e29d87d0).
 7. #909 2b: the `statics` pass (feature/909-phase2). micro destroy 80 → ~50 ns on the host; first cut takes one
-   resource per region. Next: the ownership comparison with CPython and Go (owner, 2026-11-20).
+   resource per region. Merged (90aa8d63b). Container gate with CPython and Go: bench/ownership/README.md.
+8. #529: JIT fast paths for region adds and per-instance identities, inherited summaries. ownership.ok on the host
+   21.7 → 9.5 ms (plain twin 4.0). Owner 2026-11-20: ownership is solved; continue 0.6.0 in my own order.

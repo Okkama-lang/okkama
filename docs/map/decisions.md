@@ -31,6 +31,10 @@ the session's memory; older rulings live in the commits and tickets named.
 - **2026-11-20. More code runs on Champ in the Wave CI (#894).** This covers t/, bench/micro (moved from
   okkama-docs; results stay there), examples/, and examples/bible (a copy of the Bible branch's examples). On
   Sparrow a failure fails the job; on Champ failures are only reported.
+- **2026-11-20. Immutable containers inherit summaries (#529).** A container made only from summarized parts
+  reaches nothing they do not, so it is summarized at birth; summaries are all undone together (`freed`), so an
+  inherited one is as valid as its parts'. Machine code reads the same headers the helpers read and calls them only
+  when the answer could be yes.
 - **2026-11-20. Static resources reuse the ownership census (#909 2b).** The escape question has one
   implementation (`ir/ownership.rs`); `ir/statics.rs` adds only type, region and dominance conditions. A pinned
   resource is invisible to every walk and is destroyed once by `resource.leave`/`resource.unwind`.

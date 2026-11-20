@@ -1119,6 +1119,17 @@ pub extern "C" fn rt_exec(
         I::GlobalGet { global, .. } => crate::intrinsics::global(ctx, runtime, *global as usize),
         _ => execute(runtime, function, instruction, &operands),
     };
+    // #529: a container made from summarized parts is summarized at birth.
+    if let Ok(result) = outcome
+        && runtime.resources.enabled
+        && matches!(instruction, I::ArraySlice { .. } | I::ArrayConcat { .. } | I::MapNew { .. } | I::MapMerge { .. })
+    {
+        let types = &runtime.loaded.program.functions[function].registers;
+        let parts: Vec<(Word, Repr)> = registers.iter().zip(words)
+            .map(|(register, &word)| (word, runtime.kind_of(types[register.0 as usize]).repr()))
+            .collect();
+        runtime.inherit_summary(result, &parts);
+    }
     exec_outcome(runtime, ctx, frame, outcome, |runtime| def_repr(runtime, function, instruction))
 }
 

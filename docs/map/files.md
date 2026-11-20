@@ -104,12 +104,12 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1136 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 2106 lines
+## ownership-runtime — 2 files, 2179 lines
 
-- `sparrow-core/src/failures.rs` 1495 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/failures.rs` 1568 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 611 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30118 lines
+## sparrow — 63 files, 30222 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 126 — Memory for machine code: one reserved region per kind, filled in order.
@@ -118,11 +118,11 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/heap.rs` 2062 — Non-moving precise heap (decision R1). Every object starts with a header:
 - `sparrow-core/src/intrinsics.rs` 997 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
-- `sparrow-core/src/jit.rs` 2458 — Whole-function compilation to machine code (Cranelift), lazily on first call.
+- `sparrow-core/src/jit.rs` 2552 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 365 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
 - `sparrow-core/src/maps.rs` 463 — The entries of a map value (#252–#254): a persistent B+ tree whose nodes
 - `sparrow-core/src/natives.rs` 301 — Native providers. Arguments and results are words whose representation
-- `sparrow-core/src/ops.rs` 1738 — Exact semantics of value instructions without an inline fast path.
+- `sparrow-core/src/ops.rs` 1748 — Exact semantics of value instructions without an inline fast path.
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 367 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 185 — Static facts about a loaded SPB program: the machine representation of every

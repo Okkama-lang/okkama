@@ -79,7 +79,7 @@ pub struct Resources {
     /// Per descriptor (#905): may a program-built instance (`obj.new`, `obj.next`, `variant.new`) be a leaf when
     /// its fields reach no identity? Not with a destroy of its own, a builtin (a runtime cell that changes in
     /// place) or a `once let` slot (filled after construction).
-    leaf_capable: Vec<bool>,
+    pub(crate) leaf_capable: Vec<bool>,
     serial: u64,
     identities: HashMap<Word, Identity>,
     /// Work list, visited set and open containers of `resource_graph`, reused.
@@ -634,6 +634,41 @@ impl Runtime {
         self.heap.watch(container);
     }
 
+    /// #529: a container made from parts (`arr.slice`, `arr.concat`, `map.new`, `map.merge`) reaches what they
+    /// reach and nothing else. When a part is a summarized container and no part may reach a free identity, the
+    /// result is summarized at birth: no walk ever needs to look inside it. A summary is undone for all at once
+    /// (`freed`), so it stays as true as its parts'.
+    pub(crate) fn inherit_summary(&mut self, result: Word, parts: &[(Word, Repr)]) {
+        if !self.resources.enabled {
+            return;
+        }
+        let mut summarized = false;
+        for &(word, repr) in parts {
+            let Some(pointer) = repr.pointer(word) else { continue };
+            let header = self.heap.header_of(pointer);
+            match heap::kind(header) {
+                heap::OBJECT => {
+                    if header & heap::IDENTITY != 0 && self.owner_of(pointer) == Some(Owner::Free) {
+                        return;
+                    }
+                }
+                heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => {}
+                heap::ARRAY | heap::PAYLOAD | heap::CLOSURE | heap::FRAME => {
+                    if header & heap::SUMMARY == 0 {
+                        return;
+                    }
+                    summarized = true;
+                }
+                _ => {}
+            }
+        }
+        let header = self.heap.header_of(result);
+        if summarized && header & heap::SUMMARY == 0 && matches!(heap::kind(header), heap::ARRAY | heap::PAYLOAD) {
+            okkama_devtrace::count!("runtime", "summary inherited");
+            self.summarize(result);
+        }
+    }
+
     /// May a walk (through `via`, if any) skip `container`? `oldest` caches
     /// the oldest entry of `via` for the rest of the walk.
     fn summary_holds(&self, container: Word, via: Option<Word>, oldest: &mut Option<u64>) -> bool {
@@ -881,6 +916,18 @@ impl Runtime {
                 self.dev_owned(object, region);
             }
             self.region_push(region, object);
+        }
+        // #529: an adopting walk (from no region) took every free identity the value reaches, so a reference
+        // array reaches none now. A big one is summarized at once (the walk's own size rule), so the slices and
+        // merges later made from it inherit the summary instead of being walked.
+        let header = self.heap.header_of(value);
+        if own
+            && heap::kind(header) == heap::ARRAY
+            && header & (heap::SUMMARY | heap::PACKED) == 0
+            && Repr::from_bits((header >> 9) & 3) == Repr::Ref
+            && self.heap.array_length(value) >= SUMMARY_STEPS
+        {
+            self.summarize(value);
         }
     }
 
@@ -1779,5 +1826,47 @@ mod inline_identity_tests {
         runtime.created(0, successor);
         assert!(!runtime.rehomed(successor));
         assert!(runtime.serial_of(successor) > runtime.serial_of(source));
+    }
+
+    /// #529: a slice of a summarized array is summarized at birth; a part that still reaches a free identity, or
+    /// a container nobody summarized, leaves the result to be walked.
+    #[test]
+    fn a_container_made_from_summarized_parts_is_summarized_at_birth() {
+        let mut runtime = runtime();
+        let vault = runtime.heap.object_new(0, &[7]);
+        runtime.created(0, vault);
+        let source = runtime.heap.allocate_array(Repr::Ref, &[vault, vault]);
+        let slice = runtime.heap.allocate_array(Repr::Ref, &[vault]);
+        // Not summarized yet: the result must be walked.
+        runtime.inherit_summary(slice, &[(source, Repr::Ref)]);
+        assert_eq!(runtime.heap.header_of(slice) & heap::SUMMARY, 0);
+        runtime.summarize(source);
+        // A free identity among the parts: no summary either.
+        runtime.inherit_summary(slice, &[(source, Repr::Ref), (vault, Repr::Ref)]);
+        assert_eq!(runtime.heap.header_of(slice) & heap::SUMMARY, 0);
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.set_owner(vault, Owner::Region(region));
+        runtime.inherit_summary(slice, &[(source, Repr::Ref), (vault, Repr::Ref), (41, Repr::Int)]);
+        assert_ne!(runtime.heap.header_of(slice) & heap::SUMMARY, 0, "owned vault, summarized source");
+        assert!(runtime.resources.summaries.contains_key(&slice));
+    }
+
+    /// #529: an adopting add takes every free identity a big array reaches, so the array is summarized; a small
+    /// one is cheaper to walk again.
+    #[test]
+    fn an_adopted_big_array_is_summarized_and_a_small_one_is_not() {
+        let mut runtime = runtime();
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        let vault = runtime.heap.object_new(0, &[7]);
+        runtime.created(0, vault);
+        let small = runtime.heap.allocate_array(Repr::Ref, &[vault]);
+        runtime.region_add(region, small, true);
+        assert_eq!(runtime.heap.header_of(small) & heap::SUMMARY, 0);
+        let other = runtime.heap.object_new(0, &[9]);
+        runtime.created(0, other);
+        let big = runtime.heap.allocate_array(Repr::Ref, &vec![other; SUMMARY_STEPS]);
+        runtime.region_add(region, big, true);
+        assert_eq!(runtime.owner_of(other), Some(Owner::Region(region)));
+        assert_ne!(runtime.heap.header_of(big) & heap::SUMMARY, 0);
     }
 }

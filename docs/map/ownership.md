@@ -28,6 +28,8 @@ regions, and the runtime tracks resource identities. Tweed (#903) keeps that des
 | summary | an ownership-state cache of a container that reached no free identity; reset when an old identity becomes free | `summarize`, `freed` |
 | identity storage (#528) | an object with a destroy of its own keeps serial and owner in two hidden words after its fields; frames and destroy-less carriers stay in the identity map | `Heap::object_words`, `owner_of`/`set_owner`/`serial_of` |
 | static resource (#909 2b) | a constructor result the census places in its scope, of a leaf type (own sync destroy, plain fields), alone in its region, all reachable code dominated by the creation: `resource.pin` instead of track/adopt, `resource.leave`/`resource.unwind` at the scope's exits, no region | `ir/statics.rs` (pass `statics`), `resource_pin`/`resource_close` in `failures.rs` |
+| fast paths (#529) | machine code decides `region.track`/`adopt` and the per-instance identity of `obj.new` from headers (no identity, leaf, summarized container) and calls the helper only when it may matter; `SPARROW_CORE_PLAIN` keeps the helper | `jit.rs` `may_reach_identity`, `field_may_reach_identity` |
+| inherited summary (#529) | an adopted big array is summarized at once; `arr.slice`/`arr.concat`/`map.new`/`map.merge` of summarized parts are summarized at birth, so versions of a growing map are never walked | `inherit_summary`, `region_add`, `ops::rt_exec` |
 | close | destroys the owned identities in reverse serial order, owner before fields; async destroys are awaited (`rt_region_settle`) | `region_close`, `tasks.rs` |
 
 **Measuring.** `OKKAMA_DEV=runtime` counts identities requested and skipped by type, region helpers, walks by
