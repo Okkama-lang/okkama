@@ -20,6 +20,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **An array of Events compiles on Champ (#891).** Example: `has events is @Event`. own keeps such an array as a
+  managed collection of capabilities (references with deps), the loader as closed plain data, and codegen refused it.
+  `L08.collect.completions-consumers` and `L08.collect.settlement-order` now print their expected output on Champ.
 - **An async defer that awaits a method of a captured binding compiles on Champ (#890).** Example:
   `defer await connection.settled()`, in every SQLite program. The defer call's summary kept the capture's
   retention while the async entry's contract retains nothing, and the SPB 17 load check refused the program. With

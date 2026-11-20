@@ -171,7 +171,11 @@ fn translate_program(module: &o::Module, layouts: &dyn LayoutRegistry) -> Result
                 // Own tracks role, cap and action-value elements as references; the loader admits such an
                 // array only when every object it can reach is closed plain data (ARRAY_PLAIN).
                 let view = roles::view_array(module, value.ty)? && matches!(value.facts, o::ValueFacts::Managed { .. });
-                if collection && !plain && !managed && !view {
+                // A builtin capability without destroy (Atomic, Event: P2.4 §4.8) is a reference with deps to own,
+                // and closed plain data to the loader: its runtime cell is outside the value (`ARRAY_PLAIN`).
+                let capabilities = matches!(value.facts, o::ValueFacts::Managed { .. })
+                    && capability_leaf(module, value.ty)?;
+                if collection && !plain && !managed && !view && !capabilities {
                     return Err(GenerateError("plain array or map requires own ClosedGraph certificate".into()));
                 }
             }
@@ -1589,3 +1593,20 @@ fn variant_name(name: &str) -> &str {
 }
 #[cfg(test)]
 mod ordering_tests;
+
+/// Whether a collection's leaf (through nested arrays and map values) is a builtin object without a destroy, a
+/// capability such as `Atomic` or `Event` (P2.4 §4.8), and not a D23 service holder.
+fn capability_leaf(module: &o::Module, mut ty: o::TypeId) -> Result<bool, GenerateError> {
+    loop {
+        match module.types.get(ty)? {
+            o::Type::Array(element) => ty = *element,
+            o::Type::Map(_, value) => ty = *value,
+            o::Type::Object { decl, .. } => {
+                let declaration = module.declarations.get(*decl)?;
+                return Ok(matches!(declaration.kind, o::DeclarationKind::Object { builtin: true, destroy: None, .. })
+                    && !o::catalogue::service_holder(&declaration.name));
+            }
+            _ => return Ok(false),
+        }
+    }
+}
