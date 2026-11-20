@@ -694,3 +694,50 @@ async main() is int {
 "#, "make bound\ngo end\nmake fresh\nlabel bound\nmain end\ndestroy fresh\ndestroy bound\n");
 }
 
+
+/// #820: `wrap` returns a new object that stores a FutureGroup it made and started a member in. The group's entry is
+/// an identity of `Wrap.new`'s family that no site of `wrap` shows, so its relation says `several` (#879) and codegen
+/// no longer marks `wrap` a fresh singleton, which the loader refused (FRESH_ORIGIN). Tomato's output.
+#[test]
+fn a_bound_group_stored_in_a_returned_object() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup, Supervising, FinishedFutureGroup;
+import "async/event" take Event;
+object Res {
+    has name is string;
+    Res(:name);
+    label() is string { name; }
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Maker {
+    Maker();
+    async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); }
+}
+object Holding {
+    Holding();
+    async held(name is string, gate is Event) is Res {
+        let r = Res(name: name);
+        Stdout().writeln("holding " + name);
+        await gate.wait();
+        Stdout().writeln("released " + name);
+        r;
+    }
+}
+object Wrap {
+    has g is FutureGroup<Res>;
+    Wrap(:g);
+    group() is FutureGroup<Res> { g; }
+}
+object Factory {
+    Factory();
+    wrap() is Wrap { let fg is FutureGroup<Res> = FutureGroup(); fg.start(Maker().make("pre")); let w = Wrap(g: fg); Stdout().writeln("wrap end"); w; }
+}
+async main() is int {
+    let w = Factory().wrap();
+    w.group().start(Maker().make("post"));
+    Stdout().writeln("main end");
+    0;
+}
+"#, "make pre\nwrap end\nmake post\nmain end\ndestroy post\ndestroy pre\n");
+}

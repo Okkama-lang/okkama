@@ -302,3 +302,22 @@ async main() is int {
 }
 "#, "go end\nmake x\nmain end\ndestroy x\n");
 }
+
+/// #840: a timeout on a fresh temporary receiver, awaited at once (`await Within(…).outcome()`). Full refused it with
+/// B91; it passes since an earlier fix of the release (found while closing #877). Tomato's output.
+#[test]
+fn a_timeout_on_a_fresh_temporary_receiver() {
+    expect(r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/timeout" take Within;
+import "time/clock" take SystemClock;
+import "time/duration" take Duration;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Maker { Maker(); async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); } }
+async main() is int {
+    let r = await Within(origin: Maker().make("x"), limit: Duration(seconds: 5), clock: SystemClock()).outcome();
+    Stdout().writeln("got " + r.label());
+    0;
+}
+"#, "make x\ngot x\ndestroy x\n");
+}
