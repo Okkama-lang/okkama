@@ -576,6 +576,9 @@ impl Universe {
                     result.provenance = relation.provenance;
                     // #873: the call's one site brings what the callee's returned Future holds.
                     result.held.extend(relation.held.iter().map(|held| HeldSite { site: origin, ty: held.ty }));
+                    // #879 (Fable): the one site stands for the callee's whole family; when that is more than one
+                    // identity, say so, so no caller takes the site for a fresh singleton.
+                    result.several |= relation.several || relation.fresh.len() > 1;
                 }
                 // #865 (OIR-2-async-remaining §6.3c-d): a creation borrows each bound input (a binding or a
                 // parameter, ruling (iii)); it stays beside the Future, which a returned Future's packet then carries

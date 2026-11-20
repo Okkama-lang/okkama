@@ -51,6 +51,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function can return a call's fresh object that holds another fresh one (#879).** Example:
+  `relay() is Box { Mk().make(); }` where `make` returns `Box(r: Res(...))`. Champ refused it at load
+  (`FRESH_ORIGIN`): own collapses a callee's fresh family into the one site of the call, so `relay` looked like it
+  returned one fresh identity, and codegen marked it a fresh singleton.
+  - Following Fable's ruling, a result relation now says `several` when its one site stands for a family of more
+    than one identity. Codegen marks no fresh singleton then.
+  - The #876 example returned further (`relay` over a `Box` that stores a cold Future) now runs end to end.
 - **A Future returned by a call can be stored in an object the function returns (#880).** Example:
   `wrap() is Box { Box(f: P().pass("x")); }`. The loader refused it (`SPB_REHOME`): own stored the Future in the
   `Box`, which moves its entry into the `Box`'s packet, and then still rehomed it at the exit.

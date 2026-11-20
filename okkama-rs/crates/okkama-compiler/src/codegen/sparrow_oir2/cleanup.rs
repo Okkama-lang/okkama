@@ -56,9 +56,10 @@ pub(super) fn entry_contract(module: &o::Module, f: &o::Function) -> Result<s::E
             o::FunctionAttr::Extern(name) | o::FunctionAttr::Intrinsic { name, .. } => Some(name.clone()),
             _ => None,
         }),
-        // A singleton result is the fresh identity itself; a managed array of fresh elements is not.
+        // A singleton result is the fresh identity itself; a managed array of fresh elements is not, and neither is a
+        // call's family of several identities that own collapsed into one site (#879).
         fresh_singleton: summary.is_some_and(|summary| matches!(summary.results.as_slice(), [result]
-            if result.fresh.len() == 1 && result.aliases.is_empty()
+            if result.fresh.len() == 1 && !result.several && result.aliases.is_empty()
                 && result.provenance == o::AdmissionProvenance::UnboundResult))
             && f.signature.results.iter().any(|&ty| {
                 matches!(kind(module, ty), Ok(P::Value(s::Type::Object(_) | s::Type::Successor(_))))

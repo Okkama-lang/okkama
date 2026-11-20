@@ -186,7 +186,7 @@ pub(super) fn contract(module: &ir::Module, name: &str, signature: &ir::Signatur
             deps: vec![],
             destination: ir::TransferDestination::None,
         }).collect(),
-        results: results.iter().map(|_| ir::ResultRelation { beside: vec![], held: vec![],
+        results: results.iter().map(|_| ir::ResultRelation { beside: vec![], held: vec![], several: false,
             fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
             provenance: ir::AdmissionProvenance::UnboundResult,
         }).collect(),
@@ -212,7 +212,7 @@ fn holder_contract(module: &ir::Module, name: &str, row: &catalogue::Template, s
         convention: ir::FreshConvention::Borrow, retention: None, deps: vec![],
         destination: ir::TransferDestination::None,
     }).collect();
-    let results = signature.results.iter().map(|_| ir::ResultRelation { beside: vec![], held: vec![],
+    let results = signature.results.iter().map(|_| ir::ResultRelation { beside: vec![], held: vec![], several: false,
         fresh: vec![],
         // A result that aliases the receiver (`wait`), or a view of its graph (a timeout's origin outcome, opaque:
         // which member it is, is unknown).

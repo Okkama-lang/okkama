@@ -56,7 +56,7 @@ pub(crate) fn module() -> Module {
     module.summaries.alloc(Summary {
         entry_kind: EntryKind::CallBoundary,
         parameters: vec![ParameterEffect { convention: FreshConvention::Borrow, retention: None, deps: vec![], destination: TransferDestination::None }],
-        results: vec![ResultRelation { beside: vec![], held: vec![],
+        results: vec![ResultRelation { beside: vec![], held: vec![], several: false,
             fresh: vec![], aliases: vec![], external_deps: vec![], opaque: false,
             provenance: AdmissionProvenance::UnboundResult,
         }],
@@ -281,7 +281,7 @@ fn ordering_operations_have_contracts() {
         entry_kind: EntryKind::CallBoundary,
         parameters: vec![ParameterEffect { convention: FreshConvention::Borrow, retention: None, deps: vec![],
             destination: TransferDestination::None }; 2],
-        results: vec![ResultRelation { beside: vec![], held: vec![], fresh: vec![], aliases: vec![],
+        results: vec![ResultRelation { beside: vec![], held: vec![], several: false, fresh: vec![], aliases: vec![],
             external_deps: vec![],
             opaque: false,
             provenance: AdmissionProvenance::UnboundResult }],

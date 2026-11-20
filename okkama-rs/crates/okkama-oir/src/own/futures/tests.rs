@@ -53,7 +53,7 @@ fn creation_retains_offered_cold_inputs_and_their_external_deps() {
         },
     ]);
     // The cache duty goes to the owner state (D12): the Future has no fresh family.
-    assert_eq!(summary.results, [ResultRelation { beside: vec![], held: vec![],
+    assert_eq!(summary.results, [ResultRelation { beside: vec![], held: vec![], several: false,
         fresh: vec![], aliases: vec![SummarySelection::Parameter(1)], external_deps: vec![1], opaque: false,
         provenance: AdmissionProvenance::UnboundResult,
     }]);
