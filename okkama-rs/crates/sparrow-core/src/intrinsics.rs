@@ -502,6 +502,7 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
         }
         GroupStart => {
             let (receiver, future) = (args[0], args[1]);
+            let dead = runtime.owner_is_dead(receiver);
             let Some(group) = runtime.group_mut(receiver) else {
                 return program_failure("Invalid future group");
             };
@@ -509,12 +510,24 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             if group.sealed && !known {
                 return Fail(thrown(runtime, function, 0, &[]));
             }
+            // #817: after the group's owner closed, a new member has no group duty to join. It settles on its own:
+            // a finished one releases its outcome at the call, a running one detaches to the root.
+            let orphan = !known && dead;
             if !known {
                 group.entries.push(future);
                 group.owned.push(false);
-                runtime.group_own(receiver, future);
+                if !orphan {
+                    runtime.group_own(receiver, future);
+                }
             }
             runtime.spawn(ctx, future);
+            if orphan && unsafe { (*ctx).status } == crate::runtime::OK {
+                if crate::tasks::get(future, crate::tasks::STATE) == crate::tasks::RUNNING {
+                    runtime.detach_to_root(future);
+                } else if let Some(failure) = runtime.close_future(ctx, future) {
+                    return Raise(failure);
+                }
+            }
             VOID
         }
         GroupActive => {

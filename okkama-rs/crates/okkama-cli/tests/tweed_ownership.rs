@@ -378,3 +378,73 @@ fn a_destroy_failing_on_the_failure_path_stays_secondary_to_the_failure_in_fligh
     // The catch sees the primary failure (7); the destroy's own (5) rides along as secondary.
     support::assert_value(&module, "7");
 }
+
+/// Run `program` through the CLI binary; its standard output.
+fn stdout_of(name: &str, program: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("tweed-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.ok");
+    std::fs::write(&file, program).unwrap();
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_okkama"))
+        .args(["run", file.to_str().unwrap()])
+        .env("OKKAMA_STDLIB_DIR", std)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// #817 (memo OIR-2-async-remaining §2.4): a member started after its group's owner closed settles on its own,
+/// a finished one releasing its outcome at the call; a registered member still running when the owner closes
+/// detaches to the root, and the root closer destroys its outcome at shutdown, after the cancelled tasks.
+#[test]
+fn members_that_outlive_their_groups_owner_still_close_their_outcomes() {
+    let output = stdout_of("late-members", r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/scope" take FutureGroup;
+import "async/event" take Event;
+object Res { has name is string; Res(:name); label() is string { name; } destroy { Stdout().writeln("destroy " + name); } }
+object Maker {
+    Maker();
+    async make(name is string) is Res { Stdout().writeln("make " + name); Res(name: name); }
+}
+object Holding {
+    Holding();
+    async held(name is string, gate is Event) is Res { let r = Res(name: name); await gate.wait(); r; }
+}
+object Late {
+    Late();
+    async run(group is FutureGroup<Res>, gate is Event, hold is Event, done is Event) is Res {
+        await gate.wait();
+        group.start(Maker().make("late done"));
+        Stdout().writeln("after late done");
+        group.start(Holding().held("late running", hold));
+        Stdout().writeln("after late running, active " + group.active().string());
+        done.set();
+        Res(name: "late body");
+    }
+}
+object Helper {
+    Helper();
+    async go(gate is Event, hold is Event, done is Event) is void {
+        let group is FutureGroup<Res> = FutureGroup();
+        group.start(Late().run(group, gate, hold, done));
+        Stdout().writeln("owner closes");
+    }
+}
+async main() is int {
+    let gate = Event();
+    let hold = Event();
+    let done = Event();
+    await Helper().go(gate, hold, done);
+    gate.set();
+    await done.wait();
+    Stdout().writeln("end");
+    0;
+}
+"#);
+    assert_eq!(output, "owner closes\nmake late done\ndestroy late done\nafter late done\n\
+        after late running, active 2\nend\ndestroy late running\ndestroy late body\n");
+}

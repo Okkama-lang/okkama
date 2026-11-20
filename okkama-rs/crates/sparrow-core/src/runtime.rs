@@ -270,8 +270,8 @@ impl Runtime {
         let (ready, spawned, running) = (&self.ready, &self.spawned, &self.running);
         let (timers, requests) = (&self.timers, &self.io.requests);
         let states = &self.states;
-        // #881: the packets detached Futures kept, until the root closer closes them.
-        let kept: &[Word] = &[];
+        // #817: the root region of detached Futures, until the root closer closes it.
+        let kept: Vec<Word> = self.resources.root.into_iter().collect();
         // #882: the detached Futures registered as borrowers of open owners, until those owners close.
         let borrowers: Vec<Word> = Vec::new();
         self.heap.collect_with(|visit| {
@@ -810,6 +810,12 @@ impl Runtime {
             }
             if ctx.status == OK
                 && let Some(failure) = self.shutdown(&mut ctx) {
+                    let message = self.describe(&mut ctx, failure);
+                    return Err(Error(message));
+                }
+            // #817: the root closer, after the spawned tasks settled: outcomes of Futures that outlived their owners.
+            if ctx.status == OK
+                && let Some(failure) = self.close_root(&mut ctx) {
                     let message = self.describe(&mut ctx, failure);
                     return Err(Error(message));
                 }

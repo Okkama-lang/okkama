@@ -84,6 +84,11 @@ pub struct Resources {
     identities: HashMap<Word, Identity>,
     /// Work list, visited set and open containers of `resource_graph`, reused.
     scratch: (Vec<(Word, Repr)>, Vec<Word>, Vec<Walked>),
+    /// #817: the root region. A Future still running when its owner closes detaches here, not cancelled; the
+    /// root closer (`close_root`, after shutdown) closes its outcome. A GC root (`Runtime::safepoint`).
+    pub(crate) root: Option<Word>,
+    /// The root closer is running: what still runs then has nowhere further to go.
+    root_closing: bool,
     /// Containers whose walk found no free identity (#9), with `serial` at
     /// that moment: every identity they reach is at most that old. Freeing
     /// an identity no newer than `summarized` drops them all.
@@ -1059,6 +1064,49 @@ impl Runtime {
         DestroyStep::Next(primary)
     }
 
+    /// Has `object`'s owner closed it (its identity is dead)?
+    pub(crate) fn owner_is_dead(&self, object: Word) -> bool {
+        self.resources.enabled && self.owner_of(object) == Some(Owner::Dead)
+    }
+
+    /// #817: the root region, made on first use.
+    fn root_region(&mut self) -> Word {
+        if let Some(root) = self.resources.root {
+            return root;
+        }
+        let root = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        self.resources.root = Some(root);
+        root
+    }
+
+    /// #817: a Future that outlives its owner (still running) or starts after its group's owner closed: the root
+    /// owns it until shutdown.
+    pub(crate) fn detach_to_root(&mut self, future: Word) {
+        okkama_devtrace::count!("runtime", "future detached to the root");
+        let root = self.root_region();
+        self.set_owner(future, Owner::Region(root));
+        self.region_push(root, future);
+    }
+
+    /// #817: close a Future that nobody can await any more now: its outcome and what it keeps are destroyed.
+    pub(crate) fn close_future(&mut self, ctx: *mut Ctx, future: Word) -> Option<Word> {
+        let region = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        self.set_owner(future, Owner::Region(region));
+        self.region_push(region, future);
+        self.region_close(ctx, region, &[], None)
+    }
+
+    /// #817: the root closer, after shutdown has drained the spawned tasks: the outcomes of detached Futures.
+    pub(crate) fn close_root(&mut self, ctx: *mut Ctx) -> Option<Word> {
+        let root = self.resources.root.take()?;
+        self.roots.push((root, Repr::Ref));
+        self.resources.root_closing = true;
+        let failure = self.region_close(ctx, root, &[], None);
+        self.resources.root_closing = false;
+        self.roots.pop();
+        failure
+    }
+
     /// #909 2b: pin a static resource; from now on only its scope's `resource.leave`/`resource.unwind` end it.
     pub(crate) fn resource_pin(&mut self, object: Word) {
         if self.owner_of(object) == Some(Owner::Free) {
@@ -1174,6 +1222,13 @@ impl Runtime {
                     self.region_push(home, child);
                     self.dev_owned(child, home);
                 }
+                continue;
+            }
+            if !group && !self.resources.root_closing && heap::kind(self.heap.header_of(object)) == heap::FRAME
+                && crate::tasks::get(object, crate::tasks::STATE) == crate::tasks::RUNNING
+            {
+                // §2.4: a running Future outlives its owner, detached to the root with what it keeps.
+                self.detach_to_root(object);
                 continue;
             }
             self.set_owner(object, Owner::Dead);
