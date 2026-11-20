@@ -3675,11 +3675,9 @@ Blade ставит самую низкую версию, которая удов
 ```toml
 [build]
 entry = "src/main.ok"      # или список: файлы корневого модуля
-target = "sparrow"         # единственная цель
 output = "target/app.spb"  # по умолчанию target/<name>.spb
 
 [run]
-engine = "sparrow"         # единственный движок
 args = []                  # `blade run -- a b` добавляет a и b
 env = {}                   # дополнительные переменные окружения
 ```

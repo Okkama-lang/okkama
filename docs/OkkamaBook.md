@@ -3507,11 +3507,9 @@ its dependencies, so a new release of a dependency changes nothing until some
 ```toml
 [build]
 entry = "src/main.ok"      # or a list: the files of the root module
-target = "sparrow"         # the only target
 output = "target/app.spb"  # default target/<name>.spb
 
 [run]
-engine = "sparrow"         # the only engine
 args = []                  # `blade run -- a b` appends a and b
 env = {}                   # extra environment variables
 ```
