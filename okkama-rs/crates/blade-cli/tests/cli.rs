@@ -102,7 +102,7 @@ fn a_new_project_builds_and_runs_with_no_flags() {
     let built = tree.blade("app", &["build"]);
     assert!(built.status.success(), "{}", text(&built.stderr));
     assert_eq!(text(&built.stdout), "built target/app.spb\n");
-    assert_eq!(tree.calls(), ["build src/main.ok --target sparrow -o target/app.spb"]);
+    assert_eq!(tree.calls(), ["build src/main.ok -o target/app.spb"]);
 
     // Up to date: run does not build; the program's status is Blade's.
     age(&tree.0.join("app/src/main.ok"));
@@ -114,7 +114,7 @@ fn a_new_project_builds_and_runs_with_no_flags() {
     // A changed source is built again before running.
     tree.write("app/src/extra.ok", "module app;\n");
     assert_eq!(tree.blade("app", &["run"]).status.code(), Some(7));
-    assert_eq!(tree.calls(), ["build src/main.ok --target sparrow -o target/app.spb", "exec app/target/app.spb"]);
+    assert_eq!(tree.calls(), ["build src/main.ok -o target/app.spb", "exec app/target/app.spb"]);
 }
 
 #[test]
@@ -124,18 +124,19 @@ fn blade_toml_decides_what_builds_and_runs() {
     tree.write("p/more.ok", "module p;\n");
     tree.write(
         "p/blade.toml",
-        "[module]\nname = \"p\"\n\n[build]\nentry = [\"main.ok\", \"more.ok\"]\ntarget = \"sparrow\"\noutput = \"out/p.spb\"\n\n\
+        "[module]\nname = \"p\"\n\n[build]\nentry = [\"main.ok\", \"more.ok\"]\noutput = \"out/p.spb\"\n\n\
          [run]\nargs = [\"x\"]\nenv = { GREETING = \"hi\" }\n",
     );
     let built = tree.blade("p", &["build"]);
     assert!(built.status.success(), "{}", text(&built.stderr));
-    assert_eq!(tree.calls(), ["build main.ok more.ok --target sparrow -o out/p.spb"]);
+    assert_eq!(tree.calls(), ["build main.ok more.ok -o out/p.spb"]);
     assert!(tree.0.join("p/out/p.spb").is_file());
 
-    tree.write("p/blade.toml", "[run]\nengine = \"ir\"\n");
+    // One engine (owner, 2026-11-20): the old engine key is refused with its reason.
+    tree.write("p/blade.toml", "[run]\nengine = \"sparrow\"\n");
     let ran = tree.blade("p", &["run"]);
     assert!(!ran.status.success());
-    assert!(text(&ran.stderr).contains("Sparrow is the only"));
+    assert!(text(&ran.stderr).contains("[run] engine is gone: Sparrow is the only engine"));
     assert!(tree.calls().is_empty());
 }
 
@@ -144,7 +145,7 @@ fn errors_name_the_problem_and_fail() {
     let tree = Tree::new("errors");
     let cases = [
         ("[build]\nentrance = \"main.ok\"\n", "unknown key \"entrance\" in [build]"),
-        ("[run]\nengine = \"llvm\"\n", "[run] engine \"llvm\" is not sparrow"),
+        ("[build]\ntarget = \"sparrow\"\n", "[build] target is gone"),
         ("[build]\nentry = \"missing.ok\"\n", "[build] entry \"missing.ok\" does not exist"),
         ("[build]\nentry = \"bad.ok\"\n", "build failed"),
         ("[build]\nentry = \"main.ok\"\n[dependencies]\nweb = { path = \"../web\" }\n", "dependency \"web\" is not installed"),

@@ -38,15 +38,16 @@ fn ocs_reports_sparrow_whatever_the_environment() {
 }
 
 #[test]
-fn a_build_target_other_than_sparrow_is_a_usage_error() {
+fn a_build_target_is_an_unknown_option() {
     for flags in [
         &["build", "--target", "jvm", "missing.ok", "-o", "out.spb"][..],
-        &["build", "--target=jvm", "missing.ok", "-o", "out.spb"],
+        &["build", "--target=sparrow", "missing.ok", "-o", "out.spb"],
+        &["build", "--backend", "sparrow", "missing.ok", "-o", "out.spb"],
     ] {
         let output = command().args(flags).output().unwrap();
-        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.status.code(), Some(2), "{flags:?}");
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("unknown backend `jvm`"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unknown option"), "{flags:?}");
     }
 }
 

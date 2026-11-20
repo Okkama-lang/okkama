@@ -85,7 +85,7 @@ fn sparrow_reports_failures_causes_and_cleanup() {
 fn bytecode_runs_print_the_stack_in_sparrow_terms() {
     let output = std::env::temp_dir().join(format!("okkama-traces-{}.spb", std::process::id()));
     let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["build", "--target", "sparrow", "-o"])
+        .args(["build", "-o"])
         .arg(&output)
         .arg(program("recursion"))
         .status()
@@ -158,7 +158,7 @@ fn bytecode_cause_stacks_preserve_each_origin() {
     ] {
         let output = std::env::temp_dir().join(format!("okkama-cause-traces-{}-{name}.spb", std::process::id()));
         let built = Command::new(env!("CARGO_BIN_EXE_okkama"))
-            .args(["build", "--target", "sparrow", "-o"])
+            .args(["build", "-o"])
             .arg(&output)
             .arg(program(name))
             .output()

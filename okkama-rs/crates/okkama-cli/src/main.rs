@@ -66,7 +66,7 @@ USAGE:
     okkama lsp
     okkama env
     okkama ir <FILE|-> [--format text]
-    okkama build <FILE|-> [--target sparrow] -o <FILE.spb>
+    okkama build <FILE|-> -o <FILE.spb>
     okkama exec [BUDGETS] <FILE.spb>
     okkama run [-t [--filter TEXT]...] <FILE> [FILE.ok...] [ARGS...]
     okkama <FILE.ok> [FILE.ok...]
@@ -84,7 +84,7 @@ COMMANDS:
     env       Show where okkama finds std and ICU
     lsp       Run the language server (LSP over stdio) for editors
     ir        Lower a source module to IR and print its functions
-    build     Lower a source module and invoke the selected backend
+    build     Compile a program to Sparrow bytecode (.spb)
     exec      Execute a Sparrow bytecode file in this process
     run       Run a program on Sparrow (JIT)
 
@@ -108,8 +108,6 @@ IR OPTIONS:
     --format text          Output format (default: text); see `okkama help ir`
 
 BUILD OPTIONS:
-    --target sparrow      Select Sparrow bytecode (.spb; default)
-    --backend NAME        Compatibility alias for --target
     -o, --output FILE      Output artifact path (required)
 
 RUN OPTIONS:
@@ -194,18 +192,16 @@ errors exit with code 1, usage errors with code 2, and input read errors with 3.
 ";
 
 const BUILD_HELP: &str = "\
-okkama build — invoke a code generation backend
+okkama build — compile a program to Sparrow bytecode
 
 USAGE:
-    okkama build <FILE|-> [--target sparrow] -o <FILE.spb>
+    okkama build <FILE|-> -o <FILE.spb>
 
 OPTIONS:
-    --target sparrow      Generate Sparrow bytecode (default)
-    --backend NAME        Compatibility alias for --target
     -o, --output FILE      Output artifact path (required)
 
 Use `-` as input to read Okkama source from standard input.
-The pipeline is source -> AST -> module IR -> selected backend -> output file.
+The pipeline is source -> AST -> module IR -> Sparrow bytecode -> output file.
 
 Several FILE paths form one module (spec §5.1). A generation error leaves
 output intact.
@@ -474,7 +470,6 @@ struct CommandLine {
     spans: bool,
     mode: Option<String>,
     prune_tests: bool,
-    backend: Option<String>,
     output: Option<String>,
     help: bool,
 }
@@ -509,13 +504,6 @@ fn parse_command_line(args: &[String], options: CommandOptions) -> Result<Comman
             "--spans" if options == CommandOptions::Ast => line.spans = true,
             "--mode" if options == CommandOptions::Ast => line.mode = Some(value_for("--mode")?),
             "--prune-tests" if options == CommandOptions::Ast => line.prune_tests = true,
-            "--target" | "--backend" if options == CommandOptions::Build => {
-                let value = value_for(flag)?;
-                if line.backend.as_ref().is_some_and(|old| old != &value) {
-                    return Err("conflicting target selections".into());
-                }
-                line.backend = Some(value);
-            }
             "-o" | "--output" if options == CommandOptions::Build => {
                 line.output = Some(value_for(flag)?);
             }
@@ -1361,10 +1349,7 @@ fn build_command(args: &[String]) -> Outcome {
     if line.help {
         return Outcome::success(BUILD_HELP.to_string());
     }
-    let backend = match line.backend.as_deref() {
-        None | Some("sparrow") => Backend::Sparrow,
-        Some(name) => return Outcome::usage(&format!("unknown backend `{name}` (use sparrow)")),
-    };
+    let backend = Backend::Sparrow;
     let output = match line.output.as_deref() {
         Some("") => return Outcome::usage("output file path must not be empty"),
         Some(output) => output,

@@ -18,7 +18,7 @@ Okkama устроена именно так, и проходит по всем �
 
 ```sh
 okkama run test.ok
-okkama build test.ok --target sparrow -o out.spb
+okkama build test.ok -o out.spb
 sparrow out.spb
 ```
 
@@ -26,9 +26,8 @@ sparrow out.spb
 с `run -t`. Единственный движок Okkama — Sparrow (#584); IR-интерпретатор
 и его REPL удалены, JVM-бэкенд удалён в 0.6.0 (#585; последний релиз с ним —
 0.5.8).
-`build` создаёт байткод Sparrow (`--target sparrow` — по умолчанию); бинарник `sparrow` исполняет `.spb` в рантайме Sparrow (его
-текущая версия называется Tomato). `--backend` остаётся алиасом
-`--target`. `sparrow check out.spb` проверяет файл без выполнения.
+`build` создаёт байткод Sparrow, единственную цель; бинарник `sparrow` исполняет `.spb` в рантайме Sparrow (его
+текущая версия называется Tomato). `sparrow check out.spb` проверяет файл без выполнения.
 Сборка инструментов и поддержка операций описаны в
 [руководстве Rust-реализации](../okkama-rs/README.md).
 
@@ -3676,11 +3675,9 @@ Blade ставит самую низкую версию, которая удов
 ```toml
 [build]
 entry = "src/main.ok"      # или список: файлы корневого модуля
-target = "sparrow"         # единственная цель
 output = "target/app.spb"  # по умолчанию target/<name>.spb
 
 [run]
-engine = "sparrow"         # единственный движок
 args = []                  # `blade run -- a b` добавляет a и b
 env = {}                   # дополнительные переменные окружения
 ```

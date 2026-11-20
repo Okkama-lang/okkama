@@ -497,7 +497,7 @@ exit status against the same expectations.
 
 ```sh
 okkama hello.ok                              # Sparrow JIT (default), in-process
-okkama build hello.ok --target sparrow -o hello.spb && sparrow hello.spb
+okkama build hello.ok -o hello.spb && sparrow hello.spb
 ```
 
 | | Sparrow (JIT) |

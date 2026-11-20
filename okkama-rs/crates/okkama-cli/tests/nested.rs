@@ -18,7 +18,7 @@ fn program(name: &str) -> PathBuf {
 fn build(name: &str) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!("okkama-nested-{}-{name}.spb", std::process::id()));
     let status = Command::new(env!("CARGO_BIN_EXE_okkama"))
-        .args(["build", "--target", "sparrow", "-o"])
+        .args(["build", "-o"])
         .arg(&output)
         .arg(program(name))
         .status()
