@@ -92,7 +92,8 @@ fn bound_futures(module: &Module, function: FuncId, body: &Body, state: &mut Sta
             }
             Operation::Ownership(OwnershipOp::Bind { binding } | OwnershipOp::Rebind { binding })
                 if future(binding.resource.value) => {
-                let scope = body.bindings.get(binding.binding).map_or(binding.original_scope, |declared| declared.scope);
+                let scope = body.bindings.get(binding.binding)
+                    .map_or(binding.original_scope, |declared| declared.scope);
                 bound.insert(binding.resource.value, scope);
             }
             _ => {}
