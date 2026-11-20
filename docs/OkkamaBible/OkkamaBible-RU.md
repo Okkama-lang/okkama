@@ -7756,6 +7756,70 @@ the block ended
 который держит `Ledger`, читается одинаково, есть ли за ним что закрывать или
 нет, и там, где ничего не удерживается, ничего и не закрывается.
 
+### Atomic называет, но не владеет
+
+`Atomic` — изменяемая ячейка, которую делят задачи (раздел 13.11), и она
+заимствует. Объект, положенный в неё, не переходит к ней, и ячейка не
+продлевает ему жизнь: объект уничтожается, когда кончается область его
+владельца, что бы ячейка ни называла.
+
+```okkama
+module bible/atomic_borrows v1.0.0;
+
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+
+object Lamp {
+    has name is string;
+
+    Lamp(:name);
+
+    label() is string { name; }
+
+    destroy { Stdout().writeln("  " + name + " off"); }
+}
+
+main() is int {
+    let out = Stdout();
+    let hall = Lamp(name: "hall");
+    // The cell names a lamp; it does not own one.
+    let current = Atomic(hall);
+    {
+        let desk = Lamp(name: "desk");
+        current.replace(desk);
+        out.writeln("the cell names " + current.value().label());
+    }
+    // desk's block has ended, and so has desk: the cell still names it.
+    out.writeln("after the block the cell names " + current.value().label());
+    current.replace(hall);
+    out.writeln("the cell names " + current.value().label() + " again");
+    0;
+}
+```
+
+Вывод:
+
+```text
+the cell names desk
+  desk off
+after the block the cell names desk
+the cell names hall again
+  hall off
+```
+
+- `hall` принадлежит `main`, и ячейка сначала называет его.
+- `desk` принадлежит внутреннему блоку. Ячейка называет его изнутри блока, и
+  блок всё равно уничтожает его, когда кончается.
+- После блока ячейка называет уже выключенную лампу. Её поля читаются, но всё,
+  что она держала, закрыто, и вызов, которому нужен ресурс, отказывает так же,
+  как с закрытым ресурсом (раздел 11.10).
+
+Это цена ячейки, которую могут читать многие задачи: если бы запись в неё
+передавала владение, ячейка стала бы владельцем, которого не закрывает ни одна
+область. Кладите в `Atomic` то, что переживает её: объект, которым владеет её
+собственная область, — или держите владельца в задаче, которая живёт столько
+же, сколько ячейка (раздел 20.6).
+
 ## 11.6 Ресурсы в коллекциях и замыканиях
 
 Контейнеры не владеют, а несут. Словарь дескрипторов, массив соединений и

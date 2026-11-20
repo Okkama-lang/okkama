@@ -211,6 +211,27 @@ A role does not make its values resources; each value decides for itself.
 Code that holds a `Ledger` reads the same whether the ledger behind it has
 something to close or not, and nothing is closed where nothing is held.
 
+### An Atomic names, it does not own
+
+`Atomic` is the mutable cell tasks share (Section 13.11), and it borrows.
+Putting an object into it does not move the object, and the cell does not keep
+it alive: the object is destroyed when its owner's scope ends, whatever the
+cell still names.
+
+{{example:11-atomic-borrows}}
+
+- `hall` is owned by `main`, and the cell starts by naming it.
+- `desk` is owned by the inner block. The cell names it from the inside of the
+  block, and the block still destroys it when it ends.
+- After the block the cell names a lamp that is already off. Its fields can
+  still be read, but whatever it held has been closed, and a call that needs
+  the resource fails as a closed one does (Section 11.10).
+
+The rule is the price of a cell that many tasks may read: if writing to it
+moved ownership, the cell would become an owner that no scope closes. Put into
+an `Atomic` what outlives it, an object its own scope owns, or keep the owner
+in a task that lives as long as the cell (Section 20.6).
+
 ## 11.6 Resources in collections and closures
 
 Containers do not own; they carry. A map of handles, an array of
