@@ -130,6 +130,57 @@ impl Engine<'_, '_> {
         }
     }
 
+    /// #876 (Fable): a result that stores Futures declares, by type, what their caches hold: the creations of this
+    /// body that a cache holds, and what the fresh families of calls bring at their sites (the callees' entries).
+    /// Compared as sets, as for a bare Future (#873).
+    fn stored_held_checked(&mut self, flow: &Flow, relation: &ResultRelation, values: &[ValueId]) {
+        let pieces: Vec<_> = values.iter().filter(|value| self.body.values.get(**value).ok()
+            .and_then(|data| self.module.types.get(data.ty).ok()) == Some(&Type::Service(ServiceType::Own)))
+            .flat_map(|value| flow.tokens[value.as_u32() as usize].pieces.iter().cloned()).collect();
+        let mut held = BTreeSet::new();
+        for piece in &pieces {
+            if matches!(piece.origin, Origin::Input(_)) {
+                continue;
+            }
+            // As for a bare Future: a creation of this body that a cache holds brings its value's type; a piece of a
+            // call's fresh family brings what the callee declares held at its site; anything else held is unknown.
+            let cached = piece.holder.is_some_and(|holder| holder != piece.origin);
+            let direct = cached.then(|| self.body.values.iter()
+                .find(|(id, _)| flow.identities[id.as_u32() as usize] == Some(piece.origin))
+                .map(|(_, data)| data.ty)).flatten();
+            match (direct, self.call_held_types(piece.origin)) {
+                (Some(ty), _) => {
+                    held.insert(Some(ty));
+                }
+                (None, Some(types)) => held.extend(types.into_iter().map(Some)),
+                (None, None) if cached => {
+                    held.insert(None);
+                }
+                (None, None) => {}
+            }
+        }
+        let declared: BTreeSet<_> = relation.held.iter().map(|entry| Some(entry.ty)).collect();
+        if held != declared {
+            self.error(R::B51, "a returned value's caches hold creations other than its relation declares");
+        }
+    }
+
+    /// #876: what a call's relations declare held at the fresh site of `origin`, when a call created it.
+    fn call_held_types(&self, origin: Origin) -> Option<Vec<TypeId>> {
+        let (op, site) = match origin {
+            Origin::Instruction(inst, site) => (&self.body.insts.get(inst).ok()?.op, site),
+            Origin::Invoke(block, site) => match &self.body.blocks.get(block).ok()?.term.kind {
+                TermKind::InvokeOwn { op, .. } => (&**op, site),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let (call, _, _) = super::super::summaries::call(op)?;
+        let summary = self.module.summaries.get(call.summary?).ok()?;
+        Some(summary.results.iter().flat_map(|relation| &relation.held)
+            .filter(|entry| entry.site.as_u32() == site).map(|entry| entry.ty).collect())
+    }
+
     /// #873 (Fable): the types a piece that a returned Future holds brings into its cache. A creation of this body
     /// brings its value's type. A piece of a call's fresh family brings what the callee's relation declares held at
     /// its site, which the callee's exit checked. The Future's own identity brings only that, or nothing when this
@@ -917,11 +968,14 @@ impl Engine<'_, '_> {
             if !relation.beside.is_empty() && !future {
                 self.error(R::B51, "only a bare Future result declares entries beside it");
             }
-            if !relation.held.is_empty() && !future {
-                self.error(R::B51, "only a bare Future result declares creations its cache holds");
+            let holds = self.body.values.get(*value).is_ok_and(|data| self.holds_futures(data.ty));
+            if !relation.held.is_empty() && !holds {
+                self.error(R::B51, "only a result that can hold a Future declares creations a cache holds");
             }
             if future && summary.entry_kind == EntryKind::CallBoundary {
                 self.beside_checked(flow, *value, relation, values, &arguments, summary);
+            } else if holds && summary.entry_kind == EntryKind::CallBoundary {
+                self.stored_held_checked(flow, relation, values);
             }
             if summary.entry_kind == EntryKind::CallBoundary {
                 let keys = flow.refs[value.as_u32() as usize].clone();

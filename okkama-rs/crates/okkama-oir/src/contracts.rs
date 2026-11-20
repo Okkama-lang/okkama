@@ -286,8 +286,9 @@ pub struct ResultRelation {
     /// #865 (§6.3d): for a bare Future result only, the entries of its result packet that the Future does not hold.
     /// Every other fresh site and taken parameter of the relation is held by the Future's cache (D25.1).
     pub beside: Vec<BesideEntry>,
-    /// #873 (Fable): for a bare Future result only, the types of the creations its cache holds. The caller that admits
-    /// the Future counts their destroy effects in the envelope of the scope that may settle it.
+    /// #873, #876 (Fable): for a result that can hold a Future, bare or stored, the types of the creations its Futures'
+    /// caches hold. The caller that admits it counts their destroy effects in the envelope of the scope that may
+    /// settle them.
     pub held: Vec<HeldSite>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
