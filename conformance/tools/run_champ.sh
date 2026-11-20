@@ -11,7 +11,7 @@
 #                    running Sparrow again (same profile and suite tree)
 #   OCS_COMPARE      an earlier blockers.json to diff against
 #   OCS_TARGET_DIR   cargo target root for both builds (default: the adapters'
-#                    .target; Champ builds into its engine-champ subdirectory)
+#                    .target; Champ builds into its engine-champ subdirectory, gate profile)
 #
 # Writes OUT_DIR/sparrow/, OUT_DIR/champ/ (ocs run directories),
 # OUT_DIR/blockers.json and OUT_DIR/blockers.txt. Exits non-zero only when a
