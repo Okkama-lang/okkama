@@ -542,8 +542,17 @@ impl Universe {
                     .is_some_and(|ty| futures::is_future(module, *ty));
                 for selection in &relation.aliases {
                     let selected = instantiate(selection, &arguments, values, budget)?;
-                    let beside = !matches!(selection, SummarySelection::Union(_))
+                    let atom = !matches!(selection, SummarySelection::Union(_));
+                    let beside = atom
                         && relation.beside.contains(&BesideEntry::Parameter(normal::parameter(selection)));
+                    // #820 with #879: an input the result keeps whose own relation names nothing (a FutureGroup an
+                    // intrinsic made here) is an identity of the call's family that no site of the caller shows.
+                    let owning = atom && arguments.get(usize::from(normal::parameter(selection)))
+                        .and_then(|argument| body.values.get(*argument).ok())
+                        .is_some_and(|data| types.get(&data.ty).is_some_and(TypeClassification::may_own));
+                    if owning && selected.fresh.is_empty() && selected.aliases.is_empty() {
+                        result.several = true;
+                    }
                     if creator && !beside {
                         result.held.extend(selected.fresh.iter().filter_map(|site| {
                             summaries::site_type(body, *site, stride).map(|ty| HeldSite { site: *site, ty })

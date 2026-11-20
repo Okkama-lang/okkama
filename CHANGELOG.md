@@ -51,6 +51,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - Two more partition fixes from the review (#862):
     - a selection that names a Future no longer moves a bound duty;
     - only an admissible selection leaves a returned Future entry behind without a check.
+- **A function can return a new object that stores a FutureGroup it made (#820).** Champ refused it at load
+  (`FRESH_ORIGIN`). The group's entry was an identity of the constructor's family that no site of the function
+  showed, so the function looked like it returned one fresh identity. Its relation now says `several` (#879).
+  Also pinned: a timeout on a fresh temporary receiver (`await Within(…).outcome()`, #840) runs under Full.
 - **A function that takes a FutureGroup keeps its precise failures (#877).** Since #875, a function whose entry
   can carry a Future assumes every destroy failure. Own counted a FutureGroup's members among those Futures, and the
   loader did not. A group starts every member it registers and holds no cold Future, so own now skips its members
