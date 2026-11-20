@@ -171,9 +171,10 @@ covered (owner, 2026-11-17). The book aims at about 400 pages per language.
 - 2026-11-20: 11.5 gains "A role can hide a resource" (`11-role-resource`): a role-typed field holds a
   resource or a plain value, and ownership follows the value; the records' array moves with its vaults to the
   caller. Checked on 0.5.8 and tree Tomato with Tweed's #905. `build.py --check` passes `--engine sparrow`
-  only to a toolchain that knows it (0.6.0 has one engine and no such option). **Open:** 20.9's claim that a
-  child started as a temporary keeps what it borrows was true on Champ (#882), which is gone; on Tomato a
-  temporary child reads a lent resource after its destroy (#914). Fix #914 before the release, or revise 20.9.
+  only to a toolchain that knows it (0.6.0 has one engine and no such option). 20.9's claim that a child
+  started as a temporary keeps what it borrows was true on Champ (#882), which is gone; on Tomato a temporary
+  child read a lent resource after its destroy (#914). Fixed the same day (`FutureGroup.start` no longer
+  adopts a temporary; the starting scope hands it to the group with what it borrows); both forms are tested.
   Chapter 23 no longer shows `--target sparrow` (one engine, one target).
 
 - 2026-11-17, later: chapter 20's std coordination tools get examples
