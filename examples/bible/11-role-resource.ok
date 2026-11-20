@@ -1,0 +1,58 @@
+module bible/role_resource v1.0.0;
+
+import "io/stdout" take Stdout;
+
+// Any ledger answers its balance; only a vault holds something to close.
+role Ledger {
+    balance() is int;
+}
+
+object Account does Ledger {
+    has amount is int;
+
+    Account(:amount);
+
+    balance() is int { amount; }
+}
+
+object Vault does Ledger {
+    has amount is int;
+
+    Vault(:amount);
+
+    balance() is int { amount * 2; }
+
+    destroy { Stdout().writeln("  vault " + amount.string() + " closed"); }
+}
+
+object Record {
+    has id is int;
+    has ledger is Ledger;
+
+    Record(:id, :ledger);
+
+    total() is int { ledger.balance(); }
+}
+
+object Bank {
+    Bank();
+
+    // Every tenth record holds a vault; the array of records is returned.
+    records(count is int) is @Record {
+        (0..count).map() -> i {
+            let ledger is Ledger = if i % 10 == 0 { Vault(amount: i); } else { Account(amount: i); };
+            Record(id: i, ledger: ledger);
+        };
+    }
+}
+
+main() is int {
+    let out = Stdout();
+    {
+        let records = Bank().records(25);
+        let sum = records.reduce(0) -> total, record { total + record.total(); };
+        out.writeln("main owns 25 records, total " + sum.string());
+    }
+    out.writeln("the block ended");
+    0;
+}
