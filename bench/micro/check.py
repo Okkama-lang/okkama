@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """The micro-benchmark programs as correctness tests: no timing, no Docker.
 
-    bench/micro/check.py --okkama BIN [--pipeline oir2] [--jobs N] [--cage] [--stdlib DIR] [--only a,b]
+    bench/micro/check.py --okkama BIN [--jobs N] [--cage] [--stdlib DIR] [--only a,b]
 
 Every program of manifest.json runs with N=17 and N=31 (warmup 3), as run.py's
 pre-check does, and its checksums must equal the independent oracles of
-oracles.py; stderr must be empty and the exit status 0. `--pipeline oir2`
-runs Champ (a champ-abi build). The host runs the programs directly: use it
+oracles.py; stderr must be empty and the exit status 0. The host runs the programs directly: use it
 in CI, or with `--cage` (okkama-rs/tools/new-runtime/caged.py) on a personal
 machine. Timings belong to run.py. Exit status 0 when every program passed.
 """
@@ -32,8 +31,6 @@ WARMUP = 3
 def check(name, source, args):
     command = [args.okkama, "run", "--timeout", str(args.timeout), str(source)]
     env = dict(os.environ, OKKAMA_STDLIB_DIR=args.stdlib, OKKAMA_TRACE="off")
-    if args.pipeline:
-        env["OKKAMA_PIPELINE"] = args.pipeline
     for n in COUNTS:
         run = command + [str(n), str(WARMUP)]
         if args.cage:
@@ -59,7 +56,6 @@ def check(name, source, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--okkama", required=True)
-    parser.add_argument("--pipeline", choices=["oir2"], help="oir2: Champ (a champ-abi build)")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--cage", action="store_true")
@@ -95,7 +91,7 @@ def main():
         print(f"Failed {len(failed)}/{len(results)} programs")
     else:
         print("All programs match their oracles.")
-    print(f"Programs={len(results)}, N={','.join(map(str, COUNTS))}, pipeline={args.pipeline or 'sparrow'}")
+    print(f"Programs={len(results)}, N={','.join(map(str, COUNTS))}, engine=sparrow")
     return 1 if failed else 0
 
 

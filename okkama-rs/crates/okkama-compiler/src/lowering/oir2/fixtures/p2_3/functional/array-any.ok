@@ -1,8 +1,0 @@
-module app;
-main() is int {
-    let xs is @int = [1, 2];
-    xs.any() -> x {
-        x > 0;
-    };
-    0;
-}

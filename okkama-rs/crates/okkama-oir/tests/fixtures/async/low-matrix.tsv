@@ -1,3 +1,0 @@
-rule	positive	negative
-low-duty-settled-twice	low/async-never-awaited.oir	low-invalid/low-duty-settled-twice.oir
-low-cancel-outside-final-exit	low/async-plain-await.oir	low-invalid/low-cancel-outside-final-exit.oir

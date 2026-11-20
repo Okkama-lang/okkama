@@ -1,8 +1,0 @@
-{
-  "repeated_extraction_packet": [],
-  "overlap_destroy_count": 1,
-  "full_deps": [
-    "child-key"
-  ],
-  "borrowed_other_owner": "external"
-}

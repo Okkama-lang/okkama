@@ -8,7 +8,6 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-champ-abi = ["sparrow-core/champ-abi"]
 allocation-stats = ["dep:okkama-allocation-counter"]
 
 [dependencies]

@@ -1,1 +1,0 @@
-frontend: Map key type Res cannot be a key: Res has a destroy block

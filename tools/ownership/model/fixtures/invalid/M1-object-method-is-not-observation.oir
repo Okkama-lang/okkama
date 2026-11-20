@@ -1,5 +1,0 @@
-# Draft 3 M1
-profile own
-scope.begin s
-new a A
-observe object.label a

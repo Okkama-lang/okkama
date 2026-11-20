@@ -1,8 +1,0 @@
-module app;
-main() is int {
-    let xs = 1..=2;
-    xs.reduce(0) -> acc, x {
-        acc + x;
-    };
-    0;
-}

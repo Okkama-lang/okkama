@@ -1,9 +1,0 @@
-module app;
-object Owner {
-    has n is int;
-    Owner(:n);
-    cap View {
-        value is int { n + 1; }
-    }
-}
-main() is int { Owner(n: 4)::View::value; }

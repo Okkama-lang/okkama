@@ -1,5 +1,0 @@
-module app;
-async test "async body" {
-    test.ok(true);
-    test.is(2, 2);
-}

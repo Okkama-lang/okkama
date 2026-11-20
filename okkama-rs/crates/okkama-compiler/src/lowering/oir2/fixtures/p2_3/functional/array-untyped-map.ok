@@ -1,7 +1,0 @@
-module app;
-main() is int {
-    let mapped is @int = [].map() -> x {
-        1;
-    };
-    0;
-}

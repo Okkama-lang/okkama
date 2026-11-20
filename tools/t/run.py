@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The t/ suite (#245): self-checking Okkama programs that print TAP.
 
-    tools/t/run.py [--configs sparrow] [--jobs N] [--cage] [--champ-okkama BIN] [FILE|DIR ...]
+    tools/t/run.py [--configs sparrow] [--jobs N] [--cage] [FILE|DIR ...]
 
 Every file under t/ (or the ones given) runs on every configuration:
 
@@ -9,9 +9,6 @@ Every file under t/ (or the ones given) runs on every configuration:
     sparrow-passes-off Sparrow with OKKAMA_IR_PASSES=none
     sparrow-gc-stress  Sparrow with SPARROW_CORE_GC_STRESS=1 (a collection
                     at every safepoint, freed cells poisoned)
-    champ           Champ: the OIR-2 pipeline (OKKAMA_PIPELINE=oir2) on a
-                    champ-abi build, given by --champ-okkama (cargo build
-                    -p okkama-cli --features champ-abi)
 
 Before the run, tools/t/gen.py writes the generated families to t/gen
 (`--no-generate` keeps what is there). A file prints `1..N`, then `ok K - name` or `not ok K - name` for K = 1..N in
@@ -41,12 +38,11 @@ SUPPORT = os.path.join(SUITE, "support")
 OKKAMA = os.path.join(ROOT, "okkama-rs", "target", "release", "okkama")
 CAGE = os.path.join(ROOT, "okkama-rs", "tools", "new-runtime", "caged.py")
 
-# configuration: (engine, environment, binary: "okkama" or "champ_okkama")
+# configuration: (engine, environment, binary option)
 CONFIGS = {
     "sparrow": ("sparrow", {}, "okkama"),
     "sparrow-passes-off": ("sparrow", {"OKKAMA_IR_PASSES": "none"}, "okkama"),
     "sparrow-gc-stress": ("sparrow", {"SPARROW_CORE_GC_STRESS": "1"}, "okkama"),
-    "champ": ("sparrow", {"OKKAMA_PIPELINE": "oir2"}, "champ_okkama"),
 }
 
 PLAN = re.compile(r"^1\.\.(\d+)$")
@@ -116,7 +112,6 @@ def main():
     parser.add_argument("--configs", default="sparrow")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     parser.add_argument("--okkama", default=OKKAMA)
-    parser.add_argument("--champ-okkama", help="the champ-abi build for the champ configuration")
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--max-memory", default="1G")
     parser.add_argument("--cage", action="store_true")
@@ -130,8 +125,6 @@ def main():
     # Programs run from their own directory: a binary needs an absolute path.
     for binary in sorted({CONFIGS[config][2] for config in configs}):
         option = "--" + binary.replace("_", "-")
-        if getattr(args, binary) is None:
-            parser.error(f"the champ configuration needs {option}")
         setattr(args, binary, os.path.abspath(getattr(args, binary)))
         if not os.access(getattr(args, binary), os.X_OK):
             parser.error(f"no okkama binary at {getattr(args, binary)} (build it or pass {option})")

@@ -48,10 +48,8 @@ def assignment(value):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=('engines', 'ab', 'stats', 'tap', 'two-toolchains'))
+    p.add_argument('mode', choices=('engines', 'ab', 'stats', 'tap'))
     p.add_argument('--toolchain', type=Path, help='installed bin/ and lib/okkama/std')
-    from oracle_two import add_arguments
-    add_arguments(p)
     p.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
     p.add_argument('--corpus', action='append', choices=('ownership', 'conformance', 'std', 't', 'bench'),
                    help='repeat to select corpora; default: all available')
@@ -440,12 +438,6 @@ def main():
         p.error('--jobs must be positive')
     if not args.allow_host and not in_container():
         p.error('refusing to execute outside a container; use oracle-docker.sh or explicitly --allow-host')
-    if args.mode == 'two-toolchains':
-        from oracle_two import run_suite
-        try:
-            return run_suite(args)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            p.error(str(exc))
     if args.toolchain is None:
         p.error('--toolchain is required')
     args.root = args.root.resolve()

@@ -1,6 +1,0 @@
-# review/15-error-payload-rejected
-profile own
-scope.begin s
-new resource R
-error.payload resource
-scope.end s

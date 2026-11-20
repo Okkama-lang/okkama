@@ -1,4 +1,0 @@
-module app;
-role Label { label() is int; }
-object Box does Label { Box(); label() is int { 1; } }
-main() is int { let r is Label = Box(); r.missing(); }

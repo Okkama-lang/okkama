@@ -12,40 +12,17 @@ Last update: 2026-11-20, after wave/78. The working branch of 0.6.0 is `release/
 | cp | feature/754-cancel-docs | old | unknown: check before use |
 | r060 | wave/18 | old | unknown: check before use |
 
-## Champ, in numbers (Wave CI, run 44735863424, release before wave/77)
+## Champ removed (#911, 2026-11-20)
 
-- Conformance: 1022/1046 after wave/77, 0 timeouts.
-- Remaining blockers:
-  - async destroy D1 (6);
-  - channels Q2 (7);
-  - TCP race SPB_SCHEDULE → FRESH_PACKET (5);
-  - own budget on SQLite (2);
-  - smaller items.
-- Corpora:
+The following are gone (branch feature/911-remove-champ, about 355k lines):
+- the OIR-2 pipeline: the okkama-oir crate, `lowering/oir2` and `codegen/sparrow_oir2`;
+- SPB 17: `okkama-sparrow/src/spb17`, whose shared `Repr`, `TraceSlot` and `OBJECT_KIND` moved to
+  `okkama_sparrow::layout`;
+- the Champ runtime and JIT (`sparrow-core/src/champ`, `jit/champ`) and every `champ-abi` cfg (feature removed);
+- the Champ tests, the conformance adapter's champ engine with its blockers ranking, the verifier differential,
+  the P1 two-toolchain oracle and the OIR-2 reference model.
 
-  | Corpus | Champ fails |
-  |---|---|
-  | t/ | 78 of 141 files |
-  | Bible examples | 90 of 240 |
-  | examples/ | 29 of 69 |
-  | micro | 4 of 75 |
-
-  Sparrow passes all of them, including 50 729 t/ checks.
-- Failure buckets, filed as sub-issues of #894:
-
-  | Ticket | Bucket | Cases |
-  |---|---|---|
-  | #895 | diagnostics printed as Debug | 61 |
-  | #896 | closure identity (wrong output) | 2 |
-  | #897 | runtime memory budget | 42 |
-  | #898 | own budget | ~30 |
-  | #899 | SPB generation rejects its own output | — |
-  | #900 | Atomic of objects or arrays | ~20 |
-  | #901 | verifier and lowering rejections | — |
-  | #902 | unsupported builtins | — |
-
-- First devtrace reading (a 50-line race, debug build): verify_load takes 21.5 s of about 34 s, own's analysis of
-  main takes 1.87M work units, and the native-contract catalogue takes 1.7 s.
+The parked branch feature/847-schedule (worktree sch) is obsolete: remove it.
 
 ## Tweed (decided 2026-11-20): phase 0 measurements
 
@@ -111,8 +88,7 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
 
 ## Next
 
-1. #911 step 1 (this wave/80): the Wave CI runs only the Tomato pipeline. Gone: the champ, oir and
-   differential parts, the champ-abi clippy, conformance on Champ, the Champ blockers and corpora on Champ.
+1. #911 is done: step 1 (CI) in wave/80, step 2 (code) in wave/81.
 2. #908 is done: in the container 11-ownership takes 100.5 ms on Tomato, 23.0 ms on Tweed and 28.2 ms on CPython.
    Command and table: bench/ownership/README.md.
 3. #909, phase 2: elide region tracking of values that do not escape (a reduce accumulator's versions), plus

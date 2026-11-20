@@ -1,9 +1,0 @@
-{
-  "demand": "want",
-  "checkpoints": [
-    {
-      "at": "after-branch",
-      "A_alive": true
-    }
-  ]
-}

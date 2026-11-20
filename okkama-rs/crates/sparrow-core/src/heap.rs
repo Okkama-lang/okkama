@@ -19,7 +19,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 pub const FREE: u8 = 0;
-pub const OBJECT: u8 = okkama_sparrow::spb17::layout::OBJECT_KIND;
+pub const OBJECT: u8 = okkama_sparrow::layout::OBJECT_KIND;
 pub const STRING: u8 = 2;
 pub const ARRAY: u8 = 3;
 pub const BIGINT: u8 = 4;
@@ -84,26 +84,7 @@ pub const PAGE_BYTES: usize = PAGE_WORDS * 8;
 /// Cell sizes in words, header included. Async frames are seven words plus
 /// one per register: classes up to 128 words keep frames of large functions
 /// on free lists instead of separate allocations.
-#[cfg(not(feature = "champ-abi"))]
 pub const CLASSES: [usize; 18] = [2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128];
-/// Measurement hook for review m4. Change only for the controlled G2 size-class experiment.
-#[cfg(feature = "champ-abi")]
-pub(crate) const CHAMP_SEVEN_WORD_CLASS: bool = false;
-#[cfg(feature = "champ-abi")]
-pub const CLASSES: [usize; 18 + CHAMP_SEVEN_WORD_CLASS as usize] = {
-    let baseline = [2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128];
-    let mut result = [0; 18 + CHAMP_SEVEN_WORD_CLASS as usize];
-    let mut index = 0;
-    while index < result.len() {
-        result[index] = if CHAMP_SEVEN_WORD_CLASS && index == 5 {
-            7
-        } else {
-            baseline[index - (CHAMP_SEVEN_WORD_CLASS && index > 5) as usize]
-        };
-        index += 1;
-    }
-    result
-};
 /// Direct word-count lookup, generated from the same classes used by pages
 /// and inline JIT allocation. Construction fails at compile time if the
 /// canonical classes cease to be strictly increasing or their indices no
@@ -199,7 +180,7 @@ pub struct Layouts {
 
 /// A slot that can contain a pointer. Keep `Int`: its word can be a BigInt.
 /// Indices are in words after the header, just like the full layouts.
-pub(crate) use okkama_sparrow::spb17::layout::TraceSlot;
+pub(crate) use okkama_sparrow::layout::TraceSlot;
 
 /// Built once from the final layouts, including runtime-specific overrides.
 /// Boxed slices have no spare capacity and are never changed during collection.
@@ -266,10 +247,6 @@ pub struct HeapStats {
 pub struct Heap {
     // Neither table may be replaced independently: stale indices could lose roots.
     layouts: Layouts,
-    #[cfg(feature = "champ-abi")]
-    object_layouts: Box<[crate::champ::ObjectRuntimeLayout]>,
-    #[cfg(feature = "champ-abi")]
-    champ_teardown: bool,
     trace_layouts: TraceLayouts,
     pages: Vec<Page>,
     /// Free list heads per class; a free cell's second word links the next.
@@ -412,16 +389,7 @@ impl Heap {
     }
 
     pub fn new(layouts: Layouts) -> Self {
-        #[cfg(feature = "champ-abi")]
-        let object_layouts = layouts.objects.iter().map(|storage| {
-            crate::champ::ObjectRuntimeLayout::new(storage.clone(), crate::champ::LayoutFacts::default(), vec![])
-                .expect("plain heap layout")
-        }).collect();
         Self {
-            #[cfg(feature = "champ-abi")]
-            object_layouts,
-            #[cfg(feature = "champ-abi")]
-            champ_teardown: false,
             trace_layouts: TraceLayouts::new(&layouts),
             layouts,
             pages: Vec::new(),
@@ -451,23 +419,7 @@ impl Heap {
         }
     }
 
-    /// Install final descriptors atomically with their storage and GC tables.
-    #[cfg(feature = "champ-abi")]
-    pub fn new_champ(layouts: Layouts, objects: Box<[crate::champ::ObjectRuntimeLayout]>) -> Self {
-        assert_eq!(layouts.objects.len(), objects.len());
-        let mut heap = Self::new(layouts);
-        for (index, object) in objects.iter().enumerate() {
-            assert_eq!(heap.layouts.objects[index], object.storage_fields());
-            assert_eq!(heap.trace_layouts.objects[index].as_ref(), object.trace_layout());
-        }
-        heap.object_layouts = objects;
-        heap
-    }
 
-    #[cfg(feature = "champ-abi")]
-    pub fn object_runtime_layout(&self, descriptor: u32) -> &crate::champ::ObjectRuntimeLayout {
-        &self.object_layouts[descriptor as usize]
-    }
 
     /// Full layouts for allocation and resource walks. Read-only so the
     /// collector's precomputed descriptors cannot become stale.
@@ -615,7 +567,6 @@ impl Heap {
 
     // ---- objects ----
 
-    #[cfg(not(feature = "champ-abi"))]
     pub fn object_new(&mut self, descriptor: u32, fields: &[Word]) -> Word {
         self.counted("object", descriptor, fields.len().max(1) + 1);
         let object = self.allocate(fields.len().max(1) + 1);
@@ -626,42 +577,7 @@ impl Heap {
         }
         object
     }
-    /// Allocate incomplete storage. Completion is an explicit Runtime operation.
-    #[cfg(feature = "champ-abi")]
-    pub fn object_new(&mut self, descriptor: u32, fields: &[Word]) -> Word {
-        let layout = self.object_runtime_layout(descriptor);
-        assert!(fields.len() <= layout.storage_field_count());
-        let words = layout.allocation_words();
-        let header = layout.header(descriptor);
-        self.counted("object", descriptor, words);
-        let object = self.allocate(words);
-        // SAFETY: the descriptor reserves all storage, four tail words and minimum padding.
-        unsafe {
-            std::ptr::write_bytes(object as *mut u64, 0, words);
-            *(object as *mut u64) = header;
-            std::ptr::copy_nonoverlapping(fields.as_ptr(), (object + 8) as *mut u64, fields.len());
-        }
-        object
-    }
 
-    /// Fresh header/tail; copy storage only, then apply verified physical-slot updates.
-    #[cfg(feature = "champ-abi")]
-    pub fn object_successor(&mut self, source: Word, updates: &[(usize, Word)]) -> Word {
-        let header = self.header_of(source);
-        assert_eq!(kind(header), OBJECT);
-        let descriptor = payload(header);
-        let count = self.object_runtime_layout(descriptor).storage_field_count();
-        assert!(updates.iter().all(|&(index, _)| index < count));
-        let successor = self.object_new(descriptor, &[]);
-        // SAFETY: distinct live allocations of the same final descriptor. Allocation cannot collect.
-        unsafe {
-            std::ptr::copy_nonoverlapping((source + 8) as *const u64, (successor + 8) as *mut u64, count);
-        }
-        for &(index, value) in updates {
-            self.set_field(successor, index, value);
-        }
-        successor
-    }
 
     /// SAFETY of the accessors below: `object` is a live object of the right
     /// kind and the index is within its layout, as the verifier guarantees.
@@ -1601,10 +1517,7 @@ impl Heap {
                 }
             };
             match kind(header) {
-                #[cfg(not(feature = "champ-abi"))]
                 OBJECT => fields(&self.trace_layouts.objects[payload(header) as usize], &mut push),
-                #[cfg(feature = "champ-abi")]
-                OBJECT => fields(self.object_runtime_layout(payload(header)).trace_layout(), &mut push),
                 CLOSURE => fields(&self.trace_layouts.closures[payload(header) as usize], &mut push),
                 FRAME => fields(&self.trace_layouts.frames[payload(header) as usize], &mut push),
                 // A shared version keeps its buffer alive; the buffer traces
@@ -1719,10 +1632,6 @@ impl Heap {
                     continue;
                 }
                 if kind(header) != FREE {
-                    #[cfg(feature = "champ-abi")]
-                    if !self.champ_teardown {
-                        crate::champ::check_sweep(header, self.stress);
-                    }
                     unsafe { release(address, header) };
                     unsafe { *(address as *mut u64) = 0 };
                 }
@@ -1749,10 +1658,6 @@ impl Heap {
                 external_live += unsafe { owned_bytes(address, header) };
                 true
             } else {
-                #[cfg(feature = "champ-abi")]
-                if !self.champ_teardown {
-                    crate::champ::check_sweep(header, self.stress);
-                }
                 unsafe { release(address, header) };
                 false
             }
@@ -1848,10 +1753,6 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // Terminal teardown (including STOP/host drop) does not promise language cleanup.
         // Only collection of a running heap checks lost ownership roots.
-        #[cfg(feature = "champ-abi")]
-        {
-            self.champ_teardown = true;
-        }
         // Release Rust data of every remaining object.
         self.collect(|_| {});
     }

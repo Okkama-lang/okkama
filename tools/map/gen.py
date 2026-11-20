@@ -26,25 +26,19 @@ OUT = os.path.join(ROOT, "docs", "map")
 LAYERS = [
     ("okkama-compiler/src/syntax", "front"),
     ("okkama-compiler/src/analysis", "front"),
-    ("okkama-compiler/src/lowering/oir2", "lower"),
-    ("okkama-compiler/src/lowering", "lower-oir1"),
-    ("okkama-oir/src/own", "own"),
-    ("okkama-oir/src/verify", "verify"),
-    ("okkama-oir/src/coro", "coro"),
-    ("okkama-oir/src/low", "low"),
-    ("okkama-oir/src", "oir"),
-    ("okkama-compiler/src/codegen/sparrow_oir2", "codegen"),
-    ("okkama-compiler/src/codegen", "codegen-oir1"),
+    ("okkama-compiler/src/lowering", "lower"),
+    ("okkama-compiler/src/ir", "ir"),
+    ("okkama-compiler/src/codegen", "codegen"),
     ("okkama-compiler/src", "compiler"),
-    ("okkama-sparrow/src/spb17", "loader"),
     ("okkama-sparrow/src", "spb"),
-    ("sparrow-core/src/champ", "champ"),
+    ("sparrow-core/src/failures.rs", "ownership-runtime"),
+    ("sparrow-core/src/tasks.rs", "ownership-runtime"),
     ("sparrow-core/src", "sparrow"),
     ("okkama-devtrace/src", "devtrace"),
     ("okkama-cli/src", "cli"),
 ]
-# The layers that implement ownership (the "nannies" of one rule).
-OWNERSHIP = ["lower", "own", "verify", "coro", "low", "codegen", "loader", "champ"]
+# The layers that implement ownership: one rule should live in as few of them as possible (Tweed, #903).
+OWNERSHIP = ["lower", "ir", "codegen", "ownership-runtime", "sparrow"]
 
 TAG = re.compile(r"\b(D\d{1,2}(?:\.\d)?|PR-[A-Z]\d?|C-\d{1,2}|B\d{1,3})\b")
 CODE = re.compile(r'"([A-Z][A-Z0-9]*_[A-Z0-9_]{2,})"')
@@ -113,8 +107,7 @@ def rules_map():
            f"## Tags in more than one ownership layer ({len(multi)})", "",
            "| tag | layers | files |", "|---|---|---|"]
     for tag in multi:
-        layers = [name for name in OWNERSHIP + ["oir", "compiler", "spb", "sparrow", "cli", "other"]
-                  if name in where[tag]]
+        layers = [name for name in OWNERSHIP + ["compiler", "spb", "cli", "other"] if name in where[tag]]
         files = "; ".join(f"{name}: " + ", ".join(f"`{f.split('/src/', 1)[-1]}`" for f in sorted(where[tag][name])[:4])
                           + (" …" if len(where[tag][name]) > 4 else "") for name in layers)
         out.append(f"| {tag} | {len(layers)} | {files} |")

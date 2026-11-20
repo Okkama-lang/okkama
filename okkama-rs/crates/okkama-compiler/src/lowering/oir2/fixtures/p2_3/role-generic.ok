@@ -1,9 +1,0 @@
-module app;
-role Read<T> { get() is T; }
-object Box<T> does Read<T> { has value is T; Box(:value); get() is T { value; } }
-main() is int {
-    let a is Read<int> = Box(value: 1);
-    let b is Read<string> = Box(value: "two");
-    b.get();
-    a.get();
-}

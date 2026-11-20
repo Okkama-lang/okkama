@@ -1,7 +1,0 @@
-module app;
-main() is int {
-    defer if true {
-        return 7;
-    } else { };
-    return 1;
-}

@@ -1,8 +1,0 @@
-module app;
-main() is int {
-    let xs = [1, 2];
-    for xs -> x {
-        return x;
-    }
-    0;
-}

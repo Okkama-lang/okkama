@@ -1,5 +1,0 @@
-module app;
-role A { a() is int; }
-role B { b() is int; }
-object Both does A, B { Both(); a() is int { 1; } b() is int { 2; } }
-main() is int { let a is A = Both(); let b is B = a; b.b(); }

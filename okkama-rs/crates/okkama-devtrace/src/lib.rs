@@ -7,8 +7,8 @@
 //!
 //! ```text
 //! OKKAMA_DEV=all                       every category
-//! OKKAMA_DEV=own,loader                these categories
-//! OKKAMA_DEV=own:connection,dump       own, only for functions whose name contains "connection"; plus dumps
+//! OKKAMA_DEV=lower,runtime              these categories
+//! OKKAMA_DEV=lower:main,dump           lower, only for functions whose name contains "main"; plus dumps
 //! OKKAMA_DEV_OUT=DIR                   output directory (default: $TMPDIR/okkama-dev/<pid>)
 //! ```
 //!
@@ -28,16 +28,8 @@ use std::time::{Duration, Instant};
 
 /// The categories the code base uses, for `OKKAMA_DEV=help`. A new category is added here.
 pub const CATEGORIES: &[(&str, &str)] = &[
-    ("stages", "pipeline stages: wall time, sizes, failures"),
-    ("front", "parser, registry, checker"),
-    ("lower", "lowering to OIR-2 High"),
-    ("own", "ownership elaboration: decisions, splits, binds, budgets"),
-    ("verify", "OIR-2 verifiers: steps and rejections per stage"),
-    ("coro", "async frames and suspension"),
-    ("low", "Low lowering"),
-    ("codegen", "SPB 17 generation"),
-    ("loader", "SPB 17 load checks: each check, each rejection"),
-    ("runtime", "runtime events: allocation, destroy, cleanup, tasks"),
+    ("lower", "lowering and IR passes: sizes, region operations by kind, per-function IR dumps"),
+    ("runtime", "runtime events: identities, region helpers, resource walks, structure indexes, allocation"),
     ("jit", "JIT compilation"),
     ("gc", "collections"),
 ];
