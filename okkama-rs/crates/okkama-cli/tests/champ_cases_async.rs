@@ -1442,3 +1442,50 @@ fn a_throw_after_an_await_in_a_map_body_destroys_what_was_made() {
 }
 "#, "make m0\ndestroy m0\nmake m1\ndestroy m1\nbroken\n", false);
 }
+
+/// #798: a defer that reads only `self` (std's `QueryRows.next`: `defer busy.replace(false)`) runs at the action's
+/// close after a catch of a failed await in a try. Closing the try scope on the failure path kept only what the
+/// handler reads, so `self` was dropped and own stopped at "missing incoming SSA slot". The second call shows the
+/// defer ran: a busy flag left set would refuse the third.
+#[test]
+fn a_defer_reading_self_runs_after_a_caught_await() {
+    let source = r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+enum Ended is Error = (ended);
+enum Busy is Error = (busy);
+object Source {
+    Source();
+    async row(fail is bool) is int {
+        confirm !fail else throw Ended.ended;
+        7;
+    }
+}
+object Rows {
+    has busy is Atomic<bool>;
+    Rows() { busy = Atomic(false); }
+    state() is string { if busy.value() { "busy" } else { "idle" }; }
+    async next(fail is bool) is int {
+        confirm busy.compare_and_replace(false, true) else throw Busy.busy;
+        defer busy.replace(false);
+        try {
+            await Source().row(fail);
+        }
+        catch eof is Ended {
+            0;
+        }
+    }
+}
+async main() is int {
+    let rows = Rows();
+    Stdout().writeln((await rows.next(false)).string() + " " + rows.state());
+    Stdout().writeln((await rows.next(true)).string() + " " + rows.state());
+    Stdout().writeln((await rows.next(false)).string() + " " + rows.state());
+    0;
+}
+"#;
+    for mode in [okkama_compiler::oir2::VerifyMode::Structural, okkama_compiler::oir2::VerifyMode::Full] {
+        let run = run_source_with(source, mode).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        assert_eq!((run.stdout.as_str(), run.result), ("7 idle\n0 idle\n7 idle\n", Ok(0)), "{mode:?}");
+    }
+}

@@ -978,11 +978,9 @@ impl Driver<'_, '_> {
             point.env.cleanup.wanted = None;
             point.env.cleanup.carried.clear();
             point.env.cleanup.replacement = None;
-            let mut needed: BTreeSet<ValueId> = BTreeSet::new();
-            if let Some(target) = &self.current_unwind {
-                needed.extend(&target.args);
-                needed.extend(&self.failure_live[&target.block]);
-            }
+            // #798: what the handler reads, and what the outer scopes' registered defers capture: a defer that
+            // reads only `self` still runs at the enclosing close after the catch.
+            let needed = self.unwind_needed(&point);
             let journals = &point.env.journals;
             point.env.values.retain(|value, _| needed.contains(value) || journals.contains_key(value));
         }

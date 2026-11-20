@@ -20,6 +20,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A defer that reads only `self` survives a caught failure on Champ (#798).** Example: std's `QueryRows.next`,
+  `defer busy.replace(false)` with a `try` around `await origin.row()`. Closing the `try` scope on the failure path
+  kept only what the catch handler reads, so `self` was dropped and `own` stopped at "missing incoming SSA slot".
+  The close now also keeps what the enclosing scopes' registered defers capture. `L08.db.query-lifetime` passes on
+  Champ (Structural); the SQLite cases now stop at the coro step limit (#806).
 - **SQLite programs get past the native signatures and the timeout helpers on Champ (#824).**
   - `runtime/database`'s natives take `@DbCellState`, which `runtime/db` declares. The compiler and the SPB 17
     loader now resolve a table handle in the native's own module first, then as the only runtime module's handle
