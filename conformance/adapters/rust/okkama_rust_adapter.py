@@ -43,10 +43,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SPARROW_BUILD = ["cargo", "build", "--quiet", "--offline"]
 # Each engine is its own build: its own cargo features, its own target
 # directory (artifacts are never shared) and its own probe cache entry.
+# Champ builds with the `gate` profile (release optimizations without LTO, as the Wave CI's crate tests): the
+# OIR-2 pipeline of a std-heavy program (the SQLite cases) takes about 90 s to compile in a debug build, over a
+# case's 60 s budget (owner, 2026-11-20).
 ENGINES = {
-    "sparrow": {"build": SPARROW_BUILD, "target_subdir": None, "pipeline": None},
-    "champ": {"build": SPARROW_BUILD + ["-p", "okkama-cli", "--features", "champ-abi"],
-              "target_subdir": "engine-champ", "pipeline": "oir2"},
+    "sparrow": {"build": SPARROW_BUILD, "target_subdir": None, "pipeline": None, "profile": "debug"},
+    "champ": {"build": SPARROW_BUILD + ["--profile", "gate", "-p", "okkama-cli", "--features", "champ-abi"],
+              "target_subdir": "engine-champ", "pipeline": "oir2", "profile": "gate"},
 }
 REMOVED_ENGINES = ("ir", "jvm")
 # Exit status of `okkama run` when OIR-2 lowering cannot handle the program.
@@ -211,9 +214,10 @@ def probe_uncached(engine="sparrow"):
                 break
     # A workspace has no [package]; its CLI crate builds the `okkama` binary.
     # Prefer it so a stale binary of an older single-crate layout is ignored.
-    binary = os.path.join(tdir, "debug", "okkama")
+    profile = ENGINES[engine or "sparrow"]["profile"]
+    binary = os.path.join(tdir, profile, "okkama")
     if not os.path.exists(binary):
-        binary = os.path.join(tdir, "debug", name)
+        binary = os.path.join(tdir, profile, name)
     ev["binary"] = binary
     code, out, err = run([binary, "--ocs-capabilities"], timeout=30, env=binary_env(engine))
     ev["capabilities_exit"] = code

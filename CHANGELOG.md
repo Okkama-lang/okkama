@@ -20,6 +20,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **The Champ conformance adapter builds with the `gate` profile** (owner, 2026-11-20): release optimizations without
+  LTO, as the Wave CI's crate tests. A debug build compiled the SQLite cases in about 90 s, over their 60 s budget.
 - **Async tests run on Champ (#570).** A test profile with an `async test` stopped before lowering with
   "async test … (#570)", although the async lowering already took test bodies as fixed roots. The gate is gone:
   `L04.fakes.typed-state` and `L07.test-runner.all-pass-async` pass on Champ (Structural). A silent exit status 4

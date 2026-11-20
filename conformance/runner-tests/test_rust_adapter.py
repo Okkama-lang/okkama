@@ -64,6 +64,12 @@ class ProbeCacheTests(unittest.TestCase):
         self.assertEqual(champ[:4], ["cargo", "build", "--quiet", "--offline"])
         self.assertIn("champ-abi", champ[champ.index("--features") + 1])
         self.assertEqual(champ[champ.index("-p") + 1], "okkama-cli")
+        # Champ builds with the gate profile (owner, 2026-11-20: a debug build compiles the SQLite cases over their
+        # 60 s budget); its binary is found under that profile's directory.
+        self.assertEqual(champ[champ.index("--profile") + 1], "gate")
+        self.assertEqual(adapter.ENGINES["champ"]["profile"], "gate")
+        self.assertEqual(adapter.ENGINES["sparrow"]["profile"], "debug")
+        self.assertNotIn("--profile", adapter.build_command("sparrow"))
 
     def test_binary_environment(self):
         self.assertIsNone(adapter.binary_env("sparrow"))

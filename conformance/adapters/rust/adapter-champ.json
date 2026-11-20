@@ -19,5 +19,5 @@
   "pass_env": [
     "PATH"
   ],
-  "notes": "Builds okkama-cli with --features champ-abi into .target/engine-champ (never shared with the Sparrow build). parse/check go to the native endpoint (shared front end); run/test go through `okkama run` on Champ. Compare with a run of adapter.json on the same profile: tools/champ_blockers.py."
+  "notes": "Builds okkama-cli with --features champ-abi and the gate profile (release optimizations without LTO) into .target/engine-champ/gate (never shared with the Sparrow build). parse/check go to the native endpoint (shared front end); run/test go through `okkama run` on Champ. Compare with a run of adapter.json on the same profile: tools/champ_blockers.py."
 }
