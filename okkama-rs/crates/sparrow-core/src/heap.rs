@@ -362,6 +362,9 @@ pub struct Allocations {
     /// Objects alive after the last collection, by kind and descriptor:
     /// (count, bytes). A census for leak hunting (`--stats`).
     pub live: std::collections::BTreeMap<(&'static str, u32), (u64, u64)>,
+    /// The sweep's census (#918): (count, bytes) per cell kind (indices below 256) and per object descriptor
+    /// (256 + descriptor), two additions per live cell; `live` is filled from it once per collection.
+    live_dense: Vec<(u64, u64)>,
     pub collection_nanos: u64,
     /// The two phases of collections: marking from the roots, and the sweep.
     pub mark_nanos: u64,
@@ -384,11 +387,28 @@ fn kind_name(kind: u8) -> &'static str {
     }
 }
 
-fn census(live: &mut std::collections::BTreeMap<(&'static str, u32), (u64, u64)>, header: u64, bytes: usize) {
-    let descriptor = if kind(header) == OBJECT { payload(header) } else { 0 };
-    let entry = live.entry((kind_name(kind(header)), descriptor)).or_default();
-    entry.0 += 1;
-    entry.1 += bytes as u64;
+/// One live cell in the sweep's census (#918): an array slot, not a map entry per cell.
+#[inline]
+fn census(dense: &mut Vec<(u64, u64)>, header: u64, bytes: usize) {
+    let index = if kind(header) == OBJECT { 256 + payload(header) as usize } else { kind(header) as usize };
+    if index >= dense.len() {
+        dense.resize(index + 1, (0, 0));
+    }
+    let slot = &mut dense[index];
+    slot.0 += 1;
+    slot.1 += bytes as u64;
+}
+
+/// The census as the statistics report it: (kind name, descriptor or 0) → (count, bytes).
+fn census_map(dense: &[(u64, u64)], live: &mut std::collections::BTreeMap<(&'static str, u32), (u64, u64)>) {
+    live.clear();
+    for (index, &(count, bytes)) in dense.iter().enumerate() {
+        if count == 0 {
+            continue;
+        }
+        let key = if index >= 256 { (kind_name(OBJECT), (index - 256) as u32) } else { (kind_name(index as u8), 0) };
+        live.insert(key, (count, bytes));
+    }
 }
 
 impl Heap {
@@ -1659,7 +1679,7 @@ impl Heap {
             chains.clear();
         }
         if let Some(allocations) = &mut self.allocations {
-            allocations.live.clear();
+            allocations.live_dense.iter_mut().for_each(|slot| *slot = (0, 0));
         }
         let mut live = 0;
         let mut external_live = 0;
@@ -1682,7 +1702,7 @@ impl Heap {
                     kept += 1;
                     external_live += unsafe { owned_bytes(address, header) };
                     if let Some(allocations) = &mut self.allocations {
-                        census(&mut allocations.live, header, step);
+                        census(&mut allocations.live_dense, header, step);
                     }
                     continue;
                 }
@@ -1715,7 +1735,7 @@ impl Heap {
                 memory[0] = header & !MARK;
                 live += memory.len() * 8;
                 if let Some(allocations) = &mut self.allocations {
-                    census(&mut allocations.live, header, memory.len() * 8);
+                    census(&mut allocations.live_dense, header, memory.len() * 8);
                 }
                 large_bytes += memory.len() * 8;
                 external_live += unsafe { owned_bytes(address, header) };
@@ -1729,6 +1749,10 @@ impl Heap {
             self.poison();
         }
         self.large_bytes = large_bytes;
+        if let Some(allocations) = &mut self.allocations {
+            let Allocations { live_dense, live, .. } = &mut **allocations;
+            census_map(live_dense, live);
+        }
         self.live = live;
         self.live_sum += live;
         // Map nodes freed by this sweep are already gone from the live count.
@@ -2408,6 +2432,32 @@ mod tests {
         assert_eq!(heap.held_bytes(), heap.stats().pages * PAGE_BYTES + 2 * owner + owned);
         heap.collect(|_| {});
         assert_eq!(heap.stats().external_live_bytes, 0);
+    }
+
+    /// #918: the sweep's census counts live cells per kind and per object descriptor in an array and reports
+    /// the same map as before; each collection starts from zero.
+    #[test]
+    fn the_census_counts_live_cells_by_kind_and_descriptor() {
+        let mut heap = Heap::new(layouts());
+        heap.allocations = Some(Box::default());
+        let text = heap.allocate_text("held");
+        let node = heap.object_new(0, &[UNBOUND, word::small(1).unwrap()]);
+        let other = heap.object_new(0, &[node, word::small(2).unwrap()]);
+        let pair = heap.object_new(1, &[other, text]);
+        let _garbage = heap.object_new(1, &[UNBOUND, UNBOUND]);
+        heap.collect(|visit| visit(pair, Repr::Ref));
+        let live = &heap.allocations.as_ref().unwrap().live;
+        let object = kind_name(OBJECT);
+        assert_eq!(live[&(object, 0)].0, 2, "two Nodes");
+        assert_eq!(live[&(object, 1)].0, 1, "one Pair; the garbage one is gone");
+        assert_eq!(live[&(kind_name(kind(heap.header_of(text))), 0)].0, 1, "the text");
+        assert_eq!(live.values().map(|&(count, _)| count).sum::<u64>(), 4);
+        assert_eq!(live.values().map(|&(_, bytes)| bytes).sum::<u64>(), heap.stats().live_bytes as u64);
+        // A second collection counts afresh: only what is still reachable.
+        heap.collect(|visit| visit(node, Repr::Ref));
+        let live = &heap.allocations.as_ref().unwrap().live;
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[&(object, 0)].0, 1);
     }
 
     #[test]

@@ -8,12 +8,25 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **The collector's benchmark set, `bench/gc` (#917).** Five workloads (a large long-lived heap, big-integer
+  churn, a tiny live heap with resources, a burst and reuse, payload maps) and `run.py`, which A/Bs builds on
+  them: steady time (median and IQR over shuffled processes), peak RSS, instructions, and from `OKKAMA_DEV=gc`
+  collections with root, mark and sweep times. The v0.6.0 baseline is in `okkama-docs/benchmarks/gc`; it shows
+  the root scan taking 60% of collection time when resources are live.
+
 - **Compact `if`: `if condition: a else: b` (#921).** The same `if` with one expression per branch, built by the
   parser as the block form (each branch a block holding its expression), so analysis, lowering and the runtime
   are unchanged. Both branches are required; a branch is an expression, never a block; the forms do not mix.
   `else:` goes to the nearest `if`, and `else` followed by `:` never starts a fallback, so a branch's own
   fallback takes parentheses: `if ready: (cache else 0) else: 1`. `okkama fmt` keeps the compact spelling. Book
   11.6, spec 8.11 and the grammar, conformance `L03.if.compact`/`L03.if.compact-without-else`, VS Code 0.11.0.
+
+### Changed
+
+- **Statistics no longer slow the sweep (#918).** `SPARROW_CORE_STATS` counted every live cell into a sorted map
+  during the sweep (14.1 ms of sweep against 2.8 ms without, ownership.ok); it now adds into an array per kind and
+  object descriptor and builds the report once per collection. Sweep and mark times with and without statistics
+  agree within noise.
 
 ## [0.6.0] — 2026-11-21
 
