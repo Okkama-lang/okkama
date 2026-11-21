@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **Tests in process workers, with captured output and deadlines (#938).** `okkama run -t --workers N` runs each
+  test in its own process, at most N at a time; each test's stdout and stderr are captured up to 64 KiB (cut and
+  marked beyond) and reported with it (human, JSON `stdout`/`stderr`/`truncated`, JUnit `system-out`/
+  `system-err`). `--test-timeout SECS` (with `--workers`) stops a test past its monotonic deadline (`timed_out`); a
+  worker that dies without a result is `crashed`. Reports keep declaration order; plain `run -t` stays in-process.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second

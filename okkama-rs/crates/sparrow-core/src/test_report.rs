@@ -13,6 +13,28 @@ pub enum TestOutcome {
     Failed(Vec<String>),
     /// `test.skip`, with its reason ("" when none was given).
     Skipped(String),
+    /// Its process worker passed the deadline, in milliseconds, and was
+    /// stopped (#938).
+    TimedOut(u64),
+    /// Its process worker ended without a result: how it ended (#938).
+    Crashed(String),
+}
+
+impl TestOutcome {
+    /// Whether it fails the run: a failed check, a deadline or a crash.
+    pub fn fails(&self) -> bool {
+        matches!(self, Self::Failed(_) | Self::TimedOut(_) | Self::Crashed(_))
+    }
+}
+
+/// What a test wrote, captured by its process worker (#938): each stream up
+/// to the capture limit, and whether more was cut off.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapturedOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 /// One test of the run.
@@ -30,6 +52,8 @@ pub struct TestCase {
     /// Its named sub-cases (`test.case`, #809) in the order they ran; empty
     /// for a test without them.
     pub cases: Vec<SubCase>,
+    /// What it wrote, when a process worker ran it (#938).
+    pub output: Option<CapturedOutput>,
 }
 
 /// A named sub-case of a test (#809): `Test/sub-case` is its identity.
@@ -43,10 +67,9 @@ impl TestCase {
     /// The verdict of the test with its sub-cases: failed when it or one of
     /// them failed, skipped when it skipped itself, passed otherwise.
     pub fn verdict(&self) -> TestOutcome {
-        let failed = |outcome: &TestOutcome| matches!(outcome, TestOutcome::Failed(_));
         match &self.outcome {
-            TestOutcome::Failed(failures) => TestOutcome::Failed(failures.clone()),
-            _ if self.cases.iter().any(|case| failed(&case.outcome)) => TestOutcome::Failed(Vec::new()),
+            own if own.fails() => own.clone(),
+            _ if self.cases.iter().any(|case| case.outcome.fails()) => TestOutcome::Failed(Vec::new()),
             other => other.clone(),
         }
     }
@@ -190,7 +213,7 @@ impl TestReport {
         TestTotals {
             tests: leaves.len(),
             passed: count(|outcome| matches!(outcome, TestOutcome::Passed)),
-            failed: count(|outcome| matches!(outcome, TestOutcome::Failed(_))),
+            failed: count(TestOutcome::fails),
             skipped: count(|outcome| matches!(outcome, TestOutcome::Skipped(_))),
         }
     }
@@ -249,6 +272,18 @@ pub fn json(report: &TestReport, suite: &str) -> String {
         fields.push(("outcome", outcome));
         fields.push(("position", number(case.position)));
         fields.extend(reason.map(|value| ("reason", value)));
+        if let Some(output) = &case.output {
+            fields.push(("stderr", Json::text(&output.stderr)));
+            fields.push(("stdout", Json::text(&output.stdout)));
+            let mut cut = Vec::new();
+            if output.stderr_truncated {
+                cut.push(Json::text("stderr"));
+            }
+            if output.stdout_truncated {
+                cut.push(Json::text("stdout"));
+            }
+            fields.push(("truncated", Json::Array(cut)));
+        }
         Json::Object(fields)
     });
     let document = Json::Object(vec![
@@ -284,6 +319,12 @@ fn json_outcome(outcome: &TestOutcome) -> (Option<Json>, Json, Option<Json>) {
             None,
         ),
         TestOutcome::Skipped(reason) => (None, Json::text("skipped"), Some(Json::text(reason))),
+        TestOutcome::TimedOut(limit) => (
+            Some(Json::Array(vec![Json::text(&format!("deadline of {limit} ms passed"))])),
+            Json::text("timed_out"),
+            None,
+        ),
+        TestOutcome::Crashed(how) => (Some(Json::Array(vec![Json::text(how)])), Json::text("crashed"), None),
     }
 }
 
@@ -371,38 +412,56 @@ pub fn junit(report: &TestReport, suite: &str) -> String {
         // Each executable case is one testcase: a sub-case as `Test/sub-case`,
         // the test itself when it has no sub-cases or failed or skipped
         // outside them (#809).
-        for sub in &case.cases {
-            junit_case(&mut out, &format!("{}/{}", case.name, sub.name), &sub.outcome, &suite);
+        // Captured output (#938) goes with the test's own testcase, or with its
+        // first sub-case when the test has no testcase of its own.
+        let own = case.cases.is_empty() || !matches!(case.outcome, TestOutcome::Passed);
+        for (index, sub) in case.cases.iter().enumerate() {
+            let output = if !own && index == 0 { case.output.as_ref() } else { None };
+            junit_case(&mut out, &format!("{}/{}", case.name, sub.name), &sub.outcome, &suite, output);
         }
-        if case.cases.is_empty() || !matches!(case.outcome, TestOutcome::Passed) {
-            junit_case(&mut out, &case.name, &case.outcome, &suite);
+        if own {
+            junit_case(&mut out, &case.name, &case.outcome, &suite, case.output.as_ref());
         }
     }
     out.push_str("  </testsuite>\n</testsuites>\n");
     out
 }
 
-/// One `testcase` of a JUnit report.
-fn junit_case(out: &mut String, name: &str, outcome: &TestOutcome, suite: &str) {
+/// One `testcase` of a JUnit report, with the captured output of its test
+/// when given (#938).
+fn junit_case(out: &mut String, name: &str, outcome: &TestOutcome, suite: &str, output: Option<&CapturedOutput>) {
     let name = xml(name);
+    if matches!(outcome, TestOutcome::Passed) && output.is_none() {
+        out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\"/>\n"));
+        return;
+    }
+    out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
     match outcome {
-        TestOutcome::Passed => out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\"/>\n")),
+        TestOutcome::Passed => {}
         TestOutcome::Failed(failures) => {
             let first = failures.first().and_then(|text| text.lines().next()).unwrap_or("");
-            out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
             out.push_str(&format!(
                 "      <failure message=\"{}\">{}</failure>\n",
                 xml(first),
                 xml(&failures.join("\n"))
             ));
-            out.push_str("    </testcase>\n");
         }
-        TestOutcome::Skipped(reason) => {
-            out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
-            out.push_str(&format!("      <skipped message=\"{}\"/>\n", xml(reason)));
-            out.push_str("    </testcase>\n");
+        TestOutcome::Skipped(reason) => out.push_str(&format!("      <skipped message=\"{}\"/>\n", xml(reason))),
+        TestOutcome::TimedOut(limit) => {
+            let message = xml(&format!("deadline of {limit} ms passed"));
+            out.push_str(&format!("      <failure type=\"timeout\" message=\"{message}\">{message}</failure>\n"));
+        }
+        TestOutcome::Crashed(how) => {
+            let message = xml(how);
+            out.push_str(&format!("      <error type=\"crash\" message=\"{message}\">{message}</error>\n"));
         }
     }
+    if let Some(output) = output {
+        let mark = |truncated: bool| if truncated { "\n[truncated]" } else { "" };
+        out.push_str(&format!("      <system-out>{}{}</system-out>\n", xml(&output.stdout), mark(output.stdout_truncated)));
+        out.push_str(&format!("      <system-err>{}{}</system-err>\n", xml(&output.stderr), mark(output.stderr_truncated)));
+    }
+    out.push_str("    </testcase>\n");
 }
 
 /// Text as XML 1.0 character data or an attribute value: the five markup
@@ -473,7 +532,7 @@ mod tests {
 
     #[test]
     fn totals_come_from_the_cases() {
-        let case = |name: &str, outcome| TestCase { name: name.into(), position: 0, execution: 0, outcome, cases: vec![] };
+        let case = |name: &str, outcome| TestCase { name: name.into(), position: 0, execution: 0, outcome, cases: vec![], output: None };
         let report = TestReport {
             seed: None,
             cases: vec![
@@ -492,13 +551,14 @@ mod tests {
         TestReport {
             seed,
             cases: vec![
-                TestCase { name: "Account :: opens".into(), position: 0, execution: 2, outcome: TestOutcome::Passed, cases: vec![] },
+                TestCase { name: "Account :: opens".into(), position: 0, execution: 2, outcome: TestOutcome::Passed, cases: vec![], output: None },
                 TestCase {
                     name: "a <tag> & \"quote\"".into(),
                     position: 1,
                     execution: 0,
                     outcome: TestOutcome::Failed(vec!["expected 2, got 1".into(), "two\nlines\u{1} é".into()]),
                     cases: vec![],
+                    output: None,
                 },
                 TestCase {
                     name: "later".into(),
@@ -506,6 +566,7 @@ mod tests {
                     execution: 1,
                     outcome: TestOutcome::Skipped("not 'today'".into()),
                     cases: vec![],
+                    output: None,
                 },
             ],
         }
@@ -605,6 +666,7 @@ mod tests {
                         sub("50 g", TestOutcome::Failed(vec!["expected 120, got 99".into()])),
                         sub("later", TestOutcome::Skipped("not yet".into())),
                     ],
+                    output: None,
                 },
                 TestCase {
                     name: "setup".into(),
@@ -612,6 +674,7 @@ mod tests {
                     execution: 1,
                     outcome: TestOutcome::Failed(vec!["no tariff".into()]),
                     cases: vec![sub("a", TestOutcome::Passed)],
+                    output: None,
                 },
             ],
         }
