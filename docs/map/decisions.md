@@ -55,6 +55,31 @@ the session's memory; older rulings live in the commits and tickets named.
   inlined; an inlined entry still polls the budget. Inlining a callee that can fail waits for an inline-frame
   table, so that traces keep the callee's frame.
 
+## URL transformation semantics (#133, 2026-11-22)
+
+Implementation choices under the owner's supplied review of 2026-11-21 and
+implementation instruction of 2026-11-22:
+
+- Keep existing parsing, `Parts`, canonical equality, resolution and normalization.
+  Add methods directly on `UrlParts`, returning validated `UrlParts` rather than
+  unchecked successors. The existing constructor gains empty/absent defaults.
+- `path_replaced` accepts raw encoded URI/IRI path text, including valid escapes;
+  the existing canonicalizer handles Unicode and rejects malformed escapes and
+  delimiters. `joined` accepts only plain text segments; percent is data even in
+  `%HH`, whereas base-path escapes are preserved. Slash inside a segment is `%2F`.
+- Joining appends, never resolves or normalizes dots. No arguments is identity.
+  One existing trailing slash is reused; all other slashes and empty segments
+  remain. Empty paths begin with `/` if there is an authority, otherwise remain
+  relative. Escape colon in the first relative segment; reject an undeclared
+  leading `//` through existing structural validation.
+- Query replacement takes `QueryParameters`, preserving its ordering, assignment
+  distinctions and RFC data encoding. Empty parameters supply `?`; an explicit
+  `query_removed()` removes the component. No form-urlencoded plus semantics.
+- Port replacement takes `Maybe<int>`: some(0..65535) requires a host, none removes
+  the explicit port. No scheme defaults; preserve userinfo and bracketed IPv6.
+- Retain existing URL/path/segment bounds and `QueryParameters`' configured
+  parameter bound. URL percent-encoding does not promise filesystem safety.
+
 ## Ownership model rulings (OIR-2): historical — OIR-2 and Champ were removed on 2026-11-20 (#911)
 
 - **2026-11-20, L13** (6d466cae8). A close's envelope covers the destroy failures that settling any of the

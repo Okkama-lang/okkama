@@ -12,6 +12,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
   2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and
   `Now().instant()` the current instant; both take `clock:` (a `Timing`), so tests can pass a `ManualClock`.
+- **URLs are built and changed without string concatenation (#133).** `UrlParts` gets immutable transformations,
+  each returning new validated parts: `path_replaced(path:)` (an encoded path, escapes canonicalized),
+  `joined("a", "b")` (plain segments, each encoded once: `/`, `?` and `#` stay data), `query_replaced(parameters:)`
+  (ordered `QueryParameters`, repeated names and empty values kept), `query_removed()`, and `port_replaced(port:)`
+  (add, replace or remove; no scheme default is invented). The structured `UrlParts(...)` constructor takes
+  defaults. The HTTP client examples build their URLs this way (`examples/http/client/build_url.ok`).
 
 ## [0.6.1] — 2026-11-22
 

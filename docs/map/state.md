@@ -2,6 +2,47 @@
 
 Last update: 2026-11-20, after wave/78. The working branch of 0.6.0 is `release/0.6.0`; develop is behind it.
 
+## #133 URL construction and transformation (2026-11-22, l-codex)
+
+Scope: the supplied #133 review (2026-11-21), authorized for implementation by
+the owner on 2026-11-22. Work stays in `l-codex`; no git or remote issue edits.
+
+- [x] Inspect the existing component constructor, canonicalizer, query/percent
+  encoding, HTTP client call sites, std principles and RFC resolution cases.
+- [x] Add inline tests before implementation; the initial check fails for the
+  missing transformation API. The original three `url/value` tests pass.
+- [x] Add immutable `path_replaced(path:)`, `joined(segments...)`,
+  `query_replaced(parameters:)`, `query_removed()` and `port_replaced(port:)`.
+  Return ordinary validated `UrlParts`, using the canonical constructor; no
+  successor bypass of validation, whole-URL reparse, builder or duplicate accessor.
+  Add safe defaults to the existing structured constructor.
+- [x] Verify raw paths versus plain segments, escaping, empty segments, relative
+  forms, immutability, preservation, IPv4/IPv6/named hosts and userinfo, explicit
+  ports and removal, query identity/order/duplicates, and length/segment bounds.
+- [x] Verify round trips and preservation properties over 144 generated URLs;
+  retain all 42 normal/abnormal RFC 3986 section 5.4 resolution examples inline.
+- [x] Convert the three HTTP client examples to structural URL construction;
+  GET demonstrates query replacement. Add a server-free `build_url` example
+  with an embedded slash and repeated query names, and its expected output.
+- [x] Update English/Russian Book documentation and `//` CommonMark API comments;
+  format the touched Okkama files with the supplied binary.
+- [x] Local verification: `url/value` 15 tests, `url/query` 3 tests,
+  `url/percent` 5 tests pass; `check` passes for all touched modules/examples
+  and `std/http/client.ok`. The construction example and existing
+  `examples/url/parts.ok` run and match their `.expected` text.
+
+Validation boundary: only the supplied Sparrow binary is available/authorized;
+there is no second current backend (see decisions). Full conformance suites,
+Docker, network runs and builds are excluded by the task. The server-backed
+client examples are statically checked, not run. No language/runtime changes.
+
+Ownership/priority: URL is a foundation area in `docs/std-principles.md` §8 and
+stays in std; an external `ok-package` move is inappropriate. Recommend P2:
+current client examples expose manual-construction ergonomics, but this review
+found no concrete exploit requiring P1. No release version changes are needed;
+CHANGELOG is excluded explicitly. Semantics are recorded in
+[decisions.md](decisions.md) and the Book's URL section.
+
 ## Branches and worktrees (`../okkama-work`)
 
 | Worktree | Branch | What | Status |

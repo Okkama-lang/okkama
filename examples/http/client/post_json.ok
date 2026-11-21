@@ -13,6 +13,7 @@ import "json" take Json, JsonField, ParsedJson;
 import "net/tcp" take TcpListening;
 import "time/duration" take Duration;
 import "io/stdout" take Stdout;
+import "url/value" take UrlParts;
 
 // POST a JSON document and read the JSON the server answers. The server is
 // a small one on 127.0.0.1 that this program starts and drains.
@@ -22,20 +23,38 @@ object Orders does Handling {
 
     async handling(request is Request, context is HttpRequestContext) is HandlingResult {
         let order = ParsedJson(await request.text(limit: 4096)).root();
-        Stdout().writeln("server got: ", MethodName(request::Head::method), " ", request::Head::target.path(), " for ", order.int("count"), " ", order.text("item"));
-        ResponseHandling(Response(status: Status.created, content: JsonBody(Json(JsonField("id", 7), JsonField("state", "new")))));
+        Stdout().writeln(
+            "server got: ",
+            MethodName(request::Head::method),
+            " ",
+            request::Head::target.path(),
+            " for ",
+            order.int("count"),
+            " ",
+            order.text("item")
+        );
+        ResponseHandling(
+            Response(
+                status: Status.created,
+                content: JsonBody(Json(JsonField("id", 7), JsonField("state", "new")))
+            )
+        );
     }
 }
 
 async main() is int {
     let listener = await TcpListening(port: 0).listener();
-    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let base = UrlParts(
+        scheme: "http",
+        host: Maybe.some("127.0.0.1"),
+        port: Maybe.some(listener::Local::port),
+    );
     let server = HttpServer(listener: listener, handling: Orders()).started();
-        // A real program writes HttpClient(); this one may reach 127.0.0.1.
+    // A real program writes HttpClient(); this one may reach 127.0.0.1.
     let client = HttpClient(endpoints: LoopbackEndpoints());
 
     let order = Json(JsonField("item", "tea"), JsonField("count", 2));
-    let reply = await client.post(url: base + "/orders", body: JsonBody(order));
+    let reply = await client.post(url: base.joined("orders").string(), body: JsonBody(order));
     confirm reply::Head::status == Status.created else panic "order not created";
     let created = await reply.json();
     Stdout().writeln("order ", created.int("id"), " is ", created.text("state"));
