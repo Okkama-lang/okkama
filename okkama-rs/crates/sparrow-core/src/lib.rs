@@ -456,7 +456,7 @@ pub(crate) fn report_suite(
         } else {
             TestOutcome::Passed
         };
-        let case = TestCase { name: name.clone(), position: index, execution, outcome, cases: subcases };
+        let case = TestCase { name: name.clone(), position: index, execution, outcome, cases: subcases, output: None };
         if let Some(out) = out.as_mut() {
             // Sub-cases first, indented, as `Test/sub-case`; then the test's
             // verdict with its own failures.
@@ -482,10 +482,56 @@ pub(crate) fn report_suite(
     Ok(report)
 }
 
+/// The human report of a finished run (#938, process workers): each test in
+/// declaration order as the streamed report shows it, a failed test's
+/// captured output under it, then the verdict.
+pub fn human_report(report: &test_report::TestReport) -> String {
+    let mut out = std::io::Cursor::new(std::vec::Vec::<u8>::new());
+    let _ = human_into(&mut out, report);
+    String::from_utf8_lossy(out.get_ref()).into_owned()
+}
+
+fn human_into(out: &mut dyn std::io::Write, report: &test_report::TestReport) -> std::io::Result<()> {
+    use test_report::TestOutcome;
+    if let Some(seed) = report.seed {
+        writeln!(out, "=== SEED  {seed}")?;
+    }
+    for case in &report.cases {
+        writeln!(out, "=== RUN   {}", case.name)?;
+        for sub in &case.cases {
+            human_outcome(out, &format!("{}/{}", case.name, sub.name), &sub.outcome, "    ")?;
+        }
+        let own = match (&case.outcome, case.verdict()) {
+            (own, _) if own.fails() => case.outcome.clone(),
+            (_, TestOutcome::Passed) | (_, TestOutcome::Skipped(_)) => case.outcome.clone(),
+            (_, verdict) => verdict,
+        };
+        human_outcome(out, &case.name, &own, "")?;
+        if let Some(output) = case.output.as_ref().filter(|_| case.verdict().fails()) {
+            for (stream, text, cut) in [
+                ("stdout", &output.stdout, output.stdout_truncated),
+                ("stderr", &output.stderr, output.stderr_truncated),
+            ] {
+                if text.is_empty() && !cut {
+                    continue;
+                }
+                writeln!(out, "    {stream}:")?;
+                for line in text.lines() {
+                    writeln!(out, "        {line}")?;
+                }
+                if cut {
+                    writeln!(out, "        [truncated]")?;
+                }
+            }
+        }
+    }
+    writeln!(out, "{}", if report.passed() { "PASS" } else { "FAIL" })
+}
+
 /// One `--- PASS|FAIL|SKIP` line of the human report, its failures or reason
 /// under it, all after `indent`.
 fn human_outcome(
-    out: &mut Box<dyn std::io::Write + Send>,
+    out: &mut dyn std::io::Write,
     name: &str,
     outcome: &test_report::TestOutcome,
     indent: &str,
@@ -506,6 +552,14 @@ fn human_outcome(
             }
         }
         TestOutcome::Passed => writeln!(out, "{indent}--- PASS: {name}")?,
+        TestOutcome::TimedOut(limit) => {
+            writeln!(out, "{indent}--- FAIL: {name}")?;
+            writeln!(out, "{indent}    deadline of {limit} ms passed: the worker was stopped")?;
+        }
+        TestOutcome::Crashed(how) => {
+            writeln!(out, "{indent}--- FAIL: {name}")?;
+            writeln!(out, "{indent}    {}", how.replace('\n', &under))?;
+        }
     }
     Ok(())
 }
