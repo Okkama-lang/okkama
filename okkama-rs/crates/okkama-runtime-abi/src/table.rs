@@ -424,15 +424,6 @@ natives! {
     SystemSystemCpuCount = 438, "runtime/system@1::system_cpu_count/0", "() -> int";
     SystemSecureRandom = 439, "runtime/system@1::secure_random/1", "(int) -> @byte";
     SystemStorageUsage = 440, "runtime/system@1::storage_usage/1", "(string) -> %string:string";
-    TemplateTemplateCompileState = 441, "runtime/template@1::template_compile_state/3", "(string, int, int) -> TemplateCompileState";
-    TemplateTemplateCompileValid = 442, "runtime/template@1::template_compile_valid/1", "(TemplateCompileState) -> bool";
-    TemplateTemplateCompileOffset = 443, "runtime/template@1::template_compile_offset/1", "(TemplateCompileState) -> int";
-    TemplateTemplateCompileLine = 444, "runtime/template@1::template_compile_line/1", "(TemplateCompileState) -> int";
-    TemplateTemplateCompileColumn = 445, "runtime/template@1::template_compile_column/1", "(TemplateCompileState) -> int";
-    TemplateTemplateCompileMessage = 446, "runtime/template@1::template_compile_message/1", "(TemplateCompileState) -> string";
-    TemplateTemplateNodeCount = 447, "runtime/template@1::template_node_count/1", "(TemplateCompileState) -> int";
-    TemplateTemplateNodeKind = 448, "runtime/template@1::template_node_kind/2", "(TemplateCompileState, int) -> int";
-    TemplateTemplateNodeText = 449, "runtime/template@1::template_node_text/2", "(TemplateCompileState, int) -> string";
     TemplateTemplateOutputSize = 450, "runtime/template@1::template_output_size/2", "(string, int) -> int";
     TestingTestStateOpen = 451, "runtime/testing@1::test_state_open/1", "(int) -> TestState";
     TestingTestStateNext = 452, "runtime/testing@1::test_state_next/1", "(TestState) -> int";
@@ -663,4 +654,4 @@ natives! {
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
-// retired: 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258
+// retired: 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 441, 442, 443, 444, 445, 446, 447, 448, 449
