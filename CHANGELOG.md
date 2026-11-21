@@ -107,6 +107,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `ends_with`, across 54 modules (156 sites); the gettext `contains` helper is gone. Behaviour is unchanged, except
   that a few unguarded checks of an empty text answer false instead of failing on the slice.
 
+### Changed
+
+- **Mailboxes and saved cookie jars are written atomically and durably (#934).** `mail/mbox_store` and
+  `SavedCookieJar` replace their files with `TemporaryFile.replace` / `File.replace` (fsync, rename, directory
+  fsync) instead of a temporary file moved without fsync.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.
