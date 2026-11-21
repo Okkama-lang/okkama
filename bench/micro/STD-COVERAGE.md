@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-117 of 435 non-runtime module files have an explicitly declared measured action.
+150 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -23,58 +23,58 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `async/scope` | — |
 | `async/semaphore` | — |
 | `async/timeout` | — |
-| `calendar` | — |
+| `calendar` | calendar-month |
 | `cell` | — |
 | `checksum/adler32` | adler32 |
 | `checksum/crc` | crc32 |
 | `checksum/state` | — |
 | `cli/arguments` | — |
 | `cli/command` | — |
-| `collections/combinatorics` | — |
+| `collections/combinatorics` | combinations-count |
 | `collections/combining` | — |
-| `collections/deque` | — |
+| `collections/deque` | deque-ends |
 | `collections/enumeration` | — |
-| `collections/frequencies` | — |
+| `collections/frequencies` | frequencies-count |
 | `collections/heap` | heap-top |
 | `collections/iteration` | regex-parts |
 | `collections/list` | heap-top |
 | `collections/ordering` | sorted |
 | `collections/repetition` | — |
 | `collections/sequence` | — |
-| `collections/set` | — |
-| `collections/views` | — |
+| `collections/set` | keyed-set, ordered-set-union |
+| `collections/views` | views-filtered-chunked |
 | `compare` | — |
-| `compression/brotli` | — |
-| `compression/deflate` | — |
+| `compression/brotli` | brotli-round-trip |
+| `compression/deflate` | deflate-round-trip |
 | `compression/gzip` | gzip-round-trip |
 | `compression/internal/codec` | — |
 | `compression/read` | — |
 | `compression/state` | — |
 | `compression/zlib` | zlib-round-trip |
-| `compression/zstd` | — |
+| `compression/zstd` | zstd-round-trip |
 | `config/document` | — |
 | `config/environment` | — |
-| `config/ini` | — |
+| `config/ini` | ini-parse |
 | `config/key` | — |
 | `config/source` | — |
 | `config/value` | — |
 | `crypto/aead` | — |
 | `crypto/aes_gcm` | aes-gcm-round-trip |
-| `crypto/chacha20_poly1305` | — |
-| `crypto/constant_time` | — |
+| `crypto/chacha20_poly1305` | chacha20-round-trip |
+| `crypto/constant_time` | constant-time-equal |
 | `crypto/ecdsa` | — |
 | `crypto/ed25519` | ed25519-sign-verify |
 | `crypto/error` | — |
 | `crypto/hmac` | hmac-sha256 |
-| `crypto/jwt` | — |
-| `crypto/kdf` | — |
+| `crypto/jwt` | jwt-hs256-sign |
+| `crypto/kdf` | hkdf-sha256, pbkdf2-sha256 |
 | `crypto/key` | ed25519-sign-verify |
 | `crypto/key_format` | — |
 | `crypto/nonce` | — |
 | `crypto/password` | — |
 | `crypto/rsa` | — |
-| `crypto/secret` | — |
-| `crypto/x25519` | — |
+| `crypto/secret` | hkdf-sha256, pbkdf2-sha256, x25519-public-key |
+| `crypto/x25519` | x25519-public-key |
 | `crypto/x509/certificate` | — |
 | `crypto/x509/name` | — |
 | `crypto/x509/trust` | — |
@@ -101,7 +101,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `db/transaction` | — |
 | `db/value` | — |
 | `debug/dumper` | — |
-| `diff` | — |
+| `diff` | diff-edits |
 | `digest/blake2` | blake2b |
 | `digest/blocks` | — |
 | `digest/host` | — |
@@ -113,13 +113,13 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `digest/state` | — |
 | `encoding/base32` | base32-encode |
 | `encoding/base64` | base64-encode |
-| `encoding/base85` | — |
-| `encoding/binary` | — |
-| `encoding/bytes` | — |
+| `encoding/base85` | base85-encode, base85-decode |
+| `encoding/binary` | binary-int-round-trip, binary-float-round-trip, byte-range-integer |
+| `encoding/bytes` | byte-search, byte-range-integer |
 | `encoding/hex` | hex-encode, hex-decode |
-| `encoding/pem` | — |
-| `encoding/quoted_printable` | — |
-| `encoding/single_byte` | — |
+| `encoding/pem` | pem-encode, pem-parse |
+| `encoding/quoted_printable` | qp-encode, qp-decode |
+| `encoding/single_byte` | latin1-decode, ascii-encode |
 | `encoding/utf` | utf8-encode, utf16-encode, form-parse, plist-parse |
 | `error` | — |
 | `fs/directory` | — |
@@ -129,13 +129,13 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `fs/glob` | — |
 | `fs/link` | — |
 | `fs/lock` | — |
-| `fs/path` | mime-extension, unix-address |
+| `fs/path` | mime-extension, unix-address, fs-path |
 | `fs/root` | — |
 | `fs/stat` | — |
 | `fs/temp` | — |
 | `fs/watch` | — |
 | `html/entities` | html-escape, html-unescape |
-| `html/events` | — |
+| `html/events` | html-events |
 | `http/auth` | — |
 | `http/auth_challenge` | — |
 | `http/body` | — |
@@ -150,16 +150,16 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `http/client_policy` | — |
 | `http/client_protocols` | — |
 | `http/client_request` | — |
-| `http/conditional` | — |
+| `http/conditional` | http-entity-tags |
 | `http/connection` | — |
 | `http/content_coding` | — |
 | `http/conversation` | — |
 | `http/cookie` | — |
 | `http/cookie_client` | — |
-| `http/cookie_date` | — |
+| `http/cookie_date` | cookie-date |
 | `http/cookie_jar` | — |
 | `http/cookie_policy` | — |
-| `http/date` | — |
+| `http/date` | http-date-format, http-date-parse |
 | `http/digest` | — |
 | `http/endpoint` | — |
 | `http/environment_proxy` | — |
@@ -208,10 +208,10 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `http/internal/websocket_reading` | — |
 | `http/internal/websocket_upgrade` | — |
 | `http/internal/wire_bytes` | — |
-| `http/media_type` | — |
+| `http/media_type` | http-media-type |
 | `http/message` | — |
-| `http/method` | — |
-| `http/negotiation` | — |
+| `http/method` | http-method-semantics |
+| `http/negotiation` | http-quality |
 | `http/proxy` | — |
 | `http/proxy_connection` | — |
 | `http/proxy_policy` | — |
@@ -227,8 +227,8 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `http/server_policy` | — |
 | `http/sse` | — |
 | `http/static` | — |
-| `http/status` | — |
-| `http/target` | — |
+| `http/status` | http-status-phrase |
+| `http/target` | http-request-target |
 | `http/tls_session` | — |
 | `http/token` | — |
 | `http/transport_observation` | — |
@@ -252,10 +252,10 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `io/stream` | — |
 | `io/text` | template-stream |
 | `io/transfer` | — |
-| `json` | json-parse, json-round-trip, json-render, template-render, html-template, template-json-value, template-sections |
+| `json` | json-parse, json-round-trip, json-render, template-render, html-template, template-json-value, template-sections, jwt-hs256-sign |
 | `locale/case` | locale-case |
 | `locale/collation` | — |
-| `locale/currency` | — |
+| `locale/currency` | currency-digits |
 | `locale/data` | — |
 | `locale/date_time` | — |
 | `locale/internal/currencies` | — |

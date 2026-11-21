@@ -2266,5 +2266,654 @@
       "xml/name:XmlName.new",
       "xml/name:XmlName.lexical"
     ]
+  },
+  "qp-encode": {
+    "path": "std/qp-encode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/quoted_printable"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/quoted_printable:QuotedPrintableEncoded.bytes",
+      "encoding/quoted_printable:QuotedPrintableEncoded.new"
+    ]
+  },
+  "qp-decode": {
+    "path": "std/qp-decode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/quoted_printable"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/quoted_printable:QuotedPrintableDecoded.bytes",
+      "encoding/quoted_printable:QuotedPrintableDecoded.new"
+    ]
+  },
+  "base85-encode": {
+    "path": "std/base85-encode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/base85"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/base85:Base85Encoded.new",
+      "encoding/base85:Base85Encoded.string"
+    ]
+  },
+  "base85-decode": {
+    "path": "std/base85-decode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/base85"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/base85:Base85Decoded.bytes",
+      "encoding/base85:Base85Decoded.new"
+    ]
+  },
+  "latin1-decode": {
+    "path": "std/latin1-decode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/single_byte"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/single_byte:Latin1Decoded.new",
+      "encoding/single_byte:Latin1Decoded.string"
+    ]
+  },
+  "ascii-encode": {
+    "path": "std/ascii-encode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/single_byte"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/single_byte:AsciiEncoded.bytes",
+      "encoding/single_byte:AsciiEncoded.new"
+    ]
+  },
+  "binary-int-round-trip": {
+    "path": "std/binary-int-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/binary"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/binary:Binary.int",
+      "encoding/binary:Binary.new",
+      "encoding/binary:IntegerBytes.bytes",
+      "encoding/binary:IntegerBytes.new"
+    ]
+  },
+  "binary-float-round-trip": {
+    "path": "std/binary-float-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/binary"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/binary:Binary.float",
+      "encoding/binary:Binary.new",
+      "encoding/binary:FloatBytes.bytes",
+      "encoding/binary:FloatBytes.new"
+    ]
+  },
+  "pem-encode": {
+    "path": "std/pem-encode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/pem"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/pem:PemEncoded.new",
+      "encoding/pem:PemEncoded.string"
+    ]
+  },
+  "pem-parse": {
+    "path": "std/pem-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/pem"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/pem:PemBlock.bytes",
+      "encoding/pem:PemBlock.kind",
+      "encoding/pem:PemBlock.new"
+    ]
+  },
+  "constant-time-equal": {
+    "path": "std/constant-time-equal.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/constant_time"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/constant_time:ConstantTimeEqual.matches",
+      "crypto/constant_time:ConstantTimeEqual.new"
+    ]
+  },
+  "hkdf-sha256": {
+    "path": "std/hkdf-sha256.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/kdf",
+      "crypto/secret"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/kdf:HkdfSecret.new",
+      "crypto/kdf:HkdfSecret.secret",
+      "crypto/secret:SecretBytes.export_bytes",
+      "crypto/secret:SecretBytes.new"
+    ]
+  },
+  "pbkdf2-sha256": {
+    "path": "std/pbkdf2-sha256.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/kdf",
+      "crypto/secret"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/kdf:Pbkdf2Secret.new",
+      "crypto/kdf:Pbkdf2Secret.secret",
+      "crypto/secret:SecretBytes.export_bytes",
+      "crypto/secret:SecretBytes.new"
+    ]
+  },
+  "chacha20-round-trip": {
+    "path": "std/chacha20-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/chacha20_poly1305"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/chacha20_poly1305:ChaCha20Poly1305.opened",
+      "crypto/chacha20_poly1305:ChaCha20Poly1305.sealed"
+    ]
+  },
+  "jwt-hs256-sign": {
+    "path": "std/jwt-hs256-sign.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/jwt",
+      "json"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/jwt:JwtToken.new",
+      "crypto/jwt:JwtToken.string",
+      "json:Json.new",
+      "json:JsonField.new"
+    ]
+  },
+  "deflate-round-trip": {
+    "path": "std/deflate-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "compression/deflate"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "compression/deflate:DeflateCompressed.bytes",
+      "compression/deflate:DeflateCompressed.new",
+      "compression/deflate:DeflateDecompressed.bytes",
+      "compression/deflate:DeflateDecompressed.new"
+    ]
+  },
+  "zstd-round-trip": {
+    "path": "std/zstd-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "compression/zstd"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "compression/zstd:ZstdCompressed.bytes",
+      "compression/zstd:ZstdCompressed.new",
+      "compression/zstd:ZstdDecompressed.bytes",
+      "compression/zstd:ZstdDecompressed.new"
+    ]
+  },
+  "brotli-round-trip": {
+    "path": "std/brotli-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "compression/brotli"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "compression/brotli:BrotliCompressed.bytes",
+      "compression/brotli:BrotliCompressed.new",
+      "compression/brotli:BrotliDecompressed.bytes",
+      "compression/brotli:BrotliDecompressed.new"
+    ]
+  },
+  "keyed-set": {
+    "path": "std/keyed-set.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "collections/set"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/set:KeyedSet.membership",
+      "collections/set:KeyedSet.new",
+      "collections/set:KeyedSet.size"
+    ]
+  },
+  "ordered-set-union": {
+    "path": "std/ordered-set-union.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "collections/set"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/set:OrderedSet.new",
+      "collections/set:Union.new",
+      "collections/set:Union.size"
+    ]
+  },
+  "deque-ends": {
+    "path": "std/deque-ends.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "collections/deque"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/deque:Deque.first",
+      "collections/deque:Deque.last",
+      "collections/deque:Deque.new",
+      "collections/deque:Deque.prefix",
+      "collections/deque:Deque.size",
+      "collections/deque:Deque.suffix",
+      "collections/deque:Deque.tail"
+    ]
+  },
+  "frequencies-count": {
+    "path": "std/frequencies-count.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "collections/frequencies"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/frequencies:Frequencies.amount",
+      "collections/frequencies:Frequencies.new",
+      "collections/frequencies:Frequencies.size",
+      "collections/frequencies:Frequencies.total"
+    ]
+  },
+  "ini-parse": {
+    "path": "std/ini-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "config/ini"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "config/ini:IniDocument.section",
+      "config/ini:IniSection.membership",
+      "config/ini:IniSection.value",
+      "config/ini:ParsedIni.document",
+      "config/ini:ParsedIni.new"
+    ]
+  },
+  "http-media-type": {
+    "path": "std/http-media-type.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/media_type"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/media_type:HttpMediaParameters.first",
+      "http/media_type:HttpMediaType.new",
+      "http/media_type:HttpMediaType.parameters",
+      "http/media_type:HttpMediaType.string"
+    ]
+  },
+  "http-date-format": {
+    "path": "std/http-date-format.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/date"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/date:HttpDate.new",
+      "http/date:HttpDate.string"
+    ]
+  },
+  "http-date-parse": {
+    "path": "std/http-date-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/date"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/date:ParsedHttpDate.instant",
+      "http/date:ParsedHttpDate.new"
+    ]
+  },
+  "http-status-phrase": {
+    "path": "std/http-status-phrase.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/status"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/status:StatusCode.new",
+      "http/status:StatusCode.number",
+      "http/status:StatusCode.phrase"
+    ]
+  },
+  "http-method-semantics": {
+    "path": "std/http-method-semantics.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/method"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/method:MethodName.method",
+      "http/method:MethodName.new",
+      "http/method:MethodSemantics.idempotent",
+      "http/method:MethodSemantics.new",
+      "http/method:MethodSemantics.safe"
+    ]
+  },
+  "http-entity-tags": {
+    "path": "std/http-entity-tags.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/conditional"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/conditional:EntityTags.strong_matches",
+      "http/conditional:EntityTags.values",
+      "http/conditional:EntityTags.weak_matches",
+      "http/conditional:ParsedEntityTags.new",
+      "http/conditional:ParsedEntityTags.tags"
+    ]
+  },
+  "http-request-target": {
+    "path": "std/http-request-target.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/target"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/target:ParsedRequestTarget.new",
+      "http/target:ParsedRequestTarget.target",
+      "http/target:RequestTarget.path",
+      "http/target:RequestTarget.query"
+    ]
+  },
+  "http-quality": {
+    "path": "std/http-quality.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/negotiation"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/negotiation:ParsedQuality.new",
+      "http/negotiation:ParsedQuality.quality",
+      "http/negotiation:Quality.weight"
+    ]
+  },
+  "calendar-month": {
+    "path": "std/calendar-month.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "calendar"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "calendar:CalendarMonth.new",
+      "calendar:CalendarMonth.size",
+      "calendar:MonthDates.new",
+      "calendar:MonthDates.size",
+      "calendar:YearMonth.new"
+    ]
+  },
+  "diff-edits": {
+    "path": "std/diff-edits.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "diff"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "diff:Diff.edits",
+      "diff:Diff.new",
+      "diff:Diff.ratio"
+    ]
+  },
+  "byte-search": {
+    "path": "std/byte-search.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/bytes:ByteSearch.from",
+      "encoding/bytes:ByteSearch.new"
+    ]
+  },
+  "byte-range-integer": {
+    "path": "std/byte-range-integer.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/binary",
+      "encoding/bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/bytes:ByteRange.integer",
+      "encoding/bytes:ByteRange.new"
+    ]
+  },
+  "combinations-count": {
+    "path": "std/combinations-count.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "collections/combinatorics"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/combinatorics:Combinations.cursor",
+      "collections/combinatorics:Combinations.new"
+    ]
+  },
+  "x25519-public-key": {
+    "path": "std/x25519-public-key.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/secret",
+      "crypto/x25519"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/secret:SecretBytes.new",
+      "crypto/x25519:X25519PrivateKey.new",
+      "crypto/x25519:X25519PrivateKey.public_key",
+      "crypto/x25519:X25519PublicKey.raw"
+    ]
+  },
+  "cookie-date": {
+    "path": "std/cookie-date.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "http/cookie_date"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "http/cookie_date:ParsedCookieDate.instant",
+      "http/cookie_date:ParsedCookieDate.new"
+    ]
+  },
+  "fs-path": {
+    "path": "std/fs-path.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "fs/path"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "fs/path:Path.extension",
+      "fs/path:Path.name",
+      "fs/path:Path.new",
+      "fs/path:Path.parent",
+      "fs/path:Path.parts"
+    ]
+  },
+  "html-events": {
+    "path": "std/html-events.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "html/events"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "html/events:HtmlComment.kind",
+      "html/events:HtmlEndTag.kind",
+      "html/events:HtmlEvents.cursor",
+      "html/events:HtmlEvents.new",
+      "html/events:HtmlStartTag.kind",
+      "html/events:HtmlText.kind"
+    ]
+  },
+  "currency-digits": {
+    "path": "std/currency-digits.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "locale/currency"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "locale/currency:Currency.code",
+      "locale/currency:Currency.digits",
+      "locale/currency:Currency.new"
+    ]
+  },
+  "views-filtered-chunked": {
+    "path": "std/views-filtered-chunked.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "collections/views"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/views:Chunked.cursor",
+      "collections/views:Chunked.new",
+      "collections/views:Filtered.new"
+    ]
   }
 }

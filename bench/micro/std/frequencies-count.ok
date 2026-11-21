@@ -1,0 +1,28 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "collections/frequencies" take Frequencies;
+import "collections/list" take List, EmptyList;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let empty is List<string> = EmptyList();
+        let words = empty.prefix(["a", "b", "c"][i % 3]).prefix("a").prefix("b").prefix("a");
+        let counts = Frequencies(values: words);
+        self.run(i + 1, n, acc + (counts.amount("a") + counts.size() + counts.total()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -8,7 +8,7 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
-- **Std micro-benchmarks (#244).** `bench/micro/std` grows from 11 to 117 programs across 117 std modules (264
+- **Std micro-benchmarks (#244).** `bench/micro/std` grows from 11 to 159 programs across 150 std modules (397
   measured public actions), from hashing, ciphers and compression to dates, locales, URLs, templates, text and
   numbers; each has an independent Python oracle. `bench/micro/actions.py` keeps an inventory of every public std
   action (STD-ACTIONS.md, `--check` for staleness) and writes a protocol-v2 skeleton for a missing one.

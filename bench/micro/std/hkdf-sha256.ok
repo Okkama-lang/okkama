@@ -1,0 +1,29 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "crypto/kdf" take HkdfSecret, KdfHash;
+import "crypto/secret" take SecretBytes;
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let input = SecretBytes([byte(i % 256), byte(1), byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), byte(8), byte(9), byte(10), byte(11), byte(12), byte(13), byte(14), byte(15)]);
+        let salt = [byte(1), byte(2), byte(3), byte(4)];
+        let info = [byte(105), byte(110), byte(102), byte(111)];
+        let key = HkdfSecret(KdfHash.sha256, input, salt, info, 32).secret().export_bytes();
+        self.run(i + 1, n, acc + (key[0].int() + key[31].int()) % 7);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

@@ -13,12 +13,62 @@ import zlib
 import hashlib
 import json
 from functools import lru_cache
+import posixpath
+from html.parser import HTMLParser
+import calendar
+import difflib
+import math
+import email.utils
+import configparser
+from collections import Counter
+import struct
 
 
 def rem(a, b):
     # Okkama integer remainder follows truncation toward zero.
     return a % b if a >= 0 else -((-a) % b)
 
+
+def x25519_public(scalar):
+    """RFC 7748 section 5: X25519(k, 9), Montgomery ladder over p = 2^255 - 19."""
+    p=2**255-19
+    k=bytearray(scalar)
+    k[0]&=248;k[31]&=127;k[31]|=64
+    k=int.from_bytes(k,'little')
+    x1,x2,z2,x3,z3,swap=9,1,0,9,1,0
+    for t in reversed(range(255)):
+        bit=(k>>t)&1
+        swap^=bit
+        if swap:x2,x3,z2,z3=x3,x2,z3,z2
+        swap=bit
+        a,b=(x2+z2)%p,(x2-z2)%p
+        aa,bb=a*a%p,b*b%p
+        e=(aa-bb)%p
+        c,d=(x3+z3)%p,(x3-z3)%p
+        da,cb=d*a%p,c*b%p
+        x3=(da+cb)**2%p
+        z3=x1*(da-cb)**2%p
+        x2=aa*bb%p
+        z2=e*(aa+121665*e)%p
+    if swap:x2,x3,z2,z3=x3,x2,z3,z2
+    return (x2*pow(z2,p-2,p)%p).to_bytes(32,'little')
+class _HtmlEventCount(HTMLParser):
+    """Counts events as an HTML tokenizer reports them; a self-closing tag is one start tag."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.events=0
+        self.starts=0
+    def handle_starttag(self,tag,attrs):
+        self.events+=1
+        self.starts+=1
+    def handle_startendtag(self,tag,attrs):
+        self.handle_starttag(tag,attrs)
+    def handle_endtag(self,tag):
+        self.events+=1
+    def handle_data(self,data):
+        self.events+=1
+    def handle_comment(self,data):
+        self.events+=1
 
 def contribution(name, i):
     if name in {'baseline','constructor-generic','destroy','defer','async-await','spawn','channel','cancel','cancel-async-cleanup','event-wake','map-bigint-key','map-long-key','map-replace','map-empty','rat-add','rat-int-round-trip','json-parse','map-plus','array-plus','map-literal','map-literal-8','map-literal-12'}: return i % 7
@@ -182,6 +232,126 @@ def contribution(name, i):
     if name == 'url-parts': return (len('https://example.com/a/'+str(i)+'?x=1')) % 7
     if name == 'uuid5-name': return (uuid.uuid5(uuid.NAMESPACE_DNS, 'item'+str(i)).bytes[0]) % 7
     if name == 'xml-name': return (len('t:item'+str(i))) % 7
+    # #244, modules a-l: oracles follow the RFCs and Python's codecs, not VM output.
+    if name=='qp-encode':
+        b=i%256
+        literal=(33<=b<=126 and b!=61) or b==32
+        return ((1 if literal else 3)+11+(b if literal else 61))%7
+    if name=='qp-decode':return (i%256+5)%7
+    if name=='base85-encode':
+        text=base64.a85encode(bytes([i%256,1,2,3,4])).decode()
+        return (len(text)+ord(text[0]))%7
+    if name=='base85-decode':return (i%256+6)%7
+    if name=='latin1-decode':return (4+i%256)%7
+    if name=='ascii-encode':return (len('row '+str(i))+ord(str(i)[0]))%7
+    if name=='binary-int-round-trip':
+        packed=struct.pack('>i',(i*7919)%2000000-1000000)
+        return (packed[0]+packed[3]+1)%7
+    if name=='binary-float-round-trip':
+        packed=struct.pack('<d',i/8-1.5)
+        return (packed[7]+packed[6]+1)%7
+    if name=='pem-encode':
+        body=base64.b64encode(bytes((i+7*k)%256 for k in range(40))).decode()
+        text='-----BEGIN TEST DATA-----\n'+body+'\n-----END TEST DATA-----\n'
+        return (len(text)+ord(text[26]))%7
+    if name=='pem-parse':return (i%256+40+9)%7
+    if name=='constant-time-equal':return 2 if i%3==0 else 1
+    if name=='hkdf-sha256':
+        prk=hmac.new(bytes([1,2,3,4]),bytes([i%256]+list(range(1,16))),hashlib.sha256).digest()
+        key=hmac.new(prk,b'info\x01',hashlib.sha256).digest()
+        return (key[0]+key[31])%7
+    if name=='pbkdf2-sha256':
+        key=hashlib.pbkdf2_hmac('sha256',('password-'+str(i)).encode(),b'salt',16,32)
+        return (key[0]+key[31])%7
+    if name=='chacha20-round-trip':return (i%256+8+16)%7
+    if name=='jwt-hs256-sign':
+        segment=lambda raw:base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
+        signing=segment(b'{"alg":"HS256","typ":"JWT"}')+'.'+segment(json.dumps({'sub':'user-'+str(i),'n':i},separators=(',',':')).encode())
+        token=signing+'.'+segment(hmac.new(b'a-benchmark-secret-of-32-or-more-bytes',signing.encode(),hashlib.sha256).digest())
+        return (len(token)+ord(token[-1]))%7
+    if name in {'deflate-round-trip','zstd-round-trip','brotli-round-trip'}:return (i%256+8)%7
+    if name=='keyed-set':
+        values={i%10,(i*3)%10,5,7}
+        return (len(values)+(1 if i%4 in values else 0))%7
+    if name=='ordered-set-union':return len({'a','b',str(i%5)}|{'b','c',str(i%7)})%7
+    if name=='deque-ends':return (i+1+4)%7
+    if name=='frequencies-count':
+        counts=Counter(['a','b','a',['a','b','c'][i%3]])
+        return (counts['a']+len(counts)+4)%7
+    if name=='ini-parse':
+        parser=configparser.ConfigParser()
+        parser.read_string('[server]\nhost=example\nport='+str(i)+'\n')
+        return (len(parser['server']['port'])+(1 if 'host' in parser['server'] else 0))%7
+    if name=='http-media-type':
+        level=str(i%3)
+        return (len('text/html; charset=utf-8; level='+level)+len('utf-8')+len(level))%7
+    if name=='http-date-format':
+        text=email.utils.formatdate(1700000000+i*86413,usegmt=True)
+        return (len(text)+ord(text[5]))%7
+    if name=='http-date-parse':
+        return int(datetime.datetime(1994,11,6,8,49,i%60,tzinfo=datetime.timezone.utc).timestamp())%7
+    if name=='http-status-phrase':
+        # RFC 9110 section 15 reason phrases.
+        phrases={200:'OK',201:'Created',204:'No Content',301:'Moved Permanently',304:'Not Modified',
+                 400:'Bad Request',404:'Not Found',500:'Internal Server Error',503:'Service Unavailable'}
+        code=[200,201,204,301,304,400,404,500,503][i%9]
+        return (len(phrases[code])+code)%7
+    if name=='http-method-semantics':
+        # RFC 9110 sections 9.2.1 (safe) and 9.2.2 (idempotent).
+        method=['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS','TRACE'][i%8]
+        safe=method in {'GET','HEAD','OPTIONS','TRACE'}
+        return ((1 if safe else 0)+(2 if safe or method in {'PUT','DELETE'} else 0))%7
+    if name=='http-entity-tags':
+        # RFC 9110 section 8.8.3.2: W/"b1" weakly matches "b1"; a strong match needs two strong tags.
+        return (2+(1 if i%3==1 else 0))%7
+    if name=='http-request-target':return (len('/search/'+str(i))+len('q='+str(i)))%7
+    if name=='http-quality':return (100*(i%10)+10*((i//10)%10))%7
+    if name=='calendar-month':
+        year,month=2000+i%30,1+i%12
+        return (len(calendar.Calendar(0).monthdatescalendar(year,month))+calendar.monthrange(year,month)[1])%7
+    if name=='diff-edits':
+        mark=str(i%5)
+        left=['alpha','beta','gamma',mark,'delta']
+        right=['alpha','gamma','beta',mark,'delta',str(i%3)]
+        # Edits list every line once: kept lines (a longest common subsequence) plus removed and added ones.
+        common=[[0]*(len(right)+1) for _ in range(len(left)+1)]
+        for a in range(len(left)):
+            for b in range(len(right)):
+                common[a+1][b+1]=common[a][b]+1 if left[a]==right[b] else max(common[a][b+1],common[a+1][b])
+        edits=len(left)+len(right)-common[len(left)][len(right)]
+        ratio=difflib.SequenceMatcher(None,left,right).ratio()
+        return (edits+int(ratio*1000.0)+(1 if ratio==1.0 else 0))%7
+    if name=='byte-search':
+        source=bytes((k*31+7)%251 for k in range(512))
+        start=i%300
+        return source.find(source[start+40:start+43],start)%7
+    if name=='byte-range-integer':return int.from_bytes(bytes([i%256,(i*7)%256,200]),'big')%7
+    if name=='combinations-count':
+        size=1+i%4
+        return (math.comb(5,size)*size)%7
+    if name=='x25519-public-key':
+        raw=x25519_public(bytes([i%256]+list(range(1,32))))
+        return (raw[0]+raw[31])%7
+    if name=='cookie-date':
+        return int(datetime.datetime(2015,10,21,7,28,i%60,tzinfo=datetime.timezone.utc).timestamp())%7
+    if name=='fs-path':
+        path=posixpath.normpath('/srv'+'/d'*(i%4)+'/./logs//file'+str(i)+'.tar.gz')
+        parts=['/']+path.strip('/').split('/')
+        name_part=posixpath.basename(path)
+        return (len(parts)+len(parts)-1+len(name_part)+len(name_part.rsplit('.',1)[1]))%7
+    if name=='html-events':
+        parser=_HtmlEventCount()
+        parser.feed('<p class=x>Hello <b>'+str(i)+'</b>'+('<br/>' if i%2==0 else '')+'</p><!-- c -->')
+        parser.close()
+        return (parser.events+3*parser.starts)%7
+    if name=='currency-digits':
+        # ISO 4217 minor units.
+        code=['USD','JPY','BHD','EUR','KWD','CLP','GBP','TND'][i%8]
+        return ({'USD':2,'JPY':0,'BHD':3,'EUR':2,'KWD':3,'CLP':0,'GBP':2,'TND':3}[code]+3)%7
+    if name=='views-filtered-chunked':
+        kept=[v for v in [i%5,1,2,3,4,5,6] if v%2==0]
+        chunks=[kept[k:k+2] for k in range(0,len(kept),2)]
+        return (3*len(chunks)+sum(chunk[0] for chunk in chunks))%7
     raise ValueError('No independent oracle: '+name)
 
 
