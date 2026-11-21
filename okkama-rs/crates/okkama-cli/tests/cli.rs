@@ -1589,6 +1589,202 @@ fn traversal_steps_own_their_cursor_and_keep_no_record_of_past_ones() {
 
 // ---- okkama man (#512)
 
+#[test]
+fn man_keyword_search_covers_paths_names_and_summaries_and_validates_arguments() {
+    let dir = std::env::temp_dir().join(format!("okkama-man-search-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("area")).unwrap();
+    std::fs::write(dir.join("area/demo.ok"), "module area/demo;\n\n// Module overview.\n\n// Unusual résumé.\nobject Widget {\n    // Send a parcel.\n    send() is void {}\n    // Hidden needle.\n    hidden secret() is void {}\n}\n// Hidden needle.\nhidden object Secret { Secret() {} }\n").unwrap();
+    let search = |args: &[&str]| okkama().arg("man").args(args)
+        .env("OKKAMA_STDLIB_DIR", &dir).env_remove("OKKAMA_IMPORT_DIRS")
+        .env_remove("PAGER").output().unwrap();
+    for query in ["AREA/DEMO", "widget", "RÉSUMÉ", "parcel"] {
+        let output = search(&["-k", query]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stdout(&output).contains("area/demo"), "{}", stdout(&output));
+    }
+    let output = search(&["--format", "markdown", "-k", "parcel"]);
+    assert!(stdout(&output).contains("Widget.send"), "{}", stdout(&output));
+    let output = search(&["-k", "needle"]);
+    assert!(output.status.success());
+    assert!(stdout(&output).contains("No matches"));
+    assert!(!stdout(&output).contains("Secret"));
+    for args in [&["-k"][..], &["-k", ""], &["-k", "x", "area/demo"], &["-k", "x", "-k", "y"]] {
+        assert_eq!(search(args).status.code(), Some(2), "{args:?}");
+    }
+    assert!(stdout(&man(&["--help"])).contains("-k QUERY"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn man_declaration_links_include_external_modules_and_warn_without_failing() {
+    let dir = std::env::temp_dir().join(format!("okkama-man-links-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("other.ok"), "module other;\n// The external role.\nrole Writing { write() is void; }\n").unwrap();
+    let file = dir.join("app.ok");
+    std::fs::write(&file, "module app;\n\n// See [Thing.write], [other.Writing], [Missing].\n\nobject Thing {\n    write(x is int) is void {}\n    write(x is string) is void {}\n}\n").unwrap();
+    for format in ["text", "markdown"] {
+        let output = man(&["--format", format, file.to_str().unwrap()]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let page = stdout(&output);
+        assert!(page.contains("okkama-doc:/app#Thing.write"), "{page}");
+        assert!(page.contains("okkama-doc:/other#Writing"), "{page}");
+        assert!(stderr(&output).contains("warning: unresolved documentation link [Missing]"), "{}", stderr(&output));
+        assert!(stderr(&output).contains("app.ok:3:"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A bounded protocol client for the documentation regressions (#513).
+struct DocLsp {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    messages: std::sync::mpsc::Receiver<serde_json::Value>,
+    next: u32,
+}
+
+impl DocLsp {
+    fn new() -> Self {
+        Self::with_stdlib(&std_dir())
+    }
+
+    fn with_stdlib(stdlib: &std::path::Path) -> Self {
+        let mut child = okkama().arg("lsp").env("OKKAMA_STDLIB_DIR", stdlib)
+            .env_remove("OKKAMA_IMPORT_DIRS").stdin(Stdio::piped()).stdout(Stdio::piped())
+            .stderr(Stdio::null()).spawn().unwrap();
+        let input = child.stdin.take().unwrap();
+        let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (sender, messages) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(Some(message)) = lsp_server::Message::read(&mut output) {
+                if sender.send(serde_json::to_value(message).unwrap()).is_err() { break; }
+            }
+        });
+        let mut client = Self { child, input, messages, next: 0 };
+        client.request("initialize", serde_json::json!({"capabilities": {}}));
+        client.notify("initialized", serde_json::json!({}));
+        client
+    }
+
+    fn send(&mut self, message: serde_json::Value) {
+        let text = message.to_string();
+        write!(self.input, "Content-Length: {}\r\n\r\n{}", text.len(), text).unwrap();
+        self.input.flush().unwrap();
+    }
+
+    fn notify(&mut self, method: &str, params: serde_json::Value) {
+        self.send(serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params}));
+    }
+
+    fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.next += 1;
+        let id = self.next;
+        self.send(serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        loop {
+            let message = self.messages.recv_timeout(std::time::Duration::from_secs(20)).expect("LSP response within 20 seconds");
+            if message.get("id") == Some(&serde_json::json!(id)) {
+                assert!(message.get("error").is_none(), "{message}");
+                return message["result"].clone();
+            }
+        }
+    }
+}
+
+#[test]
+fn lsp_doc_std_completion_resolves_links_from_unsaved_public_model() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-std-doc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let library = "module demo;\n// See [First].\nobject First {\n    First() {}\n    // Member [First.send].\n    send(x is int = 2) is void {}\n}\nhidden object Secret { Secret() {} }\n";
+    let file = dir.join("demo.ok");
+    std::fs::write(&file, library).unwrap();
+    let imported_uri = format!("file://{}", file.display());
+    let uri = format!("file://{}", dir.join("app.ok").display());
+    let text = "module app;\nmain() is int { std.demo.";
+    let mut client = DocLsp::with_stdlib(&dir);
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": imported_uri, "version": 1, "text": library.replace("Member", "Unsaved member")}}));
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": uri, "version": 1, "text": text}}));
+    let completion = client.request("textDocument/completion", serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 1, "character": text.lines().nth(1).unwrap().len()}}));
+    let items = completion.as_array().unwrap();
+    assert!(!items.iter().any(|item| item["label"] == "Secret"));
+    let first = items.iter().find(|item| item["label"] == "First").unwrap();
+    assert!(first["documentation"]["value"].as_str().unwrap().contains("Unsaved member"));
+    let resolved = client.request("completionItem/resolve", first.clone());
+    let documentation = resolved["documentation"]["value"].as_str().unwrap();
+    assert!(documentation.contains("Unsaved member"), "{documentation}");
+    assert!(documentation.contains("x is int = 2"));
+    assert!(documentation.contains("[First.send](okkama-doc:/demo#First.send)"));
+    assert!(!documentation.contains("Secret"));
+    client.notify("textDocument/didChange", serde_json::json!({"textDocument": {"uri": imported_uri, "version": 2}, "contentChanges": [{"text": library.replace("object First", "hidden object First")}]}));
+    let hidden = client.request("completionItem/resolve", first.clone());
+    assert!(hidden.get("documentation").is_none(), "{hidden}");
+    client.request("shutdown", serde_json::Value::Null);
+    client.notify("exit", serde_json::Value::Null);
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+impl Drop for DocLsp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn lsp_doc_model_matches_man_and_tracks_open_change_and_close_of_imports() {
+    let dir = std::env::temp_dir().join(format!("okkama-lsp-doc-integration-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let library = "module money;\n// Public [Money] and [Money.plus].\nobject Money {\n    // Create an amount.\n    Money() {}\n    // Integer amount.\n    plus(x is int = 1) is int { x; }\n    // Text amount.\n    plus(x is string) is string { x; }\n    // Private words.\n    hidden secret() is void {}\n}\n// Private type.\nhidden object Secret { Secret() {} }\n";
+    let path = dir.join("money.ok");
+    std::fs::write(&path, library).unwrap();
+    let text = "module app;\nimport \"money\" take Money;\nmain() is int { let m = Money(); let _s = m.plus(\"x\"); m.plus(2); }\n";
+    let uri = format!("file://{}", dir.join("app.ok").display());
+    let imported_uri = format!("file://{}", path.display());
+    let position = |needle: &str| serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 2, "character": text.lines().nth(2).unwrap().find(needle).unwrap() + 1}});
+    let mut client = DocLsp::new();
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": uri, "languageId": "okkama", "version": 1, "text": text}}));
+    let hover = client.request("textDocument/hover", position("plus(2)"));
+    let start = text.lines().nth(2).unwrap().find("plus(2)").unwrap();
+    assert_eq!(hover["range"], serde_json::json!({"start": {"line": 2, "character": start}, "end": {"line": 2, "character": start + 4}}));
+    let hover = hover["contents"]["value"].as_str().unwrap();
+    assert!(hover.contains("Integer amount"), "{hover}");
+    assert!(hover.contains("x is int = 1"));
+    assert!(!hover.contains("Text amount"));
+    assert!(!hover.contains("Private"));
+    let page = man(&["--format", "markdown", path.to_str().unwrap(), "Money.plus"]);
+    assert!(page.status.success(), "{}", stderr(&page));
+    assert!(stdout(&page).contains("Integer amount.") && stdout(&page).contains("Text amount."));
+    let imported = client.request("textDocument/hover", serde_json::json!({"textDocument": {"uri": uri}, "position": {"line": 1, "character": 22}}));
+    assert!(imported["contents"]["value"].as_str().unwrap().contains("[Money.plus](okkama-doc:/money#Money.plus)"));
+    client.notify("textDocument/didOpen", serde_json::json!({"textDocument": {"uri": imported_uri, "languageId": "okkama", "version": 1, "text": library.replace("Integer amount", "Opened buffer")}}));
+    let opened = client.request("textDocument/hover", position("plus(2)"));
+    assert!(opened["contents"]["value"].as_str().unwrap().contains("Opened buffer"), "{opened}");
+    client.notify("textDocument/didChange", serde_json::json!({"textDocument": {"uri": imported_uri, "version": 2}, "contentChanges": [{"text": library.replace("Integer amount", "Changed buffer")}]}));
+    let changed = client.request("textDocument/hover", position("plus(2)"));
+    assert!(changed["contents"]["value"].as_str().unwrap().contains("Changed buffer"), "{changed}");
+    let completion = client.request("textDocument/completion", position("plus(2)"));
+    let completions = completion.as_array().unwrap();
+    assert!(completions.iter().any(|item| item["label"] == "plus" && item["documentation"]["value"].as_str().is_some_and(|value| value.contains("Changed buffer"))), "{completion}");
+    assert!(!completions.iter().any(|item| item["label"] == "secret"));
+    client.notify("textDocument/didClose", serde_json::json!({"textDocument": {"uri": imported_uri}}));
+    let closed = client.request("textDocument/hover", position("plus(2)"));
+    assert!(closed["contents"]["value"].as_str().unwrap().contains("Integer amount"), "{closed}");
+    client.request("shutdown", serde_json::Value::Null);
+    client.notify("exit", serde_json::Value::Null);
+    drop(client);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn man_broken_links_are_lint_warnings_with_the_original_location() {
+    let file = TempFile::new("doc-warning.ok", b"module example;\n\n// See [Missing].\n\nobject Public { Public() {} }\n");
+    let output = run(&["lint", file.path()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout(&output).contains(":3:8: warning[unresolved-doc-link]: unresolved documentation link [Missing]"), "{}", stdout(&output));
+    assert!(!stdout(&output).contains("error:"));
+}
+
 fn std_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std")
 }

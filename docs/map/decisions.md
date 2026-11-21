@@ -6,6 +6,11 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Documentation Phase B (#513).** The owner made the entire ticket
+  the scope, without a new approval round or language changes. Open choices
+  use the simplest behavior consistent with #512 §§11, 13, 16, 18; implementation
+  choices and checks: [Phase B record](../std-docs-phase-b-513.md).
+
 - **2026-11-20. One engine, no selector.** `okkama run` has no `--engine`, and `OKKAMA_ENGINE` and
   `OCS_RUST_ENGINE` are ignored (a4b8ad285). Only `bench/micro/run.py` still passes the flag, and only to old
   toolchains that know it.

@@ -30,6 +30,7 @@ okkama man — reference pages from the doc comments of modules
 USAGE:
     okkama man [--format text|markdown] [--no-pager]
     okkama man [OPTIONS] MODULE [NAME | NAME.ACTION]
+    okkama man [OPTIONS] -k QUERY
 
 MODULE is a module path (`io/stdout`, or `std/io/stdout` for std only) or a
 source file (`./src/app.ok`). Without MODULE, the index of std.
@@ -38,6 +39,7 @@ OPTIONS:
     --format text      Terminal text (default)
     --format markdown  The page as Markdown
     --no-pager         Never start $PAGER
+    -k QUERY           Search std module paths, public names and summaries
 ";
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -50,10 +52,19 @@ pub(crate) fn command(args: &[String]) -> Outcome {
     let mut format = Format::Text;
     let mut pager = true;
     let mut positional = Vec::new();
+    let mut query = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let value = match arg.as_str() {
             "-h" | "--help" => return Outcome::success(HELP.to_string()),
+            "-k" => {
+                if query.is_some() { return Outcome::usage("-k may be given only once"); }
+                let Some(value) = rest.next().filter(|value| !value.trim().is_empty()) else {
+                    return Outcome::usage("-k needs a non-empty QUERY");
+                };
+                query = Some(value.trim().to_string());
+                continue;
+            }
             "--no-pager" => {
                 pager = false;
                 continue;
@@ -87,13 +98,19 @@ pub(crate) fn command(args: &[String]) -> Outcome {
             && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
             && std::env::var("TERM").map_or(true, |term| term != "dumb"),
     };
-    let loader = FileLoader::from_env();
-    let page = match positional.as_slice() {
+    let mut loader = FileLoader::from_env();
+    let mut warnings = String::new();
+    if query.is_some() && !positional.is_empty() {
+        return Outcome::usage("-k QUERY cannot be combined with a module or declaration");
+    }
+    let page = if let Some(query) = query {
+        search(&loader, &query, format, &style)
+    } else { match positional.as_slice() {
         [] => index(&loader, format, &style),
-        [target] => module_page(&loader, target, None, format, &style),
-        [target, name] => module_page(&loader, target, Some(name), format, &style),
+        [target] => module_page(&mut loader, target, None, format, &style, &mut warnings),
+        [target, name] => module_page(&mut loader, target, Some(name), format, &style, &mut warnings),
         _ => return Outcome::usage("okkama man takes a module and at most one name"),
-    };
+    }};
     let page = match page {
         Ok(page) => page,
         Err(message) => return Outcome::failure(format!("okkama man: {message}\n"), EXIT_DIAGNOSTICS),
@@ -104,9 +121,9 @@ pub(crate) fn command(args: &[String]) -> Outcome {
         && let Ok(setting) = std::env::var("PAGER")
         && let Some(()) = show_in_pager(&setting, &page)
     {
-        return Outcome::success(String::new());
+        return Outcome { stdout: String::new(), stderr: warnings, code: 0 };
     }
-    Outcome::success(page)
+    Outcome { stdout: page, stderr: warnings, code: 0 }
 }
 
 /// The terminal's width from `COLUMNS`, 80 when it is not set; pages keep
@@ -183,22 +200,46 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
     }
 }
 
+fn search(loader: &FileLoader, query: &str, format: Format, style: &Style) -> Result<String, String> {
+    let mut paths = Vec::new();
+    collect(&loader.stdlib, &loader.stdlib, &mut paths);
+    if paths.is_empty() { return Err(format!("no std found in {}", loader.stdlib.display())); }
+    paths.sort();
+    let mut entries = Vec::new();
+    for path in paths {
+        let doc = ModuleDoc::load(&loader.stdlib.join(format!("{path}.ok")))?;
+        entries.extend(doc.search(query));
+    }
+    Ok(match format {
+        Format::Text => render::search_text(&entries, style),
+        Format::Markdown => render::search_markdown(&entries),
+    })
+}
+
 /// A module path segment: a letter or `_`, then letters, digits and `_`.
-fn segment(name: &str) -> bool {
+pub(super) fn segment(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn module_page(
-    loader: &FileLoader,
+    loader: &mut FileLoader,
     target: &str,
     name: Option<&String>,
     format: Format,
     style: &Style,
+    warnings: &mut String,
 ) -> Result<String, String> {
     let file = resolve(loader, target)?;
-    let doc = ModuleDoc::load(&file)?;
+    let text = std::fs::read_to_string(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let source = okkama_compiler::SourceFile::new(file.display().to_string(), text)
+        .map_err(|_| format!("{}: the file is too large", file.display()))?;
+    let doc = okkama_compiler::doc::document(&source, loader)?;
+    for warning in &doc.link_warnings {
+        let location = source.location(warning.span.start);
+        warnings.push_str(&format!("{}:{}:{}: warning: unresolved documentation link [{}]\n", source.name(), location.line, location.column, warning.name));
+    }
     let Some(name) = name else {
         return Ok(match format {
             Format::Text => render::module_text(&doc, style),
@@ -278,6 +319,15 @@ fn resolve(loader: &FileLoader, target: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::{segment, show_in_pager};
+
+    #[test]
+    fn keyword_search_checks_its_arguments_before_loading_std() {
+        for args in [&["-k"][..], &["-k", " "], &["-k", "x", "module"], &["-k", "x", "-k", "y"]] {
+            let args: Vec<_> = args.iter().map(|arg| arg.to_string()).collect();
+            assert_eq!(super::command(&args).code, 2);
+        }
+        assert!(super::HELP.contains("-k QUERY"));
+    }
 
     #[test]
     fn a_missing_pager_falls_back_to_printing() {

@@ -21,3 +21,11 @@ trace.
 
 Where one ownership rule lives in several rows, rules.md lists them. The aim is lowering plus the runtime, with
 one elaboration pass (#909) and one debug-only checker (#910).
+
+Documentation (#512/#513) is a separate read-only path: `doc::document` reuses
+the module graph and declaration registry, then `doc::Documentation` resolves
+public declaration links and warning spans. `doc::render` supplies man pages,
+search results and IDE documentation. `ide::build` selects declarations using
+analysis spans; std path completion uses the same public inventory and editor
+overlays, resolving selected entries through LSP `completionItem/resolve`.
+This path neither lowers bodies nor generates or executes code.

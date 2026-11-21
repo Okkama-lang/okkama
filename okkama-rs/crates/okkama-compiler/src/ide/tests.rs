@@ -66,6 +66,87 @@ fn inspect(text: &str) -> Inspection {
     lowering::inspect(&source, &mut loader, false)
 }
 
+#[test]
+fn doc_model_drives_imported_hover_completion_links_and_unsaved_overloads() {
+    let library = "module shop/money;\n\n// Public [Money] and [Money.plus].\nobject Money {\n    // Construct an amount.\n    Money() {}\n    // Integer amount; see [Money].\n    //\n    // ```text\n    // [NotALink]\n    // ```\n    plus(value is int = 1) is int { value; }\n    // Text amount.\n    plus(value is string) is string { value; }\n    // Never publish this.\n    hidden secret() is void {}\n}\n// Never publish this type.\nhidden object Secret { Secret() {} }\n";
+    let text = "module app;\nimport \"shop/money\" take Money;\nmain() is int { let m = Money(); let _s = m.plus(\"x\"); m.plus(2); }\n";
+    let file = SourceFile::new("/app/main.ok", text).unwrap();
+    let mut loader = Memory(HashMap::from([("shop/money".into(), library.into())]));
+    let inspection = lowering::inspect(&file, &mut loader, false);
+    let integer = at(&inspection, text, "plus(2)", 0, 1);
+    assert!(integer.hover.contains("Integer amount"), "{}", integer.hover);
+    assert!(integer.hover.contains("value is int = 1"));
+    assert!(!integer.hover.contains("Text amount"));
+    assert!(integer.hover.contains("[Money](okkama-doc:/shop/money#Money)"));
+    let string = at(&inspection, text, "plus(\"x\")", 0, 1);
+    assert!(string.hover.contains("Text amount"));
+    assert!(!string.hover.contains("Integer amount"));
+    assert_eq!(integer.definition.as_ref().unwrap().range.start.line, 11);
+    let members = inspection.members.get("Money").unwrap();
+    let completions: Vec<_> = members.iter().filter(|member| member.label == "plus").collect();
+    assert_eq!(completions.len(), 2);
+    assert!(completions[0].documentation.contains("Integer amount"));
+    assert!(completions[0].documentation.contains("value is int = 1"));
+    assert!(completions[1].documentation.contains("Text amount"));
+    assert!(!members.iter().any(|member| member.label == "secret"));
+    let imported = at(&inspection, text, "take Money", 0, 6);
+    assert!(imported.hover.contains("Construct an amount"));
+    assert!(!imported.hover.contains("Never publish"));
+    let library_file = SourceFile::new("/lib/shop/money.ok", library).unwrap();
+    let doc = crate::doc::document(&library_file, &mut loader).unwrap();
+    let item = doc.item("Money").unwrap();
+    let member = &item.members[1];
+    let expected_hover = crate::doc::render::hover(&doc, item, Some(member));
+    assert_eq!(integer.hover, expected_hover);
+    assert_eq!(completions[0].documentation, expected_hover);
+    let page = crate::doc::render::item_markdown(&doc, item, Some(&[member]));
+    let prose = member.doc.as_ref().unwrap().markdown();
+    assert!(page.contains(&prose));
+    assert!(integer.hover.contains(&prose));
+    assert!(integer.hover.contains("```text\n[NotALink]\n```"));
+    assert!(page.contains("Integer amount; see [Money](okkama-doc:/shop/money#Money)."));
+    loader.0.insert("shop/money".into(), library.replace("Integer amount", "Updated buffer"));
+    let updated = lowering::inspect(&file, &mut loader, false);
+    let hover = &at(&updated, text, "plus(2)", 0, 1).hover;
+    assert!(hover.contains("Updated buffer"), "{hover}");
+    assert!(!hover.contains("Integer amount"));
+}
+
+#[test]
+fn doc_links_use_import_scopes_explicit_modules_and_warning_ranges() {
+    let text = "module app;\r\nimport \"shop/money\" as cash;\r\n\r\n// See [cash.Money], [shop/money.Money.plus], [Money], [shop/money.Nope].\r\n//\r\n// ~~~\r\n// [NotALink]\r\n// ~~~\r\n\r\nobject Public {}\r\n";
+    let inspection = inspect(text);
+    let warnings: Vec<_> = inspection.diagnostics.iter().filter(|d| d.code.as_deref() == Some("unresolved-doc-link")).collect();
+    assert_eq!(warnings.len(), 2, "{:?}", inspection.diagnostics);
+    for warning in warnings {
+        assert_eq!(warning.severity, Severity::Warning);
+        let range = LineIndex::new(text);
+        let span = Span::new(range.offset(warning.range.start), range.offset(warning.range.end));
+        assert!(["[Money]", "[shop/money.Nope]"].contains(&&text[span.range()]));
+    }
+}
+
+#[test]
+fn doc_model_selects_role_and_constructor_overloads_and_filters_hidden_globals() {
+    let text = "module app;\nrole Reading {\n    // Integer role action.\n    read(x is int) is int;\n    // Text role action.\n    read(x is string) is string;\n}\nobject Reader does Reading {\n    // Empty reader.\n    Reader() {}\n    // Reader from a number.\n    Reader(x is int) {}\n    read(x is int) is int { x; }\n    read(x is string) is string { x; }\n}\n// Hidden documentation.\nhidden object Secret { Secret() {} }\nmain() is int {\n    let reader is Reading = Reader(1);\n    let _text = reader.read(\"x\");\n    reader.read(2);\n}\n";
+    let inspection = inspect(text);
+    assert!(inspection.parsed);
+    assert!(!inspection.diagnostics.iter().any(|diagnostic| diagnostic.severity == Severity::Error), "{:?}", inspection.diagnostics);
+    let integer = &at(&inspection, text, "read(2)", 0, 1).hover;
+    assert!(integer.contains("Integer role action"), "{integer}");
+    assert!(!integer.contains("Text role action"));
+    let string = &at(&inspection, text, "read(\"x\")", 0, 1).hover;
+    assert!(string.contains("Text role action"), "{string}");
+    assert!(!string.contains("Integer role action"));
+    let constructor = &at(&inspection, text, "Reader(1)", 0, 1).hover;
+    assert!(constructor.contains("Reader from a number"), "{constructor}");
+    assert!(!constructor.contains("Empty reader"));
+    let completions = &inspection.members["Reading"];
+    assert!(completions[0].documentation.contains("Integer role action"));
+    assert!(completions[1].documentation.contains("Text role action"));
+    assert!(!inspection.globals.iter().any(|item| item.label == "Secret"));
+}
+
 /// Символ на `occurrence`-м вхождении `needle` (смещение `shift` внутри).
 fn at<'a>(
     inspection: &'a Inspection,
