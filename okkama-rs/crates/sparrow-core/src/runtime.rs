@@ -271,7 +271,9 @@ impl Runtime {
         let (timers, requests) = (&self.timers, &self.io.requests);
         let states = &self.states;
         // #817: the root region of detached Futures, until the root closer closes it.
-        let kept: Vec<Word> = self.resources.root.into_iter().collect();
+        let mut kept: Vec<Word> = self.resources.root.into_iter().collect();
+        // #915: the pinned identities, their holders and pins waiting for a taker.
+        kept.extend(self.pin_roots());
         // #882: the detached Futures registered as borrowers of open owners, until those owners close.
         let borrowers: Vec<Word> = Vec::new();
         self.heap.collect_with(|visit| {

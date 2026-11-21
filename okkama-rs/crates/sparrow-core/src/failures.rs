@@ -91,6 +91,12 @@ pub struct Resources {
     pub(crate) root: Option<Word>,
     /// The root closer is running: what still runs then has nowhere further to go.
     root_closing: bool,
+    /// #915 message pins (Book 20.2): identity → the regions holding a pin on it (a channel's packet, a receiving
+    /// Future's cache region, the scope that took the value), with repeats; and the reverse index.
+    pins: HashMap<Word, Vec<Word>>,
+    pinned_by: HashMap<Word, Vec<Word>>,
+    /// Pins a taking await or a returning scope left for the next region that takes this exact value.
+    pending_pins: Option<(Word, Vec<Word>)>,
     /// Containers whose walk found no free identity (#9), with `serial` at
     /// that moment: every identity they reach is at most that old. Freeing
     /// an identity no newer than `summarized` drops them all.
@@ -500,6 +506,11 @@ impl Runtime {
                 }
             }
         }
+        // A returned value carries its pins into the cache (#915).
+        if let [root] = roots[..] && self.pins_wait_for(root) {
+            let owned = self.frame_region(frame);
+            self.claim_pins(owned, root);
+        }
         // A plain value (no identity anywhere) needs no region.
         if !roots.iter().any(|&root| self.may_reach_free(root)) {
             return;
@@ -616,8 +627,7 @@ impl Runtime {
     /// A send is accepted into the buffer: the channel's packet takes the fresh message from the sender's INPUTS.
     pub(crate) fn message_accept(&mut self, sender: Word, channel: &Rc<RefCell<crate::primitives::Channel>>, value: Word, repr: Repr) {
         let Some(value) = repr.pointer(value).filter(|_| self.resources.enabled) else { return };
-        let inputs = crate::tasks::get(sender, crate::tasks::INPUTS);
-        self.hand_over(inputs, value, |runtime| {
+        let packet = |runtime: &mut Self| {
             let packet = channel.borrow().packet;
             if packet != UNBOUND {
                 return packet;
@@ -625,7 +635,32 @@ impl Runtime {
             let packet = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
             channel.borrow_mut().packet = packet;
             packet
-        });
+        };
+        let inputs = crate::tasks::get(sender, crate::tasks::INPUTS);
+        self.hand_over(inputs, value, packet);
+        // #915: what has another owner is pinned by the packet; what has none, the packet owns.
+        let identities = self.message_identities(value);
+        if identities.is_empty() {
+            return;
+        }
+        let packet = packet(self);
+        self.hold_message(&identities, packet);
+    }
+
+    /// #915: `holder` takes the free identities of a message and pins those another owner keeps.
+    fn hold_message(&mut self, identities: &[Word], holder: Word) {
+        for &identity in identities {
+            match self.owner_of(identity) {
+                Some(Owner::Free) => {
+                    self.set_owner(identity, Owner::Region(holder));
+                    self.region_push(holder, identity);
+                    self.dev_owned(identity, holder);
+                }
+                Some(Owner::Region(owner)) if owner == holder => {}
+                Some(Owner::Dead) | None => {}
+                Some(_) => self.pin(identity, holder),
+            }
+        }
     }
 
     /// A message reaches `receiver`: from the channel's packet (buffered) or straight from a sender's INPUTS
@@ -633,6 +668,182 @@ impl Runtime {
     pub(crate) fn message_deliver(&mut self, from: Word, receiver: Word, value: Word, repr: Repr) {
         let Some(value) = repr.pointer(value).filter(|_| self.resources.enabled) else { return };
         self.hand_over(from, value, |runtime| runtime.frame_inputs(receiver));
+        // #915: the receiving Future's cache holds the pins now (from the packet, or new ones in a rendezvous).
+        let identities = self.message_identities(value);
+        if identities.is_empty() {
+            return;
+        }
+        let cache = self.frame_region(receiver);
+        for &identity in &identities {
+            if from != UNBOUND && self.resources.pins.get(&identity).is_some_and(|holders| holders.contains(&from)) {
+                self.unpin(identity, from);
+            }
+        }
+        let held: Vec<Word> = identities
+            .into_iter()
+            .filter(|&identity| !matches!(self.owner_of(identity), Some(Owner::Region(owner)) if owner == crate::tasks::get(receiver, crate::tasks::INPUTS)))
+            .collect();
+        self.hold_message(&held, cache);
+    }
+
+    /// #915: every identity `value` reaches, whatever its owner (a dead one excluded).
+    fn message_identities(&mut self, value: Word) -> Vec<Word> {
+        let mut found = Vec::new();
+        let mut seen: Vec<Word> = Vec::new();
+        let mut pending = vec![(value, Repr::Ref)];
+        while let Some((word, repr)) = pending.pop() {
+            let Some(object) = repr.pointer(word) else { continue };
+            let header = self.heap.header_of(object);
+            match heap::kind(header) {
+                heap::OBJECT if !self.resources.flags[heap::payload(header) as usize] => continue,
+                heap::ARRAY if header & heap::PACKED != 0 || Repr::from_bits((header >> 9) & 3) != Repr::Ref => continue,
+                heap::OBJECT | heap::ARRAY | heap::CLOSURE | heap::PAYLOAD | heap::FRAME => {}
+                _ => continue,
+            }
+            if !self.heap.visit(object) {
+                continue;
+            }
+            seen.push(object);
+            if self.owner_of(object).is_some_and(|owner| owner != Owner::Dead) {
+                found.push(object);
+            }
+            match heap::kind(header) {
+                heap::OBJECT => {
+                    let layout = &self.heap.layouts().objects[heap::payload(header) as usize];
+                    for (index, &field) in layout.iter().enumerate() {
+                        pending.push((self.heap.field(object, index), field));
+                    }
+                }
+                heap::ARRAY => {
+                    let repr = Repr::from_bits((header >> 9) & 3);
+                    pending.extend(self.heap.elements(object).iter().map(|&e| (e, repr)));
+                }
+                heap::CLOSURE => {
+                    let layout = &self.heap.layouts().closures[heap::payload(header) as usize];
+                    for (index, &field) in layout.iter().enumerate() {
+                        pending.push((self.heap.field(object, index), field));
+                    }
+                }
+                heap::PAYLOAD => {
+                    if let Some(map) = self.heap.payload::<crate::ops::MapValue>(object) {
+                        pending.extend(map.entries.values().map(|(_, v)| (*v, map.value)));
+                    } else if let Some(boxed) = self.heap.payload::<crate::ops::AnyBox>(object) {
+                        pending.push((boxed.value, boxed.repr));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for object in seen {
+            self.heap.unvisit(object);
+        }
+        found
+    }
+
+    /// #915: `holder` pins `identity`.
+    fn pin(&mut self, identity: Word, holder: Word) {
+        // The holder lists it, as a tracked entry: a region with entries is never skipped at its exit (machine code
+        // leaves an empty region without calling the runtime), so its pins are always released.
+        self.region_push(holder, identity);
+        self.resources.pins.entry(identity).or_default().push(holder);
+        self.resources.pinned_by.entry(holder).or_default().push(identity);
+        self.heap.set_header_bits(identity, heap::PINNED);
+    }
+
+    /// Drop one pin of `holder` on `identity`.
+    fn unpin(&mut self, identity: Word, holder: Word) {
+        if let Some(holders) = self.resources.pins.get_mut(&identity)
+            && let Some(at) = holders.iter().position(|&h| h == holder)
+        {
+            holders.swap_remove(at);
+            if holders.is_empty() {
+                self.resources.pins.remove(&identity);
+                self.heap.clear_header_bits(identity, heap::PINNED);
+            }
+        }
+        if let Some(identities) = self.resources.pinned_by.get_mut(&holder)
+            && let Some(at) = identities.iter().position(|&i| i == identity)
+        {
+            identities.swap_remove(at);
+            if identities.is_empty() {
+                self.resources.pinned_by.remove(&holder);
+            }
+        }
+    }
+
+    /// `holder` ends: its pins go, and the identities they pinned (repeats kept).
+    fn release_pins(&mut self, holder: Word) -> Vec<Word> {
+        if self.resources.pinned_by.is_empty() {
+            return Vec::new();
+        }
+        let Some(identities) = self.resources.pinned_by.get(&holder).cloned() else { return Vec::new() };
+        for &identity in &identities {
+            self.unpin(identity, holder);
+        }
+        identities
+    }
+
+    /// A closing `region` that keeps `kept`: its pins on what `kept` reaches wait for the next region that takes
+    /// `kept` (a returned value carries its pins); the rest go.
+    fn release_pins_keeping(&mut self, region: Word, kept: &[Word]) {
+        let released = self.release_pins(region);
+        if released.is_empty() {
+            return;
+        }
+        if let [value] = kept {
+            let reached = self.message_identities(*value);
+            let carried: Vec<Word> = released.into_iter().filter(|identity| reached.contains(identity)).collect();
+            if !carried.is_empty() {
+                self.resources.pending_pins = Some((*value, carried));
+            }
+        }
+    }
+
+    /// The pins waiting for `value` (a taken outcome, a returned value) move to `region`, which takes it.
+    pub(crate) fn claim_pins(&mut self, region: Word, value: Word) {
+        let Some((waiting, _)) = &self.resources.pending_pins else { return };
+        if *waiting != value {
+            return;
+        }
+        let (_, identities) = self.resources.pending_pins.take().expect("checked");
+        for identity in identities {
+            match self.owner_of(identity) {
+                Some(Owner::Dead) | None => {}
+                Some(Owner::Region(owner)) if owner == region => {}
+                _ => self.pin(identity, region),
+            }
+        }
+    }
+
+    /// Whether pins wait for `value` (a lazily made region must then exist).
+    pub(crate) fn pins_wait_for(&self, value: Word) -> bool {
+        self.resources.pending_pins.as_ref().is_some_and(|(waiting, _)| *waiting == value)
+    }
+
+    /// The owner of pinned `identity` closes: ownership passes to a holder of a pin, which then no longer pins it.
+    /// None when nothing pins it.
+    fn hand_to_pin_holder(&mut self, identity: Word) -> Option<Word> {
+        if self.heap.header_of(identity) & heap::PINNED == 0 {
+            return None;
+        }
+        let holder = *self.resources.pins.get(&identity)?.first()?;
+        self.unpin(identity, holder);
+        okkama_devtrace::count!("runtime", "pinned identity handed to its holder");
+        self.set_owner(identity, Owner::Region(holder));
+        self.region_push(holder, identity);
+        self.dev_owned(identity, holder);
+        Some(holder)
+    }
+
+    /// GC roots of the pin tables.
+    pub(crate) fn pin_roots(&self) -> Vec<Word> {
+        let mut roots: Vec<Word> = self.resources.pins.keys().copied().collect();
+        roots.extend(self.resources.pinned_by.keys().copied());
+        if let Some((value, identities)) = &self.resources.pending_pins {
+            roots.push(*value);
+            roots.extend(identities);
+        }
+        roots
     }
 
     /// A capability of a channel dies: the packet, when it was the last one, to close with it.
@@ -691,6 +902,11 @@ impl Runtime {
         let owned = crate::tasks::get(frame, crate::tasks::OWNED);
         if owned == UNBOUND {
             return;
+        }
+        // #915: the cache's pins go with the taken value to the region that takes it.
+        let pinned = self.release_pins(owned);
+        if !pinned.is_empty() {
+            self.resources.pending_pins = Some((crate::tasks::get(frame, crate::tasks::RESULT), pinned));
         }
         for index in 0..self.region_len(owned) {
             let object = self.region_get(owned, index);
@@ -1051,6 +1267,10 @@ impl Runtime {
             if owner != Owner::Free && owner != Owner::Region(region) {
                 continue;
             }
+            // #915: a pinned identity outlives this owner with its pin's holder.
+            if self.hand_to_pin_holder(object).is_some() {
+                continue;
+            }
             self.set_owner(object, Owner::Dead);
             return Some(CloseAction::Destroy(object, self.serial_of(object)));
         }
@@ -1132,6 +1352,9 @@ impl Runtime {
     }
 
     pub(crate) fn region_add(&mut self, region: Word, value: Word, own: bool) {
+        if self.resources.pending_pins.is_some() {
+            self.claim_pins(region, value);
+        }
         if !self.may_reach_free(value) {
             return;
         }
@@ -1360,6 +1583,9 @@ impl Runtime {
         if self.owner_of(object) != Some(Owner::Static) {
             return primary;
         }
+        if self.hand_to_pin_holder(object).is_some() {
+            return primary;
+        }
         self.set_owner(object, Owner::Dead);
         let serial = self.serial_of(object);
         self.dev_destroyed(object, 0);
@@ -1415,6 +1641,10 @@ impl Runtime {
         mut primary: Option<Word>,
         awaits: bool,
     ) -> Closed {
+        // #915: a closing region drops its pins, except those a kept value carries on.
+        if !self.resources.pinned_by.is_empty() {
+            self.release_pins_keeping(region, keep);
+        }
         let length = self.region_len(region);
         if length == 0 {
             return Closed::Done(primary);
@@ -1471,6 +1701,10 @@ impl Runtime {
                 self.detach_to_root(object);
                 continue;
             }
+            // #915: a pinned Future or capability goes to its pin's holder instead.
+            if self.hand_to_pin_holder(object).is_some() {
+                continue;
+            }
             self.set_owner(object, Owner::Dead);
             // A channel's last capability closes its unread messages with it (#587).
             let regions = match self.channel_released(object) {
@@ -1478,6 +1712,7 @@ impl Runtime {
                 None => self.private_regions(object),
             };
             for owned in regions.into_iter().flatten() {
+                self.release_pins(owned);
                 for index in 0..self.region_len(owned) {
                     let child = self.region_get(owned, index);
                     if group && let Some(identity) = self.resources.identities.get_mut(&child) {
@@ -1735,7 +1970,7 @@ pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u
     runtime.count(|_| "region add".into());
     // #530: machine code enters a region as 0 and the first add that has something to hold makes it.
     let region = match region {
-        UNBOUND if !runtime.may_reach_free(value) => return UNBOUND,
+        UNBOUND if !runtime.may_reach_free(value) && !runtime.pins_wait_for(value) => return UNBOUND,
         UNBOUND => {
             okkama_devtrace::count!("runtime", "region made at its first add");
             runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS])

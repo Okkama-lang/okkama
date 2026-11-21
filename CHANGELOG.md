@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A channel message never outlives the resource it carries (#915).** Book 20.2's pins: an accepted message pins
+  the resources another owner keeps until delivery and the end of the receiving scope. An owner that ends first
+  (an async helper's input, a sender's local, any outer scope) hands the resource to the channel, the receiving
+  Future or the scope that took it, instead of destroying it under the receiver. A receiver that is done first
+  leaves the resource with its owner, so source aliases keep working. New corpus program `channel-pins`.
+
 - **A successor Future can be handed on as a plain Future (#790).** `Future<^C>` (an async successor's Future)
   is accepted where `Future<C>` is expected: an argument, a field, a declared result; a generic holder infers
   `T = C`. That handoff uses the obligation. A typed local is not a handoff, the conversion goes one way only,

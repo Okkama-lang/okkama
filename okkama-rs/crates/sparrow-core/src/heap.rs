@@ -79,6 +79,8 @@ pub const IDENTITY: u64 = 1 << 27;
 /// An in-object identity whose cache was rehomed (#528): `Identity::cache_rehomed` for identities kept in the
 /// object rather than in the map.
 pub const REHOMED: u64 = 1 << 28;
+/// An identity that an accepted channel message pins (#915): its owner's close hands it to the pin's holder.
+pub const PINNED: u64 = 1 << 29;
 /// The hidden identity words of an object with a destroy of its own (#528, owner's choice 2026-11-20: +16 bytes):
 /// the serial, then the owner (0 free, 1 dead, otherwise the owning region's address).
 pub const IDENTITY_WORDS: usize = 2;
@@ -631,6 +633,13 @@ impl Heap {
         // SAFETY: as in `visit`.
         unsafe {
             *(object as *mut u64) |= bits;
+        }
+    }
+
+    pub fn clear_header_bits(&mut self, object: Word, bits: u64) {
+        // SAFETY: as in `visit`.
+        unsafe {
+            *(object as *mut u64) &= !bits;
         }
     }
     /// Mark `object` as having a resource identity ([`IDENTITY`]).

@@ -11,9 +11,9 @@ failures, compile-negative fixtures and pending semantics must not enter it.
 
 ## Inventory and validation
 
-- Main directory: **97 programs, 441 TAP assertions** (37 handwritten programs
-  with 201 assertions, plus 60 generated programs with 240 assertions).
-- 95 main programs expect exit code 0 with all TAP assertions passing.
+- Main directory: **98 programs, 448 TAP assertions** (38 handwritten programs
+  with 208 assertions, plus 60 generated programs with 240 assertions).
+- 96 main programs expect exit code 0 with all TAP assertions passing.
 - Two main programs intentionally exit 1 after two passing cleanup assertions
   each: `panic-unwind.ok` and `secondary-failures.ok`.
 - No pending assertions remain. The initial #581 implementation restored the
@@ -22,8 +22,10 @@ failures, compile-negative fixtures and pending semantics must not enter it.
   engine still has borrow-only behavior.
 - #587 follows the owner's OIR-2 draft 3 §10.1 decision: `cold-futures`
   check 9 expects completion-time input cleanup.
+- #915 adds `channel-pins` (7 checks): Book 20.2's message pins, written from
+  the Book and the owner's #587 review.
 - `rejected/`: six compile-negative fixtures, not executable oracle inputs.
-- All 441 assertions are in the main corpus. Original assertions are retained
+- All 448 assertions are in the main corpus. Original assertions are retained
   exactly once; the four historical corrections below change expected values.
   `channel-transfer` check 1 is restored to its original empty-log expectation
   by unique temporary take; `cold-futures` check 9 changes with #587. #578 adds
