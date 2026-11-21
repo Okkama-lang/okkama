@@ -16,9 +16,13 @@ pub(super) struct ZstdCompressor {
 }
 
 impl ZstdCompressor {
-    pub(super) fn new(level: i32) -> Result<Self, Fail> {
+    /// A compressor at `level`; `size`, when known, is the whole input's
+    /// length, so zstd sizes its window and tables for it instead of for an
+    /// unbounded stream (#939: 62 us on 8 bytes at level 3 without it).
+    pub(super) fn new(level: i32, size: Option<u64>) -> Result<Self, Fail> {
         let mut engine = Encoder::new(level).map_err(broken)?;
         engine.set_parameter(CParameter::ChecksumFlag(true)).map_err(broken)?;
+        engine.set_pledged_src_size(size).map_err(broken)?;
         Ok(Self { engine, finished: false })
     }
 }

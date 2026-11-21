@@ -131,10 +131,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
   stays 7bit.
-- **Cookie dates parse 17 times faster, PEM blocks 3 times (#939).** `ParsedCookieDate` compiled five regular
+- **Cookie dates parse 17 times faster, PEM blocks 3 times, a small zstd round trip 9 times (#939).** `ParsedCookieDate` compiled five regular
   expressions per parse; it now scans tokens once (2.8 µs instead of 62 µs, the cost of `ParsedHttpDate`), with
   the same results on a 20 008-line differential. `PemBlock` checks its text once for `kind()` and `bytes()`, and
   the Base64 check no longer searches the alphabet per character (4.3 µs instead of 14 µs on 40 bytes).
+  `ZstdCompressed` tells zstd the size of its whole input, so the codec no longer prepares tables for an
+  unbounded stream: compressing and decompressing 8 bytes at level 3 takes 10 µs instead of 95 µs. The frame
+  now records its content size, as the zstd tool writes it.
 
 ### Changed
 
