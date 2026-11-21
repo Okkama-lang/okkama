@@ -367,34 +367,31 @@ mod requested_walk {
 /// #932: an action without inputs publishes its outcome as it completes; one with inputs waits for
 /// `finish_inputs` (#587).
 mod complete_action {
-    use crate::heap;
     use crate::runtime::Runtime;
     use crate::tasks::*;
     use crate::word::{Repr, UNBOUND, Word};
 
+    fn runtime() -> Box<Runtime> {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"complete\" \"1.0.0\"\ntype t0 int\ntype t1 object obj0\n\
+             object obj0 \"Lease\" {\n destroy f2\n}\n\
+             function f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
+             function f1 \"work\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
+             function f2 \"Lease.destroy\" {\n registers [t1]\n params [r0]\n result void\n 0: ret _\n}\n\
+             entry f0\n",
+        ).unwrap();
+        Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap())
+    }
+
     fn running_frame(runtime: &mut Runtime) -> Word {
-        let frame = runtime.heap.allocate(1 + FIXED_WORDS);
-        // SAFETY: fresh storage of 1 + FIXED_WORDS words.
-        unsafe {
-            *(frame as *mut u64) = heap::header(heap::FRAME, Repr::Raw, 1);
-            std::ptr::write_bytes((frame + 8) as *mut u64, 0, FIXED_WORDS);
-        }
-        for word in [WAITER, AWAITING, INPUTS, OWNED, RESULT, FAILURE] {
-            set(frame, word, UNBOUND);
-        }
+        let frame = runtime.future_new(1, &[]);
         set(frame, STATE, RUNNING);
         frame
     }
 
     #[test]
     fn an_action_without_inputs_is_published_at_once_and_one_with_inputs_is_not() {
-        let program = okkama_sparrow::assemble(
-            "sparrow 16\nmodule \"complete\" \"1.0.0\"\ntype t0 int\n\
-             function f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
-             function f1 \"work\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
-             entry f0\n",
-        ).unwrap();
-        let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
+        let mut runtime = runtime();
         let future = running_frame(&mut runtime);
         let waiter = running_frame(&mut runtime);
         runtime.listen(future, waiter);
@@ -406,9 +403,37 @@ mod complete_action {
         assert_eq!(get(waiter, AWAITING), UNBOUND, "the waiter is woken");
         let held = running_frame(&mut runtime);
         let inputs = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 5]);
-        set(held, INPUTS, inputs);
+        runtime.set_held(held, Held::Inputs, inputs);
         runtime.complete_action(held, DONE, 9);
         assert_eq!(get(held, STATE), RUNNING, "published after finish_inputs");
         assert_ne!(get(held, FLAGS) & COMPLETING, 0);
+    }
+
+    /// #932: the ownership regions live behind the registers, in programs with resources only; a program without
+    /// them keeps 0.5.8's frame and reads them as unbound.
+    #[test]
+    fn ownership_regions_live_behind_the_registers_only_with_resources() {
+        let mut runtime = runtime();
+        let frame = runtime.future_new(1, &[]);
+        let info = &runtime.loaded.functions[1];
+        let at = info.held_at.expect("a program with resources");
+        assert_eq!(at, REGISTERS + info.kinds.len() as u64 * 8);
+        assert_eq!(info.identity_at, Some(at + 16), "no parameters: the identity follows the regions");
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 5]);
+        runtime.set_held(frame, Held::Owned, region);
+        assert_eq!(get(frame, at), region);
+        assert_eq!(runtime.held(frame, Held::Owned), region);
+        assert_eq!(runtime.held(frame, Held::Inputs), UNBOUND);
+        runtime.heap.collect(|visit| visit(frame, Repr::Ref));
+        assert_eq!(runtime.heap.array_length(runtime.held(frame, Held::Owned)), 5, "the collector traces the region");
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"plain\" \"1.0.0\"\ntype t0 int\n\
+             function f0 \"work\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n",
+        ).unwrap();
+        let mut plain = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
+        assert_eq!(plain.loaded.functions[0].held_at, None);
+        assert_eq!(plain.loaded.layouts().frames[0].len(), FIXED_WORDS + 1, "fixed words and one register");
+        let frame = plain.future_new(0, &[]);
+        assert_eq!(plain.held(frame, Held::Inputs), UNBOUND);
     }
 }

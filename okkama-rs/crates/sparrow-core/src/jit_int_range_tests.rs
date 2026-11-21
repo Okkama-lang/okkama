@@ -159,6 +159,9 @@ fn pointer_free_operation_results_survive_await_and_keep_big_aliases_and_cleanup
                             assert_eq!(frame.len(), retained, "{}", source.symbol);
                             continue;
                         }
+                        // #932: the ownership regions come first.
+                        assert_eq!(&frame[retained..retained + 2], &[Repr::Ref, Repr::Ref], "{}", source.symbol);
+                        let retained = retained + 2;
                         assert_eq!(frame.len(), retained + source.params.len() + 2, "{}", source.symbol);
                         for (index, param) in source.params.iter().enumerate() {
                             assert_eq!(frame[retained + index], info.kinds[param.0 as usize].repr());

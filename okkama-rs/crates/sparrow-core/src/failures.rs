@@ -485,7 +485,7 @@ impl Runtime {
             self.region_add(inputs, value, true);
         }
         if inputs != UNBOUND && self.region_len(inputs) == 0 {
-            crate::tasks::set(frame, crate::tasks::INPUTS, UNBOUND);
+            self.set_held(frame, crate::tasks::Held::Inputs, UNBOUND);
         }
     }
 
@@ -505,7 +505,7 @@ impl Runtime {
         if roots.is_empty() {
             return;
         }
-        let inputs = crate::tasks::get(frame, crate::tasks::INPUTS);
+        let inputs = self.held(frame, crate::tasks::Held::Inputs);
         if inputs != UNBOUND && self.region_len(inputs) > 0 {
             let owned = self.frame_region(frame);
             for &root in &roots {
@@ -551,8 +551,8 @@ impl Runtime {
             if !seen.insert(frame) {
                 continue;
             }
-            for slot in [crate::tasks::OWNED, crate::tasks::INPUTS] {
-                let region = crate::tasks::get(frame, slot);
+            for held in [crate::tasks::Held::Owned, crate::tasks::Held::Inputs] {
+                let region = self.held(frame, held);
                 if region == UNBOUND || self.region_len(region) == 0 {
                     continue;
                 }
@@ -575,23 +575,23 @@ impl Runtime {
 
     /// A frame's private region, made on first use.
     fn frame_region(&mut self, frame: Word) -> Word {
-        let owned = crate::tasks::get(frame, crate::tasks::OWNED);
+        let owned = self.held(frame, crate::tasks::Held::Owned);
         if owned != UNBOUND {
             return owned;
         }
         let owned = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
-        crate::tasks::set(frame, crate::tasks::OWNED, owned);
+        self.set_held(frame, crate::tasks::Held::Owned, owned);
         owned
     }
 
     /// A frame's input region (#587), made on first use.
     fn frame_inputs(&mut self, frame: Word) -> Word {
-        let inputs = crate::tasks::get(frame, crate::tasks::INPUTS);
+        let inputs = self.held(frame, crate::tasks::Held::Inputs);
         if inputs != UNBOUND {
             return inputs;
         }
         let inputs = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
-        crate::tasks::set(frame, crate::tasks::INPUTS, inputs);
+        self.set_held(frame, crate::tasks::Held::Inputs, inputs);
         inputs
     }
 
@@ -653,7 +653,7 @@ impl Runtime {
             channel.borrow_mut().packet = packet;
             packet
         };
-        let inputs = crate::tasks::get(sender, crate::tasks::INPUTS);
+        let inputs = self.held(sender, crate::tasks::Held::Inputs);
         self.hand_over(inputs, value, packet);
         // #915: what has another owner is pinned by the packet; what has none, the packet owns.
         let identities = self.message_identities(value);
@@ -698,7 +698,7 @@ impl Runtime {
         }
         let held: Vec<Word> = identities
             .into_iter()
-            .filter(|&identity| !matches!(self.owner_of(identity), Some(Owner::Region(owner)) if owner == crate::tasks::get(receiver, crate::tasks::INPUTS)))
+            .filter(|&identity| !matches!(self.owner_of(identity), Some(Owner::Region(owner)) if owner == self.held(receiver, crate::tasks::Held::Inputs)))
             .collect();
         self.hold_message(&held, cache);
     }
@@ -911,8 +911,8 @@ impl Runtime {
     /// A Future's private regions (its cached outcome, its inputs) or a group's packet of registered Futures.
     fn private_regions(&self, object: Word) -> [Option<Word>; 2] {
         if heap::kind(self.heap.header_of(object)) == heap::FRAME {
-            let slot = |slot| Some(crate::tasks::get(object, slot)).filter(|&region| region != UNBOUND);
-            [slot(crate::tasks::OWNED), slot(crate::tasks::INPUTS)]
+            let slot = |held| Some(self.held(object, held)).filter(|&region| region != UNBOUND);
+            [slot(crate::tasks::Held::Owned), slot(crate::tasks::Held::Inputs)]
         } else if let Some(crate::primitives::State::Group(group)) = self.states.get(&object) {
             [group.resources, None]
         } else { [None, None] }
@@ -922,7 +922,7 @@ impl Runtime {
     /// owners. No allocation, safepoint or user code occurs before region.track
     /// admits the successfully delivered result in the caller.
     pub(crate) fn take_outcome(&mut self, frame: Word) {
-        let owned = crate::tasks::get(frame, crate::tasks::OWNED);
+        let owned = self.held(frame, crate::tasks::Held::Owned);
         if owned == UNBOUND {
             return;
         }
@@ -940,7 +940,7 @@ impl Runtime {
             }
         }
         self.region_clear(owned);
-        crate::tasks::set(frame, crate::tasks::OWNED, UNBOUND);
+        self.set_held(frame, crate::tasks::Held::Owned, UNBOUND);
     }
 
     /// Free or `via`-owned identities reachable from `roots`, oldest first.

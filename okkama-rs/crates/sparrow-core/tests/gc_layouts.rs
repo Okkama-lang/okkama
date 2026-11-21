@@ -84,7 +84,8 @@ fn gc_layout_retained_arguments_survive_reused_async_registers() {
     // Field indices from the frame layout: registers, then the retained inputs (a program with resources: the
     // destroy above).
     let register = (sparrow_core::tasks::REGISTERS / 8 - 1) as usize;
-    let retained = register + 4;
+    // Four registers, then the ownership regions (#932), then the retained inputs.
+    let retained = register + 4 + 2;
     // The register copies die; the retained inputs must remain independently live.
     runtime.heap.set_field(frame, register, UNBOUND);
     runtime.heap.set_field(frame, register + 2, UNBOUND);
@@ -115,16 +116,13 @@ fn gc_layout_driver_state_and_runtime_object_overrides() {
     assert_eq!(layouts.objects[6], [Repr::Raw, Repr::Raw, Repr::Ref]); // Event
     let driver = loaded.program.functions.iter().position(|f| f.symbol == "Event.wait").unwrap();
     assert!(loaded.functions[driver].driver);
-    // Fixed words: state … flags, owned (#581), inputs (#587); then the
-    // register, the driver slot and the retained event.
+    // Fixed words: state … flags; then the register, the driver slot, and in a program with resources the
+    // ownership regions (owned #581, inputs #587; #932), the retained event and the identity (#931).
     let register = (sparrow_core::tasks::REGISTERS / 8 - 1) as usize;
-    let inputs = (sparrow_core::tasks::INPUTS / 8 - 1) as usize;
-    assert_eq!(layouts.frames[driver][inputs], Repr::Ref);
-    assert_eq!(&layouts.frames[driver][register..register + 3], &[Repr::Ref, Repr::Ref, Repr::Ref]);
-    // #931: a program with resources ends each frame with the Future's identity, two raw words.
-    let identity = if loaded.functions[driver].identity_at.is_some() { 2 } else { 0 };
-    assert_eq!(layouts.frames[driver].len(), register + 3 + identity);
-    assert!(layouts.frames[driver][register + 3..].iter().all(|&repr| repr == Repr::Raw));
+    assert!(loaded.functions[driver].identity_at.is_some(), "the fixture has resources");
+    assert_eq!(&layouts.frames[driver][register..register + 5], &[Repr::Ref; 5]);
+    assert_eq!(layouts.frames[driver].len(), register + 5 + 2);
+    assert!(layouts.frames[driver][register + 5..].iter().all(|&repr| repr == Repr::Raw));
     let mut runtime = sparrow_core::runtime::Runtime::new(loaded).unwrap();
     runtime.heap.set_stress(true);
     let waiter = runtime.heap.allocate_text("event waiter");
@@ -136,7 +134,7 @@ fn gc_layout_driver_state_and_runtime_object_overrides() {
     for _ in 0..3 {
         runtime.heap.collect(|visit| visit(frame, Repr::Ref));
         assert_eq!(runtime.heap.text(runtime.heap.field(frame, register + 1)), "driver state");
-        assert_eq!(runtime.heap.field(frame, register + 2), event);
+        assert_eq!(runtime.heap.field(frame, register + 4), event, "the retained event, after the regions");
         assert_eq!(runtime.heap.text(runtime.heap.field(event, 2)), "event waiter");
     }
 

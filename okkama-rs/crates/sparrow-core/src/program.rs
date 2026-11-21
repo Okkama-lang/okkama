@@ -55,6 +55,9 @@ pub struct FunctionInfo {
     /// retained arguments (#931). Only programs with resources (a type with `destroy`) have it; others keep 0.5.8's
     /// frame size.
     pub identity_at: Option<u64>,
+    /// Byte offset of the Future's ownership regions (OWNED, then INPUTS) in this function's frame, behind the
+    /// registers and the driver slot (#932). Only programs with resources have them.
+    pub held_at: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -136,10 +139,11 @@ impl Loaded {
                     eprintln!("; pointer-free analysis\t{}\t{} microseconds", f.symbol, started.elapsed().as_micros());
                 }
                 let driver = is_driver(f);
-                // header, fixed words, registers, the driver slot, retained arguments; then the identity
-                let identity_at = resources
-                    .then(|| (1 + crate::tasks::FIXED_WORDS + kinds.len() + usize::from(driver) + f.params.len()) as u64 * 8);
-                FunctionInfo { kinds, pointer_free, result: f.result.map(|t| Kind::of(&program, t)), driver, identity_at }
+                // header, fixed words, registers, the driver slot; then, with resources, the ownership regions,
+                // the retained arguments and the identity
+                let held_at = resources.then(|| (1 + crate::tasks::FIXED_WORDS + kinds.len() + usize::from(driver)) as u64 * 8);
+                let identity_at = held_at.map(|at| at + 16 + f.params.len() as u64 * 8);
+                FunctionInfo { kinds, pointer_free, result: f.result.map(|t| Kind::of(&program, t)), driver, identity_at, held_at }
             })
             .collect();
         // A cell is what its constructor intrinsic makes, whatever its name.
@@ -212,7 +216,7 @@ impl Loaded {
                 .iter()
                 .zip(&p.functions)
                 .map(|(f, source)| {
-                    // state, result, failure, waiter, awaiting, resume, flags, owned, inputs
+                    // state, result, failure, waiter, awaiting, resume, flags
                     let mut layout = vec![
                         Repr::Raw,
                         f.result.map_or(Repr::Raw, Kind::repr),
@@ -221,16 +225,15 @@ impl Loaded {
                         Repr::Ref,
                         Repr::Raw,
                         Repr::Raw,
-                        Repr::Ref,
-                        Repr::Ref,
                     ];
                     layout.extend(f.kinds.iter().zip(&f.pointer_free).map(|(k, free)| if *free { Repr::Raw } else { k.repr() }));
                     if f.driver {
                         layout.push(Repr::Ref);
                     }
-                    // Retained arguments and the identity serve the resource walk only: a program without
-                    // resources has neither (#932).
+                    // The ownership regions, the retained arguments and the identity serve resources only: a
+                    // program without resources has none of them (#932).
                     if f.identity_at.is_some() {
+                        layout.extend([Repr::Ref, Repr::Ref]); // owned, inputs (#932)
                         layout.extend(source.params.iter().map(|param| f.kinds[param.0 as usize].repr()));
                         layout.extend([Repr::Raw, Repr::Raw]); // identity serial and owner (#931)
                     }

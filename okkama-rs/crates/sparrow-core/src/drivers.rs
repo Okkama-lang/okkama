@@ -349,7 +349,7 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
         }
         if let Some(receiver) = Runtime::pop_parked(&mut c.receivers) {
             drop(c);
-            runtime.message_deliver(tasks::get(frame, tasks::INPUTS), receiver, value, repr);
+            runtime.message_deliver(runtime.held(frame, tasks::Held::Inputs), receiver, value, repr);
             runtime.complete_wait(receiver, COMPLETED, Some(value));
             return Done(endpoint);
         }
@@ -381,7 +381,7 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
         drop(c);
         let value = send_function(runtime, sender);
-        runtime.message_deliver(tasks::get(sender, tasks::INPUTS), frame, value, repr);
+        runtime.message_deliver(runtime.held(sender, tasks::Held::Inputs), frame, value, repr);
         runtime.complete_wait(sender, COMPLETED, None);
         return Done(value);
     }

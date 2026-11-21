@@ -36,12 +36,19 @@ pub const WAITER: u64 = 32;
 pub const AWAITING: u64 = 40;
 pub const RESUME: u64 = 48;
 pub const FLAGS: u64 = 56;
-pub const OWNED: u64 = 64;
-/// #587 (OIR-2 §10.1): the region of the fresh call inputs the Future owns. An async body releases what its
-/// outcome does not retain when the action completes; a driver keeps it until the Future itself closes.
-pub const INPUTS: u64 = 72;
-pub const REGISTERS: u64 = 80;
-pub const FIXED_WORDS: usize = 9;
+pub const REGISTERS: u64 = 64;
+pub const FIXED_WORDS: usize = 7;
+
+/// The ownership regions of a Future, behind its registers (and driver slot) in programs with resources only
+/// (#932); a program without resources has neither and reads them as unbound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Held {
+    /// The Future's outcome cache (#581).
+    Owned,
+    /// #587 (OIR-2 §10.1): the region of the fresh call inputs the Future owns. An async body releases what its
+    /// outcome does not retain when the action completes; a driver keeps it until the Future itself closes.
+    Inputs,
+}
 
 const SPAWNED: u64 = 1;
 const OBSERVED: u64 = 2;
@@ -98,6 +105,31 @@ pub(crate) fn set(frame: Word, offset: u64, value: u64) {
 }
 
 impl Runtime {
+    #[inline]
+    fn held_at(&self, frame: Word, held: Held) -> Option<u64> {
+        // Programs without resources have no regions: no lookup of the frame's function.
+        if !self.resources.enabled {
+            return None;
+        }
+        let at = self.loaded.functions[self.function_of(frame)].held_at?;
+        Some(at + if held == Held::Inputs { 8 } else { 0 })
+    }
+
+    /// A Future's ownership region (`UNBOUND`: none, or a program without resources).
+    #[inline]
+    pub(crate) fn held(&self, frame: Word, held: Held) -> Word {
+        self.held_at(frame, held).map_or(UNBOUND, |at| get(frame, at))
+    }
+
+    /// Set a Future's ownership region; only a program with resources has one.
+    pub(crate) fn set_held(&self, frame: Word, held: Held, region: Word) {
+        let Some(at) = self.held_at(frame, held) else {
+            debug_assert_eq!(region, UNBOUND, "an ownership region in a program without resources");
+            return;
+        };
+        set(frame, at, region);
+    }
+
     /// The header of a frame names its function (its layout in `Layouts::frames`).
     pub(crate) fn function_of(&self, frame: Word) -> usize {
         heap::payload(self.heap.header_of(frame)) as usize
@@ -134,10 +166,11 @@ impl Runtime {
         self.count(|r| format!("future {}", r.loaded.program.functions[function].symbol));
         let source = &self.loaded.program.functions[function];
         let registers = source.registers.len();
-        let retained = FIXED_WORDS + registers + usize::from(self.loaded.functions[function].driver);
-        // Programs with resources add the retained arguments (#578) and the inline identity's two words (#931).
+        // Programs with resources add the ownership regions (#932), the retained arguments (#578) and the inline
+        // identity's two words (#931).
         let resources = self.loaded.functions[function].identity_at.is_some();
-        let words = 1 + retained + if resources { source.params.len() + 2 } else { 0 };
+        let retained = FIXED_WORDS + registers + usize::from(self.loaded.functions[function].driver) + 2;
+        let words = if resources { 1 + retained + source.params.len() + 2 } else { 1 + retained - 2 };
         self.heap.counted("async frame", 0, words);
         let frame = self.heap.allocate(words);
         // SAFETY: fresh storage of `words` words.
@@ -299,7 +332,7 @@ impl Runtime {
     /// with the inputs it retains; the Future publishes it after `finish_inputs`.
     pub(crate) fn complete_action(&mut self, frame: Word, state: u64, value: Word) {
         // No inputs to release: "publish after the unretained inputs are released" holds at once (#932).
-        if get(frame, INPUTS) == UNBOUND {
+        if self.held(frame, Held::Inputs) == UNBOUND {
             self.settle(frame, state, value);
             return;
         }
@@ -314,7 +347,7 @@ impl Runtime {
     /// failure, with the destroy failures as secondaries).
     fn finish_inputs(&mut self, ctx: *mut Ctx, frame: Word) {
         let status = |ctx: *mut Ctx| unsafe { (*ctx).status };
-        let inputs = get(frame, INPUTS);
+        let inputs = self.held(frame, Held::Inputs);
         if inputs != UNBOUND {
             let failure = get(frame, FAILURE);
             if rt_region_settle(ctx, frame, inputs, UNBOUND, failure) == AWAIT_PENDING {
@@ -332,7 +365,7 @@ impl Runtime {
                 }
                 _ => return,
             }
-            set(frame, INPUTS, UNBOUND);
+            self.set_held(frame, Held::Inputs, UNBOUND);
         }
         let failure = get(frame, FAILURE);
         let reserved = get(frame, FLAGS) & RESERVED != 0;
@@ -343,7 +376,7 @@ impl Runtime {
         }
         if reserved {
             // A reserved result that a destroy failure aborted: its resources go first.
-            let owned = get(frame, OWNED);
+            let owned = self.held(frame, Held::Owned);
             if owned != UNBOUND {
                 if rt_region_settle(ctx, frame, owned, UNBOUND, failure) == AWAIT_PENDING {
                     return;
@@ -352,7 +385,7 @@ impl Runtime {
                     return;
                 }
                 set(frame, FAILURE, unsafe { (*ctx).scratch });
-                set(frame, OWNED, UNBOUND);
+                self.set_held(frame, Held::Owned, UNBOUND);
             }
             set(frame, RESULT, UNBOUND);
             set(frame, FLAGS, get(frame, FLAGS) & !RESERVED);
