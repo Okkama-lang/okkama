@@ -284,43 +284,21 @@ role Responding {
     response() is Response;
 }
 
-// A response shows its head through the cap `Head`; `body()` is the opening
-// to read. Unless told, it has no fields, an empty body and HTTP/1.1.
-object Response does Responding {
+// What a response says before its body: status, fields and version. It owns
+// no body and does nothing (#937).
+object ResponseHead {
     has status is Status;
     has headers is Headers;
-    has body is BodyOpening;
     has version is HttpVersion;
 
-    // A response with status and the body as given.
-    Response(
+    // A head with status; no fields and HTTP/1.1 unless told.
+    ResponseHead(
         status is Status,
         headers is Headers = Headers(),
-        body is BodyOpening = EmptyBody(),
         version is HttpVersion = HttpVersion.http_1_1
     ) {
         self.status = status;
         self.headers = headers;
-        self.body = body;
-        self.version = version;
-    }
-
-    // Response(status: Status.ok, content: TextBody(text: "hi")): the body and
-    // its Content-Type come from the content, unless headers name one.
-    Response(
-        status is Status,
-        content is Content,
-        headers is Headers = Headers(),
-        version is HttpVersion = HttpVersion.http_1_1
-    ) {
-        self.status = status;
-        self.headers = if headers.membership(HeaderName("Content-Type")) {
-            headers;
-        }
-        else {
-            headers.addition(Header(name: HeaderName("Content-Type"), value: content.media_type()));
-        };
-        body = content.opening();
         self.version = version;
     }
 
@@ -345,6 +323,98 @@ object Response does Responding {
 
         version is HttpVersion {
             version;
+        }
+    }
+}
+
+// A response shows its head through the cap `Head`; `body()` is the opening
+// to read. Unless told, it has no fields, an empty body and HTTP/1.1. Like a
+// request it is its head and its body, made apart and put together:
+//
+//     let head = ResponseHead(status: Status.created, headers: location);
+//     Response(head: head, content: JsonBody(order));     // a Content
+//     Response(head: head, body: opening);                // any BodyOpening, unread
+//
+// From a Content it takes the content's media type as Content-Type unless its
+// fields name a compatible one (ConflictingContentType otherwise) and the
+// known length as Content-Length unless its fields frame the body, as a
+// request does; from a BodyOpening it keeps its fields as given.
+object Response does Responding {
+    has head is ResponseHead;
+    has body is BodyOpening;
+
+    // A response with status and the body as given.
+    Response(
+        status is Status,
+        headers is Headers = Headers(),
+        body is BodyOpening = EmptyBody(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        head = ResponseHead(status: status, headers: headers, version: version);
+        self.body = body;
+    }
+
+    // head with body as it is: the fields are not touched, the body not read.
+    Response(head is ResponseHead, body is BodyOpening = EmptyBody()) {
+        self.head = head;
+        self.body = body;
+    }
+
+    // head with content: Content-Type and, when the body knows it,
+    // Content-Length come from the content.
+    Response(head is ResponseHead, content is Content) {
+        let opening = content.opening();
+        self.head = ResponseHead(
+            status: head::Head::status,
+            headers: ContentFields(
+                origin: head::Head::headers,
+                media_type: content.media_type(),
+                body: opening
+            ).headers(),
+            version: head::Head::version
+        );
+        body = opening;
+    }
+
+    // Response(status: Status.ok, content: TextBody(text: "hi")): the body and
+    // its Content-Type come from the content, unless headers name one.
+    Response(
+        status is Status,
+        content is Content,
+        headers is Headers = Headers(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        let fields = if headers.membership(HeaderName("Content-Type")) {
+            headers;
+        }
+        else {
+            headers.addition(Header(name: HeaderName("Content-Type"), value: content.media_type()));
+        };
+        head = ResponseHead(status: status, headers: fields, version: version);
+        body = content.opening();
+    }
+
+    // The status, its code and class, the fields and the version.
+    cap Head {
+        status is Status {
+            head::Head::status;
+        }
+
+        // The status as a number: 200, 404, or the code of Status.other.
+        code is int {
+            head::Head::code;
+        }
+
+        class is StatusClass {
+            head::Head::class;
+        }
+
+        headers is Headers {
+            head::Head::headers;
+        }
+
+        version is HttpVersion {
+            head::Head::version;
         }
     }
 
@@ -760,4 +830,44 @@ async test "explicit framing is kept or refused; a body of unknown length gets n
     );
     test.is(raw::Head::headers.entries().size(), 0);
     test.is(await raw.text(limit: 64), "raw");
+}
+
+test "a response from a head and content gets its Content-Type and Content-Length (#937)" {
+    let head = ResponseHead(
+        status: Status.created,
+        headers: Headers(Header(name: HeaderName("Location"), value: "/orders/7"))
+    );
+    test.is(head::Head::code, 201);
+    test.is(head::Head::version, HttpVersion.http_1_1);
+    let response = Response(head: head, content: JsonBody(Json(JsonField("id", 7))));
+    test.is(response::Head::code, 201);
+    test.is(response::Head::class, StatusClass.successful);
+    let fields = response::Head::headers;
+    test.is(fields.first(HeaderName("Location")), "/orders/7");
+    test.is(fields.first(HeaderName("Content-Type")), "application/json");
+    test.is(fields.first(HeaderName("Content-Length")), "8");
+    let fitting = Response(
+        head: ResponseHead(
+            status: Status.ok,
+            headers: Headers(
+                Header(name: HeaderName("Content-Type"), value: "Text/Plain; Charset=UTF-8")
+            )
+        ),
+        content: TextBody(text: "hi")
+    );
+    test.is(fitting::Head::headers.values(HeaderName("Content-Type")).size(), 1);
+    test.throws(ConflictingContentType) {
+        let contradicting = Response(
+            head: ResponseHead(
+                status: Status.ok,
+                headers: Headers(Header(name: HeaderName("Content-Type"), value: "image/png"))
+            ),
+            content: TextBody(text: "hi")
+        );
+    };
+    let raw = Response(head: ResponseHead(status: Status.ok), body: TextBody(text: "hi").opening());
+    test.is(raw::Head::headers.entries().size(), 0);
+    let old = Response(status: Status.not_found);
+    test.is(old::Head::code, 404);
+    test.is(old::Head::headers.entries().size(), 0);
 }

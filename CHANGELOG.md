@@ -20,6 +20,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   shuffled order (Fisher-Yates on SplitMix64), printed and recorded. Exit 0 when nothing failed, 1 for failed
   tests (and, as before, for a filter that selects none), 2 for a bad command line, 4 when the run reached no
   verdict (a source error, nothing to run).
+- **Responses are composed like requests (#937).** `ResponseHead(status:, headers:, version:)` is a response's head;
+  `Response(head:, content:)` takes the content's Content-Type (or a compatible declared one;
+  `ConflictingContentType` otherwise) and known Content-Length, and `Response(head:, body:)` keeps the fields as
+  given. `Response::Head` shows the one head; the existing constructors keep their behaviour.
 - **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
   `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
   `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in
