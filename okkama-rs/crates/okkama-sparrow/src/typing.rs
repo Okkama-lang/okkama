@@ -292,10 +292,14 @@ impl<'a> Typing<'a> {
             }
             I::Move { dst, source } => {
                 // `move` также переименовывает: succ.take (^C → C), retag
-                // (@never → @T), map.retag (%never:never → %K:V), cap.make (C → cap of C).
+                // (@never → @T), map.retag (%never:never → %K:V), cap.make (C → cap of C),
+                // future.handoff (future<^C> → future<C>, #790: the same Future, its `C` result).
                 let (from, to) = (self.ty(*source), self.ty(dst.0));
                 let renamed = match (from, to) {
                     (Type::Successor(a), Type::Object(b)) => a == b,
+                    (Type::Future(Some(a)), Type::Future(Some(b))) => {
+                        matches!((self.resolve(*a), self.resolve(*b)), (Type::Successor(x), Type::Object(y)) if x == y)
+                    }
                     // Only `never` parts of an untagged literal change, at any depth (#297).
                     (Type::Array(_), Type::Array(_)) | (Type::Map(..), Type::Map(..)) => self.fits_untagged(from, to),
                     (Type::Object(o), Type::Cap(c)) => self.program.caps.get(c.0 as usize).is_some_and(|cap| cap.owner == *o),

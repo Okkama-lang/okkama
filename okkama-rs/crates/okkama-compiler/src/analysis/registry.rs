@@ -2977,6 +2977,9 @@ impl<'a> Registry<'a> {
         if from == to || from.is_error() || to.is_error() {
             return true;
         }
+        if from.future_handoff(to).is_some() {
+            return true;
+        }
         match (from, to) {
             (Ty::Never, _) => true,
             (Ty::Successor(inner), _) if !to.is_successor() => self.assignable(inner, to),

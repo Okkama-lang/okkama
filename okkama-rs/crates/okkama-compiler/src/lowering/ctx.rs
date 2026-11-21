@@ -1284,8 +1284,13 @@ impl<'r, 'a> Ctx<'r, 'a> {
                     if target.is_async {
                         own = ResultType::Value(Type::Future(Box::new(own)));
                     }
+                    // An async slot's result is `Future<role>`: its witness is async too (#790).
+                    let expected_role = match &expected {
+                        ResultType::Value(Type::Future(inner)) if target.is_async => (**inner).clone(),
+                        other => other.clone(),
+                    };
                     if let (true, ResultType::Value(result @ Type::Role(_))) =
-                        (own != expected, &expected)
+                        (own != expected, &expected_role)
                     {
                         let task = Task::Witness {
                             object: id,

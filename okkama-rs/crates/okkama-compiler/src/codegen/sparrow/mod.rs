@@ -213,7 +213,9 @@ impl FunctionGen<'_> {
                 updates: updates.iter().map(|(field, value)| (*field as u32, reg(*value))).collect(),
             },
             K::Call { func, args } => I::Call { dst: opt, function: FuncRef(func.0 as u32), args: regs(args) },
-            K::SuccTake(value) | K::Retag(value) | K::MapRetag(value) | K::CapMake(value) => I::Move { dst: dst()?, source: reg(*value) },
+            K::SuccTake(value) | K::FutureHandoff(value) | K::Retag(value) | K::MapRetag(value) | K::CapMake(value) => {
+                I::Move { dst: dst()?, source: reg(*value) }
+            }
             K::Cvt(value) => I::Convert { dst: dst()?, source: reg(*value) },
             K::RoleWrap(value) => I::RoleWrap { dst: dst()?, source: reg(*value), role: result_role()? },
             K::VariantNew { case, fields } => {

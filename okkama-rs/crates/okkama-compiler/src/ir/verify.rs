@@ -1102,6 +1102,14 @@ impl<'a> FunctionVerifier<'a> {
                 Type::Successor(object) => Type::Object(*object),
                 other => return Err(format!("succ.take of {operand}: {other}, expected ^T")),
             },
+            // #790: only `Future<^C>` → `Future<C>`, the same object `C`.
+            InstKind::FutureHandoff(operand) => match self.ty(*operand)? {
+                Type::Future(result) if matches!(**result, ResultType::Value(Type::Successor(_))) => {
+                    let ResultType::Value(Type::Successor(object)) = **result else { unreachable!("matched above") };
+                    Type::Future(Box::new(ResultType::Value(Type::Object(object))))
+                }
+                other => return Err(format!("future.handoff of {operand}: {other}, expected Future<^T>")),
+            },
             InstKind::RoleWrap(operand) => {
                 let Some(result) = result else {
                     return Err("`role.wrap` must define a value".to_string());

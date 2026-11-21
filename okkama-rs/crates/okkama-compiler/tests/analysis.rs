@@ -457,6 +457,64 @@ fn successor_futures_carry_the_obligation_until_awaited() {
     }
 }
 
+/// #790 (owner's decision of 2026-11-21): a successor Future is handed on where its plain `Future<C>` is
+/// expected (argument, field, declared result, generic holder), and that handoff consumes the obligation. A typed
+/// local is not a handoff, the conversion goes one way only, and a wrong handoff reports one error.
+#[test]
+fn successor_futures_hand_off_as_plain_futures() {
+    let objects = format!(
+        "{ASYNC_COUNTER} object D {{ D(); }} \
+         object Waiter {{ Waiter(); async take(f is Future<C>) is int {{ let c = await f; c.value(); }} \
+           async other(f is Future<D>) is int {{ 0; }} async number(f is Future<int>) is int {{ await f; }} }} \
+         object Holder {{ has f is Future<C>; Holder(:f); }} \
+         object Keep<T> {{ has f is Future<T>; Keep(:f); future() is Future<T> {{ f; }} }} \
+         object Pair<T> {{ has f is Future<T>; has x is T; Pair(:f, :x); }} \
+         object Maker {{ Maker(); make() is Future<C> {{ C().inc(); }} named() is Future<C> {{ let f = C().inc(); return f; }} }}"
+    );
+    let leaked = |name: &str| {
+        format!("Successor action result must be used; binding \"{name}\" can leave scope without consumption")
+    };
+    for body in [
+        // An argument, a field, a declared result and a generic holder (T = C).
+        "let pending = C().inc(); await Waiter().take(pending);",
+        "let pending = C().inc(); let held = Holder(f: pending); 0;",
+        "let f = Maker().make(); let c = await f; c.value();",
+        "let f = Maker().named(); let c = await f; c.value();",
+        "let pending = C().inc(); let kept = Keep(f: pending); let c = await kept.future(); c.value();",
+        // A typed local keeps the obligation until it is awaited.
+        "let pending is Future<C> = C().inc(); let c = await pending; c.value();",
+        "let pending is Future<C> = C().inc(); await Waiter().take(pending);",
+        // An alias, a block value and a temporary hand it on too.
+        "let pending = C().inc(); let alias = pending; await Waiter().take(alias);",
+        "await Waiter().take(if 1 > 0 { C().inc(); } else { C().inc(); });",
+        "await Waiter().take(C().inc());",
+    ] {
+        assert!(messages(&format!("{objects} async main() is int {{ {body} }}")).is_empty(), "{body}");
+    }
+    for (body, expected) in [
+        // A typed local alone does not discharge.
+        ("let pending is Future<C> = C().inc(); 0;", vec![leaked("pending")]),
+        // Awaited, then the successor result is dropped.
+        ("let pending = C().inc(); await pending; 0;", vec!["Successor action result must be used".to_string()]),
+        // Handed on only on one branch.
+        ("let pending = C().inc(); if 1 > 0 { await Waiter().take(pending); } else { 0; }", vec![leaked("pending")]),
+    ] {
+        assert_eq!(messages(&format!("{objects} async main() is int {{ {body} }}")), expected, "{body}");
+    }
+    for (body, wanted) in [
+        // A wrong result type, an unrelated Future, `any`, and a generic that would need another conversion:
+        // each reports its own error once, with no must-use cascade.
+        ("let pending = C().inc(); await Waiter().other(pending);", "No action \"other\""),
+        ("let pending = C().inc(); await Waiter().number(pending);", "No action \"number\""),
+        ("let pending = C().inc(); let boxed is any = pending; 0;", "Cannot initialize variable \"boxed\""),
+        ("let pending = C().inc(); let pair = Pair(f: pending, x: 5); 0;", "Pair"),
+    ] {
+        let found = messages(&format!("{objects} async main() is int {{ {body} }}"));
+        assert_eq!(found.len(), 1, "{body}: {found:?}");
+        assert!(found[0].contains(wanted), "{body}: {found:?}");
+    }
+}
+
 /// Замыкание несёт обязательства захваченных successor (#322).
 #[test]
 fn closures_carry_successor_obligations() {

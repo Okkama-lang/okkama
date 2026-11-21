@@ -32,6 +32,13 @@ pub(super) struct CallArgs {
     pub diverges: bool,
 }
 
+impl CallArgs {
+    /// The checked argument values, the spread last.
+    pub(super) fn into_values(self) -> Vec<Expr> {
+        self.values.into_iter().map(|arg| arg.value).chain(self.spread.map(|(value, _)| value)).collect()
+    }
+}
+
 /// Сигнатура для выбора перегрузки (типы уже подставлены).
 #[derive(Clone, Debug)]
 pub(super) struct Shape {
@@ -1094,11 +1101,11 @@ impl Checker<'_, '_> {
             (None, true) => Vec::new(),
             (None, false) => match self.infer_specialization(object, &call, expected, span) {
                 Some(args_inferred) => args_inferred,
-                None => return Self::poisoned(span),
+                None => return Self::poisoned_call(span, call.into_values()),
             },
         };
         if !self.check_specialization(object, &resolved, span) {
-            return Self::poisoned(span);
+            return Self::poisoned_call(span, call.into_values());
         }
         self.construct_values(object, resolved, call, span)
     }
@@ -1206,13 +1213,13 @@ impl Checker<'_, '_> {
                     self.available(declared, &candidates)
                 );
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
             Err(true) => {
                 let tied: Vec<&Shape> = Self::tied(&typed).into_iter().map(|index| &shapes[index].0).collect();
                 let message = self.ambiguity(format!("Ambiguous construction of \"{name}\""), &call, &name, tied);
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
         };
         let diverges = call.diverges;
@@ -1507,7 +1514,7 @@ impl Checker<'_, '_> {
                     )
                 };
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
         };
         let (method, shape) = shapes[chosen].clone();
@@ -1588,7 +1595,7 @@ impl Checker<'_, '_> {
                     )
                 };
                 self.error(span, message);
-                return Self::poisoned(span);
+                return Self::poisoned_call(span, call.into_values());
             }
         };
         let (slot, shape) = shapes[chosen].clone();

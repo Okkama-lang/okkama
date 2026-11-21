@@ -49,6 +49,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let span = expr.span;
         Ok(match coercion {
             thir::Coercion::Take => self.take(typed, span),
+            thir::Coercion::Handoff => self.handoff(typed, target, span),
             thir::Coercion::Retag => match &target {
                 Type::Map(..) => self.emit(InstKind::MapRetag(typed.value), target, span),
                 _ => self.emit(InstKind::Retag(typed.value), target, span),

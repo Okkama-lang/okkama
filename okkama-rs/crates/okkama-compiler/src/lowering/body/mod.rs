@@ -416,14 +416,19 @@ fn lower_witness(
             "internal compiler error: a void witness",
         ));
     };
+    // An async action's witness is async: it awaits the action's Future and wraps its result (#790).
+    let call_ty = if info.is_async { Type::Future(Box::new(ResultType::Value(own.clone()))) } else { own.clone() };
     let mut value = b.emit(
         InstKind::Call {
             func,
             args: params.clone(),
         },
-        own.clone(),
+        call_ty,
         span,
     );
+    if info.is_async {
+        value = b.emit(InstKind::AwaitTake(value), own.clone(), span);
+    }
     if let Type::Successor(taken) = own {
         value = b.emit(InstKind::SuccTake(value), Type::Object(taken), span);
     }
@@ -432,11 +437,15 @@ fn lower_witness(
     let (values, blocks, params) = b.finish(&params).map_err(|message| {
         LoweringError::invalid(span, format!("internal compiler error: {message}"))
     })?;
+    let mut attrs = vec![ir::Attr::Method(object)];
+    if info.is_async {
+        attrs.push(ir::Attr::Async);
+    }
     Ok(ir::Function {
         symbol,
         params,
         result: ResultType::Value(result),
-        attrs: vec![ir::Attr::Method(object)],
+        attrs,
         values,
         blocks,
         span,
@@ -1339,6 +1348,14 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
 
     /// Погасить обязательство `^C`; у остальных типов значение не меняется.
     /// Алиасы разделяют одно обязательство: их значение тоже становится `C`.
+    /// #790: a successor Future handed on as its plain Future. A role successor is the role in OIR already.
+    pub(super) fn handoff(&mut self, value: Typed, target: Type, span: Span) -> Typed {
+        if value.ty == target {
+            return value;
+        }
+        self.emit(InstKind::FutureHandoff(value.value), target, span)
+    }
+
     fn take(&mut self, value: Typed, span: Span) -> Typed {
         let Type::Successor(object) = value.ty else {
             return value;
@@ -2613,6 +2630,7 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
         let target = self.expr_type(expr)?;
         Ok(Out::Value(match coercion {
             Coercion::Take => self.take(typed, span),
+            Coercion::Handoff => self.handoff(typed, target, span),
             Coercion::Retag => match &target {
                 Type::Map(..) => self.emit(InstKind::MapRetag(typed.value), target, span),
                 _ => self.emit(InstKind::Retag(typed.value), target, span),

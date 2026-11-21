@@ -416,7 +416,7 @@ impl Flow {
                             }
                         }
                     }
-                    InstKind::SuccTake(from) | InstKind::Cvt(from) | InstKind::RoleWrap(from)
+                    InstKind::SuccTake(from) | InstKind::FutureHandoff(from) | InstKind::Cvt(from) | InstKind::RoleWrap(from)
                     | InstKind::VariantOf(from) | InstKind::RoleNarrow { value: from, .. }
                     | InstKind::Retag(from) | InstKind::MapRetag(from)
                     | InstKind::BuilderFinish(from) | InstKind::MapBuilderFinish(from) => {

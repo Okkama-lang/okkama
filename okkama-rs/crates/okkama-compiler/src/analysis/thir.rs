@@ -185,6 +185,9 @@ pub enum ConstValue {
 pub enum Coercion {
     /// `^C` → `C`: погашение обязательства successor.
     Take,
+    /// #790: `Future<^C>` → `Future<C>` at an argument, field or result: the successor obligation is handed on
+    /// with the Future (flow treats it as a transfer). Never at a typed `let`.
+    Handoff,
     /// Объект или builtin → роль, которую он делает.
     RoleWrap,
     /// Роль → роль: подмножество действий, проверка во время исполнения.

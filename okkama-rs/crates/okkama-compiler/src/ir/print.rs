@@ -520,6 +520,7 @@ fn write_inst(
             f.write_char(')')
         }
         InstKind::SuccTake(operand) => write!(f, "succ.take {operand}"),
+        InstKind::FutureHandoff(operand) => write!(f, "future.handoff {operand}"),
         InstKind::Cvt(operand) => write!(f, "cvt {operand}"),
         InstKind::RoleWrap(operand) => write!(f, "role.wrap {operand}"),
         InstKind::VariantNew { case, fields } => {

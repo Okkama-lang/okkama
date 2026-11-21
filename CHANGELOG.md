@@ -8,6 +8,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A successor Future can be handed on as a plain Future (#790).** `Future<^C>` (an async successor's Future)
+  is accepted where `Future<C>` is expected: an argument, a field, a declared result; a generic holder infers
+  `T = C`. That handoff uses the obligation. A typed local is not a handoff, the conversion goes one way only,
+  and there is no `Future<^C>` syntax. OIR gets `future.handoff`, verified for exactly that pair of types (a
+  Sparrow `move`). A failed call or initialization no longer adds a must-use error for what it was given.
+  Roles with async successor actions now lower: their witness awaits and wraps the result.
+
 - **Arrays played as `Sequencing` or `Cursor` throw the roles' typed errors (#769).** `Sequencing.item(index)`
   outside `0..size()` throws `OutOfRange.because(...)`, `first()`/`last()` of an empty sequence throw
   `EmptySequence.empty`, and `Cursor.item()`/`successor()` at the end throw `IterationEnded.ended`: catchable by

@@ -159,7 +159,7 @@ impl State {
                     InstKind::MapGet { map, .. } => Some(map),
                     InstKind::Cvt(value) | InstKind::RoleWrap(value) | InstKind::VariantOf(value)
                     | InstKind::Retag(value) | InstKind::MapRetag(value) | InstKind::SuccTake(value)
-                    | InstKind::CapMake(value) => Some(value),
+                    | InstKind::FutureHandoff(value) | InstKind::CapMake(value) => Some(value),
                     _ => None,
                 };
                 source.and_then(|value| self.owned[value.0].clone())

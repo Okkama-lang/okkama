@@ -1086,6 +1086,10 @@ pub enum InstKind {
     },
     /// Погасить обязательство `^C` и получить значение `C`.
     SuccTake(ValueId),
+    /// #790: hand a successor Future on: `Future<^C>` becomes `Future<C>` at an argument, field or result
+    /// boundary. The same Future object: its outcome is the `C` reference either way (`^C` and `C` share a
+    /// representation); the verifier admits only exactly this pair of types.
+    FutureHandoff(ValueId),
     /// Преобразование из таблицы §16.1; целевой тип — тип результата.
     Cvt(ValueId),
     /// Конкретный объект → ограниченная ссылка роли (роль — тип результата).
@@ -1527,6 +1531,7 @@ impl InstKind {
             InstKind::IntUnary { operand, .. }
             | InstKind::BoolNot(operand)
             | InstKind::SuccTake(operand)
+            | InstKind::FutureHandoff(operand)
             | InstKind::Cvt(operand)
             | InstKind::RoleWrap(operand)
             | InstKind::AnyBox(operand)
@@ -1658,6 +1663,7 @@ impl InstKind {
             InstKind::IntUnary { operand, .. }
             | InstKind::BoolNot(operand)
             | InstKind::SuccTake(operand)
+            | InstKind::FutureHandoff(operand)
             | InstKind::Cvt(operand)
             | InstKind::RoleWrap(operand)
             | InstKind::AnyBox(operand)

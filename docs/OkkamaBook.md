@@ -2550,11 +2550,41 @@ direct call `later.count()`, and a chain such as `bottle.opened().is_open()`,
 uses the receiver at once. An async successor's obligation moves into its
 future, which must be awaited or handed on: await transfers the obligation to
 its result; passing, returning or storing the future, or spawning it, transfers
-the future itself. Reading `done()` or `cancelled()` does not. An explicit
+the future itself. A successor future is accepted where its plain future is
+expected, `Future<Counter>` for `Counter(n: 1).bumped()`: as an argument, a
+field or a declared result, and that boundary is the use (#790). A typed local
+(`let pending is Future<Counter> = …`) is not a handoff: the local keeps the
+obligation until it is awaited or handed on. The conversion goes one way, the
+result type stays the same, and there is no `Future<^C>` syntax or general
+future covariance. The receiver awaits an ordinary `Future<Counter>`: like
+passing a successor value, handing the future on does not prove the transition
+is used. Reading `done()` or `cancelled()` does not. An explicit
 `cancel()` discharges the obligation: the program decides, in its text, that
 the transition will not happen. Runtime discard guards remain for dynamic cases.
 These checks concern language-level consumption, not persistence or business
 usefulness; they do not forbid using an already consumed object again.
+
+```okkama
+object Counter {
+    has n is int;
+    Counter(:n);
+    async bumped() is ^Counter { ^n = n + 1; }
+    n() is int { n; }
+}
+
+object Waiter {
+    Waiter();
+    async take(f is Future<Counter>) is int {
+        let c = await f;
+        c.n();
+    }
+}
+
+async main() is int {
+    let pending = Counter(n: 1).bumped();
+    await Waiter().take(pending);   // the handoff uses `pending`
+}
+```
 
 A successor names a real domain transition or its resulting state, such as
 `opened()`, `advanced()`, or `enqueued(value)`. It is not a license to expose

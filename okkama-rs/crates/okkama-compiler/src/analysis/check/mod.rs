@@ -472,6 +472,26 @@ impl<'r, 'a> Checker<'r, 'a> {
         Self::typed(ExprKind::Unreachable, Ty::Error, span)
     }
 
+    /// A call that failed to type-check, which still consumes its checked arguments for the flow checks (#790):
+    /// its error is the only one, with no must-use cascade for the obligations it was given.
+    pub(super) fn poisoned_call(span: Span, values: Vec<Expr>) -> Expr {
+        if values.is_empty() {
+            return Self::poisoned(span);
+        }
+        let parts = values
+            .into_iter()
+            .map(|value| {
+                let span = value.span;
+                super::thir::ArrayPart::Value(Self::typed(
+                    ExprKind::Coerce { coercion: Coercion::Take, value: Box::new(value) },
+                    Ty::Error,
+                    span,
+                ))
+            })
+            .collect();
+        Self::typed(ExprKind::Array(parts), Ty::Error, span)
+    }
+
     /// Тип значения выражения (`Error` — нет значения после ошибки).
     pub fn ty_of(expr: &Expr) -> Ty {
         expr.ty.clone().unwrap_or(Ty::Error)
@@ -619,9 +639,9 @@ impl<'r, 'a> Checker<'r, 'a> {
         };
         match self.try_coerce(value, expected, what) {
             Ok(value) => value,
-            Err(_) => {
+            Err(value) => {
                 self.mismatch(&actual, expected, span, what);
-                Self::poisoned(span)
+                Self::poisoned_call(span, vec![*value])
             }
         }
     }
@@ -656,6 +676,10 @@ impl<'r, 'a> Checker<'r, 'a> {
         };
         if actual.taken() == *expected {
             return Ok(wrap(Coercion::Take, value, expected.clone()));
+        }
+        // #790: a successor Future handed on where its plain Future is expected (one way, same result type).
+        if actual.future_handoff(expected).is_some() {
+            return Ok(wrap(Coercion::Handoff, value, expected.clone()));
         }
         let taken = actual.taken();
         // An untagged `[]`/`[:]`, at any depth, takes the collection type (#297).

@@ -237,6 +237,8 @@ impl Checker<'_, '_> {
             _ => self.value(value, declared.as_ref()),
         };
         let checked = match &declared {
+            // #790: a typed `let` is not a handoff: the local keeps `Future<^C>` and its obligation.
+            Some(declared) if checked.ty.as_ref().is_some_and(|ty| ty.future_handoff(declared).is_some()) => checked,
             // Типизированная привязка `C` не гасит `^C`; роль — граница (`role.wrap`).
             Some(declared) if checked.ty.as_ref().map(Ty::taken).as_ref() != Some(declared) => {
                 let actual = Self::ty_of(&checked);
@@ -251,11 +253,11 @@ impl Checker<'_, '_> {
                 self.narrow_message = None;
                 match coerced {
                     Ok(value) => value,
-                    Err(_) => {
+                    Err(checked) => {
                         if !actual.is_error() && !declared.is_error() {
                             self.error(value.span, message);
                         }
-                        Self::poisoned(value.span)
+                        Self::poisoned_call(value.span, vec![*checked])
                     }
                 }
             }

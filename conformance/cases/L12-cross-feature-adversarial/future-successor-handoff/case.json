@@ -1,0 +1,43 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L12.future-successor-handoff",
+  "title": "a successor future handed on as a plain Future is used at the boundary",
+  "purpose": "A Future<^T> crosses an argument, a field, a declared result and a typed local as Future<T> (#790).",
+  "level": "L12",
+  "contracts": [
+    {
+      "contract": "X.FUTURE-SUCCESSOR",
+      "aspects": [
+        "normal"
+      ]
+    }
+  ],
+  "mode": "run",
+  "sources": [
+    "main.ok"
+  ],
+  "entry": "main.ok",
+  "requires": {
+    "environment": [
+      "stdout"
+    ]
+  },
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": "2\n5\n41\n10\n"
+    }
+  },
+  "spec_refs": [
+    "docs/okkama-spec-11072026.md#11.1 (static successor consumption)"
+  ],
+  "budget": {
+    "timeout_s": 30
+  },
+  "provenance": {
+    "origin": "authored for #790 from the owner's decision of 2026-11-21",
+    "expected_basis": "spec 11.1: a Future<^T> is accepted where Future<T> is expected at an argument, a field and a declared result; a typed local keeps the obligation until it is awaited."
+  },
+  "status": "mandatory"
+}

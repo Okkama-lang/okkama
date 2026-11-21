@@ -1,0 +1,43 @@
+module app v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Counter {
+    has n is int;
+    Counter(:n);
+    async bumped() is ^Counter { ^n = n + 1; }
+    n() is int { n; }
+}
+
+object Waiter {
+    Waiter();
+    async take(f is Future<Counter>) is int {
+        let c = await f;
+        c.n();
+    }
+}
+
+object Holder {
+    has f is Future<Counter>;
+    Holder(:f);
+    future() is Future<Counter> { f; }
+}
+
+object Maker {
+    Maker();
+    make() is Future<Counter> { Counter(n: 40).bumped(); }
+}
+
+async main() is int {
+    let pending = Counter(n: 1).bumped();
+    Stdout().writeln((await Waiter().take(pending)).string());
+    let held = Holder(f: Counter(n: 4).bumped());
+    let fifth = await held.future();
+    Stdout().writeln(fifth.n().string());
+    let made = await Maker().make();
+    Stdout().writeln(made.n().string());
+    let typed is Future<Counter> = Counter(n: 9).bumped();
+    let tenth = await typed;
+    Stdout().writeln(tenth.n().string());
+    0;
+}

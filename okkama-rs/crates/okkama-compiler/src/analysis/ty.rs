@@ -135,6 +135,17 @@ impl Ty {
         }
     }
 
+    /// #790: `Future<^C>` handed on as `Future<C>` (`Some(C)`), the result types equal once the marker is gone.
+    pub fn future_handoff(&self, to: &Ty) -> Option<&Ty> {
+        match (self, to) {
+            (Ty::Future(Some(from)), Ty::Future(Some(target))) => match &**from {
+                Ty::Successor(inner) if **inner == **target => Some(&**inner),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn is_successor(&self) -> bool {
         matches!(self, Ty::Successor(_))
     }

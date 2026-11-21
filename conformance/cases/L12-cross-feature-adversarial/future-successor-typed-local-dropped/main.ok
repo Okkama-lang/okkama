@@ -1,0 +1,13 @@
+module app v1.0.0;
+
+object Counter {
+    has n is int;
+    Counter(:n);
+    async bumped() is ^Counter { ^n = n + 1; }
+    n() is int { n; }
+}
+
+async main() is int {
+    let pending is Future<Counter> = Counter(n: 1).bumped();
+    0;
+}
