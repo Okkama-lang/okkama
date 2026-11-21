@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-35 of 435 non-runtime module files have an explicitly declared measured action.
+42 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -50,7 +50,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `compression/internal/codec` | — |
 | `compression/read` | — |
 | `compression/state` | — |
-| `compression/zlib` | — |
+| `compression/zlib` | zlib-round-trip |
 | `compression/zstd` | — |
 | `config/document` | — |
 | `config/environment` | — |
@@ -102,14 +102,14 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `db/value` | — |
 | `debug/dumper` | — |
 | `diff` | — |
-| `digest/blake2` | — |
+| `digest/blake2` | blake2b |
 | `digest/blocks` | — |
 | `digest/host` | — |
-| `digest/legacy` | — |
+| `digest/legacy` | md5, sha1 |
 | `digest/read` | — |
 | `digest/sha2` | sha256, sha512 |
 | `digest/sha3` | sha3-256 |
-| `digest/shake` | — |
+| `digest/shake` | shake128 |
 | `digest/state` | — |
 | `encoding/base32` | base32-encode |
 | `encoding/base64` | base64-encode |
@@ -270,7 +270,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `locale/internal/zone_meta` | — |
 | `locale/internal/zone_names` | — |
 | `locale/likely` | — |
-| `locale/list` | — |
+| `locale/list` | locale-list |
 | `locale/match` | — |
 | `locale/number` | locale-decimal |
 | `locale/system` | — |
@@ -375,7 +375,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `statistics` | statistics-median |
 | `strings/buffer` | — |
 | `strings/format` | — |
-| `strings/join` | — |
+| `strings/join` | joined |
 | `strings/parse` | int-parse, hex-number-parse |
 | `template/compile` | — |
 | `template/engine` | template-render |
@@ -422,7 +422,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `toml/value` | — |
 | `unicode/character` | — |
 | `unicode/normalization` | normalize-nfc |
-| `url/form` | — |
+| `url/form` | form-parse |
 | `url/percent` | percent-encode, percent-decode |
 | `url/query` | query-parse |
 | `url/value` | — |

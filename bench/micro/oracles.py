@@ -106,6 +106,14 @@ def contribution(name, i):
         exponent=len(digits)-3
         text=digits[0]+('.'+digits[1:] if len(digits)>1 else '')+('e'+str(exponent) if exponent else '')
         return len(text)%7
+    if name=='md5':return hashlib.md5(data8).digest()[0]%7
+    if name=='sha1':return hashlib.sha1(data8).digest()[0]%7
+    if name=='blake2b':return hashlib.blake2b(data8,digest_size=32).digest()[0]%7
+    if name=='shake128':return hashlib.shake_128(data8).digest(16)[0]%7
+    if name=='zlib-round-trip':return (i%256)%7
+    if name=='locale-list':return len('tea, milk, and '+str(i))%7
+    if name=='joined':return len('a, b, '+str(i))%7
+    if name=='form-parse':return len(str(i))%7
     raise ValueError('No independent oracle: '+name)
 
 
