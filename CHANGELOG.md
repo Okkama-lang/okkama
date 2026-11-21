@@ -8,6 +8,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **Std micro-benchmarks (#244).** `bench/micro/std` grows from 11 to 60 programs: hex, base32 and percent coding,
+  CRC-32 and Adler-32, SHA-1, SHA-512, SHA3-256, MD5, BLAKE2b, SHAKE128, HMAC-SHA256, AES-GCM and Ed25519, gzip and
+  zlib round trips, IP, UUID, query, form, XML, TOML and CSV, hexadecimal numbers and decimals, dates (shifting, ISO,
+  formatting), Turkish case, Russian plurals, German decimals, English lists, Unicode categories and NFC, JSON and
+  template rendering, HTML, XML and regex escaping, regex replacement, UTF-16, joining, formatting, text buffers,
+  text indentation, heaps and statistics. Each has an independent Python oracle; 51 of 435 std modules now have a
+  declared measured action.
 - **Tests in process workers, with captured output and deadlines (#938).** `okkama run -t --workers N` runs each
   test in its own process, at most N at a time; each test's stdout and stderr are captured up to 64 KiB (cut and
   marked beyond) and reported with it (human, JSON `stdout`/`stderr`/`truncated`, JUnit `system-out`/
@@ -18,35 +25,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed write after half its bytes); `File.replace` is shown to keep the old file and leave no temporary file when
   the write, the file fsync or the rename fails, and to report `not_durable` with the new content when only the
   directory fsync fails. `bench/io/replace.ok` compares write, write + sync and replace on the machine at hand.
-- **Eleven more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
-  percent encoding and decoding, date shifting, Turkish case, NFC normalization, JSON rendering and template
-  rendering, each with an independent Python oracle; 17 of 435 std modules now have a declared measured action.
-- **Eighteen more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32,
-- **Twenty-two more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32,
-  SHA-512, SHA3-256, HMAC-SHA256, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing,
-  hexadecimal numbers, date shifting, Turkish case, NFC normalization, JSON and template rendering, XML attributes,
-  TOML, statistics and text indentation, each with an independent Python oracle.
 - **The std reference as man pages, HTML and JSON (#515).** `okkama man --format man|html|json` renders a module from
   the same documentation model as `okkama man`, the editor and doctests; `okkama man --all --format FORMAT --output
   DIR` exports the whole std (section `3ok` man pages, a self-contained HTML site with relative links, versioned
   JSON with schema 1). `make install MAN_PAGES=1` (or `install.sh --man-pages`) also installs the man pages, and
   `make reference` builds the HTML site.
-- **Twenty-seven more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32,
-  SHA-512, SHA3-256, HMAC-SHA256, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing,
-  hexadecimal numbers, date shifting, Turkish case, NFC normalization, JSON and template rendering, XML attributes,
-  TOML, statistics, text indentation, HTML escaping and unescaping, query parsing, regex replacement and UTF-16, each
-  with an independent Python oracle.
-- **Thirty more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
-- **Thirty-two more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
-  SHA3-256, HMAC-SHA256, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
-- **Forty more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
-  SHA3-256, SHA-1, MD5, BLAKE2b, SHAKE128, HMAC-SHA256, zlib, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
-- **Forty-six more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
-- **Forty-nine more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
-  SHA3-256, SHA-1, MD5, BLAKE2b, SHAKE128, HMAC-SHA256, AES-GCM, Ed25519, zlib, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
-  numbers, date shifting and formatting, Turkish case, Russian plurals, German decimals, decimal arithmetic, heaps, NFC normalization, JSON and
-  template rendering, XML attributes, TOML, statistics, text indentation, HTML escaping and unescaping, query
-  and form parsing, joining, formatting, text buffers, CSV round trips, English lists, regex replacement and escaping, XML escaping, Unicode categories, ISO dates and UTF-16, each with an independent Python oracle.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second
@@ -161,9 +144,6 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `== 1` for absence) is `contains`, prefixes and suffixes compared through `slice` are `starts_with` and
   `ends_with`, across 54 modules (156 sites); the gettext `contains` helper is gone. Behaviour is unchanged, except
   that a few unguarded checks of an empty text answer false instead of failing on the slice.
-
-### Changed
-
 - **Mailboxes and saved cookie jars are written atomically and durably (#934).** `mail/mbox_store` and
   `SavedCookieJar` replace their files with `TemporaryFile.replace` / `File.replace` (fsync, rename, directory
   fsync) instead of a temporary file moved without fsync.
@@ -173,9 +153,6 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   bounded power over untrusted input keeps its bit budget through `BoundedPower`. `BigInt` stays as a type.
   Migration: `Json(BigInt(n))` → `Json(n)`, `DbInteger(BigInt(n))` → `DbInteger(n)`,
   `duration.nanoseconds().int()` → `duration.nanoseconds()`; `docs/std-int-511/inventory.md` lists every change.
-
-### Changed
-
 - **std template: one engine over Json (#178).** `template/engine` adds `Template(source:, escaping:, partials:,
   limits:)`, compiled once and reused (`string(data)`, `write(data:, destination:)`), with `TemplateEscaping` (text,
   html), `TemplatePartials`, `TemplateLimits` and `TemplateError`. The language stays small (values, dotted paths,
