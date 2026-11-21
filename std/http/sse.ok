@@ -502,8 +502,8 @@ object ServerEvents {
                     next;
                 }
             }
-            let cr = text.split("\r")[0].length();
-            let lf = text.split("\n")[0].length();
+            let cr = text.find("\r") else text.length();
+            let lf = text.find("\n") else text.length();
             let at = if cr < lf {
                 cr;
             }
@@ -804,4 +804,11 @@ async test "an event stream reads retry digits and replaces ill-formed UTF-8" {
     test.is(EventRetry(first.retry()).milliseconds(), 2500);
     let second = await events.event();
     test.is(second::Event::data, "h�i�");
+}
+
+async test "an event stream ends lines at CR, LF or CRLF, whichever comes first (#260)" {
+    let wire = Utf8Encoded("data: one\rdata: two\r\ndata: three\n\r").bytes();
+    let events = ServerEvents(ByteBody(wire).reading());
+    let first = await events.event();
+    test.is(first::Event::data, "one\ntwo\nthree");
 }

@@ -197,7 +197,7 @@ object LocaleSubtag {
     // Whether it can be a variant.
     variant() is bool {
         ((origin.length() >= 5 && origin.length() <= 8)
-            || (origin.length() == 4 && "0123456789".split(origin.slice(0, 1)).size() == 2))
+            || (origin.length() == 4 && "0123456789".contains(origin.slice(0, 1))))
             && self.characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
     }
 
@@ -230,14 +230,14 @@ object LocaleSubtag {
     unicode_key() is bool {
         origin.length() == 2
             && LocaleSubtag(origin.slice(0, 1)).singleton()
-            && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split(origin.slice(1, 2)).size() == 2;
+            && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(origin.slice(1, 2));
     }
 
     // Whether it can be a `t` extension key.
     transform_key() is bool {
         origin.length() == 2
-            && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split(origin.slice(0, 1)).size() == 2
-            && "0123456789".split(origin.slice(1, 2)).size() == 2;
+            && "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(origin.slice(0, 1))
+            && "0123456789".contains(origin.slice(1, 2));
     }
 
     // It in lowercase.
@@ -271,7 +271,7 @@ object LocaleSubtag {
 
     hidden characters(alphabet is string) is bool {
         let valid = (0..origin.length()).reduce(true) -> previous, index {
-            previous && alphabet.split(origin.slice(index, index + 1)).size() == 2;
+            previous && alphabet.contains(origin.slice(index, index + 1));
         };
         origin != "" && valid;
     }

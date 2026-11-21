@@ -547,7 +547,7 @@ hidden object MailDateParsing {
         if hours != 100 {
             return MailDateOffset(seconds: hours * 3600, known: true);
         }
-        if name.length() == 1 && "abcdefghiklmnopqrstuvwxyz".split(name).size() == 2 {
+        if name.length() == 1 && "abcdefghiklmnopqrstuvwxyz".contains(name) {
             return MailDateOffset(seconds: 0, known: false);
         }
         throw InvalidMail.located(0, "unsupported mail date zone");

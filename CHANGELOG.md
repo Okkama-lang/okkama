@@ -92,6 +92,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   stays 7bit.
 ### Changed
 
+- **std uses `contains` and `find` instead of reduce and split tricks (#260, part 2).** Equality membership through
+  `reduce` is `contains` in 16 modules; a digit's value read through `split(...)[0].length()` (plist) and a
+  position through `split(...)[0].length()` (server-sent events) are `find`; locale tags and mail check single
+  characters with `contains`.
 - **std checks text with the builtins (#260, part 1).** Containment written as `text.split(part).size() > 1` (or
   `== 1` for absence) is `contains`, prefixes and suffixes compared through `slice` are `starts_with` and
   `ends_with`, across 54 modules (156 sites); the gettext `contains` helper is gone. Behaviour is unchanged, except
