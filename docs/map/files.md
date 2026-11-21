@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36456 lines
+## other — 87 files, 36489 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -250,7 +250,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/bytes.rs` 85 — `runtime/bytes`: views of a byte range (`encoding/bytes`), the same
 - `okkama-runtime-core/src/native/cldr.rs` 91 — `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
 - `okkama-runtime-core/src/native/collation.rs` 286 — `runtime/collation` и `runtime/locale` — перенос `CollationNatives` и
-- `okkama-runtime-core/src/native/compression.rs` 568 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
+- `okkama-runtime-core/src/native/compression.rs` 600 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
 - `okkama-runtime-core/src/native/db.rs` 300 — Immutable database cells. External DbValue protocols are checked by stdlib
 - `okkama-runtime-core/src/native/encoding.rs` 958 — `runtime/hex`, `runtime/base32`, `runtime/base64`, `runtime/base85`,
 - `okkama-runtime-core/src/native/formats.rs` 673 — Natives форматов данных: `runtime/io_decorators`,
@@ -286,5 +286,5 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/x509.rs` 2044 — `runtime/x509`: строгий DER-конверт и снимок
 - `okkama-runtime-core/src/native/xml.rs` 434 — `runtime/xml` (#144): a bounded, non-validating tokenizer of a whole XML
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
-- `okkama-runtime-core/src/native/compression/zstd_codec.rs` 117 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
+- `okkama-runtime-core/src/native/compression/zstd_codec.rs` 118 — zstd (RFC 8878) on the reference C library (#184). A compressor writes one
 - `sparrow-cli/src/main.rs` 253 — `sparrow`: the Sparrow runtime on the core (`sparrow-core`): loading with a

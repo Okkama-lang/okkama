@@ -25,7 +25,7 @@ object NativeCompressor does Compressing {
     // lacks it.
     NativeCompressor(format is string, level is int) {
         CodecLevel(format: format, level: level).check();
-        state = CodecOpening(format: format, compressing: true, level: level, limit: 1).state();
+        state = CodecOpening(format: format, compressing: true, level: level, limit: -1).state();
         let empty is @byte = [];
         pending = Atomic(empty);
         done = Atomic(false);
@@ -260,7 +260,8 @@ object NativeCompressed {
     // The compressed bytes.
     bytes() is @byte {
         CodecLevel(format: format, level: level).check();
-        let state = CodecOpening(format: format, compressing: true, level: level, limit: 1).state();
+        // The whole input is known: the codec sizes its tables for it (#939).
+        let state = CodecOpening(format: format, compressing: true, level: level, limit: origin.size()).state();
         codec_write(state, origin) + codec_finish(state);
     }
 }

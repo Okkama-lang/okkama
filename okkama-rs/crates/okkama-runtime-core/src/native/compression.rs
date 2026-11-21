@@ -370,6 +370,11 @@ fn levels(format: &str) -> Option<(i64, i64)> {
     }
 }
 
+/// A compressor's `limit` when the size of its whole input is not known.
+const UNKNOWN_SIZE: u64 = u64::MAX;
+
+/// A codec for `format`. Decompressing, `limit` caps the output; compressing,
+/// it is the whole input's size, or [`UNKNOWN_SIZE`].
 fn open(format: &str, compressing: bool, level: i64, limit: u64) -> Result<Codec, Fail> {
     let deflate = |format| {
         if compressing {
@@ -382,7 +387,10 @@ fn open(format: &str, compressing: bool, level: i64, limit: u64) -> Result<Codec
         ("deflate", _) => deflate(Format::Deflate),
         ("zlib", _) => deflate(Format::Zlib),
         ("gzip", _) => deflate(Format::Gzip),
-        ("zstd", true) => Codec::Other(Box::new(zstd_codec::ZstdCompressor::new(level as i32)?)),
+        ("zstd", true) => {
+            let size = (limit != UNKNOWN_SIZE).then_some(limit);
+            Codec::Other(Box::new(zstd_codec::ZstdCompressor::new(level as i32, size)?))
+        }
         ("zstd", false) => Codec::Other(Box::new(zstd_codec::ZstdDecompressor::new(limit)?)),
         ("brotli", true) => Codec::Other(Box::new(brotli_codec::BrotliCompressor::new(level as u32))),
         ("brotli", false) => Codec::Other(Box::new(brotli_codec::BrotliDecompressor::new(limit))),
@@ -455,7 +463,9 @@ pub fn execute(native: Native, args: &[Value], arrays: &mut ArrayHeap) -> Result
                 let Some(level) = args[2].as_int()?.to_i64().filter(|level| (low..=high).contains(level)) else {
                     return Err(failure(native, invalid(format!("Compression level must be {low}..{high}"))));
                 };
-                (level, 1)
+                // The whole input's size when known (#939); negative: unknown.
+                let size = args[3].as_int()?.to_i64().and_then(|size| u64::try_from(size).ok());
+                (level, size.unwrap_or(UNKNOWN_SIZE))
             } else {
                 let Some(limit) = args[3].as_int()?.to_i64().filter(|limit| *limit > 0) else {
                     return Err(failure(native, invalid("Decompression limit must be positive")));
@@ -531,7 +541,7 @@ mod tests {
     }
 
     fn other_roundtrip(format: &str, level: i64, data: &[u8], pieces: usize) -> (Vec<u8>, usize) {
-        let Ok(Codec::Other(mut compressor)) = open(format, true, level, 1) else { panic!("open") };
+        let Ok(Codec::Other(mut compressor)) = open(format, true, level, UNKNOWN_SIZE) else { panic!("open") };
         let mut packed = Vec::new();
         for chunk in data.chunks((data.len() / pieces).max(1)) {
             packed.extend(compressor.write(chunk).ok().expect("write"));
@@ -567,7 +577,7 @@ mod tests {
     fn zstd_and_brotli_refuse_damage_truncation_and_overflow() {
         let data = b"tea ".repeat(1000);
         for format in ["zstd", "brotli"] {
-            let Ok(Codec::Other(mut compressor)) = open(format, true, levels(format).unwrap().0 + 1, 1) else {
+            let Ok(Codec::Other(mut compressor)) = open(format, true, levels(format).unwrap().0 + 1, UNKNOWN_SIZE) else {
                 panic!("open")
             };
             let mut packed = compressor.write(&data).ok().unwrap();
@@ -584,6 +594,39 @@ mod tests {
         }
         assert!(levels("zstd") == Some((1, 22)) && levels("brotli") == Some((0, 11)));
         assert!(open("lzma", true, 1, 1).is_err());
+    }
+
+    /// #939: a whole input of known size is compressed into a frame that says
+    /// its size, reads back whole, and costs far less to start than a stream
+    /// of unknown size.
+    #[test]
+    fn zstd_with_a_known_size_records_it_and_starts_cheaply() {
+        let compress = |data: &[u8], size: u64| {
+            let Ok(Codec::Other(mut compressor)) = open("zstd", true, 19, size) else { panic!("open") };
+            let mut packed = compressor.write(data).ok().expect("write");
+            packed.extend(compressor.finish().ok().expect("finish"));
+            packed
+        };
+        for data in [&b"8 bytes!"[..], b"", &b"tea ".repeat(5000)] {
+            let packed = compress(data, data.len() as u64);
+            // Frame header descriptor: Frame_Content_Size_flag (bits 7-6) or
+            // Single_Segment_flag (bit 5) set means the content size is present.
+            assert!(packed[4] & 0b1110_0000 != 0, "{} bytes: no content size", data.len());
+            let Ok(Codec::Other(mut decompressor)) = open("zstd", false, 0, 1 << 20) else { panic!("open") };
+            assert_eq!(decompressor.write(&packed).ok().expect("decompress"), data);
+            assert!(decompressor.finish().is_ok());
+        }
+        let unknown = compress(b"8 bytes!", UNKNOWN_SIZE);
+        assert_eq!(unknown[4] & 0b1110_0000, 0, "an unknown size is not recorded");
+        let time = |size: u64| {
+            let started = std::time::Instant::now();
+            for _ in 0..20 {
+                compress(b"8 bytes!", size);
+            }
+            started.elapsed()
+        };
+        let (known, unknown) = (time(8), time(UNKNOWN_SIZE));
+        assert!(known * 4 < unknown, "known {known:?} vs unknown {unknown:?}");
     }
 
     #[test]
