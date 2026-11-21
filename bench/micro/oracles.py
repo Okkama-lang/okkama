@@ -94,6 +94,12 @@ def contribution(name, i):
     if name=='query-parse':return len(str(i))%7
     if name=='regex-replace':return len(re.sub(r'\s+',' ','a  b   c'+str(i)))%7
     if name=='utf16-encode':return len(('A\U0001F600'+str(i)).encode('utf-16-be'))%7
+    if name=='plural-ru':
+        if i%10==1 and i%100!=11:return 1
+        if 2<=i%10<=4 and not 12<=i%100<=14:return 2
+        return 3
+    if name=='date-format':return ord((datetime.date(2026,8,11)+datetime.timedelta(days=i%400)).strftime('%d/%m/%Y')[0])%7
+    if name=='locale-decimal':return len(f'{i:,}'.replace(',','.')+',50')%7
     raise ValueError('No independent oracle: '+name)
 
 

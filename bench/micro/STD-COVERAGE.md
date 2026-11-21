@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-30 of 435 non-runtime module files have an explicitly declared measured action.
+33 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -243,7 +243,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `i18n/catalog` | — |
 | `i18n/gettext` | — |
 | `i18n/operands` | — |
-| `i18n/plural` | — |
+| `i18n/plural` | plural-ru |
 | `io/buffer` | — |
 | `io/decorators` | — |
 | `io/input` | — |
@@ -272,7 +272,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `locale/likely` | — |
 | `locale/list` | — |
 | `locale/match` | — |
-| `locale/number` | — |
+| `locale/number` | locale-decimal |
 | `locale/system` | — |
 | `locale/tag` | — |
 | `logging/enrichment` | — |
@@ -413,7 +413,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `time/date` | date-shift |
 | `time/day` | — |
 | `time/duration` | — |
-| `time/format` | — |
+| `time/format` | date-format |
 | `time/iso` | — |
 | `time/local_datetime` | — |
 | `time/rfc3339` | — |
