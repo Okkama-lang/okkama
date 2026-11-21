@@ -1,0 +1,1622 @@
+[
+  {
+    "module": "std/archive/entry.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/archive/entry.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   archive entries preserve the role coordinates and file bytes\n--- PASS: archive entries preserve the role coordinates and file bytes\n=== RUN   archive symbolic and hard links keep distinct kinds\n--- PASS: archive symbolic and hard links keep distinct kinds\n=== RUN   archive devices reject contradictory kind and negative numbers\n--- PASS: archive devices reject contradictory kind and negative numbers\n=== RUN   a file entry takes text content\n--- PASS: a file entry takes text content\nPASS\n"
+  },
+  {
+    "module": "std/archive/metadata.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/archive/metadata.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   archive metadata retains calendar and comment with explicit absence\n--- PASS: archive metadata retains calendar and comment with explicit absence\n=== RUN   archive epoch conversion preserves negative fractional seconds\n--- PASS: archive epoch conversion preserves negative fractional seconds\n=== RUN   archive metadata diagnostics are stable values\n--- PASS: archive metadata diagnostics are stable values\nPASS\n"
+  },
+  {
+    "module": "std/archive/tar.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/archive/tar.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 8,
+    "failed": 0,
+    "output": "=== RUN   TAR octal fields enforce exact bounds\n--- PASS: TAR octal fields enforce exact bounds\n=== RUN   PAX lengths count UTF8 bytes and decimal width carries\n--- PASS: PAX lengths count UTF8 bytes and decimal width carries\n=== RUN   TAR epoch text retains the sign of fractional negative seconds\n--- PASS: TAR epoch text retains the sign of fractional negative seconds\n=== RUN   TAR input numeric fields reject malformed octal\n--- PASS: TAR input numeric fields reject malformed octal\n=== RUN   PAX timestamps require exact nanoseconds\n--- PASS: PAX timestamps require exact nanoseconds\n=== RUN   PAX attributes retain local deletion and newest value\n--- PASS: PAX attributes retain local deletion and newest value\n=== RUN   TAR stream counter snapshots preserve cumulative independent budgets\n--- PASS: TAR stream counter snapshots preserve cumulative independent budgets\n=== RUN   TAR stream local extension presence is not the attribute count\n--- PASS: TAR stream local extension presence is not the attribute count\nPASS\n"
+  },
+  {
+    "module": "std/archive/zip.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/archive/zip.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 5,
+    "failed": 0,
+    "output": "=== RUN   ZIP choices resolve defaults and preserve the method\n--- PASS: ZIP choices resolve defaults and preserve the method\n=== RUN   ZIP level ranges are exact and zero has method-specific meaning\n--- PASS: ZIP level ranges are exact and zero has method-specific meaning\n=== RUN   a ZIP archive is read through its central directory\n--- PASS: a ZIP archive is read through its central directory\n=== RUN   a ZIP archive that lies is refused\n--- PASS: a ZIP archive that lies is refused\n=== RUN   a written ZIP archive reads back\n--- PASS: a written ZIP archive reads back\nPASS\n"
+  },
+  {
+    "module": "std/async/timeout.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/async/timeout.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   time wins over a future that never settles\n--- PASS: time wins over a future that never settles\n=== RUN   a settled future wins and a negative limit is refused\n--- PASS: a settled future wins and a negative limit is refused\nPASS\n"
+  },
+  {
+    "module": "std/config/document.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/config/document.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a JSON document becomes settings: nested members extend the key, arrays are values\n--- PASS: a JSON document becomes settings: nested members extend the key, arrays are values\nPASS\n"
+  },
+  {
+    "module": "std/crypto/jwt.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/crypto/jwt.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 9,
+    "failed": 0,
+    "output": "=== RUN   JWT verifies the RFC 7515 HS256 example\n--- PASS: JWT verifies the RFC 7515 HS256 example\n=== RUN   JWT verifies the RFC 7515 ES256 example\n--- PASS: JWT verifies the RFC 7515 ES256 example\n=== RUN   JWT signs the RFC 8037 Ed25519 example\n--- PASS: JWT signs the RFC 8037 Ed25519 example\n=== RUN   JWT round-trips every algorithm\n--- PASS: JWT round-trips every algorithm\n=== RUN   JWT refuses another algorithm and none\n--- PASS: JWT refuses another algorithm and none\n=== RUN   JWT checks the shape of a token\n--- PASS: JWT checks the shape of a token\n=== RUN   JWT checks nbf, iat, aud and iss\n--- PASS: JWT checks nbf, iat, aud and iss\n=== RUN   JWT chooses keys by kid\n--- PASS: JWT chooses keys by kid\n=== RUN   JWT refuses keys that do not fit\n--- PASS: JWT refuses keys that do not fit\nPASS\n"
+  },
+  {
+    "module": "std/crypto/x509/certificate.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/crypto/x509/certificate.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   unknown purpose OIDs remain exact metadata\n--- PASS: unknown purpose OIDs remain exact metadata\n=== RUN   empty DER is rejected before certificate publication\n--- PASS: empty DER is rejected before certificate publication\n=== RUN   empty supplied chain cannot denote a peer chain\n--- PASS: empty supplied chain cannot denote a peer chain\nPASS\n"
+  },
+  {
+    "module": "std/crypto/x509/trust.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/crypto/x509/trust.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   explicit empty roots do not acquire system trust\n--- PASS: explicit empty roots do not acquire system trust\n=== RUN   system root request is available without acquiring host roots\n--- PASS: system root request is available without acquiring host roots\n=== RUN   certificate identities preserve nominal DNS and IP selection\n--- PASS: certificate identities preserve nominal DNS and IP selection\nPASS\n"
+  },
+  {
+    "module": "std/db/connection.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/db/connection.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/db/pool.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/pool.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   pool bounds precede physical acquisition\n--- PASS: pool bounds precede physical acquisition\nPASS\n"
+  },
+  {
+    "module": "std/db/postgres.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/postgres.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 7,
+    "failed": 0,
+    "output": "=== RUN   startup message carries protocol 3.0 and UTF-8 session settings\n--- PASS: startup message carries protocol 3.0 and UTF-8 session settings\n=== RUN   bind frames carry formats, NULL and binary bytes\n--- PASS: bind frames carry formats, NULL and binary bytes\n=== RUN   text results decode by column type\n--- PASS: text results decode by column type\n=== RUN   command tags report affected rows only for data changes\n--- PASS: command tags report affected rows only for data changes\n=== RUN   SQLSTATE classes map to portable failure kinds\n--- PASS: SQLSTATE classes map to portable failure kinds\n=== RUN   transaction options become one BEGIN\n--- PASS: transaction options become one BEGIN\n=== RUN   a URL names the server, the user, the database and TLS\n--- PASS: a URL names the server, the user, the database and TLS\nPASS\n"
+  },
+  {
+    "module": "std/db/prepared.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/db/prepared.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/db/query.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/db/query.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/db/read.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/read.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a column reader converts one cell strictly and names the column on failure\n--- PASS: a column reader converts one cell strictly and names the column on failure\nPASS\n"
+  },
+  {
+    "module": "std/db/row.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/row.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   a row reads its cells by name: strict, Maybe and Presence\n--- PASS: a row reads its cells by name: strict, Maybe and Presence\n=== RUN   a row refuses ambiguous names and mismatched widths\n--- PASS: a row refuses ambiguous names and mismatched widths\nPASS\n"
+  },
+  {
+    "module": "std/db/sqlite.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/sqlite.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 6,
+    "failed": 0,
+    "output": "=== RUN   SQLite defaults are explicit and foreign keys remain enabled\n--- PASS: SQLite defaults are explicit and foreign keys remain enabled\n=== RUN   SQLite rejects contradictory flags and sub-millisecond busy timeouts\n--- PASS: SQLite rejects contradictory flags and sub-millisecond busy timeouts\n=== RUN   queries read one row, maybe a row, a bounded list and a stream\n--- PASS: queries read one row, maybe a row, a bounded list and a stream\n=== RUN   prepared statements, transactions and acquisitions\n--- PASS: prepared statements, transactions and acquisitions\n=== RUN   scripts, blobs and an online backup\n--- PASS: scripts, blobs and an online backup\n=== RUN   a connection runs SQL with bound values and answers a query\n--- PASS: a connection runs SQL with bound values and answers a query\nPASS\n"
+  },
+  {
+    "module": "std/db/sqlite/backup.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/sqlite/backup.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   a backup report counts copied pages within the total\n--- PASS: a backup report counts copied pages within the total\n=== RUN   a backup checks its step and timeout, then asks its source\n--- PASS: a backup checks its step and timeout, then asks its source\nPASS\n"
+  },
+  {
+    "module": "std/db/sqlite/blob.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/sqlite/blob.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a blob handle names its database, table and column without NUL\n--- PASS: a blob handle names its database, table and column without NUL\nPASS\n"
+  },
+  {
+    "module": "std/db/sqlite/script.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/sqlite/script.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a script is at most one MiB of UTF-8\n--- PASS: a script is at most one MiB of UTF-8\nPASS\n"
+  },
+  {
+    "module": "std/db/statement.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/statement.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   statement parameters remain distinct from SQL text\n--- PASS: statement parameters remain distinct from SQL text\nPASS\n"
+  },
+  {
+    "module": "std/db/transaction.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/transaction.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   transaction options default to the server's isolation, read-write\n--- PASS: transaction options default to the server's isolation, read-write\nPASS\n"
+  },
+  {
+    "module": "std/db/value.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/db/value.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   511 DB int callbacks and native cells preserve precision and nullability\n--- PASS: 511 DB int callbacks and native cells preserve precision and nullability\n=== RUN   database NULL remains separate from empty text\n--- PASS: database NULL remains separate from empty text\nPASS\n"
+  },
+  {
+    "module": "std/fs/directory.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/fs/directory.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 5,
+    "failed": 0,
+    "output": "=== RUN   a directory is created, found, moved and removed one level at a time\n--- PASS: a directory is created, found, moved and removed one level at a time\n=== RUN   parents: true makes every missing directory and accepts an existing one\n--- PASS: parents: true makes every missing directory and accepts an existing one\n=== RUN   entries come sorted by name, one level only; a file is not a directory\n--- PASS: entries come sorted by name, one level only; a file is not a directory\n=== RUN   descendants come in preorder, children sorted; a tree is removed bottom-up\n--- PASS: descendants come in preorder, children sorted; a tree is removed bottom-up\n=== RUN   a directory symlink is a leaf: listed, never entered, removed without its target\n--- PASS: a directory symlink is a leaf: listed, never entered, removed without its target\nPASS\n"
+  },
+  {
+    "module": "std/fs/entry.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/fs/entry.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   an entry tells whether something is there, what it is and how big\n--- PASS: an entry tells whether something is there, what it is and how big\n=== RUN   an entry moves and is removed; both name the path when it is gone\n--- PASS: an entry moves and is removed; both name the path when it is gone\n=== RUN   copy and move refuse an occupied destination unless told to overwrite\n--- PASS: copy and move refuse an occupied destination unless told to overwrite\nPASS\n"
+  },
+  {
+    "module": "std/fs/root.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/fs/root.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   explicit root close is idempotent and child descriptor is independent\n--- PASS: explicit root close is idempotent and child descriptor is independent\n=== RUN   a rooted piece is read off the program's thread\n--- PASS: a rooted piece is read off the program's thread\nPASS\n"
+  },
+  {
+    "module": "std/fs/stat.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/fs/stat.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   permission observations retain integer bit groups\n--- PASS: permission observations retain integer bit groups\nPASS\n"
+  },
+  {
+    "module": "std/http/auth.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/auth.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   authentication scope uses canonical origin and path boundaries\n--- PASS: authentication scope uses canonical origin and path boundaries\nPASS\n"
+  },
+  {
+    "module": "std/http/body.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/body.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   byte body reads are independent and trailers require EOF\n--- PASS: byte body reads are independent and trailers require EOF\n=== RUN   a body in memory is read in pieces, then ends with its trailers\n--- PASS: a body in memory is read in pieces, then ends with its trailers\nPASS\n"
+  },
+  {
+    "module": "std/http/body_coding.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/body_coding.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   a body is gzipped and gunzipped while it is read\n--- PASS: a body is gzipped and gunzipped while it is read\n=== RUN   a body is compressed and decompressed as Brotli while it is read\n--- PASS: a body is compressed and decompressed as Brotli while it is read\nPASS\n"
+  },
+  {
+    "module": "std/http/cache.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/cache.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 0,
+    "failed": 1,
+    "output": "=== RUN   a fresh response is served from memory without reaching the origin\n--- FAIL: a fresh response is served from memory without reaching the origin\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/http/cache_admission.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/cache_admission.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/cache_freshness.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/cache_freshness.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   cache age includes monotonic response delay\n--- PASS: cache age includes monotonic response delay\nPASS\n"
+  },
+  {
+    "module": "std/http/cache_memory.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/cache_memory.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/cache_validation.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/cache_validation.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/client.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/client.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 2,
+    "failed": 4,
+    "output": "=== RUN   unstarted client response cancellation acquires no route or connection\n--- PASS: unstarted client response cancellation acquires no route or connection\n=== RUN   a client gets text and posts JSON through its shortcuts\n--- FAIL: a client gets text and posts JSON through its shortcuts\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a default client reaches public endpoints only\n--- PASS: a default client reaches public endpoints only\n=== RUN   a client follows redirects and carries its cookies when told\n--- FAIL: a client follows redirects and carries its cookies when told\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   shortcuts and composed requests go out the same way: content, forms, queries, streams\n--- FAIL: shortcuts and composed requests go out the same way: content, forms, queries, streams\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a body of unknown length goes out chunked over HTTP/1.1, read once and not before\n--- FAIL: a body of unknown length goes out chunked over HTTP/1.1, read once and not before\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/http/client_policy.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/client_policy.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   default client policy is explicit and HTTP1-only\n--- PASS: default client policy is explicit and HTTP1-only\nPASS\n"
+  },
+  {
+    "module": "std/http/client_protocols.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/client_protocols.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   the client agrees protocols with TLS and maps ALPN to a version\n--- PASS: the client agrees protocols with TLS and maps ALPN to a version\nPASS\n"
+  },
+  {
+    "module": "std/http/client_request.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/client_request.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   direct route adds Host and a slash without adding optional client features\n--- PASS: direct route adds Host and a slash without adding optional client features\n=== RUN   an unframed body is framed for HTTP/1.1: a known length, chunked when unknown, nothing when empty\n--- PASS: an unframed body is framed for HTTP/1.1: a known length, chunked when unknown, nothing when empty\nPASS\n"
+  },
+  {
+    "module": "std/http/conditional.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/conditional.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   entity tag comparison respects validator strength\n--- PASS: entity tag comparison respects validator strength\n=== RUN   entity tag list wildcard and empty list differ\n--- PASS: entity tag list wildcard and empty list differ\n=== RUN   byte range plans normalize exact inclusive intervals\n--- PASS: byte range plans normalize exact inclusive intervals\n=== RUN   an entity tag list reads weak tags, spaces and empty members\n--- PASS: an entity tag list reads weak tags, spaces and empty members\nPASS\n"
+  },
+  {
+    "module": "std/http/connection.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/connection.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   HTTP1 opener rejects incompatible ALPN before acquisition\n--- PASS: HTTP1 opener rejects incompatible ALPN before acquisition\nPASS\n"
+  },
+  {
+    "module": "std/http/conversation.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/conversation.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/cookie.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/cookie.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   session expiry has no absolute instant\n--- PASS: session expiry has no absolute instant\n=== RUN   cookie prefix and wire policy\n--- PASS: cookie prefix and wire policy\n=== RUN   set-cookie fields carry safe defaults, Max-Age and expiry\n--- PASS: set-cookie fields carry safe defaults, Max-Age and expiry\n=== RUN   request cookies are read by name\n--- PASS: request cookies are read by name\nPASS\n"
+  },
+  {
+    "module": "std/http/cookie_client.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/cookie_client.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   first-party cookies use the current request site and method\n--- PASS: first-party cookies use the current request site and method\nPASS\n"
+  },
+  {
+    "module": "std/http/cookie_jar.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/cookie_jar.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   empty jar is an explicit closeable effect\n--- PASS: empty jar is an explicit closeable effect\nPASS\n"
+  },
+  {
+    "module": "std/http/cookie_policy.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/cookie_policy.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   Set-Cookie keeps explicit context and precedence\n--- PASS: Set-Cookie keeps explicit context and precedence\nPASS\n"
+  },
+  {
+    "module": "std/http/date.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/date.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   HTTP dates are whole seconds in GMT\n--- PASS: HTTP dates are whole seconds in GMT\nPASS\n"
+  },
+  {
+    "module": "std/http/digest.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/digest.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   Digest nonce counts remain independent and monotone\n--- PASS: Digest nonce counts remain independent and monotone\nPASS\n"
+  },
+  {
+    "module": "std/http/endpoint.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/endpoint.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   explicit empty network selection grants no endpoint\n--- PASS: explicit empty network selection grants no endpoint\n=== RUN   loopback endpoints allow this machine only\n--- PASS: loopback endpoints allow this machine only\nPASS\n"
+  },
+  {
+    "module": "std/http/environment_proxy.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/environment_proxy.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   environment proxies are selected only from the supplied snapshot\n--- PASS: environment proxies are selected only from the supplied snapshot\nPASS\n"
+  },
+  {
+    "module": "std/http/exchange.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/exchange.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   a client response reads its head through caps and its body whole\n--- PASS: a client response reads its head through caps and its body whole\n=== RUN   text follows the charset, json parses, an unknown charset is refused\n--- PASS: text follows the charset, json parses, an unknown charset is refused\nPASS\n"
+  },
+  {
+    "module": "std/http/form.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/form.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   multipart boundary is bounded ASCII, including quoted MIME spaces\n--- PASS: multipart boundary is bounded ASCII, including quoted MIME spaces\n=== RUN   a multipart form reads parts after padded boundaries and quoted parameters\n--- PASS: a multipart form reads parts after padded boundaries and quoted parameters\nPASS\n"
+  },
+  {
+    "module": "std/http/handler.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/handler.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a response result answers its response and refuses the WebSocket view\n--- PASS: a response result answers its response and refuses the WebSocket view\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_body.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_body.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   empty framing closes its explicit owner without a source read\n--- PASS: empty framing closes its explicit owner without a source read\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_body_check.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_body_check.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   body contradiction is rejected by shared pre-head validation\n--- PASS: body contradiction is rejected by shared pre-head validation\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_body_writing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_body_writing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   output chunk sizes use exact lowercase hex\n--- PASS: output chunk sizes use exact lowercase hex\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_chunk.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_chunk.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   zero chunk and empty trailers have explicit boundaries\n--- PASS: zero chunk and empty trailers have explicit boundaries\n=== RUN   chunk lines are read without a regex\n--- PASS: chunk lines are read without a regex\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_continue.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_continue.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   ordinary request entry has no outstanding continue permission\n--- PASS: ordinary request entry has no outstanding continue permission\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_framing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_framing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   request body boundaries are decided before reading\n--- PASS: request body boundaries are decided before reading\n=== RUN   511 HTTP lengths retain exact int values and reject invalid grammar\n--- PASS: 511 HTTP lengths retain exact int values and reject invalid grammar\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_head.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_head.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   strict HTTP1 head preserves extension status and duplicate fields\n--- PASS: strict HTTP1 head preserves extension status and duplicate fields\n=== RUN   a Host field is one authority: a host and an optional port\n--- PASS: a Host field is one authority: a host and an optional port\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_message_writing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_message_writing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   complete empty request round-trips over a borrowed stream\n--- PASS: complete empty request round-trips over a borrowed stream\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_reading.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_reading.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   head delimiter scan remembers only its boundary\n--- PASS: head delimiter scan remembers only its boundary\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_session.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   unstarted exchange cancellation leaves its explicit session owner available\n--- PASS: unstarted exchange cancellation leaves its explicit session owner available\nPASS\n"
+  },
+  {
+    "module": "std/http/http1_writing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/http1_writing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   extension response status keeps mandatory reason separator\n--- PASS: extension response status keeps mandatory reason separator\nPASS\n"
+  },
+  {
+    "module": "std/http/http2_connection.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/http2_connection.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/http2_server.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/http2_server.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/http2_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/http2_session.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/internal/http2_body.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/internal/http2_body.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/internal/http2_fields.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/internal/http2_fields.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   response pseudo-status stays outside ordinary Headers\n--- PASS: response pseudo-status stays outside ordinary Headers\nPASS\n"
+  },
+  {
+    "module": "std/http/internal/http2_receiving.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/internal/http2_receiving.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/internal/trailers.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/internal/trailers.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   trailers refuse framing and routing fields, and the ones Connection nominates\n--- PASS: trailers refuse framing and routing fields, and the ones Connection nominates\nPASS\n"
+  },
+  {
+    "module": "std/http/internal/websocket_frame.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/internal/websocket_frame.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   WebSocket server frame contains no mask\n--- PASS: WebSocket server frame contains no mask\nPASS\n"
+  },
+  {
+    "module": "std/http/internal/websocket_messages.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/internal/websocket_messages.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   fragments assemble into one message; control frames pass by\n--- PASS: fragments assemble into one message; control frames pass by\n=== RUN   a close frame carries a status code and a UTF-8 reason\n--- PASS: a close frame carries a status code and a UTF-8 reason\nPASS\n"
+  },
+  {
+    "module": "std/http/internal/websocket_output.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/internal/websocket_output.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/internal/websocket_reading.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/internal/websocket_reading.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/internal/websocket_upgrade.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/internal/websocket_upgrade.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/message.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/message.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 9,
+    "failed": 0,
+    "output": "=== RUN   message metadata does not open its empty body\n--- PASS: message metadata does not open its empty body\n=== RUN   a request to a URL is a GET with no fields unless told\n--- PASS: a request to a URL is a GET with no fields unless told\n=== RUN   a response takes content and its media type\n--- PASS: a response takes content and its media type\n=== RUN   a request reads its whole body within a limit\n--- PASS: a request reads its whole body within a limit\n=== RUN   a declared length over the limit is refused before reading\n--- PASS: a declared length over the limit is refused before reading\n=== RUN   a head is the method, target, fields and version, checked to fit together\n--- PASS: a head is the method, target, fields and version, checked to fit together\n=== RUN   a request from a head and content gets its Content-Type and Content-Length\n--- PASS: a request from a head and content gets its Content-Type and Content-Length\n=== RUN   an explicit Content-Type stays when it fits the content and is refused when it contradicts it\n--- PASS: an explicit Content-Type stays when it fits the content and is refused when it contradicts it\n=== RUN   explicit framing is kept or refused; a body of unknown length gets no length and is not read\n--- PASS: explicit framing is kept or refused; a body of unknown length gets no length and is not read\nPASS\n"
+  },
+  {
+    "module": "std/http/proxy.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/proxy.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 0,
+    "failed": 1,
+    "output": "=== RUN   a proxied exchange sends the absolute target and the proxy credentials\n--- FAIL: a proxied exchange sends the absolute target and the proxy credentials\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/http/proxy_connection.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/proxy_connection.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/proxy_request.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/proxy_request.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a forward request keeps the absolute target; CONNECT names the authority\n--- PASS: a forward request keeps the absolute target; CONNECT names the authority\nPASS\n"
+  },
+  {
+    "module": "std/http/proxy_tunnel.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/proxy_tunnel.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/redirect.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/redirect.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   redirect policy bounds history and disables downgrade by default\n--- PASS: redirect policy bounds history and disables downgrade by default\nPASS\n"
+  },
+  {
+    "module": "std/http/retry.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/retry.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a stale connection is retried once for an idempotent, replayable request\n--- PASS: a stale connection is retried once for an idempotent, replayable request\nPASS\n"
+  },
+  {
+    "module": "std/http/robots.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/robots.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   wildcard fallback and implicit robots path\n--- PASS: wildcard fallback and implicit robots path\nPASS\n"
+  },
+  {
+    "module": "std/http/routing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/routing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 9,
+    "failed": 0,
+    "output": "=== RUN   encoded separators are one decoded route coordinate\n--- PASS: encoded separators are one decoded route coordinate\n=== RUN   root path is zero segments and matches only the root pattern\n--- PASS: root path is zero segments and matches only the root pattern\n=== RUN   default rejection keeps empty 400 and Allow-carrying 405 responses\n--- PASS: default rejection keeps empty 400 and Allow-carrying 405 responses\n=== RUN   a literal wins over a parameter, and a parameter over a wildcard\n--- PASS: a literal wins over a parameter, and a parameter over a wildcard\n=== RUN   a pattern without the method gives way to the next one\n--- PASS: a pattern without the method gives way to the next one\n=== RUN   only routes of one method with one shape are refused\n--- PASS: only routes of one method with one shape are refused\n=== RUN   a route for every method gives way to the request's own method\n--- PASS: a route for every method gives way to the request's own method\n=== RUN   a table takes more than 256 routes\n--- PASS: a table takes more than 256 routes\n=== RUN   a table redirects a path to its declared form with or without the final slash\n--- PASS: a table redirects a path to its declared form with or without the final slash\nPASS\n"
+  },
+  {
+    "module": "std/http/selected_connection.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/selected_connection.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/server.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/server.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 0,
+    "failed": 5,
+    "output": "=== RUN   a server answers over loopback, reads bodies, and drains\n--- FAIL: a server answers over loopback, reads bodies, and drains\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a server speaks HTTP/2 over cleartext and multiplexes one connection\n--- FAIL: a server speaks HTTP/2 over cleartext and multiplexes one connection\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a server answers HTTP/1.0 and keeps its connection only when asked\n--- FAIL: a server answers HTTP/1.0 and keeps its connection only when asked\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a request body that pauses past the idle timeout is answered with 408\n--- FAIL: a request body that pauses past the idle timeout is answered with 408\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a server speaks HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN\n--- FAIL: a server speaks HTTPS and offers HTTP/2 and HTTP/1.1 by ALPN\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/http/server_policy.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/server_policy.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   server policy has bounded defaults and refuses unsupported budgets\n--- PASS: server policy has bounded defaults and refuses unsupported budgets\nPASS\n"
+  },
+  {
+    "module": "std/http/sse.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/sse.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   event retry is explicit and negative delays clamp to zero\n--- PASS: event retry is explicit and negative delays clamp to zero\n=== RUN   an event stream reads retry digits and replaces ill-formed UTF-8\n--- PASS: an event stream reads retry digits and replaces ill-formed UTF-8\nPASS\n"
+  },
+  {
+    "module": "std/http/static.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/static.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   static policy defaults bound ranges and disable optional file modes\n--- PASS: static policy defaults bound ranges and disable optional file modes\n=== RUN   files are served below a route parameter with a cache rule and content tags\n--- PASS: files are served below a route parameter with a cache rule and content tags\nPASS\n"
+  },
+  {
+    "module": "std/http/tls_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/tls_session.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   HTTP1 TLS uses exact ALPN or absent-protocol fallback\n--- PASS: HTTP1 TLS uses exact ALPN or absent-protocol fallback\nPASS\n"
+  },
+  {
+    "module": "std/http/transport_observation.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/transport_observation.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   an observation arms, then records the first response byte\n--- PASS: an observation arms, then records the first response byte\nPASS\n"
+  },
+  {
+    "module": "std/http/websocket.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/websocket.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   WebSocket values distinguish projections\n--- PASS: WebSocket values distinguish projections\n=== RUN   a text message reads as JSON and a binary one does not\n--- PASS: a text message reads as JSON and a binary one does not\nPASS\n"
+  },
+  {
+    "module": "std/http/websocket_client.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/websocket_client.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 0,
+    "failed": 1,
+    "output": "=== RUN   a WebSocket client talks to a server over loopback and closes cleanly\n--- FAIL: a WebSocket client talks to a server over loopback and closes cleanly\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/http/websocket_handshake.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/websocket_handshake.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   WebSocket accept uses RFC6455 nonce\n--- PASS: WebSocket accept uses RFC6455 nonce\nPASS\n"
+  },
+  {
+    "module": "std/http/websocket_origin.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/websocket_origin.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a WebSocket upgrade is allowed only from the same origin\n--- PASS: a WebSocket upgrade is allowed only from the same origin\nPASS\n"
+  },
+  {
+    "module": "std/http/websocket_server.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/websocket_server.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/websocket_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama check std/http/websocket_session.ok",
+    "status": "checked-no-tests",
+    "code": 0,
+    "passed": 0,
+    "failed": 0,
+    "output": ""
+  },
+  {
+    "module": "std/http/xmlrpc.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/http/xmlrpc.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   standard XMLRPC values do not require casts\n--- PASS: standard XMLRPC values do not require casts\n=== RUN   every value reads as its own kind and refuses the others (#517)\n--- PASS: every value reads as its own kind and refuses the others (#517)\n=== RUN   arrays, structs and calls read by position and name (#517)\n--- PASS: arrays, structs and calls read by position and name (#517)\nPASS\n"
+  },
+  {
+    "module": "std/i18n/catalog.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/i18n/catalog.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   catalog retains exact translation including empty text\n--- PASS: catalog retains exact translation including empty text\nPASS\n"
+  },
+  {
+    "module": "std/i18n/gettext.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/i18n/gettext.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   GNU plural formula short circuits unused division\n--- PASS: GNU plural formula short circuits unused division\n=== RUN   PO projection preserves explicit empty context\n--- PASS: PO projection preserves explicit empty context\n=== RUN   plural formulas keep their GNU unsigned 64-bit results (#205)\n--- PASS: plural formulas keep their GNU unsigned 64-bit results (#205)\nPASS\n"
+  },
+  {
+    "module": "std/i18n/plural.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/i18n/plural.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   visible decimal precision affects English cardinal category\n--- PASS: visible decimal precision affects English cardinal category\nPASS\n"
+  },
+  {
+    "module": "std/io/decorators.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/io/decorators.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 8,
+    "failed": 0,
+    "output": "=== RUN   buffered and limited readings\n--- PASS: buffered and limited readings\n=== RUN   chained readings, snapshots, tees and discarding\n--- PASS: chained readings, snapshots, tees and discarding\n=== RUN   a limited async reading stops at its limit and asks for no more\n--- PASS: a limited async reading stops at its limit and asks for no more\n=== RUN   a limited async reading: one allowance for repeated awaits and overlapping reads\n--- PASS: a limited async reading: one allowance for repeated awaits and overlapping reads\n=== RUN   a counting async reading counts what its reads deliver, once\n--- PASS: a counting async reading counts what its reads deliver, once\n=== RUN   a timed async reading: per read, a shared deadline, and nothing read behind a timeout\n--- PASS: a timed async reading: per read, a shared deadline, and nothing read behind a timeout\n=== RUN   a buffered async writing holds writes until a flush or an overflow sends them\n--- PASS: a buffered async writing holds writes until a flush or an overflow sends them\n=== RUN   a buffered async writing keeps order and breaks without sending twice\n--- PASS: a buffered async writing keeps order and breaks without sending twice\nPASS\n"
+  },
+  {
+    "module": "std/json.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/json.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 12,
+    "failed": 0,
+    "output": "=== RUN   511 exact int JSON preserves large values presence and bounded reads\n--- PASS: 511 exact int JSON preserves large values presence and bounded reads\n=== RUN   values built in code are written compact and pretty\n--- PASS: values built in code are written compact and pretty\n=== RUN   repeated names are rejected when built and when parsed\n--- PASS: repeated names are rejected when built and when parsed\n=== RUN   reads check kinds and name the pointer\n--- PASS: reads check kinds and name the pointer\n=== RUN   objects are walked by name and merged\n--- PASS: objects are walked by name and merged\n=== RUN   presence distinguishes missing null and non-null members\n--- PASS: presence distinguishes missing null and non-null members\n=== RUN   maybe members read as the given fallback when absent or null\n--- PASS: maybe members read as the given fallback when absent or null\n=== RUN   parsed text is written back exactly\n--- PASS: parsed text is written back exactly\n=== RUN   typed member readers preserve absence and reject invalid values\n--- PASS: typed member readers preserve absence and reject invalid values\n=== RUN   json parses from UTF-8 bytes as from text\n--- PASS: json parses from UTF-8 bytes as from text\n=== RUN   items stream from an array or from lines (#136)\n--- PASS: items stream from an array or from lines (#136)\n=== RUN   values are written one per line (#136)\n--- PASS: values are written one per line (#136)\nPASS\n"
+  },
+  {
+    "module": "std/locale/currency.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/locale/currency.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   currency identity never comes from a locale\n--- PASS: currency identity never comes from a locale\nPASS\n"
+  },
+  {
+    "module": "std/locale/date_time.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/locale/date_time.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   localized date keeps the Gregorian year explicit\n--- PASS: localized date keeps the Gregorian year explicit\nPASS\n"
+  },
+  {
+    "module": "std/locale/number.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/locale/number.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   exact decimal number rounds before its text is localized\n--- PASS: exact decimal number rounds before its text is localized\n=== RUN   digits follow the locale's numbering system both ways\n--- PASS: digits follow the locale's numbering system both ways\n=== RUN   511 locale int quantization preserves quotient remainder and negative rounding\n--- PASS: 511 locale int quantization preserves quotient remainder and negative rounding\nPASS\n"
+  },
+  {
+    "module": "std/logging/enrichment.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/enrichment.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   field logging adds its fields; a child logger extends the name\n--- PASS: field logging adds its fields; a child logger extends the name\nPASS\n"
+  },
+  {
+    "module": "std/logging/field.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/field.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   log fields keep member order, reject bad names and merge by name\n--- PASS: log fields keep member order, reject bad names and merge by name\nPASS\n"
+  },
+  {
+    "module": "std/logging/file.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/file.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a log file appends, reopens and refuses writes once closed\n--- PASS: a log file appends, reopens and refuses writes once closed\nPASS\n"
+  },
+  {
+    "module": "std/logging/filter.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/filter.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   thresholds: the most specific override wins; allowed logs drop the rest\n--- PASS: thresholds: the most specific override wins; allowed logs drop the rest\n=== RUN   thresholds and filters take levels by dotted name\n--- PASS: thresholds and filters take levels by dotted name\n=== RUN   allowed logs say which levels pass before a record exists\n--- PASS: allowed logs say which levels pass before a record exists\nPASS\n"
+  },
+  {
+    "module": "std/logging/line.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/line.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   a record is one physical line of text or JSON, quotes escaped\n--- PASS: a record is one physical line of text or JSON, quotes escaped\n=== RUN   a physical line escapes terminal controls and line separators only\n--- PASS: a physical line escapes terminal controls and line separators only\nPASS\n"
+  },
+  {
+    "module": "std/logging/logger.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/logger.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   a logger writes its levels and leaves the rest unbuilt\n--- PASS: a logger writes its levels and leaves the rest unbuilt\n=== RUN   a logger's level, children and the Logging role\n--- PASS: a logger's level, children and the Logging role\n=== RUN   a logger needs only its name\n--- PASS: a logger needs only its name\nPASS\n"
+  },
+  {
+    "module": "std/logging/named.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/named.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   a named logger stamps time, name and process, and merges its fields\n--- PASS: a named logger stamps time, name and process, and merges its fields\n=== RUN   a named logger needs only its name and destination\n--- PASS: a named logger needs only its name and destination\n=== RUN   a level the destination would not write builds nothing\n--- PASS: a level the destination would not write builds nothing\nPASS\n"
+  },
+  {
+    "module": "std/logging/queue.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/queue.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 5,
+    "failed": 0,
+    "output": "=== RUN   queue options keep their bounds\n--- PASS: queue options keep their bounds\n=== RUN   a full queue rejects the record\n--- PASS: a full queue rejects the record\n=== RUN   a full queue drops the newest record\n--- PASS: a full queue drops the newest record\n=== RUN   a full queue drops the oldest record\n--- PASS: a full queue drops the oldest record\n=== RUN   a failed delivery closes the queue and drain reports it\n--- PASS: a failed delivery closes the queue and drain reports it\nPASS\n"
+  },
+  {
+    "module": "std/logging/record.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/record.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a record keeps its moment, level, message, context and optional cause\n--- PASS: a record keeps its moment, level, message, context and optional cause\nPASS\n"
+  },
+  {
+    "module": "std/logging/redact.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/redact.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   redaction replaces the named members and keeps the rest in order\n--- PASS: redaction replaces the named members and keeps the rest in order\nPASS\n"
+  },
+  {
+    "module": "std/logging/rotation.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/rotation.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   size and interval rotation decide and name the archive\n--- PASS: size and interval rotation decide and name the archive\n=== RUN   a rotating file archives by generation and keeps the newest backups\n--- PASS: a rotating file archives by generation and keeps the newest backups\n=== RUN   an interval rotation names the archive by time\n--- PASS: an interval rotation names the archive by time\nPASS\n"
+  },
+  {
+    "module": "std/logging/stream.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/stream.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   stream writers put one line per record on their output\n--- PASS: stream writers put one line per record on their output\nPASS\n"
+  },
+  {
+    "module": "std/logging/syslog.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/syslog.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   syslog severities follow RFC 5424\n--- PASS: syslog severities follow RFC 5424\n=== RUN   syslog options check header names and the payload size\n--- PASS: syslog options check header names and the payload size\n=== RUN   a syslog message is an RFC 5424 header, a BOM and the JSON line\n--- PASS: a syslog message is an RFC 5424 header, a BOM and the JSON line\nPASS\n"
+  },
+  {
+    "module": "std/logging/write.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/logging/write.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   collected, broadcast, fallback and best-effort writers\n--- PASS: collected, broadcast, fallback and best-effort writers\n=== RUN   writers say which records they would write\n--- PASS: writers say which records they would write\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_command.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_command.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   mailbox command uses a quoted canonical name\n--- PASS: mailbox command uses a quoted canonical name\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_exchange.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_exchange.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   exchange state retains exact unread bytes and unbounded serial\n--- PASS: exchange state retains exact unread bytes and unbounded serial\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_message.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_message.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   missing FETCH content remains unavailable\n--- PASS: missing FETCH content remains unavailable\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_metadata.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_metadata.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   ESEARCH snapshots validate cardinality and extrema\n--- PASS: ESEARCH snapshots validate cardinality and extrema\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_session.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   missing assigned UIDs are explicit rather than fabricated\n--- PASS: missing assigned UIDs are explicit rather than fabricated\n=== RUN   fresh session state has no selection and zero generation\n--- PASS: fresh session state has no selection and zero generation\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_state.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_state.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   selection progress keeps absent observations distinct from zero\n--- PASS: selection progress keeps absent observations distinct from zero\nPASS\n"
+  },
+  {
+    "module": "std/mail/imap_uid.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/imap_uid.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   UID snapshots deduplicate and preserve stable identifiers\n--- PASS: UID snapshots deduplicate and preserve stable identifiers\nPASS\n"
+  },
+  {
+    "module": "std/mail/mailbox.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/mailbox.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 8,
+    "failed": 0,
+    "output": "=== RUN   keyword flags retain spelling and compare without ASCII case\n--- PASS: keyword flags retain spelling and compare without ASCII case\n=== RUN   system flags expose only their own variant\n--- PASS: system flags expose only their own variant\n=== RUN   flag sets retain first spelling and compare protocol identity\n--- PASS: flag sets retain first spelling and compare protocol identity\n=== RUN   maildir filenames retain identifiers and interpret standard flags\n--- PASS: maildir filenames retain identifiers and interpret standard flags\n=== RUN   stored messages retain content and protocol flags\n--- PASS: stored messages retain content and protocol flags\n=== RUN   maildir flag names use canonical order\n--- PASS: maildir flag names use canonical order\n=== RUN   a Maildir creates its folders, then keeps and lists messages\n--- PASS: a Maildir creates its folders, then keeps and lists messages\n=== RUN   mailbox names take ASCII characters only, by position\n--- PASS: mailbox names take ASCII characters only, by position\nPASS\n"
+  },
+  {
+    "module": "std/mail/mbox_store.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/mbox_store.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   mbox coordinates do not observe a filesystem\n--- PASS: mbox coordinates do not observe a filesystem\nPASS\n"
+  },
+  {
+    "module": "std/mail/message.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/message.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 8,
+    "failed": 0,
+    "output": "=== RUN   delivery preparation retains the source message\n--- PASS: delivery preparation retains the source message\n=== RUN   message identifiers preserve case and literal spelling\n--- PASS: message identifiers preserve case and literal spelling\n=== RUN   mail dates preserve unknown zero offsets\n--- PASS: mail dates preserve unknown zero offsets\n=== RUN   a message from its fields sets its date, identifier and content type\n--- PASS: a message from its fields sets its date, identifier and content type\n=== RUN   a text beyond ASCII goes out quoted-printable and comes back whole (#935)\n--- PASS: a text beyond ASCII goes out quoted-printable and comes back whole (#935)\n=== RUN   an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#936)\n--- PASS: an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#936)\n=== RUN   a message from its fields drops the fraction of the clock's second (#518)\n--- PASS: a message from its fields drops the fraction of the clock's second (#518)\n=== RUN   mail date tokens and message identifiers are read by position\n--- PASS: mail date tokens and message identifiers are read by position\nPASS\n"
+  },
+  {
+    "module": "std/mail/pop3.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/pop3.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   POP3 number and opaque identifier have different identities\n--- PASS: POP3 number and opaque identifier have different identities\nPASS\n"
+  },
+  {
+    "module": "std/mail/pop3_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/pop3_session.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   POP3 commands encode only typed operands\n--- PASS: POP3 commands encode only typed operands\nPASS\n"
+  },
+  {
+    "module": "std/mail/smtp.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/smtp.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   EHLO distinguishes SIZE presence and retains unknown extensions\n--- PASS: EHLO distinguishes SIZE presence and retains unknown extensions\n=== RUN   EHLO does not promote greeting text into capabilities\n--- PASS: EHLO does not promote greeting text into capabilities\nPASS\n"
+  },
+  {
+    "module": "std/mail/smtp_data.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/smtp_data.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   SMTP DATA counts original content and quotes a dot-only line\n--- PASS: SMTP DATA counts original content and quotes a dot-only line\nPASS\n"
+  },
+  {
+    "module": "std/mail/smtp_session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/mail/smtp_session.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 2,
+    "failed": 11,
+    "output": "=== RUN   a submission: multiline greeting, EHLO, MAIL with SIZE, every recipient, dot-stuffed data without Bcc, QUIT\n--- FAIL: a submission: multiline greeting, EHLO, MAIL with SIZE, every recipient, dot-stuffed data without Bcc, QUIT\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   refused recipients: a partial refusal is reported, a full one sends no data and keeps the session\n--- FAIL: refused recipients: a partial refusal is reported, a full one sends no data and keeps the session\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   STARTTLS: verified TLS, a fresh EHLO whose capabilities replace the old ones, then AUTH PLAIN\n--- FAIL: STARTTLS: verified TLS, a fresh EHLO whose capabilities replace the old ones, then AUTH PLAIN\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   implicit TLS: a refused login closes the connection and the error holds no secret\n--- FAIL: implicit TLS: a refused login closes the connection and the error holds no secret\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   TLS is never skipped: no STARTTLS offered, no PLAIN offered, a wrong host name, bytes after the STARTTLS reply\n--- FAIL: TLS is never skipped: no STARTTLS offered, no PLAIN offered, a wrong host name, bytes after the STARTTLS reply\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   server refusals keep the session open, 421 closes it, EHLO has no HELO fallback\n--- FAIL: server refusals keep the session open, 421 closes it, EHLO has no HELO fallback\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a reply that breaks the protocol, or a lost connection, closes the session; after the data it is uncertain\n--- FAIL: a reply that breaks the protocol, or a lost connection, closes the session; after the data it is uncertain\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a step over its timeout closes the session; cancelling a submission does too\n--- FAIL: a step over its timeout closes the session; cancelling a submission does too\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   submissions started together run one after another\n--- FAIL: submissions started together run one after another\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   8BITMIME, SMTPUTF8 and SIZE are checked before anything is sent\n--- FAIL: 8BITMIME, SMTPUTF8 and SIZE are checked before anything is sent\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   an international envelope and 8-bit data name SMTPUTF8 and BODY=8BITMIME\n--- FAIL: an international envelope and 8-bit data name SMTPUTF8 and BODY=8BITMIME\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   envelope addresses are mailboxes and cannot carry a command\n--- PASS: envelope addresses are mailboxes and cannot carry a command\n=== RUN   credentials need TLS, and the client name is a domain\n--- PASS: credentials need TLS, and the client name is a domain\nFAIL\n"
+  },
+  {
+    "module": "std/math/decimal.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/math/decimal.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   equivalent spellings share one canonical form\n--- PASS: equivalent spellings share one canonical form\n=== RUN   decimals add, subtract and multiply exactly\n--- PASS: decimals add, subtract and multiply exactly\n=== RUN   decimals divide and round as asked\n--- PASS: decimals divide and round as asked\n=== RUN   decimals become fractions and floats, within limits\n--- PASS: decimals become fractions and floats, within limits\nPASS\n"
+  },
+  {
+    "module": "std/net/dns.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/dns.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   fixed lookup preserves requested port without a system resolver\n--- PASS: fixed lookup preserves requested port without a system resolver\n=== RUN   system lookup cancellation before start launches no worker\n--- PASS: system lookup cancellation before start launches no worker\nPASS\n"
+  },
+  {
+    "module": "std/net/endpoint.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/endpoint.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   zone diagnostic preserves exact spelling\n--- PASS: zone diagnostic preserves exact spelling\n=== RUN   IPv6 endpoint formatting keeps scope outside the bare address\n--- PASS: IPv6 endpoint formatting keeps scope outside the bare address\n=== RUN   hostnames canonicalize through nontransitional IDNA before endpoint formatting\n--- PASS: hostnames canonicalize through nontransitional IDNA before endpoint formatting\nPASS\n"
+  },
+  {
+    "module": "std/net/interface.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/interface.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   empty interface snapshot retains independent flags\n--- PASS: empty interface snapshot retains independent flags\nPASS\n"
+  },
+  {
+    "module": "std/net/ip.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/ip.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 6,
+    "failed": 0,
+    "output": "=== RUN   numeric address aliases have canonical identity\n--- PASS: numeric address aliases have canonical identity\n=== RUN   address rejects endpoint decorations\n--- PASS: address rejects endpoint decorations\n=== RUN   CIDR masks host bits and keeps inclusive endpoints\n--- PASS: CIDR masks host bits and keeps inclusive endpoints\n=== RUN   single-address network cursor ends without wrapping\n--- PASS: single-address network cursor ends without wrapping\n=== RUN   interface preserves host bits alongside its normalized network\n--- PASS: interface preserves host bits alongside its normalized network\n=== RUN   511 IPv6 full space size is an exact int\n--- PASS: 511 IPv6 full space size is an exact int\nPASS\n"
+  },
+  {
+    "module": "std/net/multicast.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/multicast.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   multicast defaults agree with explicit requests\n--- PASS: multicast defaults agree with explicit requests\n=== RUN   multicast hop boundaries and loopback are independent\n--- PASS: multicast hop boundaries and loopback are independent\n=== RUN   multicast hop limit rejects host default and overflow\n--- PASS: multicast hop limit rejects host default and overflow\n=== RUN   invalid multicast group diagnostic preserves canonical address\n--- PASS: invalid multicast group diagnostic preserves canonical address\nPASS\n"
+  },
+  {
+    "module": "std/net/stream.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/stream.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   connection endpoint observations preserve direction\n--- PASS: connection endpoint observations preserve direction\nPASS\n"
+  },
+  {
+    "module": "std/net/tcp.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/tcp.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 3,
+    "failed": 2,
+    "output": "=== RUN   TCP defaults agree with explicit settings\n--- PASS: TCP defaults agree with explicit settings\n=== RUN   TCP options preserve independent choices\n--- PASS: TCP options preserve independent choices\n=== RUN   numeric TCP reports actual OS-selected endpoints\n--- FAIL: numeric TCP reports actual OS-selected endpoints\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   the race keeps the first family first and interleaves the other\n--- PASS: the race keeps the first family first and interleaves the other\n=== RUN   a listener on a port; connections by address and by host name\n--- FAIL: a listener on a port; connections by address and by host name\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/net/tcp_racing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/tcp_racing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   TCP racing rejects an empty candidate list\n--- PASS: TCP racing rejects an empty candidate list\nPASS\n"
+  },
+  {
+    "module": "std/net/tls.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/tls.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 2,
+    "failed": 1,
+    "output": "=== RUN   client defaults retain only modern versions and explicit empty trust\n--- PASS: client defaults retain only modern versions and explicit empty trust\n=== RUN   a TLS server answers a client that trusts its CA\n--- FAIL: a TLS server answers a client that trusts its CA\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a TLS identity takes PEM certificates and a PKCS #8 key\n--- PASS: a TLS identity takes PEM certificates and a PKCS #8 key\nFAIL\n"
+  },
+  {
+    "module": "std/net/udp.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/net/udp.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 7,
+    "failed": 1,
+    "output": "=== RUN   datagram retains binary payload and sender\n--- PASS: datagram retains binary payload and sender\n=== RUN   empty retained datagram can still be truncated\n--- PASS: empty retained datagram can still be truncated\n=== RUN   UDP option defaults and independent explicit requests\n--- PASS: UDP option defaults and independent explicit requests\n=== RUN   UDP binding construction accepts requests without acquiring sockets\n--- PASS: UDP binding construction accepts requests without acquiring sockets\n=== RUN   receive creation is lazy and cancellation leaves its owner open\n--- PASS: receive creation is lazy and cancellation leaves its owner open\n=== RUN   send creation does not validate or submit until awaited\n--- PASS: send creation does not validate or submit until awaited\n=== RUN   connected request and unstarted cancellation do not acquire a socket\n--- PASS: connected request and unstarted cancellation do not acquire a socket\n=== RUN   a socket bound by port sends to another\n--- FAIL: a socket bound by port sends to another\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind UDP socket\")\n    Caused by:\n      NativeFailure: Cannot bind UDP socket\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::udp_bound/5\nFAIL\n"
+  },
+  {
+    "module": "std/numbers/bigint.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/numbers/bigint.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 6,
+    "failed": 0,
+    "output": "=== RUN   511 int quotient and remainder agree with BigInt for every sign\n--- PASS: 511 int quotient and remainder agree with BigInt for every sign\n=== RUN   511 bounded powers keep every parser budget and reject oversized products\n--- PASS: 511 bounded powers keep every parser budget and reject oversized products\n=== RUN   a BigInt holds an int and takes one\n--- PASS: a BigInt holds an int and takes one\n=== RUN   arbitrary precision arithmetic\n--- PASS: arbitrary precision arithmetic\n=== RUN   division truncates toward zero and the remainder follows the dividend\n--- PASS: division truncates toward zero and the remainder follows the dividend\n=== RUN   power is bounded by a bit budget\n--- PASS: power is bounded by a bit budget\nPASS\n"
+  },
+  {
+    "module": "std/numbers/bigrational.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/numbers/bigrational.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   511 rational int components normalize every sign without narrowing\n--- PASS: 511 rational int components normalize every sign without narrowing\n=== RUN   rationals add, subtract, multiply and divide exactly\n--- PASS: rationals add, subtract, multiply and divide exactly\nPASS\n"
+  },
+  {
+    "module": "std/numbers/float.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/numbers/float.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   binary64 tenth has a one-digit decimal representative\n--- PASS: binary64 tenth has a one-digit decimal representative\nPASS\n"
+  },
+  {
+    "module": "std/os/process.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/os/process.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 7,
+    "failed": 0,
+    "output": "=== RUN   an exit tells how the process ended; only an exited one has a code\n--- PASS: an exit tells how the process ended; only an exited one has a code\n=== RUN   a process is fed through its input and read through its output\n--- PASS: a process is fed through its input and read through its output\n=== RUN   a process takes text and answers text\n--- PASS: a process takes text and answers text\n=== RUN   a signal ends a running process\n--- PASS: a signal ends a running process\n=== RUN   closing a process that never started does not start it\n--- PASS: closing a process that never started does not start it\n=== RUN   streams are written and read asynchronously (#196)\n--- PASS: streams are written and read asynchronously (#196)\n=== RUN   a slow child does not hold up other tasks (#196)\n--- PASS: a slow child does not hold up other tasks (#196)\nPASS\n"
+  },
+  {
+    "module": "std/os/storage.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/os/storage.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   usage counts what is used and what fits\n--- PASS: usage counts what is used and what fits\n=== RUN   impossible usage is refused\n--- PASS: impossible usage is refused\n=== RUN   the volume of the working directory reports a consistent usage\n--- PASS: the volume of the working directory reports a consistent usage\nPASS\n"
+  },
+  {
+    "module": "std/plist/parse.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/plist/parse.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 6,
+    "failed": 0,
+    "output": "=== RUN   plist parser rejects empty and truncated inputs with byte diagnostics\n--- PASS: plist parser rejects empty and truncated inputs with byte diagnostics\n=== RUN   plist parser validates configuration before input observation\n--- PASS: plist parser validates configuration before input observation\n=== RUN   plist parser recognizes both wire formats\n--- PASS: plist parser recognizes both wire formats\n=== RUN   XML plist text decodes references and line breaks and scans for delimiters\n--- PASS: XML plist text decodes references and line breaks and scans for delimiters\n=== RUN   a plist dictionary reads like json (#141)\n--- PASS: a plist dictionary reads like json (#141)\n=== RUN   511 plist int round trips preserve large signed values in both formats\n--- PASS: 511 plist int round trips preserve large signed values in both formats\nPASS\n"
+  },
+  {
+    "module": "std/plist/value.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/plist/value.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   plist scalar payloads keep their own nominal kinds\n--- PASS: plist scalar payloads keep their own nominal kinds\n=== RUN   plist containers preserve order and exact member names\n--- PASS: plist containers preserve order and exact member names\n=== RUN   plist missing duplicate and cardinality failures are typed\n--- PASS: plist missing duplicate and cardinality failures are typed\nPASS\n"
+  },
+  {
+    "module": "std/plist/write.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/plist/write.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   plist binary lengths use inline counts before extended records\n--- PASS: plist binary lengths use inline counts before extended records\n=== RUN   plist exact duplicate names remain distinct from case variants\n--- PASS: plist exact duplicate names remain distinct from case variants\n=== RUN   plist binary envelope and reserved suffix fit an exact byte budget\n--- PASS: plist binary envelope and reserved suffix fit an exact byte budget\n=== RUN   511 plist int byte extraction keeps signed and unsigned 128 bit limits\n--- PASS: 511 plist int byte extraction keeps signed and unsigned 128 bit limits\nPASS\n"
+  },
+  {
+    "module": "std/template/html.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/template/html.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   HTML context distinguishes text and quoted ordinary attributes\n--- PASS: HTML context distinguishes text and quoted ordinary attributes\n=== RUN   HTML context rejects event attributes and raw content\n--- PASS: HTML context rejects event attributes and raw content\n=== RUN   HTML names fold ASCII and unfinished fragments fail\n--- PASS: HTML names fold ASCII and unfinished fragments fail\nPASS\n"
+  },
+  {
+    "module": "std/template/json.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/template/json.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   dotted paths read scalars of a Json\n--- PASS: dotted paths read scalars of a Json\n=== RUN   template JSON failures have stable diagnostics\n--- PASS: template JSON failures have stable diagnostics\n=== RUN   a JSON number renders as its JSON text, not in scientific form\n--- PASS: a JSON number renders as its JSON text, not in scientific form\nPASS\n"
+  },
+  {
+    "module": "std/template/sections.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/template/sections.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 6,
+    "failed": 0,
+    "output": "=== RUN   section iterations share a bounded ledger\n--- PASS: section iterations share a bounded ledger\n=== RUN   zero iterations permit no executed body\n--- PASS: zero iterations permit no executed body\n=== RUN   section configuration rejects negatives before parsing\n--- PASS: section configuration rejects negatives before parsing\n=== RUN   partial and active section depth errors stay distinct\n--- PASS: partial and active section depth errors stay distinct\n=== RUN   output meter reserves exact UTF-8 contributions\n--- PASS: output meter reserves exact UTF-8 contributions\n=== RUN   output meter failure is atomic and int maximum does not overflow\n--- PASS: output meter failure is atomic and int maximum does not overflow\nPASS\n"
+  },
+  {
+    "module": "std/testing/check.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/check.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   reusable comparisons pass through the current test context\n--- PASS: reusable comparisons pass through the current test context\nPASS\n"
+  },
+  {
+    "module": "std/testing/double.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/double.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   recording snapshots remain immutable\n--- PASS: recording snapshots remain immutable\nPASS\n"
+  },
+  {
+    "module": "std/testing/report.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/report.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   empty TAP report carries an explicit skipped plan\n--- PASS: empty TAP report carries an explicit skipped plan\nPASS\n"
+  },
+  {
+    "module": "std/testing/result.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/result.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   empty reports have successful exit status\n--- PASS: empty reports have successful exit status\nPASS\n"
+  },
+  {
+    "module": "std/testing/runner.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/runner.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a runner report reads results, failures, positions, causes and output\n--- PASS: a runner report reads results, failures, positions, causes and output\nPASS\n"
+  },
+  {
+    "module": "std/testing/snapshot.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/snapshot.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   text normalization is explicit\n--- PASS: text normalization is explicit\nPASS\n"
+  },
+  {
+    "module": "std/testing/time.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/testing/time.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   manual clock changes no host clock\n--- PASS: manual clock changes no host clock\nPASS\n"
+  },
+  {
+    "module": "std/time/clock.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/time/clock.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   now is the clock's instant\n--- PASS: now is the clock's instant\n=== RUN   instants are durations from the epoch\n--- PASS: instants are durations from the epoch\n=== RUN   monotonic readings never mix domains\n--- PASS: monotonic readings never mix domains\n=== RUN   an instant writes itself in RFC 3339 UTC\n--- PASS: an instant writes itself in RFC 3339 UTC\nPASS\n"
+  },
+  {
+    "module": "std/time/duration.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/time/duration.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 3,
+    "failed": 0,
+    "output": "=== RUN   durations scale exactly\n--- PASS: durations scale exactly\n=== RUN   whole amounts of one unit\n--- PASS: whole amounts of one unit\n=== RUN   511 duration nanoseconds preserve large signed ints\n--- PASS: 511 duration nanoseconds preserve large signed ints\nPASS\n"
+  },
+  {
+    "module": "std/time/local_datetime.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/time/local_datetime.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   local date-times add whole civil days\n--- PASS: local date-times add whole civil days\n=== RUN   a local date-time writes itself in ISO 8601\n--- PASS: a local date-time writes itself in ISO 8601\nPASS\n"
+  },
+  {
+    "module": "std/time/rfc3339.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/time/rfc3339.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   RFC 3339 text reads an instant and keeps its offset\n--- PASS: RFC 3339 text reads an instant and keeps its offset\nPASS\n"
+  },
+  {
+    "module": "std/time/zone.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/time/zone.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   local times resolve to instants through a named zone\n--- PASS: local times resolve to instants through a named zone\n=== RUN   a zone shows an instant as local time with its offset\n--- PASS: a zone shows an instant as local time with its offset\n=== RUN   fixed zones have one offset and refuse bad ones\n--- PASS: fixed zones have one offset and refuse bad ones\n=== RUN   today is the date in the zone at the clock's instant\n--- PASS: today is the date in the zone at the clock's instant\nPASS\n"
+  },
+  {
+    "module": "std/url/value.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/url/value.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 16,
+    "failed": 0,
+    "output": "=== RUN   query presence and reserved escapes survive canonicalization\n--- PASS: query presence and reserved escapes survive canonicalization\n=== RUN   authority presence includes empty userinfo and unassigned port\n--- PASS: authority presence includes empty userinfo and unassigned port\n=== RUN   explicit URL reference resolution preserves empty query and trailing slash\n--- PASS: explicit URL reference resolution preserves empty query and trailing slash\n=== RUN   structured URL construction preserves canonical identity\n--- PASS: structured URL construction preserves canonical identity\n=== RUN   raw path replacement canonicalizes escapes without changing other parts\n--- PASS: raw path replacement canonicalizes escapes without changing other parts\n=== RUN   raw paths reject malformed escapes and structural injection\n--- PASS: raw paths reject malformed escapes and structural injection\n=== RUN   joining encodes plain segments once and retains existing escapes\n--- PASS: joining encodes plain segments once and retains existing escapes\n=== RUN   joining defines empty segments roots and trailing separators\n--- PASS: joining defines empty segments roots and trailing separators\n=== RUN   query replacement retains order assignments and RFC data semantics\n--- PASS: query replacement retains order assignments and RFC data semantics\n=== RUN   appending a query keeps what is there, in order, and adds encoded parameters\n--- PASS: appending a query keeps what is there, in order, and adds encoded parameters\n=== RUN   query absence empty query and removal are explicit\n--- PASS: query absence empty query and removal are explicit\n=== RUN   ports can be added replaced and removed preserving authority\n--- PASS: ports can be added replaced and removed preserving authority\n=== RUN   transformations chain without modifying their source\n--- PASS: transformations chain without modifying their source\n=== RUN   generated transformations preserve unrelated components and round trip\n--- PASS: generated transformations preserve unrelated components and round trip\n=== RUN   transformations enforce URL path and segment boundaries\n--- PASS: transformations enforce URL path and segment boundaries\n=== RUN   RFC 3986 normal and abnormal reference resolution stays distinct from joining\n--- PASS: RFC 3986 normal and abnormal reference resolution stays distinct from joining\nPASS\n"
+  },
+  {
+    "module": "std/web/app.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/app.ok",
+    "status": "environment",
+    "code": 1,
+    "passed": 0,
+    "failed": 3,
+    "output": "=== RUN   a web application routes requests over loopback and drains\n--- FAIL: a web application routes requests over loopback and drains\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a compressed reply reaches the client decoded\n--- FAIL: a compressed reply reaches the client decoded\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\n=== RUN   a web application serves HTTPS with HTTP/2 and HTTP/1.1 by ALPN\n--- FAIL: a web application serves HTTPS with HTTP/2 and HTTP/1.1 by ALPN\n    NetworkFailure: NetworkFailure.detailed(NetworkOperation.binding, NetworkFailureKind.permission_denied, \"Cannot bind TCP listener\")\n    Caused by:\n      NativeFailure: Cannot bind TCP listener\n      code: permission_denied\n      domain: core.net\n      operation: runtime/network@1::tcp_bound/4\nFAIL\n"
+  },
+  {
+    "module": "std/web/around.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/around.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   an access log writes one line per request\n--- PASS: an access log writes one line per request\n=== RUN   bearer authentication lets only the token through\n--- PASS: bearer authentication lets only the token through\n=== RUN   cors answers preflights and marks replies to its origin\n--- PASS: cors answers preflights and marks replies to its origin\n=== RUN   replies are compressed for clients that accept it\n--- PASS: replies are compressed for clients that accept it\nPASS\n"
+  },
+  {
+    "module": "std/web/exception.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/exception.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   problems name status, title and detail\n--- PASS: problems name status, title and detail\nPASS\n"
+  },
+  {
+    "module": "std/web/internal/reply.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/internal/reply.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 2,
+    "failed": 0,
+    "output": "=== RUN   framing headers are owned by the reply\n--- PASS: framing headers are owned by the reply\n=== RUN   only representation statuses carry bodies\n--- PASS: only representation statuses carry bodies\nPASS\n"
+  },
+  {
+    "module": "std/web/reply.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/reply.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 5,
+    "failed": 0,
+    "output": "=== RUN   a text reply declares its representation and keeps the given fields\n--- PASS: a text reply declares its representation and keeps the given fields\n=== RUN   redirects and created replies carry their location\n--- PASS: redirects and created replies carry their location\n=== RUN   bytes and streams declare their media type\n--- PASS: bytes and streams declare their media type\n=== RUN   an events reply streams its channel as text/event-stream\n--- PASS: an events reply streams its channel as text/event-stream\n=== RUN   a file reply answers with the file and keeps the given fields\n--- PASS: a file reply answers with the file and keeps the given fields\nPASS\n"
+  },
+  {
+    "module": "std/web/request.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/request.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   request JSON reading failures are 422 exceptions at the pointer\n--- PASS: request JSON reading failures are 422 exceptions at the pointer\n=== RUN   the query is decoded once and read many times\n--- PASS: the query is decoded once and read many times\n=== RUN   values a client sent are read by name, and a bad one is 400\n--- PASS: values a client sent are read by name, and a bad one is 400\n=== RUN   links fill the parameters of named routes\n--- PASS: links fill the parameters of named routes\nPASS\n"
+  },
+  {
+    "module": "std/web/routing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/routing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 9,
+    "failed": 0,
+    "output": "=== RUN   scope prefixes are absolute and have no trailing slash\n--- PASS: scope prefixes are absolute and have no trailing slash\n=== RUN   routes take one Fallback, and only at the top\n--- PASS: routes take one Fallback, and only at the top\n=== RUN   a resource writes its path once for several methods\n--- PASS: a resource writes its path once for several methods\n=== RUN   Route takes any one method and Any every method\n--- PASS: Route takes any one method and Any every method\n=== RUN   arounds run outer before inner and may answer by themselves\n--- PASS: arounds run outer before inner and may answer by themselves\n=== RUN   an around refuses a WebSocket upgrade or lets it go on\n--- PASS: an around refuses a WebSocket upgrade or lets it go on\n=== RUN   a path with or without its final slash is redirected to the declared one\n--- PASS: a path with or without its final slash is redirected to the declared one\n=== RUN   named routes give links to endpoints\n--- PASS: named routes give links to endpoints\n=== RUN   files are served below a path, passing the arounds\n--- PASS: files are served below a path, passing the arounds\nPASS\n"
+  },
+  {
+    "module": "std/web/session.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/session.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 1,
+    "failed": 0,
+    "output": "=== RUN   a session starts with a signed cookie, is found again and ends\n--- PASS: a session starts with a signed cookie, is found again and ends\nPASS\n"
+  },
+  {
+    "module": "std/web/testing.ok",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t std/web/testing.ok",
+    "status": "pass",
+    "code": 0,
+    "passed": 4,
+    "failed": 0,
+    "output": "=== RUN   a test client calls the routes without a network\n--- PASS: a test client calls the routes without a network\n=== RUN   a test client passes the arounds of the routes\n--- PASS: a test client passes the arounds of the routes\n=== RUN   every method sends headers (#650)\n--- PASS: every method sends headers (#650)\n=== RUN   a client with a jar carries the cookies replies set (#650)\n--- PASS: a client with a jar carries the cookies replies set (#650)\nPASS\n"
+  }
+]

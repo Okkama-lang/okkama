@@ -40,7 +40,6 @@ import "async/event" take Event;
 import "url/value" take UrlParts;
 import "http/version" take HttpVersion;
 import "http/body" take BodyOpening, BodyReading;
-import "numbers/bigint" take BigInt;
 
 // A username and a password for Digest authentication.
 object DigestCredentials {
@@ -833,7 +832,7 @@ hidden object DigestBody does BodyOpening {
         self.proof = proof;
     }
 
-    length() is BigInt {
+    length() is int {
         origin.length();
     }
 

@@ -2,7 +2,7 @@ module http/cache v1.0.0;
 
 // A private HTTP cache around a client (RFC 9111).
 //
-//     let cache = MemoryHttpCache(clock: SystemClock(), maximum: BigInt(67108864));
+//     let cache = MemoryHttpCache(clock: SystemClock(), maximum: 67108864);
 //     let client = Caching(origin: HttpClient(), cache: cache, clock: SystemClock());
 //     await client.response(Request(url: "https://example.com/logo.png"));
 //
@@ -41,7 +41,6 @@ import "http/request_context" take HttpRequestContext;
 import "http/client" take HttpClient;
 import "http/endpoint" take LoopbackEndpoints;
 import "net/tcp" take TcpListening;
-import "numbers/bigint" take BigInt;
 import "time/duration" take Duration;
 
 // Private cache decorator; returned live bodies remain lazy. Publication needs
@@ -593,7 +592,7 @@ async test "a fresh response is served from memory without reaching the origin" 
     ).started();
     let base = "http://127.0.0.1:" + server::Local::port.string();
     let client = HttpClient(endpoints: LoopbackEndpoints());
-    let memory = MemoryHttpCache(clock: clock, maximum: BigInt(1048576));
+    let memory = MemoryHttpCache(clock: clock, maximum: 1048576);
     let cached = Caching(origin: client, cache: memory, clock: clock);
     test.is(await (await cached.response(Request(url: base + "/page"))).text(), "copy 1");
     test.is(await (await cached.response(Request(url: base + "/page"))).text(), "copy 1");

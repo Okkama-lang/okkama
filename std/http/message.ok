@@ -60,7 +60,6 @@ import "url/value" take ParsedUrl;
 import "encoding/utf" take Utf8Decoded, Utf8Encoded;
 import "io/stream" take AsyncReading;
 import "io/transfer" take ReadUntilEnd, ReadLimitExceeded;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 
 // What a request asks: method, target, fields and version, checked to fit
@@ -228,14 +227,14 @@ object Request {
     // a streamed one is copied once, when its chunks are joined.
     async bytes(limit is int) is @byte {
         confirm limit >= 0 else throw BodyLimitExceeded.limit(limit);
-        let declared is @BigInt = try {
+        let declared is @int = try {
             [body.length()];
         }
         catch e is UnknownBodyLength {
-            let unknown is @BigInt = [];
+            let unknown is @int = [];
             unknown;
         };
-        confirm declared.size() == 0 || declared[0].order(BigInt(limit)) != Order.greater
+        confirm declared.size() == 0 || declared[0].order((limit)) != Order.greater
             else throw BodyLimitExceeded.limit(limit);
         match body.contained() {
             case Maybe.some(whole) {
@@ -481,11 +480,11 @@ hidden object ContentFields {
         let chunked = typed.membership(HeaderName("Transfer-Encoding"));
         confirm lengths.size() == 0 || !chunked
             else throw InvalidHttpMessage.because("Transfer-Encoding with Content-Length");
-        let known is @BigInt = try {
+        let known is @int = try {
             [body.length()];
         }
         catch e is UnknownBodyLength {
-            let unknown is @BigInt = [];
+            let unknown is @int = [];
             unknown;
         };
         for known -> length {
@@ -594,8 +593,8 @@ async test "a request reads its whole body within a limit" {
 hidden object DeclaredBody does BodyOpening {
     DeclaredBody();
 
-    length() is BigInt {
-        BigInt(1000000);
+    length() is int {
+        1000000;
     }
 
     replayable() is bool {

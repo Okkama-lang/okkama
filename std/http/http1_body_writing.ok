@@ -13,7 +13,6 @@ import "io/stream" take AsyncWriting, ByteSource;
 import "io/decorators" take ByteSnapshot, InvalidReading;
 import "io/buffer" take ByteBuffer;
 import "encoding/single_byte" take Latin1Encoded, Latin1Decoded;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -93,7 +92,7 @@ hidden object Http1BodyWriteOperation {
                 "upgraded bytes require a dedicated protocol writer"
             );
         if kind == Http1BodyKind.fixed {
-            confirm plan.length().order(BigInt(limits::Limits::body_bytes)) != Order.greater
+            confirm plan.length().order((limits::Limits::body_bytes)) != Order.greater
                 else throw Http1LimitExceeded.kind("body_bytes");
         }
         self.body = body;
@@ -115,17 +114,17 @@ hidden object Http1BodyWriteOperation {
         }
         let cleanup = Http1BodyWriteCleanup(reads: reads, writes: writes);
         defer await cleanup.close();
-        let known is @BigInt = try {
+        let known is @int = try {
             [body.length()];
         }
         catch e is UnknownBodyLength {
-            let empty is @BigInt = [];
+            let empty is @int = [];
             empty;
         };
         if known.size() > 0 {
             confirm known[0].sign() >= 0
                 else throw InvalidHttpMessage.because("negative body source length");
-            confirm known[0].order(BigInt(limits::Limits::body_bytes)) != Order.greater
+            confirm known[0].order((limits::Limits::body_bytes)) != Order.greater
                 else throw Http1LimitExceeded.kind("body_bytes");
             if kind == Http1BodyKind.fixed {
                 confirm known[0].order(plan.length()) == Order.equal
@@ -137,7 +136,7 @@ hidden object Http1BodyWriteOperation {
         let used = Atomic(0);
         let metadata = Atomic(0);
         let required = if kind == Http1BodyKind.fixed {
-            plan.length().int();
+            plan.length();
         }
         else {
             limits::Limits::body_bytes;
@@ -314,7 +313,7 @@ hidden object Http1HexSize {
         self.origin = origin;
     }
 
-    // At most five digits, 65536 being 10000; ints, not BigInt (#115).
+    // At most five digits, 65536 being 10000; ints, not int (#115).
     string() is string {
         let digits = "0123456789abcdef";
         (0..5).reduce("") -> spelled, position {

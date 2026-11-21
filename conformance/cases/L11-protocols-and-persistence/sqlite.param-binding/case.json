@@ -35,7 +35,7 @@
     "outcome": "success",
     "exit_status": 0,
     "stdout": {
-      "text": "ok 1 - direct int\nok 2 - some int\nok 3 - none int\nok 4 - direct BigInt\nok 5 - some BigInt\nok 6 - none BigInt\nok 7 - direct Decimal\nok 8 - some Decimal\nok 9 - none Decimal\nok 10 - direct float\nok 11 - some float\nok 12 - none float\nok 13 - direct bool\nok 14 - some bool\nok 15 - none bool\nok 16 - direct string\nok 17 - some string\nok 18 - none string\nok 19 - direct @byte\nok 20 - some @byte\nok 21 - none @byte\nok 22 - explicit NULL\nok 23 - signed minimum\nok 24 - signed maximum\nok 25 - bound integer\nok 26 - SQL syntax stays data\nok 27 - bound NULL\nok 28 - SQLite bool is integer\nok 29 - binary exact\nok 30 - prepared int\nok 31 - prepared empty text\nok 32 - prepared NULL\nok 33 - parameter count limit preserved\nok 34 - UTF8 byte limit preserved\nchecks: 34, failed: 0\n"
+      "text": "ok 1 - direct int\nok 2 - some int\nok 3 - none int\nok 4 - direct int\nok 5 - some int\nok 6 - none int\nok 7 - direct Decimal\nok 8 - some Decimal\nok 9 - none Decimal\nok 10 - direct float\nok 11 - some float\nok 12 - none float\nok 13 - direct bool\nok 14 - some bool\nok 15 - none bool\nok 16 - direct string\nok 17 - some string\nok 18 - none string\nok 19 - direct @byte\nok 20 - some @byte\nok 21 - none @byte\nok 22 - explicit NULL\nok 23 - signed minimum\nok 24 - signed maximum\nok 25 - bound integer\nok 26 - SQL syntax stays data\nok 27 - bound NULL\nok 28 - SQLite bool is integer\nok 29 - binary exact\nok 30 - prepared int\nok 31 - prepared empty text\nok 32 - prepared NULL\nok 33 - parameter count limit preserved\nok 34 - UTF8 byte limit preserved\nchecks: 34, failed: 0\n"
     }
   },
   "spec_refs": [

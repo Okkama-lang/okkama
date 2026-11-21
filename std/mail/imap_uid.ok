@@ -2,15 +2,14 @@ module mail/imap_uid v1.0.0;
 
 // IMAP message numbers and UIDs: different types, so they cannot be mixed.
 //
-//     let set = ImapUidSet(ImapUid(BigInt(4)), ImapUid(BigInt(5)), ImapUid(BigInt(9)));
+//     let set = ImapUidSet(ImapUid((4)), ImapUid((5)), ImapUid((9)));
 //     set.argument();                          // for UID FETCH, UID STORE …
 //     MailboxUids(mailbox: inbox, validity: state.uid_validity(), uids: set).checked(mailbox: inbox, validity: now);
 //
 // UIDs mean something only with their mailbox's UIDVALIDITY: MailboxUids keeps
-// them together and refuses stale ones (StaleImapUids). UIDs are nonzero 32-bit
+// them together and refuses stale ones StaleImapUids. UIDs are nonzero 32-bit
 // numbers; sets hold at most 4096 by default.
 
-import "numbers/bigint" take BigInt;
 import "collections/sequence" take Sequencing;
 import "collections/set" take Set, OrderedSet;
 import "compare" take Comparing, Order;
@@ -20,16 +19,16 @@ import "error" take InvalidArgument;
 
 // A message UID: 1 to 2³²−1.
 object ImapUid does Comparing<ImapUid> {
-    has value is BigInt;
+    has value is int;
 
     // Checks origin; InvalidImapIdentifier outside the range.
-    ImapUid(origin is BigInt) {
+    ImapUid(origin is int) {
         ImapUidNumber(origin).validate();
         value = origin;
     }
 
     // The number.
-    number() is BigInt {
+    number() is int {
         value;
     }
 
@@ -46,16 +45,16 @@ object ImapUid does Comparing<ImapUid> {
 
 // A UIDVALIDITY value: 1 to 2³²−1.
 object ImapUidValidity does Comparing<ImapUidValidity> {
-    has value is BigInt;
+    has value is int;
 
     // Checks origin; InvalidImapIdentifier outside the range.
-    ImapUidValidity(origin is BigInt) {
+    ImapUidValidity(origin is int) {
         ImapUidNumber(origin).validate();
         value = origin;
     }
 
     // The number.
-    number() is BigInt {
+    number() is int {
         value;
     }
 
@@ -248,14 +247,14 @@ enum ImapUidLimitExceeded is Error = (kind(kind is string));
 enum StaleImapUids is Error = (stale);
 
 hidden object ImapUidNumber {
-    has origin is BigInt;
+    has origin is int;
 
-    ImapUidNumber(origin is BigInt) {
+    ImapUidNumber(origin is int) {
         self.origin = origin;
     }
 
     validate() is void {
-        confirm origin.sign() > 0 && origin.bits() <= 32
+        confirm origin.sign() > 0 && origin <= 4294967295
             else throw InvalidImapIdentifier.because("UID value outside 1..4294967295");
     }
 }
@@ -324,7 +323,7 @@ hidden object ImapUidSeen {
 }
 
 test "UID snapshots deduplicate and preserve stable identifiers" {
-    let uids = ImapUidSet(ImapUid(BigInt(4294967295)), ImapUid(BigInt(1)), ImapUid(BigInt(1)));
+    let uids = ImapUidSet(ImapUid((4294967295)), ImapUid((1)), ImapUid((1)));
     test.is(uids.argument(), "4294967295,1");
     test.is(uids.entries().size(), 2);
 }

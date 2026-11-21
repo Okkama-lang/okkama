@@ -23,7 +23,6 @@ import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 import "encoding/single_byte" take Latin1Encoded, Latin1Decoded;
 import "runtime/utf" take utf8_valid_prefix;
 import "time/duration" take Duration;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -183,16 +182,16 @@ hidden object EventRetry {
         let value = origin::Span::seconds * 1000.rat();
         confirm value.denominator() == 1
             else throw InvalidServerEvent.because("retry requires integral milliseconds");
-        let amount = BigInt(value.numerator());
+        let amount = (value.numerator());
         milliseconds = if amount.sign() < 0 {
             0;
         }
         else {
-            if amount.order(BigInt(2147483647)) == Order.greater {
+            if amount.order((2147483647)) == Order.greater {
                 2147483647;
             }
             else {
-                amount.int();
+                amount;
             }
         };
     }
@@ -478,12 +477,12 @@ object ServerEvents {
                     valid && character.code() >= 48 && character.code() <= 57;
                 };
                 if digits {
-                    let amount = BigInt(value);
-                    let bounded = if amount.order(BigInt(2147483647)) == Order.greater {
+                    let amount = Number(value).int();
+                    let bounded = if amount.order((2147483647)) == Order.greater {
                         2147483647;
                     }
                     else {
-                        amount.int();
+                        amount;
                     };
                     retry.replace([bounded]);
                 }
@@ -658,7 +657,7 @@ object EventBody does BodyOpening {
     }
 
     // UnknownBodyLength.
-    length() is BigInt {
+    length() is int {
         throw UnknownBodyLength.unknown;
     }
 

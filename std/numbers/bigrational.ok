@@ -2,39 +2,32 @@ module numbers/bigrational v1.0.0;
 
 // Canonical exact ratio: positive denominator, gcd=1, unique zero 0/1.
 //
-//     let third = BigRational(numerator: BigInt(1), denominator: BigInt(3));
+//     let third = BigRational(numerator: 1, denominator: 3);
 //     third.plus(third).string();    // "2/3"
 //     third.divided(third).string(); // "1/1"
 
 import "compare" take Comparing, Order;
-import "numbers/bigint" take BigInt;
 
-// An exact fraction of two BigInts, always reduced: 2/4 is 1/2.
+// An exact fraction of two ints, always reduced: 2/4 is 1/2.
 object BigRational does Comparing<BigRational> {
-    has upper, lower is BigInt;
+    has upper, lower is int;
 
     // The ratio is reduced here, so equal ratios have equal fields and compare
     // equal.
-    BigRational(numerator is BigInt, denominator is BigInt) {
+    BigRational(numerator is int, denominator is int) {
         confirm denominator.sign() != 0 else throw ZeroBigRationalDenominator.zero;
-        let common = numerator.gcd(denominator);
-        let divisor = if denominator.sign() < 0 {
-            -common;
-        }
-        else {
-            common;
-        };
-        upper = numerator / divisor;
-        lower = denominator / divisor;
+        let canonical = rat(numerator, denominator);
+        upper = canonical.numerator();
+        lower = canonical.denominator();
     }
 
     // The numerator, with the sign.
-    numerator() is BigInt {
+    numerator() is int {
         upper;
     }
 
     // The denominator, always positive.
-    denominator() is BigInt {
+    denominator() is int {
         lower;
     }
 
@@ -90,15 +83,34 @@ enum ZeroBigRationalDenominator is Error = (zero);
 // Division by zero.
 enum BigRationalDivisionByZero is Error = (by_zero);
 
+test "511 rational int components normalize every sign without narrowing" {
+    for [7, -7, 123456789012345678901234567890, -123456789012345678901234567890] -> a {
+        for [2, -2] -> b {
+            let value = BigRational(numerator: a, denominator: b);
+            test.is(rat(value.numerator(), value.denominator()), rat(a, b));
+            test.ok(value.denominator() > 0);
+        }
+    }
+    test.is(BigRational(numerator: 12, denominator: -18).string(), "-2/3");
+    test.is(BigRational(numerator: 0, denominator: -18).string(), "0/1");
+    test.ok(try {
+        BigRational(numerator: 1, denominator: 0);
+        false;
+    }
+    catch error is ZeroBigRationalDenominator {
+        true;
+    });
+}
+
 test "rationals add, subtract, multiply and divide exactly" {
-    let half = BigRational(numerator: BigInt(1), denominator: BigInt(2));
-    let third = BigRational(numerator: BigInt(1), denominator: BigInt(3));
+    let half = BigRational(numerator: 1, denominator: 2);
+    let third = BigRational(numerator: 1, denominator: 3);
     test.is(half.plus(third).string(), "5/6");
     test.is(half.minus(third).string(), "1/6");
     test.is(third.minus(half).string(), "-1/6");
     test.is(half.times(third).string(), "1/6");
     test.is(half.divided(third).string(), "3/2");
-    let zero = BigRational(numerator: BigInt(0), denominator: BigInt(5));
+    let zero = BigRational(numerator: 0, denominator: 5);
     test.ok(try {
         half.divided(zero);
         false;

@@ -1,0 +1,14 @@
+module examples/json/integers v1.0.0;
+
+import "json" take Json, ParsedJson;
+import "io/stdout" take Stdout;
+
+// JSON integers are arbitrary-precision ints; int() is the bounded reader.
+main() is int {
+    let out = Stdout();
+    let value is int = ParsedJson("123456789012345678901234567890").root().integer();
+    out.writeln("integer: ", value);
+    out.writeln("next: ", value + 1);
+    out.writeln("round trip: ", ParsedJson(Json(value).string()).root().integer() == value);
+    0;
+}

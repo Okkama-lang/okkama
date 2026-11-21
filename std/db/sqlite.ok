@@ -38,7 +38,6 @@ import "db/error" take DbFailure, DbFailureKind, DbOperation, DbClosed, DbBusy, 
     IndeterminateCommit;
 import "collections/sequence" take Sequencing;
 import "encoding/utf" take Utf8Encoded;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "time/duration" take Duration, DurationUnit;
 import "async/atomic" take Atomic;
@@ -370,7 +369,7 @@ object SqliteConnection does DbConnection, DbExecuting, DbPreparing, DbPreparedO
         database is string,
         table is string,
         column is string,
-        row is BigInt,
+        row is int,
         writable is bool
     ) is SqliteBlob {
         await origin.open_blob(database, table, column, row, writable, 0);
@@ -689,7 +688,7 @@ object SqliteSession does Closing {
         database is string,
         table is string,
         column is string,
-        row is BigInt,
+        row is int,
         writable is bool,
         token is int
     ) is SqliteBlob {
@@ -731,7 +730,7 @@ object SqliteSession does Closing {
     }
 
     // Reads from BLOB id.
-    async blob_bytes(id is int, offset is BigInt, limit is int, token is int) is @byte {
+    async blob_bytes(id is int, offset is int, limit is int, token is int) is @byte {
         let guard = await lock.guard();
         defer guard.close();
         confirm self.blob_active(id, token) else throw DbClosed.closed;
@@ -744,7 +743,7 @@ object SqliteSession does Closing {
     }
 
     // Writes to BLOB id.
-    async blob_write(id is int, offset is BigInt, source is @byte, token is int) is bool {
+    async blob_write(id is int, offset is int, source is @byte, token is int) is bool {
         let guard = await lock.guard();
         defer guard.close();
         confirm self.blob_active(id, token) else throw DbClosed.closed;
@@ -1369,13 +1368,13 @@ object SqliteFrame {
     }
 
     // Pages copied by a backup.
-    copies() is BigInt {
-        BigInt(sqlite.sqlite_reply_info(state)["copies"]);
+    copies() is int {
+        Number(sqlite.sqlite_reply_info(state)["copies"]).int();
     }
 
     // Pages in all.
-    total() is BigInt {
-        BigInt(sqlite.sqlite_reply_info(state)["total"]);
+    total() is int {
+        Number(sqlite.sqlite_reply_info(state)["total"]).int();
     }
 
     // The executions of a script.
@@ -1385,7 +1384,7 @@ object SqliteFrame {
                 Execution();
             }
             else {
-                Execution(BigInt(value));
+                Execution(Number(value).int());
             }
         };
         values;
@@ -1409,7 +1408,7 @@ object SqliteFrame {
     // The execution.
     execution() is Execution {
         if sqlite.sqlite_reply_affected_known(state) {
-            Execution(BigInt(sqlite.sqlite_reply_affected(state)));
+            Execution(Number(sqlite.sqlite_reply_affected(state)).int());
         }
         else {
             Execution();
@@ -1625,7 +1624,7 @@ object SqliteTransaction does Transaction, DbExecuting, DbPreparing, SqliteBlobO
         database is string,
         table is string,
         column is string,
-        row is BigInt,
+        row is int,
         writable is bool
     ) is SqliteBlob {
         confirm self.active() else throw TransactionEnded.ended;
@@ -1779,23 +1778,23 @@ hidden object SqliteBlobHandle does SqliteBlob, Closing {
         }
     }
 
-    bounds(offset is BigInt, limit is int) is void {
-        confirm offset.order(BigInt(0)) != Order.less
-            && offset.order(BigInt(size)) != Order.greater
+    bounds(offset is int, limit is int) is void {
+        confirm offset.order((0)) != Order.less
+            && offset.order((size)) != Order.greater
             && limit >= 0
             && limit <= 65536
-            && (offset + BigInt(limit)).order(BigInt(size)) != Order.greater
+            && (offset + limit).order((size)) != Order.greater
             else throw InvalidSqliteBlob.invalid;
     }
 
-    async bytes(offset is BigInt, limit is int) is @byte {
+    async bytes(offset is int, limit is int) is @byte {
         confirm !self.closed() else throw DbClosed.closed;
         confirm limit > 0 else throw InvalidSqliteBlob.invalid;
         self.bounds(offset, limit);
         await owner.blob_bytes(id, offset, limit, token);
     }
 
-    async write(offset is BigInt, source is @byte) is SqliteBlob {
+    async write(offset is int, source is @byte) is SqliteBlob {
         confirm !self.closed() else throw DbClosed.closed;
         confirm writable
             else throw DbFailure.detailed(
@@ -2010,12 +2009,12 @@ async test "scripts, blobs and an online backup" {
         database: "main",
         table: "b",
         column: "data",
-        row: BigInt(1),
+        row: 1,
         writable: true
     ).blob();
     test.is(blob.size(), 4);
-    await blob.write(BigInt(1), [7.byte(), 8.byte()]);
-    test.is(await blob.bytes(BigInt(0), 4), [0.byte(), 7.byte(), 8.byte(), 0.byte()]);
+    await blob.write((1), [7.byte(), 8.byte()]);
+    test.is(await blob.bytes((0), 4), [0.byte(), 7.byte(), 8.byte(), 0.byte()]);
     blob.close();
     test.is(blob.closed(), true);
     let target = scratch.path().child("copy.db");

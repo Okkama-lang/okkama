@@ -1,5 +1,6 @@
 module mail/pop3 v1.0.0;
 
+import "strings/parse" take Number;
 // POP3 values (RFC 1939, RFC 2449): message numbers, unique ids, listings and
 // capabilities.
 //
@@ -16,7 +17,6 @@ module mail/pop3 v1.0.0;
 import "mail/pop3_reply" take PopReply;
 import "collections/sequence" take Sequencing;
 import "collections/set" take Set, OrderedSet;
-import "numbers/bigint" take BigInt;
 import "encoding/utf" take Utf8Encoded;
 import "encoding/single_byte" take Latin1Decoded;
 import "mime/media_type" take MimeItems;
@@ -102,11 +102,11 @@ object PopListingLimits {
 // One message of a listing: number, size and UIDL id if known.
 object PopMessage {
     has number is PopNumber;
-    has size is BigInt;
+    has size is int;
     has identifiers is @PopIdentifier;
 
     // As given; at most one id.
-    PopMessage(number is PopNumber, size is BigInt, identifiers is @PopIdentifier) {
+    PopMessage(number is PopNumber, size is int, identifiers is @PopIdentifier) {
         confirm size.sign() >= 0 && identifiers.size() <= 1
             else throw InvalidPopData.because("inconsistent message observation");
         self.number = number;
@@ -120,7 +120,7 @@ object PopMessage {
     }
 
     // Its size in bytes, as the server counts it.
-    size() is BigInt {
+    size() is int {
         size;
     }
 
@@ -203,7 +203,7 @@ object PopCapabilities {
 }
 
 // Strict unsigned decimal parsing with separate digit and machine-number bounds.
-// Message sizes are BigInt; no float conversion can lose their low bits.
+// Message sizes are int; no float conversion can lose their low bits.
 hidden object PopDecimal {
     has origin is string;
 
@@ -218,8 +218,8 @@ hidden object PopDecimal {
         self.origin = origin;
     }
 
-    integer() is BigInt {
-        BigInt(origin);
+    integer() is int {
+        Number(origin).int();
     }
 
     number() is int {
@@ -262,7 +262,7 @@ hidden object PopDataLines {
 // What STAT says: how many messages and how many bytes.
 object PopMailboxState {
     has count is int;
-    has size is BigInt;
+    has size is int;
 
     // Reads a STAT reply within limits.
     PopMailboxState(reply is PopReply, limits is PopListingLimits) {
@@ -281,7 +281,7 @@ object PopMailboxState {
     }
 
     // Bytes in all.
-    size() is BigInt {
+    size() is int {
         size;
     }
 
@@ -330,7 +330,7 @@ object PopListing {
                 confirm parts.size() == 2
                     else throw InvalidPopData.because("UIDL requires number and identifier");
                 let number = PopNumber(PopDecimal(origin: parts[0], limits: limits).number());
-                PopMessage(number: number, size: BigInt(0), identifiers: [PopIdentifier(parts[1])]);
+                PopMessage(number: number, size: 0, identifiers: [PopIdentifier(parts[1])]);
             };
             for identified -> message {
                 let number = message.number().number();
@@ -372,7 +372,7 @@ enum MissingPopIdentifier is Error = (missing);
 test "POP3 number and opaque identifier have different identities" {
     test.is(PopNumber(7).number(), 7);
     test.is(PopIdentifier("7").string(), "7");
-    let absent = PopMessage(number: PopNumber(7), size: BigInt(0), identifiers: []);
+    let absent = PopMessage(number: PopNumber(7), size: 0, identifiers: []);
     test.is(absent.identified(), false);
 }
 

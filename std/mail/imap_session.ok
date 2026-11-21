@@ -36,7 +36,6 @@ import "mail/imap_uid" take ImapUidSet, ImapUidSetLimits, ImapUidValidity, ImapU
 import "mail/mailbox" take MailFlags;
 import "collections/sequence" take Sequencing;
 import "mime/media_type" take MimeItems;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "async/lock" take Lock, LockGuard;
 import "async/channel" take Channel, Sending, ChannelClosed;
@@ -484,11 +483,11 @@ object SelectedMailbox does Closing {
 // One selection of a mailbox; it expires when another is made.
 object ImapSelectionToken {
     has name is ImapMailboxName;
-    has generation is BigInt;
+    has generation is int;
     has stopped is Event;
 
     // Selection generation of name.
-    ImapSelectionToken(name is ImapMailboxName, generation is BigInt) {
+    ImapSelectionToken(name is ImapMailboxName, generation is int) {
         self.name = name;
         self.generation = generation;
         stopped = Event();
@@ -500,7 +499,7 @@ object ImapSelectionToken {
     }
 
     // Its number.
-    generation() is BigInt {
+    generation() is int {
         generation;
     }
 
@@ -544,11 +543,11 @@ object ImapSelectedState {
 }
 
 hidden object ImapSessionState {
-    has serial is BigInt;
+    has serial is int;
     has selection is @ImapSelectedState;
 
     ImapSessionState() {
-        serial = BigInt(0);
+        serial = 0;
         selection = [];
     }
 
@@ -576,7 +575,7 @@ hidden object ImapSessionState {
     }
 
     selected(name is ImapMailboxName, value is ImapMailboxState) is ^ImapSessionState {
-        let following = (serial + BigInt(1));
+        let following = (serial + 1);
         let token = ImapSelectionToken(name: name, generation: following);
         ^serial = following;
         ^selection = [ImapSelectedState(token: token, value: value)];
@@ -1057,7 +1056,7 @@ object ImapEventObservation does ImapResponseObserving {
 // Changes to mailboxes and messages (formerly mail/imap_changes).
 
 // The UIDs a server gave to copied or appended messages, when it says
-// (UIDPLUS).
+// UIDPLUS.
 object ImapAssignedUids {
     has values is @MailboxUids;
 
@@ -1110,9 +1109,7 @@ object ImapCopiedUids {
                 && arguments.item(2).kind() == ImapValueKind.atom
                 else throw InvalidImapData.because("invalid COPYUID code");
             let validity = ImapUidValidity(
-                BigInt(
-                    ImapUnsigned(origin: arguments.item(0).string(), nonzero: true).int().string()
-                )
+                (ImapUnsigned(origin: arguments.item(0).string(), nonzero: true).int())
             );
             let source = ImapUidRanges(
                 origin: arguments.item(1).string(),
@@ -1342,13 +1339,11 @@ hidden object ImapAppending {
             && arguments.item(1).kind() == ImapValueKind.atom
             else throw InvalidImapData.because("invalid APPENDUID code");
         let validity = ImapUidValidity(
-            BigInt(ImapUnsigned(origin: arguments.item(0).string(), nonzero: true).int().string())
+            (ImapUnsigned(origin: arguments.item(0).string(), nonzero: true).int())
         );
         let assigned = ImapUidSet(
             ImapUid(
-                BigInt(
-                    ImapUnsigned(origin: arguments.item(1).string(), nonzero: true).int().string()
-                )
+                (ImapUnsigned(origin: arguments.item(1).string(), nonzero: true).int())
             )
         );
         ImapAssignedUids(

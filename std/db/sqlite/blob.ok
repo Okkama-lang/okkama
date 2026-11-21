@@ -3,14 +3,13 @@ module db/sqlite/blob v1.0.0;
 // SQLite BLOBs read and written in pieces, without loading them whole.
 //
 //     let blob = await OpenedSqliteBlob(origin: db, database: "main", table: "files",
-//         column: "data", row: BigInt(7), writable: false).blob();
-//     let head = await blob.bytes(offset: BigInt(0), limit: 16);    // the first 16 bytes
+//         column: "data", row: 7, writable: false).blob();
+//     let head = await blob.bytes(offset: 0, limit: 16);    // the first 16 bytes
 //     blob.close();
 //
 // A BLOB cannot change size: reads and writes stay within it, 64 KiB at a
 // time.
 
-import "numbers/bigint" take BigInt;
 import "encoding/utf" take Utf8Encoded, Utf8Decoded;
 
 // Something that opens BLOBs.
@@ -20,7 +19,7 @@ role SqliteBlobOpening {
         database is string,
         table is string,
         column is string,
-        row is BigInt,
+        row is int,
         writable is bool
     ) is SqliteBlob;
 }
@@ -28,9 +27,9 @@ role SqliteBlobOpening {
 // An open BLOB.
 role SqliteBlob {
     // limit bytes from offset, at most 64 KiB; InvalidSqliteBlob past its end.
-    async bytes(offset is BigInt, limit is int) is @byte;
+    async bytes(offset is int, limit is int) is @byte;
     // Writes source at offset, at most 64 KiB; InvalidSqliteBlob past its end.
-    async write(offset is BigInt, source is @byte) is SqliteBlob;
+    async write(offset is int, source is @byte) is SqliteBlob;
     // Its size in bytes.
     size() is int;
     // Whether it was closed.
@@ -43,7 +42,7 @@ role SqliteBlob {
 object OpenedSqliteBlob {
     has origin is SqliteBlobOpening;
     has database, table, column is string;
-    has row is BigInt;
+    has row is int;
     has writable is bool;
 
     // The BLOB in column of row in table of database, writable or not;
@@ -53,7 +52,7 @@ object OpenedSqliteBlob {
         database is string,
         table is string,
         column is string,
-        row is BigInt,
+        row is int,
         writable is bool
     ) {
         for [database, table, column] -> name {
@@ -86,7 +85,7 @@ hidden object RefusedBlobs does SqliteBlobOpening {
         database is string,
         table is string,
         column is string,
-        row is BigInt,
+        row is int,
         writable is bool
     ) is SqliteBlob {
         throw InvalidSqliteBlob.invalid;
@@ -99,7 +98,7 @@ test "a blob handle names its database, table and column without NUL" {
         database: "main",
         table: "files",
         column: "data",
-        row: BigInt(1),
+        row: 1,
         writable: false
     );
     test.throws(InvalidSqliteBlob) {
@@ -108,7 +107,7 @@ test "a blob handle names its database, table and column without NUL" {
             database: "",
             table: "files",
             column: "data",
-            row: BigInt(1),
+            row: 1,
             writable: false
         );
     };
@@ -118,7 +117,7 @@ test "a blob handle names its database, table and column without NUL" {
             database: "main",
             table: "fi" + Utf8Decoded([0.byte()]).string() + "les",
             column: "data",
-            row: BigInt(1),
+            row: 1,
             writable: false
         );
     };
@@ -128,7 +127,7 @@ test "a blob handle names its database, table and column without NUL" {
             database: "main",
             table: "files",
             column: "d".repeat(1025),
-            row: BigInt(1),
+            row: 1,
             writable: true
         );
     };

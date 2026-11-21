@@ -9,6 +9,6 @@ main() is int {
     c = c.same_text("plus sign", try { let probe = BigInt("+1").string(); "no error"; } catch e is InvalidBigInt { "InvalidBigInt"; }, "InvalidBigInt");
     c = c.same_text("whitespace", try { let probe = BigInt(" 1").string(); "no error"; } catch e is InvalidBigInt { "InvalidBigInt"; }, "InvalidBigInt");
     c = c.same_text("division by zero", try { let probe = ((BigInt("1") / BigInt("0"))).string(); "no error"; } catch e is BigDivisionByZero { "BigDivisionByZero"; }, "BigDivisionByZero");
-    c = c.same_text("zero denominator", try { let probe = BigRational(numerator: BigInt("1"), denominator: BigInt("0")).string(); "no error"; } catch e is ZeroBigRationalDenominator { "zero"; }, "zero");
+    c = c.same_text("zero denominator", try { let probe = BigRational(numerator: 1, denominator: 0).string(); "no error"; } catch e is ZeroBigRationalDenominator { "zero"; }, "zero");
     c.done();
 }
