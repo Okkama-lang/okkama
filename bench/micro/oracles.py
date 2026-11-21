@@ -114,6 +114,12 @@ def contribution(name, i):
     if name=='locale-list':return len('tea, milk, and '+str(i))%7
     if name=='joined':return len('a, b, '+str(i))%7
     if name=='form-parse':return len(str(i))%7
+    if name=='aes-gcm-round-trip':return (i%256)%7
+    if name=='ed25519-sign-verify':return 1
+    if name=='iso-date':return ord((datetime.date(2026,8,11)+datetime.timedelta(days=i%400)).isoformat()[9])%7
+    if name=='regex-escape':return (len('price: $5.00 '+str(i))+4)%7
+    if name=='unicode-category':return 1 if i%52<26 else 2
+    if name=='xml-escape':return len('a &lt; b &amp; c'+str(i))%7
     raise ValueError('No independent oracle: '+name)
 
 

@@ -1025,5 +1025,65 @@
       "url/form"
     ],
     "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "aes-gcm-round-trip": {
+    "path": "std/aes-gcm-round-trip.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/aes_gcm"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "ed25519-sign-verify": {
+    "path": "std/ed25519-sign-verify.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "crypto/ed25519"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "iso-date": {
+    "path": "std/iso-date.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "time/iso"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "regex-escape": {
+    "path": "std/regex-escape.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "regex/escape"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "unicode-category": {
+    "path": "std/unicode-category.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "unicode/character"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "xml-escape": {
+    "path": "std/xml-escape.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "xml/write"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
   }
 }

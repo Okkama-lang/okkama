@@ -41,9 +41,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   SHA3-256, HMAC-SHA256, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
 - **Forty more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
   SHA3-256, SHA-1, MD5, BLAKE2b, SHAKE128, HMAC-SHA256, zlib, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
+- **Forty-six more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
+  SHA3-256, SHA-1, MD5, BLAKE2b, SHAKE128, HMAC-SHA256, AES-GCM, Ed25519, zlib, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
   numbers, date shifting and formatting, Turkish case, Russian plurals, German decimals, decimal arithmetic, heaps, NFC normalization, JSON and
   template rendering, XML attributes, TOML, statistics, text indentation, HTML escaping and unescaping, query
-  and form parsing, joining, English lists, regex replacement and UTF-16, each with an independent Python oracle.
+  and form parsing, joining, English lists, regex replacement and escaping, XML escaping, Unicode categories, ISO dates and UTF-16, each with an independent Python oracle.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second

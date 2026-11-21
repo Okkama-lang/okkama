@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-42 of 435 non-runtime module files have an explicitly declared measured action.
+48 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -59,11 +59,11 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `config/source` | — |
 | `config/value` | — |
 | `crypto/aead` | — |
-| `crypto/aes_gcm` | — |
+| `crypto/aes_gcm` | aes-gcm-round-trip |
 | `crypto/chacha20_poly1305` | — |
 | `crypto/constant_time` | — |
 | `crypto/ecdsa` | — |
-| `crypto/ed25519` | — |
+| `crypto/ed25519` | ed25519-sign-verify |
 | `crypto/error` | — |
 | `crypto/hmac` | hmac-sha256 |
 | `crypto/jwt` | — |
@@ -364,7 +364,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `plist/write` | — |
 | `random/distribution` | — |
 | `random/source` | — |
-| `regex/escape` | — |
+| `regex/escape` | regex-escape |
 | `regex/match` | — |
 | `regex/pattern` | regex-first-match |
 | `regex/range` | — |
@@ -414,13 +414,13 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `time/day` | — |
 | `time/duration` | — |
 | `time/format` | date-format |
-| `time/iso` | — |
+| `time/iso` | iso-date |
 | `time/local_datetime` | — |
 | `time/rfc3339` | — |
 | `time/zone` | — |
 | `toml/parse` | toml-parse |
 | `toml/value` | — |
-| `unicode/character` | — |
+| `unicode/character` | unicode-category |
 | `unicode/normalization` | normalize-nfc |
 | `url/form` | form-parse |
 | `url/percent` | percent-encode, percent-decode |
@@ -440,4 +440,4 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `xml/name` | — |
 | `xml/node` | — |
 | `xml/parse` | xml-attribute |
-| `xml/write` | — |
+| `xml/write` | xml-escape |
