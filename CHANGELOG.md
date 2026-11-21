@@ -46,6 +46,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Fixed
 
+- **A mail text with a line over 998 octets is sent quoted-printable (#936).** Such ASCII text was left 7bit and
+  failed to render; a line of exactly 998 octets stays 7bit.
 - **A UTF-8 mail text is sent quoted-printable (#935).** `MailMessage(text:)` with characters beyond ASCII
   failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text

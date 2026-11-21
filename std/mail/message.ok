@@ -14,9 +14,9 @@ module mail/message v1.0.0;
 //     back.headers().first("Subject");
 //
 // MailMessage(from:, to:, subject:, text:) adds Date, a fresh Message-ID,
-// MIME-Version and a UTF-8 Content-Type. Text beyond ASCII goes out
-// quoted-printable, which every transport carries (RFC 2045 §6.7); ASCII text
-// stays 7bit. A message knows nothing of the SMTP
+// MIME-Version and a UTF-8 Content-Type. Text beyond ASCII, or with a line
+// longer than 998 octets, goes out quoted-printable, which every transport
+// carries (RFC 2045 §6.7); other text stays 7bit. A message knows nothing of the SMTP
 // envelope; DeliveredMail is the copy to hand to a server, without Bcc.
 
 import "mime/part" take MimeBody, MimePart, MimeLimits, ParsedMime, InvalidMime, BinaryBody,
@@ -65,7 +65,8 @@ object MailMessage does ByteSource {
 
     // MailMessage(from: "Ada <ada@example.test>", to: ["grace@example.test"],
     // subject: "Lunch?", text: "Shall we?"): Date is now, Message-ID is fresh
-    // and the body is UTF-8 text, quoted-printable when it is not ASCII.
+    // and the body is UTF-8 text, quoted-printable when it is not ASCII or
+    // has a line over 998 octets.
     // clock: and random: fix them, as tests do.
     MailMessage(
         from is string,
@@ -126,10 +127,20 @@ object MailMessage does ByteSource {
                 value: "text/plain; charset=utf-8"
             ),
         );
-        let plain = Utf8Encoded(text).bytes().reduce(true) -> seven, octet {
+        let unaccented = Utf8Encoded(text).bytes().reduce(true) -> seven, octet {
             seven && octet.int() < 128;
         };
-        let fields = if plain {
+        // A 7bit line holds at most 998 octets before its CRLF (RFC 5322 2.1.1).
+        let short = text.split("\n").reduce(true) -> fits, line {
+            let ending = if line.ends_with("\r") {
+                1;
+            }
+            else {
+                0;
+            };
+            fits && line.length() - ending <= 998;
+        };
+        let fields = if unaccented && short {
             headers;
         }
         else {
@@ -887,6 +898,59 @@ test "a text beyond ASCII goes out quoted-printable and comes back whole (#935)"
     );
     test.ok(!ascii.headers().membership(MessageHeaderName("Content-Transfer-Encoding")));
     test.ok(ascii.string().ends_with("\n\nplain\n"));
+}
+
+test "an ASCII line over 998 octets goes out quoted-printable; 998 stays 7bit (#936)" {
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let long = "a".repeat(1200) + "\r\nshort\r\n";
+    let message = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "long",
+        text: long,
+        clock: clock,
+        random: PcgRandom(2)
+    );
+    test.is(
+        message.headers().first(MessageHeaderName("Content-Transfer-Encoding")),
+        "quoted-printable"
+    );
+    let wire = message.bytes();
+    let widest = Utf8Decoded(wire).string().split("\r\n").reduce(0) -> most, line {
+        if line.length() > most {
+            line.length();
+        }
+        else {
+            most;
+        };
+    };
+    test.ok(widest <= 76);
+    test.is(Utf8Decoded(ParsedMail(wire).message().body().bytes()).string(), long);
+    let edge = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "edge",
+        text: "b".repeat(998) + "\r\n",
+        clock: clock,
+        random: PcgRandom(3)
+    );
+    test.ok(!edge.headers().membership(MessageHeaderName("Content-Transfer-Encoding")));
+    test.is(
+        Utf8Decoded(ParsedMail(edge.bytes()).message().body().bytes()).string(),
+        "b".repeat(998) + "\r\n"
+    );
+    let bare = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "bare",
+        text: "c".repeat(999) + "\n",
+        clock: clock,
+        random: PcgRandom(4)
+    );
+    test.is(
+        bare.headers().first(MessageHeaderName("Content-Transfer-Encoding")),
+        "quoted-printable"
+    );
 }
 
 test "a message from its fields drops the fraction of the clock's second (#518)" {
