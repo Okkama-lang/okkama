@@ -326,6 +326,8 @@ pub struct Heap {
     /// and poison reclaimed cells, so a value kept alive by mistake fails at
     /// once instead of after a reuse.
     stress: bool,
+    /// `SPARROW_CORE_GC_AGES=1` (#919): the cells live after the previous collection, for the age census.
+    ages: Option<Ages>,
     /// Code point positions of recently indexed non-ASCII strings.
     positions: Positions,
     /// Allocations made by the runtime (not inline by machine code), by
@@ -400,6 +402,15 @@ fn kind_name(kind: u8) -> &'static str {
     }
 }
 
+/// The age census of `SPARROW_CORE_GC_AGES` (#919): the cells live after the previous collection, and the last
+/// collection's [old live, young live, old dead, young dead, mutable live] as (cells, bytes).
+#[derive(Debug, Default)]
+struct Ages {
+    collections: u64,
+    old: std::collections::HashSet<Word>,
+    last: [(u64, u64); 5],
+}
+
 /// One live cell in the sweep's census (#918): an array slot, not a map entry per cell.
 #[inline]
 fn census(dense: &mut Vec<(u64, u64)>, header: u64, bytes: usize) {
@@ -466,6 +477,7 @@ impl Heap {
             positions: Positions::default(),
             allocations: None,
             stress: false,
+            ages: std::env::var_os("SPARROW_CORE_GC_AGES").is_some_and(|value| value == "1").then(Default::default),
         }
     }
 
@@ -510,6 +522,62 @@ impl Heap {
 
     /// Collector stress: a zero threshold makes every safepoint collect. Turning it off restores the threshold
     /// a collection would set, from the live heap of the last one (#720).
+    /// #919 go/no-go: after marking, before the sweep, classify every allocated cell by whether it was live after
+    /// the previous collection (old) and whether it is marked now (live), and the live mutable cells (frames,
+    /// buffers, payloads) a sticky-mark minor collection would have to scan as roots. One line per collection
+    /// on stderr; a measurement pass, off unless `SPARROW_CORE_GC_AGES=1`.
+    fn age_census(&mut self) {
+        let Some(Ages { collections, old, last }) = self.ages.as_mut() else { return };
+        *collections += 1;
+        let mut next = std::collections::HashSet::new();
+        // [old live, young live, old dead, young dead, mutable live] as (cells, bytes)
+        let mut counts = [(0u64, 0u64); 5];
+        let mut add = |slot: usize, bytes: usize| {
+            counts[slot].0 += 1;
+            counts[slot].1 += bytes as u64;
+        };
+        let mut visit = |address: Word, header: u64, bytes: usize, next: &mut std::collections::HashSet<Word>| {
+            if kind(header) == FREE {
+                return;
+            }
+            let was_old = old.contains(&address);
+            if header & MARK != 0 {
+                next.insert(address);
+                add(if was_old { 0 } else { 1 }, bytes);
+                let mutable = match kind(header) {
+                    FRAME | PAYLOAD => true,
+                    ARRAY => header & BUFFER != 0,
+                    _ => false,
+                };
+                if mutable {
+                    add(4, bytes);
+                }
+            } else {
+                add(if was_old { 2 } else { 3 }, bytes);
+            }
+        };
+        for page in &self.pages {
+            let step = CLASSES[page.class] * 8;
+            let base = page.memory.as_ptr() as Word;
+            for cell in 0..page.memory.len() * 8 / step {
+                let address = base + (cell * step) as Word;
+                // SAFETY: every cell of a page starts with a header.
+                let header = unsafe { *(address as *const u64) };
+                visit(address, header, step, &mut next);
+            }
+        }
+        for memory in &self.large {
+            visit(memory.as_ptr() as Word, memory[0], memory.len() * 8, &mut next);
+        }
+        let [ol, yl, od, yd, ml] = counts;
+        eprintln!(
+            "; gc ages\t{collections}\told live {} {}\tyoung live {} {}\told dead {} {}\tyoung dead {} {}\tmutable live {} {}",
+            ol.0, ol.1, yl.0, yl.1, od.0, od.1, yd.0, yd.1, ml.0, ml.1
+        );
+        *old = next;
+        *last = counts;
+    }
+
     pub fn set_stress(&mut self, on: bool) {
         self.stress = on;
         self.threshold = if on { 0 } else { (self.live + self.external_live).max(COLLECTION_FLOOR) };
@@ -1532,6 +1600,9 @@ impl Heap {
             }
         }
         let swept = self.allocations.is_some().then(std::time::Instant::now);
+        if self.ages.is_some() {
+            self.age_census();
+        }
         self.sweep();
         if let (Some(allocations), Some(swept)) = (&mut self.allocations, swept) {
             allocations.sweep_nanos += swept.elapsed().as_nanos() as u64;
@@ -2529,6 +2600,25 @@ mod tests {
         let live = &heap.allocations.as_ref().unwrap().live;
         assert_eq!(live.len(), 1);
         assert_eq!(live[&(object, 0)].0, 1);
+    }
+
+    /// #919: the age census tells cells that survived the previous collection from new ones, live from dead.
+    #[test]
+    fn the_age_census_tells_old_from_young_and_live_from_dead() {
+        let mut heap = Heap::new(layouts());
+        heap.ages = Some(Ages::default());
+        let kept = heap.object_new(0, &[UNBOUND, word::small(1).unwrap()]);
+        let _dropped = heap.object_new(0, &[UNBOUND, word::small(2).unwrap()]);
+        heap.collect(|visit| visit(kept, Repr::Ref));
+        let [old_live, young_live, old_dead, young_dead, _] = heap.ages.as_ref().unwrap().last;
+        assert_eq!((old_live.0, young_live.0, old_dead.0, young_dead.0), (0, 1, 0, 1), "first collection: all young");
+        let fresh = heap.object_new(0, &[kept, word::small(3).unwrap()]);
+        heap.collect(|visit| visit(fresh, Repr::Ref));
+        let [old_live, young_live, old_dead, young_dead, _] = heap.ages.as_ref().unwrap().last;
+        assert_eq!((old_live.0, young_live.0, old_dead.0, young_dead.0), (1, 1, 0, 0), "kept is old now");
+        heap.collect(|_| {});
+        let [old_live, _, old_dead, _, _] = heap.ages.as_ref().unwrap().last;
+        assert_eq!((old_live.0, old_dead.0), (0, 2), "both die old");
     }
 
     #[test]

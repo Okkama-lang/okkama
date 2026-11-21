@@ -7,7 +7,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 | tag | layers | files |
 |---|---|---|
 
-## Tags in one layer (115)
+## Tags in one layer (116)
 
 - AMP_AMP — front: `syntax/token.rs`
 - BANG_EQUAL — front: `syntax/token.rs`
@@ -69,6 +69,7 @@ A tag is a rule of the design documents cited in a comment (`D25.3`, `B9`, `PR-B
 - SPARROW_CORE_CLOSURE_BRIDGE — sparrow: `runtime.rs`
 - SPARROW_CORE_DUMP — sparrow: `jit.rs`
 - SPARROW_CORE_FRONTEND_MAPS — sparrow: `jit.rs`
+- SPARROW_CORE_GC_AGES — sparrow: `heap.rs`
 - SPARROW_CORE_GC_STRESS — sparrow: `runtime.rs`
 - SPARROW_CORE_INT_RANGE — sparrow: `program.rs`
 - SPARROW_CORE_NO_INLINE — sparrow: `jit.rs`
