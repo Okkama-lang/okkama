@@ -8,11 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
-- **The collector's benchmark set, `bench/gc` (#917).** Five workloads (a large long-lived heap, big-integer
-  churn, a tiny live heap with resources, a burst and reuse, payload maps) and `run.py`, which A/Bs builds on
-  them: steady time (median and IQR over shuffled processes), peak RSS, instructions, and from `OKKAMA_DEV=gc`
-  collections with root, mark and sweep times. The v0.6.0 baseline is in `okkama-docs/benchmarks/gc`; it shows
-  the root scan taking 60% of collection time when resources are live.
+- **The collector's benchmark set, `bench/gc` (#917).** Six workloads (a large long-lived heap, big-integer
+  churn, a tiny live heap with resources, the same by deep recursion, a burst and reuse, payload maps) and
+  `run.py`, which A/Bs builds on them: steady time (median and IQR over shuffled processes), peak RSS,
+  instructions, and from `OKKAMA_DEV=gc` collections with root, mark and sweep times. The v0.6.0 baseline is in
+  `okkama-docs/benchmarks/gc`; it shows the root scan growing with stack depth (65.7 of 108.6 ms collecting at
+  ~100 000 frames).
 
 - **Compact `if`: `if condition: a else: b` (#921).** The same `if` with one expression per branch, built by the
   parser as the block form (each branch a block holding its expression), so analysis, lowering and the runtime

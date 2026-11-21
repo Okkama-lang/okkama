@@ -21,14 +21,18 @@ object Handle {
 
 object Work {
     Work();
-    run(i is int, n is int, acc is int) is int {
-        if i == n { return acc; }
-        let point = Point(x: i, y: 1);
-        if i % 10 == 0 {
-            let handle = Handle(id: i);
-            return self.run(i + 1, n, acc + point.sum() % 7 + handle.id() % 3);
-        }
-        self.run(i + 1, n, acc + point.sum() % 7);
+    // A loop, not recursion: a call made while a resource is alive is not a tail call (its destroy runs
+    // after it), so recursion would grow the stack and measure the root scan of deep stacks instead.
+    run(n is int) is int {
+        (0..n).reduce(0) -> acc, i {
+            let point = Point(x: i, y: 1);
+            if i % 10 == 0 {
+                let handle = Handle(id: i);
+                acc + point.sum() % 7 + handle.id() % 3;
+            } else {
+                acc + point.sum() % 7;
+            };
+        };
     }
 }
 
@@ -50,6 +54,6 @@ object Repeat {
 }
 
 main() is int {
-    Stdout().writeln(Repeat().run(() is string { Work().run(0, 1000000, 0).string(); }));
+    Stdout().writeln(Repeat().run(() is string { Work().run(1000000).string(); }));
     0;
 }

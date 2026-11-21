@@ -8,7 +8,8 @@ Workloads (each takes the #236 protocol: an argument N repeats the work N times 
 "iteration <nanoseconds>" to stderr per run):
 - ownership: bench/ownership/ownership.ok, a large long-lived heap (100 000 records, 1000 shelves);
 - bigint: big-integer churn, collections triggered by owned Rust memory over a tiny live heap;
-- tiny: a million short-lived objects per run, every tenth a resource with a destroy;
+- tiny: a million short-lived objects per run in a loop, every tenth a resource with a destroy;
+- deep: the same objects by non-tail recursion, ~100 000 frames for every collection's root scan;
 - burst: a 200 000-element structure built and dropped, then a trickle of small allocations (#522);
 - payload: maps built by updates and joined text, payload cells that own Rust memory.
 
@@ -42,6 +43,7 @@ WORKLOADS = {
     "ownership": ROOT / "bench" / "ownership" / "ownership.ok",
     "bigint": HERE / "bigint.ok",
     "tiny": HERE / "tiny.ok",
+    "deep": HERE / "deep.ok",
     "burst": HERE / "burst.ok",
     "payload": HERE / "payload.ok",
 }
