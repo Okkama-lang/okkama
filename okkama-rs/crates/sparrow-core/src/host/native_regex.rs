@@ -1138,19 +1138,21 @@ pub(crate) struct Query {
     start: BigInt,
     end: BigInt,
     mode: i64,
-    spans: RefCell<Option<Vec<(i64, i64)>>>,
+    /// The search result, computed once and shared with the match it produces (#464).
+    spans: RefCell<Option<Rc<[(i64, i64)]>>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Match {
-    spans: Vec<(i64, i64)>,
+    spans: Rc<[(i64, i64)]>,
     names: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Replacement {
     template: String,
-    prepared: RefCell<Option<(i64, i64, Vec<String>)>>,
+    /// The parsed template, computed once; readers share it (#464).
+    prepared: RefCell<Option<Rc<(i64, i64, Vec<String>)>>>,
 }
 
 #[derive(Debug, Default)]
@@ -1162,9 +1164,9 @@ fn invalid_input(native: Native, message: &str) -> ProviderError {
     failure(DOMAIN, "invalid_input", native, message)
 }
 
-fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, ProviderError> {
-    if let Some(spans) = query.spans.borrow().clone() {
-        return Ok(spans);
+fn prepare_query(native: Native, query: &Query) -> Result<Rc<[(i64, i64)]>, ProviderError> {
+    if let Some(spans) = query.spans.borrow().as_ref() {
+        return Ok(Rc::clone(spans));
     }
     let prepared = query.pattern.prepare();
     let result = match prepared.status {
@@ -1178,7 +1180,8 @@ fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, Provi
     };
     match result {
         Ok(spans) => {
-            *query.spans.borrow_mut() = Some(spans.clone());
+            let spans: Rc<[(i64, i64)]> = spans.into();
+            *query.spans.borrow_mut() = Some(Rc::clone(&spans));
             Ok(spans)
         }
         Err("Invalid regex pattern\n") => Err(invalid_input(native, "Invalid regex pattern")),
@@ -1199,9 +1202,9 @@ fn prepare_query(native: Native, query: &Query) -> Result<Vec<(i64, i64)>, Provi
     }
 }
 
-fn prepare_replacement(state: &Replacement) -> (i64, i64, Vec<String>) {
-    if let Some(prepared) = state.prepared.borrow().clone() {
-        return prepared;
+fn prepare_replacement(state: &Replacement) -> Rc<(i64, i64, Vec<String>)> {
+    if let Some(prepared) = state.prepared.borrow().as_ref() {
+        return Rc::clone(prepared);
     }
     let source: Vec<char> = state.template.chars().collect();
     let mut tokens = Vec::new();
@@ -1261,7 +1264,8 @@ fn prepare_replacement(state: &Replacement) -> (i64, i64, Vec<String>) {
         }
         (0, -1, tokens)
     };
-    *state.prepared.borrow_mut() = Some(result.clone());
+    let result = Rc::new(result);
+    *state.prepared.borrow_mut() = Some(Rc::clone(&result));
     result
 }
 
@@ -1475,7 +1479,8 @@ impl Heap {
                 let RegexHandle::Replacement(state) = self.regex(args[0])? else {
                     return Err(kind().into());
                 };
-                let (status, offset, tokens) = prepare_replacement(&state);
+                let prepared = prepare_replacement(&state);
+                let (status, offset, tokens) = (prepared.0, prepared.1, &prepared.2);
                 if operation == "regex_replacement_prepare" {
                     return Ok(
                         self.regex_map([("status".into(), status), ("offset".into(), offset)])?
@@ -1484,9 +1489,10 @@ impl Heap {
                 if status != 0 {
                     return Err(invalid("Invalid regex replacement"));
                 }
+                // Only the strings that cross into the program are copied.
                 let values = tokens
-                    .into_iter()
-                    .map(|s| self.allocate_text(s))
+                    .iter()
+                    .map(|s| self.allocate_text(s.clone()))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.allocate_array(values)?)
             }

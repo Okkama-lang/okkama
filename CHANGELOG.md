@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Regex results are shared, not copied (#464).** A query's spans and a parsed replacement template are cached
+  behind `Rc`: repeated readers and the match a query produces share them, and only the strings handed to the
+  program are copied.
 - **Regex search reuses its scratch (#463).** The NFA simulation keeps two state frontiers and swaps them, stamps
   its visited marks with a generation (cleared in O(1)) and reuses one ε-traversal stack, instead of allocating
   all three for every input character: a search over 900 characters is 24% faster without captures and 15% with
