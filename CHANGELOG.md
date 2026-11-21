@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **Responses are composed like requests (#937).** `ResponseHead(status:, headers:, version:)` is a response's head;
+  `Response(head:, content:)` takes the content's Content-Type (or a compatible declared one;
+  `ConflictingContentType` otherwise) and known Content-Length, and `Response(head:, body:)` keeps the fields as
+  given. `Response::Head` shows the one head; the existing constructors keep their behaviour.
 - **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
   `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
   `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in

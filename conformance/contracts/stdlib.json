@@ -2735,7 +2735,7 @@
     },
     {
       "id": "STD.HTTP.MESSAGE",
-      "title": "std http/message public contract (BodyLimitExceeded, ConflictingContentType, InvalidHttpMessage, Request, RequestCoordinates, RequestHead, Responding, Response)",
+      "title": "std http/message public contract (BodyLimitExceeded, ConflictingContentType, InvalidHttpMessage, Request, RequestCoordinates, RequestHead, Responding, Response, ResponseHead)",
       "family": "Standard library: http",
       "spec_refs": [
         "std/http/message.ok"
