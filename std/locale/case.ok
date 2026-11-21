@@ -1,0 +1,564 @@
+module locale/case v1.0.0;
+
+// Text in the case a language writes it. Turkish and Azeri pair the dotted and
+// dotless i (I and ı, İ and i); Lithuanian keeps the dot above i and j when an
+// accent stands over them, and drops it again in capitals. Every other
+// language takes the Unicode default case mapping, as string.lower() and
+// upper() do. The rules are Unicode's SpecialCasing.txt.
+//
+//     LocalizedCase(text: "istanbul", locale: Locale("tr")).upper();      // "İSTANBUL"
+//     LocalizedCase(text: "DİYARBAKIR", locale: Locale("tr")).lower();    // "diyarbakır"
+//     LocalizedCase(text: "iğdır ılıca", locale: Locale("tr")).title();   // "İğdır Ilıca"
+//     LocalizedCase(text: "ÌR", locale: Locale("lt")).lower();            // "i̇̀r"
+//
+// title() starts each word with its title case and lowers the rest (Unicode's
+// toTitlecase): "ǆemal" is "ǅemal", "ßa" is "Ssa", and Georgian keeps its
+// letters. A word is a run of letters, marks, digits and connectors such as
+// "_", joined across an apostrophe, a full stop, a colon or a middle dot that
+// stands between two of them, so "don't" is one word and "3rd" begins with its
+// digit. Anything outside a word keeps its title case on its own.
+//
+// The Greek final sigma follows string.lower(): "ΟΔΟΣ" is "οδος".
+
+import "locale/tag" take Locale;
+import "runtime/unicode_character" take category_code, character_combining_class;
+
+// A text and the language whose case rules apply to it.
+object LocalizedCase {
+    has text, language is string;
+
+    // text, cased as locale's language writes it.
+    LocalizedCase(text is string, locale is Locale) {
+        self.text = text;
+        language = locale.language();
+    }
+
+    // It in lowercase.
+    lower() is string {
+        let characters = text.characters();
+        CaseRules(language: language, characters: characters).lowered(
+            start: 0,
+            end: characters.size(),
+            before: "",
+        );
+    }
+
+    // It in uppercase.
+    upper() is string {
+        CaseRules(language: language, characters: text.characters()).uppered();
+    }
+
+    // It in title case: each word begins with its title case, the rest lower.
+    title() is string {
+        CaseRules(language: language, characters: text.characters()).titled();
+    }
+}
+
+// The language's conditional mappings over the characters of one text; the
+// rest is the Unicode default of string.lower() and upper().
+hidden object CaseRules {
+    has language is string;
+    has characters is @char;
+
+    CaseRules(language is string, characters is @char) {
+        self.language = language;
+        self.characters = characters;
+    }
+
+    // characters[start..end) in lowercase, conditions read inside that range;
+    // before is lowercase text standing in front of it, which the final sigma
+    // looks at.
+    lowered(start is int, end is int, before is string) is string {
+        let pieces is @string = (start..end).map() -> index {
+            self.lower_piece(index: index, start: start, end: end);
+        };
+        let whole = (before + pieces.join("")).lower();
+        whole.slice(before.length(), whole.length());
+    }
+
+    uppered() is string {
+        let pieces is @string = (0..characters.size()).map() -> index {
+            self.upper_piece(index);
+        };
+        pieces.join("").upper();
+    }
+
+    titled() is string {
+        let pieces is @string = (0..characters.size()).map() -> index {
+            if !self.word(index) {
+                self.title_of(index);
+            }
+            else if index == 0 || !self.word(index - 1) {
+                self.titled_word(start: index, end: self.word_end(index));
+            }
+            else {
+                "";
+            }
+        };
+        pieces.join("");
+    }
+
+    // One word: what stands before its first letter or digit as it is, that
+    // character in title case, the rest in lowercase.
+    hidden titled_word(start is int, end is int) is string {
+        let first = self.first_base(start: start, end: end);
+        if first == end {
+            self.lowered(start: start, end: end, before: "");
+        }
+        else {
+            let lowered_first = self.lowered(start: first, end: first + 1, before: "");
+            let rest = self.lowered(start: first + 1, end: end, before: lowered_first);
+            self.lowered(start: start, end: first, before: "") + self.title_of(first) + rest;
+        }
+    }
+
+    // The language's lowercase spelling of characters[index] before the default
+    // lowercase; the conditions look no further than start..end.
+    hidden lower_piece(index is int, start is int, end is int) is string {
+        let character = characters[index];
+        let code = character.code();
+        if language == "tr" || language == "az" {
+            if code == 0x130 {
+                "i";
+            }
+            else if code == 0x49 {
+                if self.before_dot(index: index, end: end) {
+                    "i";
+                }
+                else {
+                    "\u{131}";
+                }
+            }
+            else if code == 0x307 && self.after_capital_i(index: index, start: start) {
+                "";
+            }
+            else {
+                character.string();
+            }
+        }
+        else if language == "lt" {
+            let accented = code == 0x49 || code == 0x4A || code == 0x12E;
+            if accented && self.more_above(index: index, end: end) {
+                character.string().lower() + "\u{307}";
+            }
+            else if code == 0xCC {
+                "i\u{307}\u{300}";
+            }
+            else if code == 0xCD {
+                "i\u{307}\u{301}";
+            }
+            else if code == 0x128 {
+                "i\u{307}\u{303}";
+            }
+            else {
+                character.string();
+            }
+        }
+        else {
+            character.string();
+        }
+    }
+
+    // The language's uppercase spelling of characters[index] before the default
+    // uppercase.
+    hidden upper_piece(index is int) is string {
+        let character = characters[index];
+        let code = character.code();
+        if (language == "tr" || language == "az") && code == 0x69 {
+            "\u{130}";
+        }
+        else if language == "lt" && code == 0x307 && self.after_soft_dotted(index) {
+            "";
+        }
+        else {
+            character.string();
+        }
+    }
+
+    // characters[index] in title case.
+    hidden title_of(index is int) is string {
+        let character = characters[index];
+        if (language == "tr" || language == "az") && character.code() == 0x69 {
+            "\u{130}";
+        }
+        else {
+            TitleCase(character).string();
+        }
+    }
+
+    // Before_Dot: a combining dot above follows, with no base character and no
+    // other mark above between.
+    hidden before_dot(index is int, end is int) is bool {
+        for ((index + 1)..end) -> following {
+            if characters[following].code() == 0x307 {
+                return true;
+            }
+            let combining = character_combining_class(characters[following]);
+            if combining == 0 || combining == 230 {
+                return false;
+            }
+        }
+        false;
+    }
+
+    // After_I: a capital I comes before, with no base character and no other
+    // mark above between.
+    hidden after_capital_i(index is int, start is int) is bool {
+        for (start..index) -> step {
+            let previous = index - 1 - (step - start);
+            if characters[previous].code() == 0x49 {
+                return true;
+            }
+            let combining = character_combining_class(characters[previous]);
+            if combining == 0 || combining == 230 {
+                return false;
+            }
+        }
+        false;
+    }
+
+    // More_Above: a mark above follows, with no base character between.
+    hidden more_above(index is int, end is int) is bool {
+        for ((index + 1)..end) -> following {
+            let combining = character_combining_class(characters[following]);
+            if combining == 230 {
+                return true;
+            }
+            if combining == 0 {
+                return false;
+            }
+        }
+        false;
+    }
+
+    // After_Soft_Dotted: a soft-dotted letter (i, j, į, …) comes before, with no
+    // base character and no other mark above between.
+    hidden after_soft_dotted(index is int) is bool {
+        for (0..index) -> step {
+            let previous = index - 1 - step;
+            if SoftDotted(characters[previous].code()).yes() {
+                return true;
+            }
+            let combining = character_combining_class(characters[previous]);
+            if combining == 0 || combining == 230 {
+                return false;
+            }
+        }
+        false;
+    }
+
+    // Whether characters[index] belongs to a word.
+    hidden word(index is int) is bool {
+        self.word_character(index) || self.joiner(index);
+    }
+
+    hidden word_character(index is int) is bool {
+        let category = category_code(characters[index]);
+        let group = category.slice(0, 1);
+        group == "L" || group == "M" || category == "Nd" || category == "Nl" || category == "Pc";
+    }
+
+    // An apostrophe, full stop, colon or middle dot between two word characters.
+    hidden joiner(index is int) is bool {
+        let code = characters[index].code();
+        let joining = code == 0x27
+            || code == 0x2E
+            || code == 0x3A
+            || code == 0xB7
+            || code == 0x387
+            || code == 0x55F
+            || code == 0x5F4
+            || code == 0x2018
+            || code == 0x2019
+            || code == 0x2024
+            || code == 0x2027
+            || code == 0xFE13
+            || code == 0xFE52
+            || code == 0xFE55
+            || code == 0xFF07
+            || code == 0xFF0E
+            || code == 0xFF1A;
+        joining
+            && index > 0
+            && index + 1 < characters.size()
+            && self.word_character(index - 1)
+            && self.word_character(index + 1);
+    }
+
+    hidden word_end(start is int) is int {
+        for (start..characters.size()) -> index {
+            if !self.word(index) {
+                return index;
+            }
+        }
+        characters.size();
+    }
+
+    // The first character of start..end that is not a mark, or end.
+    hidden first_base(start is int, end is int) is int {
+        for (start..end) -> index {
+            if category_code(characters[index]).slice(0, 1) != "M" {
+                return index;
+            }
+        }
+        end;
+    }
+}
+
+// A character's title case: its uppercase, except where Unicode titles it
+// otherwise (digraphs, ligatures, ß, Greek with ypogegrammeni, Georgian).
+hidden object TitleCase {
+    has origin is char;
+
+    TitleCase(origin is char) {
+        self.origin = origin;
+    }
+
+    string() is string {
+        let code = origin.code();
+        if code >= 0x1C4 && code <= 0x1C6 {
+            "\u{1C5}";
+        }
+        else if code >= 0x1C7 && code <= 0x1C9 {
+            "\u{1C8}";
+        }
+        else if code >= 0x1CA && code <= 0x1CC {
+            "\u{1CB}";
+        }
+        else if code >= 0x1F1 && code <= 0x1F3 {
+            "\u{1F2}";
+        }
+        else if code == 0xDF {
+            "Ss";
+        }
+        else if code == 0xFB00 {
+            "Ff";
+        }
+        else if code == 0xFB01 {
+            "Fi";
+        }
+        else if code == 0xFB02 {
+            "Fl";
+        }
+        else if code == 0xFB03 {
+            "Ffi";
+        }
+        else if code == 0xFB04 {
+            "Ffl";
+        }
+        else if code == 0xFB05 || code == 0xFB06 {
+            "St";
+        }
+        else if code == 0x587 {
+            "\u{535}\u{582}";
+        }
+        else if code == 0xFB13 {
+            "\u{544}\u{576}";
+        }
+        else if code == 0xFB14 {
+            "\u{544}\u{565}";
+        }
+        else if code == 0xFB15 {
+            "\u{544}\u{56B}";
+        }
+        else if code == 0xFB16 {
+            "\u{54E}\u{576}";
+        }
+        else if code == 0xFB17 {
+            "\u{544}\u{56D}";
+        }
+        else if self.small_with_ypogegrammeni(code) {
+            char(code + 8).string();
+        }
+        else if self.capital_with_prosgegrammeni(code) {
+            origin.string();
+        }
+        else if code == 0x1FB3 {
+            "\u{1FBC}";
+        }
+        else if code == 0x1FC3 {
+            "\u{1FCC}";
+        }
+        else if code == 0x1FF3 {
+            "\u{1FFC}";
+        }
+        else if code == 0x1FB2 {
+            "\u{1FBA}\u{345}";
+        }
+        else if code == 0x1FB4 {
+            "\u{386}\u{345}";
+        }
+        else if code == 0x1FB7 {
+            "\u{391}\u{342}\u{345}";
+        }
+        else if code == 0x1FC2 {
+            "\u{1FCA}\u{345}";
+        }
+        else if code == 0x1FC4 {
+            "\u{389}\u{345}";
+        }
+        else if code == 0x1FC7 {
+            "\u{397}\u{342}\u{345}";
+        }
+        else if code == 0x1FF2 {
+            "\u{1FFA}\u{345}";
+        }
+        else if code == 0x1FF4 {
+            "\u{38F}\u{345}";
+        }
+        else if code == 0x1FF7 {
+            "\u{3A9}\u{342}\u{345}";
+        }
+        else if (code >= 0x10D0 && code <= 0x10FA) || (code >= 0x10FD && code <= 0x10FF) {
+            origin.string();
+        }
+        else {
+            origin.string().upper();
+        }
+    }
+
+    // ᾀ…ᾇ, ᾐ…ᾗ, ᾠ…ᾧ: their title case is the capital 8 code points on.
+    hidden small_with_ypogegrammeni(code is int) is bool {
+        let alpha_eta = (code >= 0x1F80 && code <= 0x1F87) || (code >= 0x1F90 && code <= 0x1F97);
+        alpha_eta || (code >= 0x1FA0 && code <= 0x1FA7);
+    }
+
+    // ᾈ…ᾏ, ᾘ…ᾟ, ᾨ…ᾯ, ᾼ, ῌ, ῼ: their own title case.
+    hidden capital_with_prosgegrammeni(code is int) is bool {
+        let alpha_eta = (code >= 0x1F88 && code <= 0x1F8F) || (code >= 0x1F98 && code <= 0x1F9F);
+        let single = code == 0x1FBC || code == 0x1FCC || code == 0x1FFC;
+        alpha_eta || single || (code >= 0x1FA8 && code <= 0x1FAF);
+    }
+}
+
+// Unicode's Soft_Dotted property: letters whose dot goes when an accent stands
+// above them.
+hidden object SoftDotted {
+    has code is int;
+
+    SoftDotted(code is int) {
+        self.code = code;
+    }
+
+    yes() is bool {
+        code == 0x69
+            || code == 0x6A
+            || code == 0x12F
+            || code == 0x249
+            || code == 0x268
+            || code == 0x29D
+            || code == 0x2B2
+            || code == 0x3F3
+            || code == 0x456
+            || code == 0x458
+            || code == 0x1D62
+            || code == 0x1D96
+            || code == 0x1DA4
+            || code == 0x1DA8
+            || code == 0x1E2D
+            || code == 0x1ECB
+            || code == 0x2071
+            || code == 0x2148
+            || code == 0x2149
+            || code == 0x2C7C
+            || code == 0x1DF1A
+            || code == 0x1E04C
+            || code == 0x1E04D
+            || code == 0x1E068
+            || (code >= 0x1D422 && code <= 0x1D693 && SoftDottedMath(code).yes());
+    }
+}
+
+// The mathematical bold, italic, script, … i and j: pairs every 52 code points
+// from U+1D422.
+hidden object SoftDottedMath {
+    has code is int;
+
+    SoftDottedMath(code is int) {
+        self.code = code;
+    }
+
+    yes() is bool {
+        let offset = (code - 0x1D422) % 52;
+        offset == 0 || offset == 1;
+    }
+}
+
+test "Turkish and Azeri: dotted and dotless i both ways" {
+    let turkish = Locale("tr");
+    test.is(LocalizedCase(text: "istanbul", locale: turkish).upper(), "İSTANBUL");
+    test.is(LocalizedCase(text: "ılık su", locale: turkish).upper(), "ILIK SU");
+    test.is(LocalizedCase(text: "DİYARBAKIR", locale: turkish).lower(), "diyarbakır");
+    test.is(LocalizedCase(text: "IİIı", locale: turkish).lower(), "ıiıı");
+    // I with a combining dot above is İ: one dotted i.
+    test.is(LocalizedCase(text: "I\u{307}stanbul", locale: turkish).lower(), "istanbul");
+    // A mark below between them still joins them; a base character does not.
+    test.is(LocalizedCase(text: "I\u{328}\u{307}", locale: turkish).lower(), "i\u{328}");
+    test.is(LocalizedCase(text: "IA\u{307}", locale: turkish).lower(), "\u{131}a\u{307}");
+    test.is(LocalizedCase(text: "I", locale: Locale("az")).lower(), "\u{131}");
+    test.is(LocalizedCase(text: "i", locale: Locale("az")).upper(), "\u{130}");
+    test.is(LocalizedCase(text: "i", locale: Locale("tr", "CY")).upper(), "\u{130}");
+    test.is(LocalizedCase(text: "", locale: turkish).lower(), "");
+}
+
+test "Turkish title case starts a word with dotted or dotless I" {
+    let turkish = Locale("tr");
+    test.is(LocalizedCase(text: "iğdır ılıca", locale: turkish).title(), "İğdır Ilıca");
+    test.is(LocalizedCase(text: "İSTANBUL'DA KIŞ", locale: turkish).title(), "İstanbul'da Kış");
+    // The dot above the first I stays: it is the title, not the lowered rest.
+    test.is(LocalizedCase(text: "I\u{307}ZMIR", locale: turkish).title(), "I\u{307}zmır");
+}
+
+test "Lithuanian keeps the dot above i under an accent and drops it in capitals" {
+    let lithuanian = Locale("lt");
+    test.is(LocalizedCase(text: "\u{CC}", locale: lithuanian).lower(), "i\u{307}\u{300}");
+    test.is(LocalizedCase(text: "\u{CD}", locale: lithuanian).lower(), "i\u{307}\u{301}");
+    test.is(LocalizedCase(text: "\u{128}", locale: lithuanian).lower(), "i\u{307}\u{303}");
+    test.is(LocalizedCase(text: "I\u{301}", locale: lithuanian).lower(), "i\u{307}\u{301}");
+    test.is(LocalizedCase(text: "J\u{303}", locale: lithuanian).lower(), "j\u{307}\u{303}");
+    test.is(
+        LocalizedCase(text: "\u{12E}\u{301}", locale: lithuanian).lower(),
+        "\u{12F}\u{307}\u{301}"
+    );
+    // Without a mark above, or past a base character, i is plain.
+    test.is(LocalizedCase(text: "IA\u{301}", locale: lithuanian).lower(), "ia\u{301}");
+    test.is(LocalizedCase(text: "I\u{328}", locale: lithuanian).lower(), "i\u{328}");
+    test.is(LocalizedCase(text: "i\u{307}\u{301}", locale: lithuanian).upper(), "I\u{301}");
+    test.is(LocalizedCase(text: "j\u{307}", locale: lithuanian).upper(), "J");
+    test.is(LocalizedCase(text: "i\u{328}\u{307}", locale: lithuanian).upper(), "I\u{328}");
+    test.is(LocalizedCase(text: "\u{1D422}\u{307}", locale: lithuanian).upper(), "\u{1D422}");
+    test.is(LocalizedCase(text: "a\u{307}", locale: lithuanian).upper(), "A\u{307}");
+    test.is(LocalizedCase(text: "ia\u{307}", locale: lithuanian).upper(), "IA\u{307}");
+}
+
+test "other languages take the Unicode default, as string.lower() and upper()" {
+    let english = Locale("en");
+    test.is(LocalizedCase(text: "TITLE I", locale: english).lower(), "title i");
+    test.is(LocalizedCase(text: "i", locale: english).upper(), "I");
+    test.is(LocalizedCase(text: "\u{130}", locale: english).lower(), "\u{130}".lower());
+    test.is(LocalizedCase(text: "\u{CC}", locale: english).lower(), "\u{EC}");
+    test.is(LocalizedCase(text: "i\u{307}", locale: english).upper(), "I\u{307}");
+    test.is(LocalizedCase(text: "Straße", locale: Locale("de")).upper(), "STRASSE");
+    test.is(LocalizedCase(text: "ΟΔΟΣ ΑΣ", locale: Locale("el")).lower(), "οδος ας");
+}
+
+test "title case: words, digraphs, ligatures, Greek and Georgian" {
+    let english = Locale("en");
+    test.is(LocalizedCase(text: "hello wORLD", locale: english).title(), "Hello World");
+    test.is(
+        LocalizedCase(text: "don't stop_now e.g. 3rd", locale: english).title(),
+        "Don't Stop_now E.g. 3rd"
+    );
+    test.is(LocalizedCase(text: "'quoted' (word)", locale: english).title(), "'Quoted' (Word)");
+    test.is(
+        LocalizedCase(text: "\u{1C6}emal \u{1C4}EMAL", locale: Locale("hr")).title(),
+        "\u{1C5}emal \u{1C5}emal"
+    );
+    test.is(LocalizedCase(text: "ßa \u{FB01}sh", locale: english).title(), "Ssa Fish");
+    test.is(LocalizedCase(text: "ΟΔΟΣ ΑΣ", locale: Locale("el")).title(), "Οδος Ας");
+    test.is(LocalizedCase(text: "\u{1FB3}\u{3A3}", locale: Locale("el")).title(), "\u{1FBC}\u{3C2}");
+    test.is(LocalizedCase(text: "ქართული ენა", locale: Locale("ka")).title(), "ქართული ენა");
+    test.is(LocalizedCase(text: "\u{301}abc", locale: english).title(), "\u{301}Abc");
+    test.is(LocalizedCase(text: "", locale: english).title(), "");
+    test.is(LocalizedCase(text: "iıI", locale: english).title(), "Iıi");
+}

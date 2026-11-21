@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
+  `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
+  `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in
+  capitals, as Unicode's SpecialCasing.txt says; other languages take the default of `string.lower()` and
+  `upper()`. `title()` starts each word with its title case (`"ǆemal"` → `"ǅemal"`, `"ßa"` → `"Ssa"`,
+  Georgian unchanged), a word joined across an apostrophe or a full stop (`"don't"`).
 - **Month and year arithmetic, today and now (#198).** `date.plus_months(n)` and `date.plus_years(n)` keep the day
   where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
   2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and

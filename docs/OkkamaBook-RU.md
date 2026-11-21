@@ -720,6 +720,10 @@ let rotated = byte(128).rotate_left(1); // byte(1)
 "Straße".upper();                    // "STRASSE": полный Unicode-регистр, без локали
 ```
 
+Регистр, который зависит от языка, например турецкие i с точкой и без,
+даёт `LocalizedCase(text:, locale:)` из `locale/case`: `lower()`, `upper()` и
+`title()`.
+
 `char` — одна кодовая точка. `"Жук".characters()` — `@char` строки,
 `letter.code()` — его кодовая точка, `letter.string()` (или `string(letter)`) —
 текст, а `char(1046)` — символ обратно; значение вне скалярных значений
@@ -4135,7 +4139,8 @@ SqliteMemory().connection()` открывает базу. `await db.execution(sq
   локаль.
 - `LocalizedDecimal`, `LocalizedCurrency`, `LocalizedDate` и `LocalizedList`
   пишут числа, деньги, даты и списки, а `LocalizedDecimalFromString` читает
-  число обратно.
+  число обратно. `LocalizedCase` меняет регистр по правилам языка (турецкий,
+  азербайджанский, литовский).
 - `PluralCategoryOf` выбирает категорию множественного числа.
   `MessageCatalog` отвечает сообщениями по `MessageKey(context:, identity:)`,
   с формами множественного числа, а `ParsedPo` читает файлы gettext.
