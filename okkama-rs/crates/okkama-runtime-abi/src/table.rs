@@ -262,7 +262,6 @@ natives! {
     JsonJsonNodeSize = 287, "runtime/json@1::json_node_size/1", "(JsonNodeState) -> int";
     JsonJsonNodeItem = 288, "runtime/json@1::json_node_item/2", "(JsonNodeState, int) -> JsonNodeState";
     JsonJsonMemberValue = 290, "runtime/json@1::json_member_value/2", "(JsonNodeState, int) -> JsonNodeState";
-    LayoutIndent = 291, "runtime/layout@1::indent/2", "(string, string) -> string";
     LayoutDedent = 292, "runtime/layout@1::dedent/1", "(string) -> string";
     LayoutWrap = 293, "runtime/layout@1::wrap/2", "(string, int) -> string";
     LayoutShorten = 294, "runtime/layout@1::shorten/3", "(string, int, string) -> string";
@@ -626,4 +625,4 @@ natives! {
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 441, 442, 443, 444, 445, 446, 447, 448, 449, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546

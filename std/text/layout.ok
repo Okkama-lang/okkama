@@ -1,7 +1,7 @@
 module text/layout v1.0.0;
 
 import "error" take InvalidArgument;
-import "runtime/layout" take indent, dedent, wrap, shorten;
+import "runtime/layout" take dedent, wrap, shorten;
 
 // Immutable text-layout values.
 //
@@ -57,7 +57,35 @@ object Indented {
 
     // The indented text.
     string() is string {
-        indent(source, indentation);
+        // A "\r" before "\n" leaves an empty piece, which stays unprefixed.
+        if source.contains("\r") {
+            return source.split("\n").map() -> piece {
+                IndentedLines(origin: piece.split("\r"), prefix: indentation).string("\r");
+            }.join("\n");
+        }
+        IndentedLines(origin: source.split("\n"), prefix: indentation).string("\n");
+    }
+}
+
+// Lines split at one kind of line break, each prefixed unless blank.
+hidden object IndentedLines {
+    has origin is @string;
+    has prefix is string;
+
+    IndentedLines(origin is @string, prefix is string) {
+        self.origin = origin;
+        self.prefix = prefix;
+    }
+
+    string(separator is string) is string {
+        origin.map() -> line {
+            if line.trim() == "" {
+                line;
+            }
+            else {
+                prefix + line;
+            }
+        }.join(separator);
     }
 }
 
@@ -152,4 +180,15 @@ test "wrap packs whole words and shorten keeps a placeholder" {
         },
         "refused"
     );
+}
+
+test "indent keeps every line break and skips lines of any whitespace" {
+    test.is(Indented(origin: "a\r\nb\rc\n", prefix: "> ").string(), "> a\r\n> b\r> c\n");
+    test.is(Indented(origin: "\r\n\r\n", prefix: "> ").string(), "\r\n\r\n");
+    test.is(
+        Indented(origin: "  a\n\t\n\u{3000}\n\u{a0}x", prefix: "- ").string(),
+        "-   a\n\t\n\u{3000}\n- \u{a0}x"
+    );
+    test.is(Indented(origin: "", prefix: "> ").string(), "");
+    test.is(Indented(origin: "a\n", prefix: "").string(), "a\n");
 }

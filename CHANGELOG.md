@@ -136,6 +136,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   stays 7bit.
 ### Changed
 
+- **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
+  most of `uuid` (parsing, printing, version, variant, v4/v8 layout) and text indentation are now Okkama; the
+  native `wrap` and `shorten` became linear on long lines (75 KB on one line: 44 ms → 0.16 ms); 30 dead natives
+  (template, json, bigint) are gone. `diff`, hex, base32/64/85, quoted-printable, `dedent`, `wrap`, `shorten` and
+  `uuid_named` stay native on measured evidence (2–30× slower in Okkama). `docs/format-natives-13.md` records every
+  module's disposition and numbers.
 - **std uses `contains` and `find` instead of reduce and split tricks (#260, part 2).** Equality membership through
   `reduce` is `contains` in 16 modules; a digit's value read through `split(...)[0].length()` (plist) and a
   position through `split(...)[0].length()` (server-sent events) are `find`; locale tags and mail check single
