@@ -72,6 +72,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
   stays 7bit.
 
+### Changed
+
+- **Mailboxes and saved cookie jars are written atomically and durably (#934).** `mail/mbox_store` and
+  `SavedCookieJar` replace their files with `TemporaryFile.replace` / `File.replace` (fsync, rename, directory
+  fsync) instead of a temporary file moved without fsync.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.

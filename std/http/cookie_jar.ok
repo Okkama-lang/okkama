@@ -26,8 +26,6 @@ import "async/atomic" take Atomic;
 import "io/stream" take Closing;
 import "fs/file" take File;
 import "fs/entry" take FileEntry;
-import "fs/directory" take Directory;
-import "fs/temp" take TemporaryDirectory, TemporaryFile, TemporaryFilePreservation;
 import "io/buffer" take ByteBuffer;
 import "encoding/single_byte" take AsciiEncoded, AsciiDecoded, InvalidAsciiByte;
 import "collections/set" take OrderedSet, Set;
@@ -597,22 +595,10 @@ object SavedCookieJar {
         self.destination = destination;
     }
 
-    // Writes the file through a temporary one and a rename, then gives it.
+    // Replaces the file atomically and durably (File.replace), then gives it;
+    // a new file is owner-only.
     file() is FileEntry {
-        let text = origin.persisted_text();
-        let scratch = TemporaryDirectory(
-            parent: Directory(destination.path().parent()),
-            prefix: "okkama-cookie-"
-        );
-        defer scratch.close();
-        let temporary = TemporaryFile(directory: Directory(scratch.path()), prefix: "snapshot-");
-        defer temporary.close();
-        temporary.write(AsciiEncoded(text).bytes());
-        temporary.flush();
-        let staged = scratch.path().child("complete");
-        TemporaryFilePreservation(origin: temporary, destination: staged).preserve();
-        temporary.close();
-        FileEntry(staged).move(destination: destination.path(), overwrite: true);
+        File(path: destination.path()).binary().replace(AsciiEncoded(origin.persisted_text()).bytes());
         destination;
     }
 }
