@@ -274,6 +274,11 @@ pub struct Standard {
     pub writing: Option<RoleId>,
     /// `cell::Cell`: stays in synchronous code (#152).
     pub cell: Option<ObjectId>,
+    /// The errors the builtin array adapters throw (#769): `collections/iteration.IterationEnded`,
+    /// `collections/sequence.EmptySequence`, `error.OutOfRange`.
+    pub iteration_ended: Option<EnumId>,
+    pub empty_sequence: Option<EnumId>,
+    pub out_of_range: Option<EnumId>,
     /// Operator roles of module `operators` (#215), by operator.
     pub operators: Operators,
 }
@@ -2740,6 +2745,10 @@ impl<'a> Registry<'a> {
             Some(TypeRef::Role(id)) => Some(id),
             _ => None,
         };
+        let error_enum = |found: Option<TypeRef>| match found {
+            Some(TypeRef::Enum(id)) if self.enums[id.0].error && self.enums[id.0].variant => Some(id),
+            _ => None,
+        };
         self.standard = Standard {
             comparing: role(lookup(self, "compare", "Comparing")),
             order: match lookup(self, "compare", "Order") {
@@ -2757,6 +2766,9 @@ impl<'a> Registry<'a> {
                 Some(TypeRef::Object(id)) => Some(id),
                 _ => None,
             },
+            iteration_ended: error_enum(lookup(self, "collections/iteration", "IterationEnded")),
+            empty_sequence: error_enum(lookup(self, "collections/sequence", "EmptySequence")),
+            out_of_range: error_enum(lookup(self, "error", "OutOfRange")),
             operators: Operators {
                 adding: role(lookup(self, "operators", "Adding")),
                 subtracting: role(lookup(self, "operators", "Subtracting")),

@@ -2,12 +2,12 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 35 files, 21329 lines
+## front — 35 files, 21339 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
 - `okkama-compiler/src/analysis/once.rs` 115 — `once let` (#491): a kept value must not depend on effects. A value that
-- `okkama-compiler/src/analysis/registry.rs` 3012 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
+- `okkama-compiler/src/analysis/registry.rs` 3022 — Таблица объявлений программы: модули, объекты, роли, enum, natives.
 - `okkama-compiler/src/analysis/thir.rs` 962 — THIR — типизированное дерево тел после семантического анализа.
 - `okkama-compiler/src/analysis/ty.rs` 231 — Семантические типы Okkama.
 - `okkama-compiler/src/analysis/check/builtin.rs` 602 — Builtin-действия значений (§6.6) и явные приведения (§6.6.1).
@@ -40,7 +40,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11605 lines
+## lower — 14 files, 11603 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1593 — Контекст lowering из THIR: специализации, функции, объявления OIR.
@@ -49,7 +49,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/mod.rs` 766 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
 - `okkama-compiler/src/lowering/std_paths.rs` 518 — Пути `std.…`: объявление стандартной библиотеки без импорта, как `std::`
-- `okkama-compiler/src/lowering/body/adapters.rs` 790 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
+- `okkama-compiler/src/lowering/body/adapters.rs` 788 — Адаптеры встроенных значений к стандартным ролям (§9.9, §12): массив как
 - `okkama-compiler/src/lowering/body/builtins.rs` 199 — Builtins built from existing instructions (#210, #211, #231): searches and
 - `okkama-compiler/src/lowering/body/calls.rs` 844 — Вызовы: actions объектов и ролей, конструкторы, natives, builtins,
 - `okkama-compiler/src/lowering/body/collections.rs` 1633 — Массивы, диапазоны, словари и функциональные операции (§12, §19).

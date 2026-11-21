@@ -8,6 +8,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Arrays played as `Sequencing` or `Cursor` throw the roles' typed errors (#769).** `Sequencing.item(index)`
+  outside `0..size()` throws `OutOfRange.because(...)`, `first()`/`last()` of an empty sequence throw
+  `EmptySequence.empty`, and `Cursor.item()`/`successor()` at the end throw `IterationEnded.ended`: catchable by
+  type or as `Error`, even when the program does not import them. They were program errors before. Indexing an
+  array directly (`values[i]`) and the array's own actions are unchanged; `collections/sequence` now imports
+  `error`.
+
 - **`LockGuard` and `Permit` are resources (#846).** A guard or permit nobody closed is released when its owner
   goes: scope exit, early return or unwinding, like any object with a `destroy`. `close()` still releases it
   earlier, and the capacity comes back once. A granted guard is an identity before its Future publishes it, so a
