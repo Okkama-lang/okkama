@@ -387,19 +387,19 @@ fn float_literals_need_digits_after_the_dot() {
     assert_eq!(token.kind, TokenKind::Float);
     assert_eq!(
         token.value,
-        Some(TokenValue::Float(FloatLiteral {
+        Some(TokenValue::Float(Box::new(FloatLiteral {
             whole: "3".into(),
             fraction: "14".into(),
             exponent: String::new(),
-        }))
+        })))
     );
     assert_eq!(
         single("2_5E-0_3").value,
-        Some(TokenValue::Float(FloatLiteral {
+        Some(TokenValue::Float(Box::new(FloatLiteral {
             whole: "25".into(),
             fraction: "0".into(),
             exponent: "-03".into(),
-        }))
+        })))
     );
     assert_eq!(kinds("1.x"), vec!["INT", "DOT", "IDENTIFIER", "EOF"]);
     assert_eq!(kinds("1..2"), vec!["INT", "DOT_DOT", "INT", "EOF"]);
@@ -753,4 +753,11 @@ fn lexer_terminates_on_arbitrary_bytes() {
             assert!(text.get(token.span.range()).is_some(), "{text:?}");
         }
     }
+}
+
+/// #471: a token's payload is sized by its largest literal; the float
+/// literal (three strings) is boxed, so a token stays within seven words.
+#[test]
+fn a_token_stays_within_seven_words() {
+    assert!(std::mem::size_of::<Token>() <= 56, "{}", std::mem::size_of::<Token>());
 }

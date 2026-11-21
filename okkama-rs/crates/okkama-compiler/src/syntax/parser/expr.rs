@@ -711,7 +711,7 @@ impl Parser<'_> {
             TokenKind::False => Literal::Bool(false),
             _ => match token.value {
                 Some(TokenValue::Int(value)) => Literal::Int(value),
-                Some(TokenValue::Float(value)) => Literal::Float(value),
+                Some(TokenValue::Float(value)) => Literal::Float(*value),
                 Some(TokenValue::Str(value)) => Literal::String(value),
                 Some(TokenValue::Char(value)) => Literal::Char(value),
                 // Literal tokens always carry a value; stay total anyway.

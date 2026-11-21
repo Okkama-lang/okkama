@@ -411,11 +411,11 @@ impl Lexer<'_> {
             ),
             (fraction, exponent) => self.add_value(
                 TokenKind::Float,
-                TokenValue::Float(FloatLiteral {
+                TokenValue::Float(Box::new(FloatLiteral {
                     whole,
                     fraction: fraction.unwrap_or_else(|| "0".to_string()),
                     exponent: exponent.unwrap_or_default(),
-                }),
+                })),
             ),
         }
     }

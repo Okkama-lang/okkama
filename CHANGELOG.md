@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Tokens take 56 bytes instead of 88 (#471).** A token's literal payload was sized by the float literal
+  (three strings); it is boxed now. About 165 000 tokens per MiB of source: 14.6 → 9.3 MB of tokens per MiB;
+  parsing all of std (499 files, 5.3 MB) unchanged at ~73 ms.
 - **Native handles take 48 bytes instead of 184 (#439).** Every slot of the handle arena paid for the largest
   provider state; the three large ones (an open rooted file, a directory listing, a temporary directory) now
   live behind a box, allocated once per open. 100 000 live parsed JSON documents: peak RSS 92.6 → 71.0 MB,

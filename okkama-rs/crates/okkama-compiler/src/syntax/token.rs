@@ -438,7 +438,8 @@ pub struct StrLiteral {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TokenValue {
     Int(IntLiteral),
-    Float(FloatLiteral),
+    /// Boxed: three strings would size every token's payload (#471).
+    Float(Box<FloatLiteral>),
     Str(StrLiteral),
     Char(char),
 }
