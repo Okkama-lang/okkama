@@ -840,10 +840,10 @@ hidden object PlistDecimalReal {
             confirm written.length() > start
                 else throw InvalidPlist.located(0, "empty real exponent");
             (start..written.length()).reduce(0) -> value, index {
-                let digit = "0123456789".split(written.slice(index, index + 1));
-                confirm digit.size() == 2 && value <= 4096
+                let digit = "0123456789".find(written.slice(index, index + 1));
+                confirm digit != Maybe<int>.none && value <= 4096
                     else throw InvalidPlist.located(0, "invalid real exponent");
-                let following = value * 10 + digit[0].length();
+                let following = value * 10 + (digit else 0);
                 confirm following <= 4096
                     else throw InvalidPlist.located(0, "real exponent limit exceeded");
                 following;
@@ -862,7 +862,7 @@ hidden object PlistDecimalReal {
             spelling;
         };
         let coefficient = (0..digits.length()).reduce(0.rat()) -> value, index {
-            value * 10.rat() + "0123456789".split(digits.slice(index, index + 1))[0].length().rat();
+            value * 10.rat() + ("0123456789".find(digits.slice(index, index + 1)) else 0).rat();
         };
         let factor = (0..(if exponent < 0 {
             -exponent;
@@ -1451,5 +1451,16 @@ test "a plist dictionary reads like json (#141)" {
     };
     test.throws(PlistKindMismatch) {
         ParsedPlist(Utf8Encoded("<plist><true/></plist>").bytes()).dictionary();
+    };
+}
+
+test "an XML real's exponent takes only digits, and its value reads digit by digit (#260)" {
+    test.is(PlistDecimalReal("15e-1").float(), 1.5);
+    test.is(PlistDecimalReal("+2.25E2").float(), 225.0);
+    test.throws(InvalidPlist) {
+        let letter = PlistDecimalReal("1e1x").float();
+    };
+    test.throws(InvalidPlist) {
+        let empty = PlistDecimalReal("1e+").float();
     };
 }
