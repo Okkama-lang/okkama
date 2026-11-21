@@ -461,6 +461,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     }
     let _span = okkama_devtrace::span!("jit", "compile");
     okkama_devtrace::count!("jit", "functions compiled");
+    let closure_reference = runtime.closure_bridge_reference;
     let Runtime { heap, loaded, jit, invocations, constants, limits, budget, stats, .. } = runtime;
     let resources = &runtime.resources;
     let started = stats.is_some().then(std::time::Instant::now);
@@ -548,6 +549,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             frame: None,
             polled: limits.polled(),
             count_helpers: stats.is_some(),
+            closure_reference,
             fuel: budget.fuel.address(),
             refusable: limits.memory.is_some(),
             pc: 0,
@@ -741,6 +743,8 @@ struct Emitter<'a, 'b> {
     polled: bool,
     /// Count helper calls (`--stats`).
     count_helpers: bool,
+    /// `SPARROW_CORE_CLOSURE_BRIDGE=reference`: every closure call goes through the helper.
+    closure_reference: bool,
     /// Address of the runtime's fuel cell.
     fuel: i64,
     /// Allocation slow paths may refuse under a memory budget.
@@ -1165,6 +1169,62 @@ impl Emitter<'_, '_> {
         let result = self.builder.inst_results(call)[0];
         self.check(pc);
         result
+    }
+
+    /// A closure call through the runtime's helper: it reads the captures, compiles the function if needed and
+    /// makes an async one's cold Future.
+    fn closure_call_slow(&mut self, pc: usize, callee: &okkama_sparrow::Register, args: &[okkama_sparrow::Register]) -> Value {
+        let ctx = self.ctx();
+        let closure = self.get(callee);
+        let address = self.spill(args);
+        let count = self.iconst(args.len() as i64);
+        let result = self.helper(|h| h.call_closure, &[ctx, closure, address, count]).expect("result");
+        self.check(pc);
+        result
+    }
+
+    /// A closure call (#928): a synchronous function whose captures fill the first parameters is called
+    /// directly, the captures read from the closure's fields, for up to `CLOSURE_DIRECT_CAPTURES` captures; the
+    /// rest (async functions, more captures) goes through the helper. The function comes from the closure's
+    /// header, and an uncompiled one is compiled on its first call, as any dynamic call.
+    fn closure_call(&mut self, pc: usize, callee: &okkama_sparrow::Register, args: &[okkama_sparrow::Register]) -> Value {
+        const CLOSURE_DIRECT_CAPTURES: usize = 2;
+        let closure = self.get(callee);
+        let header = self.builder.ins().load(types::I64, MEMORY, closure, 0);
+        let function = self.builder.ins().ushr_imm_u(header, 32);
+        let base = self.iconst(self.invocations.as_ptr() as i64);
+        let offset = self.builder.ins().imul_imm_u(function, std::mem::size_of::<runtime::Invocation>() as i64);
+        let entry = self.builder.ins().iadd(base, offset);
+        // uload32/uload8 zero-extend into an i64 themselves.
+        let params = self.builder.ins().uload32(MEMORY, entry, std::mem::offset_of!(runtime::Invocation, params) as i32);
+        let asynchronous = self.builder.ins().uload8(types::I64, MEMORY, entry, std::mem::offset_of!(runtime::Invocation, is_async) as i32);
+        let words: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
+        let merge = self.builder.create_block();
+        self.builder.append_block_param(merge, types::I64);
+        for captured in 0..=CLOSURE_DIRECT_CAPTURES {
+            if args.len() + captured > 8 {
+                break;
+            }
+            let arity = self.builder.ins().icmp_imm_u(IntCC::Equal, params, (args.len() + captured) as i64);
+            let sync = self.builder.ins().icmp_imm_u(IntCC::Equal, asynchronous, 0);
+            let direct = self.builder.ins().band(arity, sync);
+            let call = self.builder.create_block();
+            let next = self.builder.create_block();
+            self.builder.ins().brif(direct, call, &[], next, &[]);
+            self.builder.switch_to_block(call);
+            let mut values = Vec::with_capacity(captured + words.len());
+            for index in 0..captured {
+                values.push(self.builder.ins().load(types::I64, MEMORY, closure, (8 + index * 8) as i32));
+            }
+            values.extend_from_slice(&words);
+            let result = self.call(pc, CallTarget::Dynamic(function), &values);
+            self.builder.ins().jump(merge, &[result.into()]);
+            self.builder.switch_to_block(next);
+        }
+        let result = self.closure_call_slow(pc, callee, args);
+        self.builder.ins().jump(merge, &[result.into()]);
+        self.builder.switch_to_block(merge);
+        self.builder.block_params(merge)[0]
     }
 
     /// Words of `registers` in the function's spill area; returns its address.
@@ -2045,11 +2105,11 @@ impl Emitter<'_, '_> {
                 self.set(&dst.0, closure);
             }
             I::CallFn { dst, callee, args } => {
-                let closure = self.get(callee);
-                let address = self.spill(args);
-                let count = self.iconst(args.len() as i64);
-                let result = self.helper(|h| h.call_closure, &[ctx, closure, address, count]).expect("result");
-                self.check(pc);
+                let result = if self.plain || self.count_helpers || self.closure_reference {
+                    self.closure_call_slow(pc, callee, args)
+                } else {
+                    self.closure_call(pc, callee, args)
+                };
                 if let Some(dst) = dst {
                     self.set_word(&dst.0, result);
                 }
@@ -3102,4 +3162,6 @@ mod profile_tests {
 mod ready_callees_tests;
 #[cfg(test)]
 mod accessor_inline_tests;
+#[cfg(test)]
+mod closure_call_tests;
 

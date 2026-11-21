@@ -24,6 +24,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A closure call goes straight to its body (#928, part 1).** Every call of a function value went through the
+  runtime's helper (arguments spilled, a call into Rust, an arity trampoline). Machine code now reads the
+  function from the closure, and for a synchronous body with up to two captures calls it directly with the
+  captures from the closure's fields; async bodies, more captures, statistics and `SPARROW_CORE_PLAIN` keep the
+  helper. 09-closures in steady state 73.1 → 31.4 ms (Java: 8.6), closure-call 8.4 → 4.7 ns, closure-create
+  26.6 → 18.7 ns, filter-map −8%.
 - **The collector waits for 4 MB of allocation, not 1 MB (#920, owner's approval).** After a collection the next
   one comes when max(live, 4 MB) has been allocated. `bench/gc`: steady time −11% on ownership, −17% on
   payload, −28% on deep, −9% on burst, unchanged on bigint and tiny; peak RSS +1–4 MB (+12.6 MB on burst), the

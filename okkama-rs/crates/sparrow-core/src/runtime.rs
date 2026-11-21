@@ -113,7 +113,7 @@ pub struct Runtime {
     /// Stable allocation embedded in machine code; code is 0 until compiled.
     pub invocations: Box<[Invocation]>,
     /// Same-binary diagnostic control, read once at runtime construction.
-    closure_bridge_reference: bool,
+    pub(crate) closure_bridge_reference: bool,
     /// Constants embedded in machine code; always roots.
     pub constants: Vec<(Word, Repr)>,
     /// Values held by Rust while machine code runs (entry arguments, results).

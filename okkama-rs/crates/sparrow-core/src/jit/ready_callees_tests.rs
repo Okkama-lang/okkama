@@ -454,8 +454,10 @@ function f1 "caller" {
             let result = runtime.run_function_with(1, &[big, capture, argument], 2 << 20).unwrap();
             assert_eq!(runtime.heap.integer(runtime.heap.field(result, 0)).to_string(), "123456789012345678901234567890");
             assert_eq!(runtime.heap.text(runtime.heap.field(result, 1)), "captureargument");
+            // #928: the helper stays as the fallback; the direct path calls the body for 0, 1 or 2 captures
+            // (two here), one indirect call per capture count the site can take (its one argument + up to 2).
             assert_eq!(helper_calls(&runtime, 1, runtime.jit.helpers.call_closure), 1);
-            assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 0);
+            assert_eq!(opcodes(&runtime, 1, Opcode::CallIndirect), 3);
         }
     }
 }
