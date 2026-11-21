@@ -237,6 +237,9 @@ fn intrinsic_step(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: u
             let owner = runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
             let guard = runtime.heap.object_new(owner, &[]);
             runtime.state_new(guard, State::Grant { pool, closed: false });
+            // #846: a granted LockGuard or Permit is a resource (its `destroy` closes it): its identity exists before
+            // the Future publishes it, so the outcome owns it and its owner's close releases the grant.
+            runtime.created(owner as usize, guard);
             Done(guard)
         }
         BarrierWait => {

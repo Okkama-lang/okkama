@@ -747,3 +747,76 @@ async main() is int {
 "#);
     assert_eq!(output, "action ends\nspawned\ndestroy s\npublished\n");
 }
+
+/// #846: a granted LockGuard or Permit is a resource. Its owner releases it at scope exit, early return and
+/// unwinding; a temporary lives until its scope ends; a Future's cache keeps it across borrowed awaits; a returned
+/// guard follows its taker; `close()` then `destroy` gives the capacity back once; a cancelled wait grants nothing.
+#[test]
+fn lock_guards_and_permits_are_released_by_their_owner() {
+    let output = stdout_of("grants", r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/lock" take Lock, LockGuard;
+import "async/semaphore" take Semaphore, Permit;
+enum Stop is Error = (now);
+object Work {
+    Work();
+    async acquire(lock is Lock) is LockGuard { await lock.guard(); }
+    async early(lock is Lock, leave is bool) is int {
+        let guard = await lock.guard();
+        if leave { return 1; }
+        2;
+    }
+    async failing(lock is Lock) is int {
+        let guard = await lock.guard();
+        throw Stop.now;
+    }
+}
+async main() is int {
+    let out = Stdout();
+    let lock = Lock();
+    {
+        let guard = await lock.guard();
+        out.writeln("held " + (if lock.locked() { "yes"; } else { "no"; }));
+    }
+    out.writeln("scope exit releases " + (if lock.locked() { "no"; } else { "yes"; }));
+    await Work().early(lock, true);
+    out.writeln("early return releases " + (if lock.locked() { "no"; } else { "yes"; }));
+    try { await Work().failing(lock); } catch e is Stop { out.writeln("unwind releases " + (if lock.locked() { "no"; } else { "yes"; })); }
+    { await lock.guard(); out.writeln("temporary held " + (if lock.locked() { "yes"; } else { "no"; })); }
+    out.writeln("temporary releases " + (if lock.locked() { "no"; } else { "yes"; }));
+    {
+        let future = lock.guard();
+        await future;
+        out.writeln("cached held " + (if lock.locked() { "yes"; } else { "no"; }));
+        await future;
+        out.writeln("borrowed await keeps " + (if lock.locked() { "yes"; } else { "no"; }));
+    }
+    out.writeln("future owner releases " + (if lock.locked() { "no"; } else { "yes"; }));
+    {
+        let guard = await Work().acquire(lock);
+        out.writeln("returned guard held " + (if lock.locked() { "yes"; } else { "no"; }));
+        guard.close();
+        out.writeln("close releases " + (if lock.locked() { "no"; } else { "yes"; }));
+    }
+    out.writeln("destroy after close no-op " + (if lock.locked() { "no"; } else { "yes"; }));
+    {
+        let guard = await lock.guard();
+        let waiting = lock.guard();
+        waiting.cancel();
+        try { await waiting; } catch e is Cancelled { out.writeln("cancelled wait"); }
+    }
+    out.writeln("after cancelled wait free " + (if lock.locked() { "no"; } else { "yes"; }));
+    let sem = Semaphore(permits: 2);
+    {
+        let a = await sem.permit();
+        let b = await sem.permit();
+        out.writeln("permits " + (if sem.permits() == 0 { "0"; } else if sem.permits() == 1 { "1"; } else if sem.permits() == 2 { "2"; } else { "many"; }));
+        a.close();
+        out.writeln("permits " + (if sem.permits() == 0 { "0"; } else if sem.permits() == 1 { "1"; } else if sem.permits() == 2 { "2"; } else { "many"; }));
+    }
+    out.writeln("permits " + (if sem.permits() == 0 { "0"; } else if sem.permits() == 1 { "1"; } else if sem.permits() == 2 { "2"; } else { "many"; }));
+    0;
+}
+"#);
+    assert_eq!(output, "held yes\nscope exit releases yes\nearly return releases yes\nunwind releases yes\ntemporary held yes\ntemporary releases yes\ncached held yes\nborrowed await keeps yes\nfuture owner releases yes\nreturned guard held yes\nclose releases yes\ndestroy after close no-op yes\ncancelled wait\nafter cancelled wait free yes\npermits 0\npermits 1\npermits 2\n");
+}

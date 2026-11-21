@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **`LockGuard` and `Permit` are resources (#846).** A guard or permit nobody closed is released when its owner
+  goes: scope exit, early return or unwinding, like any object with a `destroy`. `close()` still releases it
+  earlier, and the capacity comes back once. A granted guard is an identity before its Future publishes it, so a
+  returned guard follows its taker and a cached one stays held across borrowed awaits.
+
 - **A Future owns its fresh inputs; an async action releases the unused ones when it completes (#587, OIR-2
   §10.1).** Fresh call arguments belong to the Future (its INPUTS) instead of the caller's scope. When an async
   body's action completes, what its result does not keep is destroyed before the Future publishes the result
