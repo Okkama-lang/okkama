@@ -2375,7 +2375,9 @@ def enum_match(type_name, ctor, cases, subject, style):
         rest = " !! _: 0" if len(cases) > 1 else ""
         return f"({subject} ?? {arms[0][0]}: {arms[0][1]}{rest})"
     if style == "else":
-        return f"(match {subject} {{ case {arms[0][0]} {{ {arms[0][1]}; }} else {{ 0; }} }})"
+        # An else after cases that cover every value is unreachable (#286): a one-case enum has none.
+        rest = " else { 0; }" if len(cases) > 1 else ""
+        return f"(match {subject} {{ case {arms[0][0]} {{ {arms[0][1]}; }}{rest} }})"
     return f"(match {subject} {{ " + " ".join(f"case {h} {{ {r}; }}" for h, r in arms) + " })"
 
 
