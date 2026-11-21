@@ -605,6 +605,19 @@ pub fn inspect(
     loader: &mut dyn ModuleLoader,
     test_mode: bool,
 ) -> crate::ide::Inspection {
+    inspect_parsed(source, None, loader, test_mode)
+}
+
+/// [`inspect`] of a file the caller has already parsed (#472): `parsed` must
+/// be the parse `test_mode` asks for -- the full grammar when testing, the
+/// production one otherwise. A full parse of a file without `test` or `fake`
+/// items is also its production parse, since only their bodies differ.
+pub fn inspect_parsed(
+    source: &SourceFile,
+    parsed: Option<crate::syntax::ast::Program>,
+    loader: &mut dyn ModuleLoader,
+    test_mode: bool,
+) -> crate::ide::Inspection {
     use crate::ide::{Diagnostic, Inspection, LineIndex, Severity};
     use crate::syntax::{self, ParseMode, ParseOptions, prune};
 
@@ -617,9 +630,9 @@ pub fn inspect(
         },
         ..ParseOptions::default()
     };
-    let parsed = match syntax::parse(source, &options) {
-        Ok(program) => program,
-        Err(_) => {
+    let parsed = match parsed.map_or_else(|| syntax::parse(source, &options).ok(), Some) {
+        Some(program) => program,
+        None => {
             // Every syntax error at once, and the outline of the declarations
             // that parsed (#47); nothing damaged goes on to analysis.
             let recovered = syntax::parse_recovering(source, &options);

@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::process::ExitCode;
 use std::str::FromStr;
 
@@ -39,10 +40,11 @@ use super::FileLoader;
 /// Открытый файл.
 struct Document {
     path: PathBuf,
-    text: String,
-    inspection: Inspection,
+    /// Shared, not copied, with the loaders' overlays and `good` (#472).
+    text: Rc<str>,
+    inspection: Rc<Inspection>,
     /// Последний разобранный текст и его результат (наведение при ошибке разбора).
-    good: Option<(String, Inspection)>,
+    good: Option<(Rc<str>, Rc<Inspection>)>,
     /// Пути, в которые публиковались диагностики этого файла.
     published: Vec<String>,
     /// Версия текста от клиента: диагностики публикуются с ней (#48).
@@ -222,8 +224,8 @@ impl Server {
                     uri.to_string(),
                     Document {
                         path,
-                        text: text.to_string(),
-                        inspection: Inspection::default(),
+                        text: Rc::from(text),
+                        inspection: Rc::default(),
                         good: None,
                         published: Vec::new(),
                         version: document.get("version").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok()),
@@ -245,7 +247,7 @@ impl Server {
                     .and_then(Value::as_str);
                 let version = params.pointer("/textDocument/version").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok());
                 if let (Some(document), Some(text)) = (self.documents.get_mut(uri), text) {
-                    document.text = text.to_string();
+                    document.text = Rc::from(text);
                     document.version = version;
                     dirty.push(uri.to_string());
                 }
@@ -282,7 +284,7 @@ impl Server {
         for document in self.documents.values() {
             let canonical =
                 std::fs::canonicalize(&document.path).unwrap_or_else(|_| document.path.clone());
-            loader.overlay.insert(canonical, document.text.clone());
+            loader.overlay.insert(canonical, Rc::clone(&document.text));
         }
         loader
     }
@@ -295,10 +297,10 @@ impl Server {
             .unwrap_or_else(|_| document.path.clone())
             .display()
             .to_string();
-        let Ok(source) = SourceFile::new(name, document.text.clone()) else {
+        let Ok(source) = SourceFile::new(name, document.text.to_string()) else {
             return;
         };
-        let inspection = super::inspect_file(&source, |test_mode| self.loader(test_mode));
+        let inspection = Rc::new(super::inspect_file(&source, |test_mode| self.loader(test_mode)));
 
         // Диагностики по файлам; ошибки других файлов — ещё и на первом импорте корня.
         let mut by_path: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
@@ -355,7 +357,7 @@ impl Server {
         }
         if let Some(document) = self.documents.get_mut(uri) {
             if inspection.parsed {
-                document.good = Some((document.text.clone(), inspection.clone()));
+                document.good = Some((Rc::clone(&document.text), Rc::clone(&inspection)));
             }
             document.inspection = inspection;
             document.published = published;
@@ -459,10 +461,10 @@ impl Server {
         let document = self.documents.get(uri)?;
         let position = ide::Position { line, character };
         let (text, inspection) = if document.inspection.parsed {
-            (&document.text, &document.inspection)
+            (&*document.text, &*document.inspection)
         } else {
             let (text, inspection) = document.good.as_ref()?;
-            (text, inspection)
+            (&**text, &**inspection)
         };
         let offset = LineIndex::new(text).offset(position);
         inspection.symbol_at(offset).cloned()
@@ -477,10 +479,10 @@ impl Server {
         let document = self.documents.get(uri)?;
         let offset = LineIndex::new(&document.text).offset(ide::Position { line, character });
         let (text, inspection) = if document.inspection.parsed {
-            (document.text.as_str(), &document.inspection)
+            (&*document.text, &*document.inspection)
         } else {
             let (text, inspection) = document.good.as_ref()?;
-            (text.as_str(), inspection)
+            (&**text, &**inspection)
         };
         Some((document, offset, text, inspection))
     }
@@ -788,7 +790,7 @@ impl Server {
         else {
             return Ok(Vec::new());
         };
-        let source = SourceFile::new(document.path.display().to_string(), document.text.clone())
+        let source = SourceFile::new(document.path.display().to_string(), document.text.to_string())
             .map_err(|error| error.to_string())?;
         let formatted = match okkama_compiler::syntax::format::format(&source) {
             Ok(formatted) => formatted,
@@ -797,7 +799,7 @@ impl Server {
                 return Err(format!("okkama fmt: {message}"));
             }
         };
-        if formatted == document.text {
+        if *formatted == *document.text {
             return Ok(Vec::new());
         }
         let lines = LineIndex::new(&document.text);

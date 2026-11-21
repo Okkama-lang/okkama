@@ -870,9 +870,12 @@ fn lint_command(args: &[String]) -> Outcome {
 /// (#649). Предупреждения и находки линтера — только тестового прохода: без
 /// тестов импорт или `hidden`, нужные лишь тестам, выглядели бы лишними.
 fn inspect_file(source: &SourceFile, loader_for: impl Fn(bool) -> FileLoader) -> Inspection {
-    let test_mode = okkama_compiler::ide::has_tests(source);
+    // One full parse decides the mode and is the first pass's parse (#472):
+    // without test items it is also the production parse.
+    let full = okkama_compiler::syntax::parse(source, &okkama_compiler::syntax::ParseOptions::default()).ok();
+    let test_mode = full.as_ref().is_none_or(okkama_compiler::ide::program_has_tests);
     let mut loader = loader_for(test_mode);
-    let mut inspection = lowering::inspect(source, &mut loader, test_mode);
+    let mut inspection = lowering::inspect_parsed(source, full, &mut loader, test_mode);
     if !test_mode || !inspection.parsed {
         return inspection;
     }
@@ -1148,7 +1151,7 @@ struct FileLoader {
     test_mode: bool,
     /// Несохранённые тексты открытых в редакторе файлов (`okkama lsp`), по
     /// каноническому пути.
-    overlay: std::collections::HashMap<PathBuf, String>,
+    overlay: std::collections::HashMap<PathBuf, std::rc::Rc<str>>,
 }
 
 impl FileLoader {
@@ -1309,7 +1312,7 @@ impl FileLoader {
         if let Some(canonical) = locate(file, dirs) {
             let name = canonical.display().to_string();
             let text = match self.overlay.get(&canonical) {
-                Some(text) => text.clone(),
+                Some(text) => text.to_string(),
                 None => std::fs::read_to_string(&canonical)
                     .map_err(|error| format!("okkama: cannot read import `{name}`: {error}\n"))?,
             };

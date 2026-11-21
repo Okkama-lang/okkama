@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The language server shares document text and parses a file once per check (#472).** Open documents'
+  text and their last good inspection are shared (`Rc`) with the loaders' overlays instead of copied on every
+  check, and the full parse that decides test mode is the first pass's parse (without test items it is also
+  the production parse). Diagnostics unchanged.
 - **Tokens take 56 bytes instead of 88 (#471).** A token's literal payload was sized by the float literal
   (three strings); it is boxed now. About 165 000 tokens per MiB of source: 14.6 → 9.3 MB of tokens per MiB;
   parsing all of std (499 files, 5.3 MB) unchanged at ~73 ms.
