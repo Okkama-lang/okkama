@@ -147,6 +147,24 @@ An `else if` chain works in every position: as a statement, as the tail of an
 action (as in `letter`) and as a value after `let x =`. Every link has its
 `else`, and all branches have one type (issue #257).
 
+### Compact `if`
+
+When each branch is one expression, `if` can be written with colons:
+
+{{example:09-if-compact}}
+
+`if c: a else: b` is not a second conditional. The parser builds the block
+form from it, each branch a block holding its expression, so the checker and
+the runtime never learn which form was written (issue #921). Both branches are
+required, a branch is an expression and never a block, and the two forms do
+not mix: `if c: a else { b; }` is a syntax error. This does not reopen the
+`goto fail` door. A compact branch cannot hold a statement, and the `else` is
+always there, so no line can sit under a condition without its being visible.
+
+An `else:` belongs to the nearest `if`, as in `shown`. A `value else fallback`
+inside a branch needs parentheses, as in `kitchen`: `else` followed by `:` is
+always the conditional's, never a fallback.
+
 ### `match`
 
 `match` compares a subject with each case's values using `==`. A case may list

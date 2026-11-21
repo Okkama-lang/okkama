@@ -5634,6 +5634,56 @@ Kotlin и Rust тоже это отвергают. Если разрешить �
 действия (как в `letter`) и как значение после `let x =`. У каждого звена свой
 `else`, и все ветви дают один тип (тикет #257).
 
+### Компактный `if`
+
+Если каждая ветвь — одно выражение, `if` можно записать через двоеточия:
+
+```okkama
+module bible/if_compact v1.0.0;
+
+import "io/stdout" take Stdout;
+
+object Thermostat {
+    has target is int;
+    Thermostat(:target);
+    // A compact if as the action's value.
+    mode(reading is int) is string { if reading < target: "heat" else: "idle"; }
+}
+
+main() is int {
+    let out = Stdout();
+    let thermostat = Thermostat(target: 20);
+    out.writeln(thermostat.mode(17) + " " + thermostat.mode(23));
+    let polling = false;
+    let timeout = if polling: 30 else: 5;
+    // else: goes to the nearest if; a branch's fallback takes parentheses.
+    let readings = ["kitchen": 19];
+    let shown = if timeout > 10: "slow" else: if timeout > 1: "fast" else: "instant";
+    let kitchen = if polling: 0 else: (readings["hall"] else -1);
+    out.writeln(timeout.string() + " " + shown + " " + kitchen.string());
+    0;
+}
+```
+
+Вывод:
+
+```text
+heat idle
+5 fast -1
+```
+
+`if c: a else: b` — не второе условие. Парсер строит из него блочную форму,
+каждая ветвь — блок с одним выражением, поэтому проверка типов и рантайм не
+узнают, какая форма была написана (тикет #921). Обе ветви обязательны, ветвь —
+выражение и никогда не блок, формы не смешиваются: `if c: a else { b; }` —
+синтаксическая ошибка. Дверь `goto fail` это не открывает. В компактной ветви
+не может стоять инструкция, а `else` есть всегда, поэтому ни одна строка не
+окажется под условием незаметно.
+
+`else:` относится к ближайшему `if`, как в `shown`. Fallback `value else
+fallback` внутри ветви берётся в скобки, как в `kitchen`: `else`, за которым
+идёт `:`, всегда принадлежит условию и никогда не начинает fallback.
+
 ### `match`
 
 `match` сравнивает субъект со значениями каждой ветви через `==`. Ветвь может
