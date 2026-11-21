@@ -4200,6 +4200,9 @@ ALPN. По SIGTERM или SIGINT сервер перестаёт принима�
 завершает процесс сразу. В тестах
 `await WebTestClient(routes).get("/notes/7")` проводит запрос через маршруты без
 сети и отвечает тем же `ClientResponse`, что получает настоящий клиент.
+Каждый метод принимает `headers:`, а `WebTestClient(routes: routes, cookies:
+MemoryCookieJar())` хранит cookies, которые ставят ответы, и отправляет их
+обратно, так что вход и запросы после него проверяются целиком.
 
 `Caching(origin: client, cache: MemoryHttpCache(clock:, maximum:), clock:)`
 отвечает свежими ответами из памяти, а `Proxied(proxy: ProxyPolicy(…), …)`
