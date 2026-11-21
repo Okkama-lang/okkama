@@ -40,11 +40,11 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11691 lines
+## lower — 14 files, 11694 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
 - `okkama-compiler/src/lowering/ctx.rs` 1597 — Контекст lowering из THIR: специализации, функции, объявления OIR.
-- `okkama-compiler/src/lowering/futures.rs` 185 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
+- `okkama-compiler/src/lowering/futures.rs` 188 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 345 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
 - `okkama-compiler/src/lowering/mod.rs` 775 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/lowering/modules.rs` 291 — Загрузка импортов и связывание модулей программы (OIR-1 §2).
@@ -105,10 +105,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1139 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 2928 lines
+## ownership-runtime — 2 files, 2952 lines
 
-- `sparrow-core/src/failures.rs` 2204 — Failures, resource regions and the text of a failure that reaches the top.
-- `sparrow-core/src/tasks.rs` 724 — Stackless async: the heap frame of an async call is also its Future.
+- `sparrow-core/src/failures.rs` 2231 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/tasks.rs` 721 — Stackless async: the heap frame of an async call is also its Future.
 
 ## sparrow — 63 files, 30909 lines
 

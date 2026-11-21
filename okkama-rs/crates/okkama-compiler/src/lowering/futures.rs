@@ -152,9 +152,10 @@ pub(super) fn take_unique(ctx: &mut Ctx<'_, '_>, functions: &mut [Function]) {
 /// running body exactly as before.
 ///
 /// Qualifies: `call %f = F(...)`, then only `region.track R, %f`, then `await.take %f`, in one block with an unwind
-/// edge, where F is an async Okkama action, or a runtime driver whose arguments are all plain (a driver keeps fresh
-/// inputs past its settlement, #587/#845, so the take would leave them without an owner).
-pub(super) fn own_awaited_temporaries(ctx: &Ctx<'_, '_>, functions: &mut [Function]) {
+/// edge, where F is async. A runtime driver keeps fresh inputs past its settlement (#587, #845: a collector's
+/// items, a send's message), so for a driver the track follows the take on the normal path: the scope still closes
+/// those inputs, and a Future with nothing left to close is not kept (`region_add`).
+pub(super) fn own_awaited_temporaries(functions: &mut [Function]) {
     let drivers: Vec<bool> = functions.iter().map(|function| function.attrs.iter().any(|attr| {
         matches!(attr, crate::ir::Attr::Extern(_) | crate::ir::Attr::Intrinsic { .. })
     })).collect();
@@ -162,30 +163,32 @@ pub(super) fn own_awaited_temporaries(ctx: &Ctx<'_, '_>, functions: &mut [Functi
     for function in functions.iter_mut() {
         let mut block = 0;
         while block < function.blocks.len() {
-            if let Some(at) = awaited_temporary(ctx, function, block, &async_calls, &drivers) {
-                split_awaited_temporary(function, block, at);
+            if let Some((at, driver)) = awaited_temporary(function, block, &async_calls, &drivers) {
+                split_awaited_temporary(function, block, at, driver);
             }
             block += 1;
         }
     }
 }
 
-/// The index of the call of a qualifying `call; region.track; await.take` triple in `block`.
-fn awaited_temporary(ctx: &Ctx<'_, '_>, function: &Function, block: usize, async_calls: &[bool], drivers: &[bool]) -> Option<usize> {
+/// The index of the call of a qualifying `call; region.track; await.take` triple in `block`, and whether the
+/// callee is a runtime driver.
+fn awaited_temporary(function: &Function, block: usize, async_calls: &[bool], drivers: &[bool]) -> Option<(usize, bool)> {
     let body = &function.blocks[block];
     body.unwind.as_ref()?;
-    body.insts.windows(3).position(|triple| {
-        let (Some(future), InstKind::Call { func, args }) = (triple[0].result, &triple[0].kind) else { return false };
-        async_calls[func.0]
-            && (!drivers[func.0] || args.iter().all(|arg| ctx.is_plain(&function.values[arg.0])))
+    body.insts.windows(3).enumerate().find_map(|(index, triple)| {
+        let (Some(future), InstKind::Call { func, .. }) = (triple[0].result, &triple[0].kind) else { return None };
+        (async_calls[func.0]
             && matches!(triple[1].kind, InstKind::RegionTrack { value, .. } if value == future)
-            && matches!(triple[2].kind, InstKind::AwaitTake(input) if input == future)
+            && matches!(triple[2].kind, InstKind::AwaitTake(input) if input == future))
+            .then_some((index, drivers[func.0]))
     })
 }
 
 /// `[.. call %f; region.track R, %f; await.take %f; rest]` (unwind U) becomes `[.. call %f] -> [await.take %f]`
-/// (unwind L) `-> [rest]` (unwind U), with `L(failure): region.track R, %f; br U(args.., failure)`.
-fn split_awaited_temporary(function: &mut Function, block: usize, at: usize) {
+/// (unwind L) `-> [rest]` (unwind U), with `L(failure): region.track R, %f; br U(args.., failure)`; for a driver
+/// `rest` starts with `region.track R, %f`.
+fn split_awaited_temporary(function: &mut Function, block: usize, at: usize, driver: bool) {
     use crate::ir::{Block, BlockId, Target, Terminator};
     let InstKind::RegionTrack { region, value: future } = function.blocks[block].insts[at + 1].kind else {
         unreachable!("checked by awaited_temporary")
@@ -206,6 +209,9 @@ fn split_awaited_temporary(function: &mut Function, block: usize, at: usize) {
         insts: vec![take],
         term: Terminator { kind: TermKind::Br(Target::new(tail)), span },
     });
+    if driver {
+        rest.insert(0, track.clone());
+    }
     function.blocks.push(Block { params: Vec::new(), unwind: Some(unwind.clone()), insts: rest, term });
     let failure = crate::ir::ValueId(function.values.len());
     function.values.push(Type::Failure);

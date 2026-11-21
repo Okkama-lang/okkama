@@ -492,7 +492,7 @@ fn lower_analyzed(
     ctx.current = None;
     check_once_lets(&ctx, &functions)?;
     futures::take_unique(&mut ctx, &mut functions);
-    futures::own_awaited_temporaries(&ctx, &mut functions);
+    futures::own_awaited_temporaries(&mut functions);
     settle_where_needed(&mut ctx, &mut functions);
     let owners: Vec<usize> = (0..functions.len()).map(|index| ctx.task_module(index)).collect();
     let mut module = ctx.module(program, imports, functions);

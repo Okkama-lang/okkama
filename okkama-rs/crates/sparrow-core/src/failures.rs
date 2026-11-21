@@ -1423,11 +1423,26 @@ impl Runtime {
         }
     }
 
+    /// #932: a consumed Future with no ownership region left (a driver's outcome taken, nothing kept): a region
+    /// closing it would release nothing.
+    fn spent_future(&self, value: Word) -> bool {
+        value != UNBOUND
+            && value & 1 == 0
+            && heap::kind(self.heap.header_of(value)) == heap::FRAME
+            && crate::tasks::get(value, crate::tasks::STATE) == crate::tasks::CONSUMED
+            && self.held(value, crate::tasks::Held::Owned) == UNBOUND
+            && self.held(value, crate::tasks::Held::Inputs) == UNBOUND
+    }
+
     pub(crate) fn region_add(&mut self, region: Word, value: Word, own: bool) {
         if self.resources.pending_pins.is_some() {
             self.claim_pins(region, value);
         }
         if !self.may_reach_free(value) {
+            return;
+        }
+        if self.spent_future(value) {
+            okkama_devtrace::count!("runtime", "region add skips a spent Future");
             return;
         }
         // The common add, a cursor or a constructor's result, is one free
@@ -1638,18 +1653,6 @@ impl Runtime {
 
     /// #817: a Future that outlives its owner (still running) or starts after its group's owner closed: the root
     /// owns it until shutdown.
-    /// #932: a Future taken by its awaiter with inputs still held (no awaited temporary should have any, I3) and
-    /// no region owning it: detached to the root, whose close releases them.
-    pub(crate) fn release_taken_temporary(&mut self, future: Word) {
-        let inputs = self.held(future, crate::tasks::Held::Inputs);
-        if self.region_len(inputs) == 0 || self.owner_of(future) != Some(Owner::Free) {
-            return;
-        }
-        okkama_devtrace::count!("runtime", "taken temporary with inputs detached");
-        debug_assert!(false, "an awaited temporary kept its inputs after the take (#932 I3)");
-        self.detach_to_root(future);
-    }
-
     pub(crate) fn detach_to_root(&mut self, future: Word) {
         okkama_devtrace::count!("runtime", "future detached to the root");
         let root = self.root_region();
@@ -2061,7 +2064,9 @@ pub extern "C" fn rt_region_add(ctx: *mut Ctx, region: Word, value: Word, own: u
     runtime.count(|_| "region add".into());
     // #530: machine code enters a region as 0 and the first add that has something to hold makes it.
     let region = match region {
-        UNBOUND if !runtime.may_reach_free(value) && !runtime.pins_wait_for(value) => return UNBOUND,
+        UNBOUND if (!runtime.may_reach_free(value) || runtime.spent_future(value)) && !runtime.pins_wait_for(value) => {
+            return UNBOUND;
+        }
         UNBOUND => {
             okkama_devtrace::count!("runtime", "region made at its first add");
             runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS])
@@ -2561,6 +2566,31 @@ mod inline_identity_tests {
             assert_eq!(sorted, vaults, "{count} entries");
             assert!(vaults.iter().all(|&vault| runtime.region_contains(region, vault)));
         }
+    }
+
+    /// #932: a consumed Future with no regions left (a driver's outcome taken) is not kept by a region; one whose
+    /// inputs are still held is, so the region closes them.
+    #[test]
+    fn a_spent_future_is_not_kept_by_a_region() {
+        let mut runtime = runtime();
+        let spent = runtime.future_new(2, &[UNBOUND]);
+        crate::tasks::set(spent, crate::tasks::STATE, crate::tasks::CONSUMED);
+        assert!(runtime.spent_future(spent));
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.region_add(region, spent, false);
+        assert!(!runtime.region_contains(region, spent));
+        let holding = runtime.future_new(2, &[UNBOUND]);
+        crate::tasks::set(holding, crate::tasks::STATE, crate::tasks::CONSUMED);
+        let inputs = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        let vault = runtime.heap.object_new(0, &[1]);
+        runtime.created(0, vault);
+        runtime.region_add(inputs, vault, true);
+        runtime.set_held(holding, crate::tasks::Held::Inputs, inputs);
+        assert!(!runtime.spent_future(holding));
+        runtime.region_add(region, holding, false);
+        assert!(runtime.region_contains(region, holding), "its inputs still need a close");
+        let running = runtime.future_new(2, &[UNBOUND]);
+        assert!(!runtime.spent_future(running), "not consumed");
     }
 
     /// #528: an object with a destroy of its own carries its serial and owner in two words after its fields;
