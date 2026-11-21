@@ -6,6 +6,26 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-21
+
+0.6.0 is the rebuild ("Tweed"). Ownership is tracked per instance on Tomato's pipeline: a resource is destroyed
+by the scope that owns it, directly when it never leaves that scope (#909) and through a region otherwise, and its
+identity lives in the object (#528) or the Future's frame (#931). Futures own their fresh inputs and channels own
+the messages they buffer (#587, #915). Sparrow is the only engine: the IR interpreter (#584), the JVM backend (#585)
+and the experimental Champ runtime with OIR-2 (#911) are gone, and `okkama build`/`okkama run` take no target or
+engine.
+- **Language.** `match` gets compact cases (`case P: value;`) and the `?? … !!` selection is removed (#893); a case
+  that can never run is an error (#286); a successor Future can be handed on as a plain one (#790); `LockGuard` and
+  `Permit` are resources (#846); arrays played as `Sequencing`/`Cursor` throw the roles' errors (#769).
+- **Speed.** Micro-benchmarks against 0.5.8: −18.7% by geometric mean over 49 reliable pairs (destroy −81%,
+  float −72%, match −32%, try-catch −30%, rat −20…27%); the language ladder −15% (11-ownership −75%). Async code
+  pays for ownership: async-await +27%, channel +17% (#932, next release). The hardening audit's performance
+  tickets are done (#432): handles 184 → 48 bytes (#439), tokens 88 → 56 (#471), JSON parse and write without
+  extra copies (#468, #466), regex scratch and spans (#463, #464), field accessors inlined by the JIT (#541).
+- **Fixed before the release:** the collector's sweep loop (#922), frame pointers in Linux release builds (#930).
+- **Tooling.** The Wave CI runs every test target and fails on a failing conformance case; development
+  instrumentation (`OKKAMA_DEV`) is compiled out of release builds.
+
 ### Changed
 
 - **A Future keeps its ownership identity in its frame (#931).** Since #581 every Future of a program with
@@ -8007,7 +8027,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/shootnix/okkama/compare/v0.5.8...HEAD
+[Unreleased]: https://github.com/shootnix/okkama/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/shootnix/okkama/compare/v0.5.8...v0.6.0
 [0.5.8]: https://github.com/shootnix/okkama/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/shootnix/okkama/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/shootnix/okkama/compare/v0.5.5...v0.5.6

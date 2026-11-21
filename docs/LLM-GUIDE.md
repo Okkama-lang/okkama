@@ -326,6 +326,13 @@ Since 0.5.5 the release report is the micro-benchmark A/B
 tag rebuilt and the candidate, one session, Linux containers. The
 cross-language ladder report is made on demand. Compare releases with a
 back-to-back A/B, not against an older report, and never against a PGO build.
+- Micro, 0.6.0 against 0.5.8 (report
+  `okkama-docs/benchmarks/reports/2026-11-21-v0.6.0/micro.html`): Sparrow
+  −18.7% by geometric mean over 49 reliable pairs; destroy −81%, float −72%,
+  match −32%, rat −20…27%. Slower: async-await +27%, channel +17% (the async
+  ownership protocol, #932 for 0.6.1). The candidate is built as the packages
+  are (`--cfg okkama_release`, frame pointers, #930). The cross-language
+  ladder: okkama-docs/benchmarks/reports/2026-11-21-v0.6.0/report.html.
 - Micro, 0.5.8 against 0.5.7 (report
   `okkama-docs/benchmarks/reports/2026-11-14-v0.5.8/micro.html`): no
   regression, no pair past the noise band; Sparrow −2.1% by geometric mean
