@@ -2045,7 +2045,7 @@
     },
     {
       "id": "STD.HTTP.BODY",
-      "title": "std http/body public contract (BodyAlreadyOpened, BodyClosed, BodyOpening, BodyReading, ByteBody, ByteBodyInput, BytesBody, Content, EmptyBody, JsonBody, OneShotBody, StreamBodyReading, TextBody, TrailersUnavailable, UnknownBodyLength)",
+      "title": "std http/body public contract (BodyAlreadyOpened, BodyClosed, BodyOpening, BodyReading, ByteBody, ByteBodyInput, BytesBody, Content, EmptyBody, FormBody, JsonBody, OneShotBody, StreamBodyReading, TextBody, TrailersUnavailable, UnknownBodyLength)",
       "family": "Standard library: http",
       "spec_refs": [
         "std/http/body.ok"
@@ -2735,7 +2735,7 @@
     },
     {
       "id": "STD.HTTP.MESSAGE",
-      "title": "std http/message public contract (BodyLimitExceeded, InvalidHttpMessage, Request, RequestCoordinates, Responding, Response)",
+      "title": "std http/message public contract (BodyLimitExceeded, ConflictingContentType, InvalidHttpMessage, Request, RequestCoordinates, RequestHead, Responding, Response)",
       "family": "Standard library: http",
       "spec_refs": [
         "std/http/message.ok"

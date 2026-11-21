@@ -18,6 +18,9 @@ module url/value v1.0.0;
 //     api.joined("search").query_replaced(parameters:
 //         QueryParameters(QueryParameter(name: "q", value: "tea & coffee"))).string();
 //     // "https://example.org/search?q=tea%20%26%20coffee"
+//     ParsedUrl("https://example.org/search?q=tea").parts().query_appended(
+//         QueryParameters(QueryParameter(name: "page", value: "2"))).string();
+//     // "https://example.org/search?q=tea&page=2"
 
 import "url/query" take QueryParameters, QueryParameter, ParsedQuery;
 import "url/percent" take PercentEncoded, PercentDecoded, UrlComponent, InvalidPercentEncoding;
@@ -1249,6 +1252,32 @@ object UrlParts {
         );
     }
 
+    // Appends parameters after the existing query, in order and encoded as
+    // query_replaced encodes them; the existing parameters stay as they are,
+    // even with a name that repeats. Without a query, or with an empty one, the
+    // parameters become the query. An empty collection changes nothing.
+    query_appended(parameters is QueryParameters) is UrlParts {
+        let added = parameters.string();
+        let existing = query_text else "";
+        if parameters.entries().size() == 0 {
+            return self;
+        }
+        UrlParts(
+            scheme: scheme_text,
+            userinfo: userinfo_text,
+            host: host_text,
+            port: port_number,
+            path: path_text,
+            query: Maybe.some(if existing == "" {
+                added;
+            }
+            else {
+                existing + "&" + added;
+            }),
+            fragment: fragment_text,
+        );
+    }
+
     // Removes the query component, including its `?`, preserving the fragment.
     query_removed() is UrlParts {
         UrlParts(
@@ -1617,6 +1646,38 @@ test "query replacement retains order assignments and RFC data semantics" {
         changed.query_replaced(parameters: ParsedQuery("a=%2F&b=+").parameters())::Parts::query,
         Maybe.some("a=%2F&b=%2B")
     );
+}
+
+test "appending a query keeps what is there, in order, and adds encoded parameters" {
+    let base = ParsedUrl("https://example.org/search?q=tea&q=&flag#top").parts();
+    let added = base.query_appended(
+        QueryParameters(
+            QueryParameter(name: "q", value: "coffee & milk"),
+            QueryParameter(name: "empty", value: ""),
+            QueryParameter(name: "bare"),
+            QueryParameter(name: "naïve", value: "a+b/c?d")
+        )
+    );
+    test.is(
+        added.string(),
+        "https://example.org/search?q=tea&q=&flag&q=coffee%20%26%20milk&empty=&bare&na%C3%AFve=a%2Bb%2Fc%3Fd#top"
+    );
+    test.is(
+        ParsedQuery(added::Parts::query else "").parameters().list("q"),
+        ["tea", "", "coffee & milk"]
+    );
+    let bare = ParsedUrl("https://example.org/search").parts();
+    test.is(
+        bare.query_appended(QueryParameters(QueryParameter(name: "page", value: "2"))).string(),
+        "https://example.org/search?page=2"
+    );
+    let empty_query = ParsedUrl("https://example.org/search?").parts();
+    test.is(
+        empty_query.query_appended(QueryParameters(QueryParameter(name: "page", value: "2"))).string(),
+        "https://example.org/search?page=2"
+    );
+    let none_added is @QueryParameter = [];
+    test.is(base.query_appended(QueryParameters(none_added)), base);
 }
 
 test "query absence empty query and removal are explicit" {

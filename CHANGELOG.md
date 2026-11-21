@@ -14,6 +14,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   capitals, as Unicode's SpecialCasing.txt says; other languages take the default of `string.lower()` and
   `upper()`. `title()` starts each word with its title case (`"ǆemal"` → `"ǅemal"`, `"ßa"` → `"Ssa"`,
   Georgian unchanged), a word joined across an apostrophe or a full stop (`"don't"`).
+- **HTTP requests are composed from a head and a content (#120).** `RequestHead(url:, method:, headers:, version:)`
+  is the method, target, fields and version; `Request(head:, content:)` adds the content's Content-Type and known
+  Content-Length (a contradicting Content-Type is `ConflictingContentType`), `Request(head:, body:)` keeps the
+  fields as given, and `Request(url:, method:, content:)` is the short form. `FormBody(parameters)` sends a form,
+  `UrlParts.query_appended(parameters)` adds query parameters, and HTTP/1.1 frames an unframed body itself
+  (Content-Length or chunked). `post`, `put` and `patch` build the same `Request`. No fluent builder, as the
+  owner decided (`examples/http/client/compose_request.ok`).
 - **Sending e-mail: an SMTP submission client (#499).** `SmtpConnecting(host:, credentials:).session()` opens a
   session (STARTTLS on 587 by default, implicit TLS or explicit plaintext, never a fallback; certificate checked
   against the host; AUTH PLAIN only after TLS, the password in `SecretBytes`), and

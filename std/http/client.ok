@@ -54,14 +54,16 @@ import "http/internal/http2_fields" take Http2RequestFields;
 import "http/version" take HttpVersion, UnsupportedHttpVersion;
 import "http/client_request" take InvalidClientRequest;
 import "http/client_request" take HttpDirectRequest;
-import "http/message" take Request, Response, InvalidHttpMessage;
+import "http/message" take Request, Response, InvalidHttpMessage, RequestHead;
+import "url/query" take QueryParameters, QueryParameter;
 import "http/exchange" take ClientResponse, Exchanging, HttpClientKey;
 import "http/connection" take Http1Connecting, Http1Acquisition, HttpAcquisitionCleanup;
 import "http/http1_session" take Http1Exchange;
 import "http/endpoint" take HttpEndpointSelection, EndpointDenied, EndpointAllowing,
     PublicEndpoints, LoopbackEndpoints;
 import "http/body" take BodyOpening, BodyReading, BodyClosed, BodyAlreadyOpened, UnknownBodyLength,
-    EmptyBody, Content, JsonBody;
+    EmptyBody, Content, JsonBody, TextBody, BytesBody, FormBody, ByteBodyInput, OneShotBody,
+    StreamBodyReading;
 import "http/header" take Headers, Header, HeaderName, HeadersWithout;
 import "http/body_coding" take GzipDecodedBody, BrotliDecodedBody;
 import "compression/brotli" take BrotliDecompressor;
@@ -82,7 +84,7 @@ import "url/value" take UrlParts;
 import "net/dns" take FixedResolution;
 import "crypto/x509/trust" take TrustedCertificates, TrustStore, SystemTrustStore;
 import "time/clock" take SystemClock;
-import "http/target" take AbsoluteTarget, RequestTargetKind;
+import "http/target" take AbsoluteTarget, RequestTargetKind, InvalidRequestTarget;
 import "http/method" take Method;
 import "url/value" take ParsedUrl;
 
@@ -180,24 +182,25 @@ object HttpClient does Exchanging, Closing {
         await chain.response(Request(url: url, method: Method.delete));
     }
 
-    // POST body to url, with headers; Content-Type comes from body.
+    // POST body to url, with headers: Request(url:, method:, content:,
+    // headers:), so Content-Type and Content-Length come from body as there.
     async post(url is string, body is Content, headers is Headers = Headers()) is ClientResponse {
         await chain.response(
-            ContentRequest(url: url, method: Method.post, body: body, headers: headers).request()
+            Request(url: url, method: Method.post, content: body, headers: headers)
         );
     }
 
     // PUT body to url, with headers.
     async put(url is string, body is Content, headers is Headers = Headers()) is ClientResponse {
         await chain.response(
-            ContentRequest(url: url, method: Method.put, body: body, headers: headers).request()
+            Request(url: url, method: Method.put, content: body, headers: headers)
         );
     }
 
     // PATCH body to url, with headers.
     async patch(url is string, body is Content, headers is Headers = Headers()) is ClientResponse {
         await chain.response(
-            ContentRequest(url: url, method: Method.patch, body: body, headers: headers).request()
+            Request(url: url, method: Method.patch, content: body, headers: headers)
         );
     }
 }
@@ -347,35 +350,6 @@ hidden object DecodingExchanging does Exchanging {
             history: page::Exchange::history,
             details: page::Exchange::details
         );
-    }
-}
-
-// A request carrying content. Its media type becomes Content-Type and its
-// length Content-Length, unless the fields already have them.
-hidden object ContentRequest {
-    has request is Request;
-
-    ContentRequest(url is string, method is Method, body is Content, headers is Headers) {
-        let opening = body.opening();
-        let kind = HeaderName("Content-Type");
-        let typed = if headers.membership(kind) {
-            headers;
-        }
-        else {
-            headers.addition(Header(name: kind, value: body.media_type()));
-        };
-        let size = HeaderName("Content-Length");
-        let fields = if typed.membership(size) || typed.membership(HeaderName("Transfer-Encoding")) {
-            typed;
-        }
-        else {
-            typed.addition(Header(name: size, value: opening.length().string()));
-        };
-        request = Request(url: url, method: method, headers: fields, body: opening);
-    }
-
-    request() is Request {
-        request;
     }
 }
 
@@ -2252,7 +2226,11 @@ hidden object LoopbackRequest {
                 else {
                     0;
                 };
-                if received.value().length() >= parts[0].length() + 4 + expected {
+                let chunked = parts[0].lower().contains("\r\ntransfer-encoding: chunked");
+                if chunked && received.value().ends_with("\r\n0\r\n\r\n") {
+                    last;
+                }
+                if !chunked && received.value().length() >= parts[0].length() + 4 + expected {
                     last;
                 }
             }
@@ -2350,4 +2328,97 @@ async test "a client follows redirects and carries its cookies when told" {
     test.is(page::Head::status, Status.ok);
     test.is(page::Exchange::history.size(), 1);
     test.is(await page.text(), "done");
+}
+
+// One loopback request answered 204: what the server heard, once the client's
+// response has come.
+hidden object LoopbackOnce {
+    has listener is TcpListener;
+
+    LoopbackOnce(listener is TcpListener) {
+        self.listener = listener;
+    }
+
+    async heard(page is Future<ClientResponse>) is string {
+        let accepted = await listener.connection();
+        defer accepted.close();
+        let asked = await LoopbackRequest(accepted.input()).text();
+        await accepted.output().write(
+            Utf8Encoded("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").bytes()
+        );
+        let answered = await page;
+        test.is(answered::Head::code, 204);
+        asked;
+    }
+}
+
+async test "shortcuts and composed requests go out the same way: content, forms, queries, streams" {
+    let listener is TcpListener = await TcpListening(port: 0).listener();
+    defer listener.close();
+    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let client = HttpClient(endpoints: LoopbackEndpoints());
+    defer client.close();
+    let once = LoopbackOnce(listener);
+    let order = Json(JsonField("id", 7));
+    let post is async (string, Content, Headers) is ClientResponse = client.post;
+    let put is async (string, Content, Headers) is ClientResponse = client.put;
+    let patch is async (string, Content, Headers) is ClientResponse = client.patch;
+    let send is async (Request) is ClientResponse = client.response;
+    let shortcut = await once.heard(spawn post(base + "/orders", JsonBody(order), Headers()));
+    let composed = await once.heard(spawn send(Request(
+        head: RequestHead(url: base + "/orders", method: Method.post),
+        content: JsonBody(order)
+    )));
+    test.is(composed, shortcut);
+    test.ok(shortcut.starts_with("POST /orders HTTP/1.1\r\n"));
+    test.ok(shortcut.lower().contains("\r\ncontent-type: application/json\r\n"));
+    test.ok(shortcut.lower().contains("\r\ncontent-length: 8\r\n"));
+    test.ok(shortcut.ends_with("\r\n\r\n{\"id\":7}"));
+    let replaced = await once.heard(
+        spawn put(base + "/notes/1", TextBody(text: "hello"), Headers())
+    );
+    test.ok(
+        replaced.starts_with("PUT /notes/1 HTTP/1.1\r\n") && replaced.ends_with("\r\n\r\nhello")
+    );
+    test.ok(replaced.lower().contains("\r\ncontent-length: 5\r\n"));
+    let patched = await once.heard(
+        spawn patch(base + "/notes/1", BytesBody(bytes: [byte(1)]), Headers())
+    );
+    test.ok(patched.starts_with("PATCH /notes/1 HTTP/1.1\r\n"));
+    let form = await once.heard(spawn send(Request(
+        url: base + "/search",
+        method: Method.post,
+        content: FormBody(QueryParameters(QueryParameter(name: "q", value: "tea & milk")))
+    )));
+    test.ok(form.lower().contains("\r\ncontent-type: application/x-www-form-urlencoded\r\n"));
+    test.ok(form.ends_with("\r\n\r\nq=tea+%26+milk"));
+    let url = ParsedUrl(base + "/search?q=tea").parts().query_appended(
+        QueryParameters(
+            QueryParameter(name: "page", value: "2"),
+            QueryParameter(name: "q", value: "a/b é")
+        )
+    ).string();
+    let query = await once.heard(spawn send(Request(url: url)));
+    test.ok(query.starts_with("GET /search?q=tea&page=2&q=a%2Fb%20%C3%A9 HTTP/1.1\r\n"));
+    test.throws(InvalidRequestTarget) {
+        Request(url: base + "/search?q=tea#results");
+    };
+}
+
+async test "a body of unknown length goes out chunked over HTTP/1.1, read once and not before" {
+    let listener is TcpListener = await TcpListening(port: 0).listener();
+    defer listener.close();
+    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let client = HttpClient(endpoints: LoopbackEndpoints());
+    defer client.close();
+    let once = LoopbackOnce(listener);
+    let send is async (Request) is ClientResponse = client.response;
+    let input = ByteBodyInput(Utf8Encoded("a stream").bytes());
+    let stream = await once.heard(spawn send(Request(
+        head: RequestHead(url: base + "/upload", method: Method.post),
+        body: OneShotBody(StreamBodyReading(input: input, owner: input, trailers: Headers()))
+    )));
+    test.ok(stream.lower().contains("\r\ntransfer-encoding: chunked\r\n"));
+    test.ok(!stream.lower().contains("content-length"));
+    test.ok(stream.ends_with("\r\n\r\n8\r\na stream\r\n0\r\n\r\n"));
 }

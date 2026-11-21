@@ -5,6 +5,7 @@ module http/body v1.0.0;
 //     Response(status: Status.ok, content: TextBody(text: "hello"));
 //     Response(status: Status.ok, content: JsonBody(Json(JsonField("id", 7))));
 //     Response(status: Status.ok, content: BytesBody(bytes: image, media_type: "image/png"));
+//     Request(url: url, method: Method.post, content: FormBody(QueryParameters(QueryParameter(name: "q", value: "tea"))));
 //
 //     let reading = request.body().reading();
 //     let chunk = await reading.bytes(8192);      // [] at the end
@@ -21,6 +22,8 @@ module http/body v1.0.0;
 
 import "http/header" take Headers;
 import "json" take Json;
+import "url/query" take QueryParameters;
+import "url/form" take FormUrlEncoded;
 import "encoding/utf" take Utf8Encoded;
 import "numbers/bigint" take BigInt;
 import "io/stream" take AsyncReading, Closing, InvalidReadLimit;
@@ -201,6 +204,27 @@ object BytesBody does Content {
     // The body to send.
     opening() is BodyOpening {
         ByteBody(bytes);
+    }
+}
+
+// An HTML form as a body, `application/x-www-form-urlencoded` (url/form:
+// spaces as `+`, the rest percent-encoded).
+object FormBody does Content {
+    has fields is QueryParameters;
+
+    // fields, in order; a name may repeat.
+    FormBody(fields is QueryParameters) {
+        self.fields = fields;
+    }
+
+    // `application/x-www-form-urlencoded`.
+    media_type() is string {
+        "application/x-www-form-urlencoded";
+    }
+
+    // The body to send.
+    opening() is BodyOpening {
+        ByteBody(FormUrlEncoded(fields).bytes());
     }
 }
 

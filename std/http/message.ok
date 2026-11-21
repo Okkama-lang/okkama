@@ -8,6 +8,29 @@ module http/message v1.0.0;
 //     request::Head::target.path();                            // "/"
 //     let body = await request.text(limit: 65536);
 //
+// A request is its head and its body, made apart and put together:
+//
+//     let head = RequestHead(
+//         method: Method.post,
+//         url: "https://api.example.com/orders",
+//         headers: Headers(Header(name: HeaderName("Accept"), value: "application/json")),
+//     );
+//     Request(head: head, content: JsonBody(order));       // a Content
+//     Request(head: head, body: opening);                  // any BodyOpening, unread
+//     Request(url: "https://api.example.com/orders", method: Method.post, content: JsonBody(order));
+//
+// A RequestHead is the method, the target, the fields and the version, checked
+// to fit; the request keeps it as its only copy of them, and Request::Head
+// shows it. A request made from a Content gets the content's media type as
+// Content-Type unless its fields name a compatible one (the same type and
+// subtype, carrying the content's parameters; ConflictingContentType
+// otherwise), and its length as Content-Length when the body knows it and the
+// fields frame it neither by Content-Length nor by Transfer-Encoding. A body of
+// unknown length gets no length: the client frames it for its protocol. A
+// request made from a BodyOpening keeps its fields as given. Making a request
+// reads, opens and closes nothing. Query parameters belong to the URL
+// (UrlParts.query_appended), credentials to the client (http/auth).
+//
 //     Response(status: Status.ok, content: TextBody(text: "hi"));
 //     Response(status: Status.no_content);
 //
@@ -20,50 +43,40 @@ module http/message v1.0.0;
 //
 // - BodyLimitExceeded: a body read whole was longer than the limit.
 // - InvalidHttpMessage: a head that does not fit together.
+// - ConflictingContentType: fields name a Content-Type the content contradicts.
 
 import "http/method" take Method, MethodName;
 import "http/status" take Status, StatusCode, StatusClass;
 import "http/header" take Headers, Header, HeaderName;
-import "http/body" take BodyOpening, BodyReading, EmptyBody, Content, TextBody, UnknownBodyLength;
+import "http/body" take BodyOpening, BodyReading, EmptyBody, Content, TextBody, UnknownBodyLength,
+    ByteBody, JsonBody, FormBody, OneShotBody, StreamBodyReading, ByteBodyInput;
+import "http/media_type" take HttpMediaType;
 import "http/version" take HttpVersion;
-import "http/target" take RequestTarget, RequestTargetSnapshot, RequestTargetMethod, AbsoluteTarget;
+import "http/target" take RequestTarget, RequestTargetSnapshot, RequestTargetMethod, AbsoluteTarget,
+    AsteriskTarget, OriginTarget;
+import "json" take Json, JsonField;
+import "url/query" take QueryParameters, QueryParameter;
 import "url/value" take ParsedUrl;
-import "encoding/utf" take Utf8Decoded;
+import "encoding/utf" take Utf8Decoded, Utf8Encoded;
 import "io/stream" take AsyncReading;
 import "io/transfer" take ReadUntilEnd, ReadLimitExceeded;
 import "numbers/bigint" take BigInt;
 import "compare" take Order;
 
-// An HTTP request: its head through the cap `Head`, and its body.
-object Request {
+// What a request asks: method, target, fields and version, checked to fit
+// together. It owns no body and does nothing.
+object RequestHead {
     has method is Method;
     has target is RequestTarget;
     has headers is Headers;
-    has body is BodyOpening;
     has version is HttpVersion;
 
-    // A request for target; WrongRequestTargetKind or InvalidRequestTarget when
-    // the target does not suit the method.
-    Request(
-        target is RequestTarget,
-        method is Method = Method.get,
-        headers is Headers = Headers(),
-        body is BodyOpening = EmptyBody(),
-        version is HttpVersion = HttpVersion.http_1_1
-    ) {
-        self.target = RequestCoordinates(method: method, target: target).target();
-        self.method = method;
-        self.headers = headers;
-        self.body = body;
-        self.version = version;
-    }
-
-    // A client request to an absolute http or https URL.
-    Request(
+    // A head for an absolute http or https URL; a GET with no fields over
+    // HTTP/1.1 unless told.
+    RequestHead(
         url is string,
         method is Method = Method.get,
         headers is Headers = Headers(),
-        body is BodyOpening = EmptyBody(),
         version is HttpVersion = HttpVersion.http_1_1
     ) {
         self.target = RequestCoordinates(
@@ -72,7 +85,20 @@ object Request {
         ).target();
         self.method = method;
         self.headers = headers;
-        self.body = body;
+        self.version = version;
+    }
+
+    // A head for target; WrongRequestTargetKind or InvalidHttpMessage when the
+    // target does not suit the method.
+    RequestHead(
+        target is RequestTarget,
+        method is Method = Method.get,
+        headers is Headers = Headers(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        self.target = RequestCoordinates(method: method, target: target).target();
+        self.method = method;
+        self.headers = headers;
         self.version = version;
     }
 
@@ -92,6 +118,102 @@ object Request {
 
         version is HttpVersion {
             version;
+        }
+    }
+}
+
+// An HTTP request: its head through the cap `Head`, and its body.
+object Request {
+    has head is RequestHead;
+    has body is BodyOpening;
+
+    // A request for target; WrongRequestTargetKind or InvalidRequestTarget when
+    // the target does not suit the method.
+    Request(
+        target is RequestTarget,
+        method is Method = Method.get,
+        headers is Headers = Headers(),
+        body is BodyOpening = EmptyBody(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        head = RequestHead(target: target, method: method, headers: headers, version: version);
+        self.body = body;
+    }
+
+    // A client request to an absolute http or https URL.
+    Request(
+        url is string,
+        method is Method = Method.get,
+        headers is Headers = Headers(),
+        body is BodyOpening = EmptyBody(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        head = RequestHead(url: url, method: method, headers: headers, version: version);
+        self.body = body;
+    }
+
+    // head with body as it is: the fields are not touched, the body not read.
+    Request(head is RequestHead, body is BodyOpening = EmptyBody()) {
+        self.head = head;
+        self.body = body;
+    }
+
+    // head with content: Content-Type and, when the body knows it,
+    // Content-Length come from the content (see the module page).
+    Request(head is RequestHead, content is Content) {
+        let opening = content.opening();
+        self.head = RequestHead(
+            target: head::Head::target,
+            method: head::Head::method,
+            headers: ContentFields(
+                origin: head::Head::headers,
+                media_type: content.media_type(),
+                body: opening
+            ).headers(),
+            version: head::Head::version
+        );
+        body = opening;
+    }
+
+    // Request(url:, method: Method.post, content: JsonBody(order)): the same
+    // for an absolute http or https URL.
+    Request(
+        url is string,
+        method is Method,
+        content is Content,
+        headers is Headers = Headers(),
+        version is HttpVersion = HttpVersion.http_1_1
+    ) {
+        let opening = content.opening();
+        head = RequestHead(
+            url: url,
+            method: method,
+            headers: ContentFields(
+                origin: headers,
+                media_type: content.media_type(),
+                body: opening
+            ).headers(),
+            version: version
+        );
+        body = opening;
+    }
+
+    // The method, target, fields and version.
+    cap Head {
+        method is Method {
+            head::Head::method;
+        }
+
+        target is RequestTarget {
+            head::Head::target;
+        }
+
+        headers is Headers {
+            head::Head::headers;
+        }
+
+        version is HttpVersion {
+            head::Head::version;
         }
     }
 
@@ -257,8 +379,91 @@ object RequestCoordinates {
     }
 }
 
+// The fields of a request that carries content: its media type as
+// Content-Type unless the fields name a compatible one, and its known length as
+// Content-Length unless the fields frame the body already.
+hidden object ContentFields {
+    has origin is Headers;
+    has media_type is string;
+    has body is BodyOpening;
+
+    ContentFields(origin is Headers, media_type is string, body is BodyOpening) {
+        self.origin = origin;
+        self.media_type = media_type;
+        self.body = body;
+    }
+
+    headers() is Headers {
+        let kind = HeaderName("Content-Type");
+        let named = origin.values(kind);
+        confirm named.size() <= 1
+            else throw ConflictingContentType.declared(named.item(1), media_type);
+        let typed = if named.size() == 0 {
+            origin.addition(Header(name: kind, value: media_type));
+        }
+        else {
+            confirm ContentTypeMatch(declared: named.item(0), content: media_type).compatible()
+                else throw ConflictingContentType.declared(named.item(0), media_type);
+            origin;
+        };
+        let size = HeaderName("Content-Length");
+        let lengths = typed.values(size);
+        let chunked = typed.membership(HeaderName("Transfer-Encoding"));
+        confirm lengths.size() == 0 || !chunked
+            else throw InvalidHttpMessage.because("Transfer-Encoding with Content-Length");
+        let known is @BigInt = try {
+            [body.length()];
+        }
+        catch e is UnknownBodyLength {
+            let unknown is @BigInt = [];
+            unknown;
+        };
+        for known -> length {
+            for lengths -> declared {
+                confirm declared.trim() == length.string()
+                    else throw InvalidHttpMessage.because("Content-Length contradicts the body");
+            }
+        }
+        if lengths.size() > 0 || chunked || known.size() == 0 {
+            typed;
+        }
+        else {
+            typed.addition(Header(name: size, value: known[0].string()));
+        }
+    }
+}
+
+// Whether a declared Content-Type fits the content's: the same type and
+// subtype (case-insensitive), and every parameter of the content's with the
+// same value (charset case-insensitive); the declared one may add more.
+hidden object ContentTypeMatch {
+    has declared, content is string;
+
+    ContentTypeMatch(declared is string, content is string) {
+        self.declared = declared;
+        self.content = content;
+    }
+
+    compatible() is bool {
+        let given = HttpMediaType(declared);
+        let wanted = HttpMediaType(content);
+        let same = given::Type::type == wanted::Type::type
+            && given::Type::subtype == wanted::Type::subtype;
+        same
+            && wanted.parameters().entries().reduce(true) -> carried, parameter {
+                carried
+                    && given.parameters().membership(parameter.name())
+                    && given.parameters().first(parameter.name()) == parameter.value();
+            };
+    }
+}
+
 // A head that does not fit together; reason says why.
 enum InvalidHttpMessage is Error = (because(reason is string));
+
+// The fields name a Content-Type, declared, that the content's own, content,
+// contradicts.
+enum ConflictingContentType is Error = (declared(declared is string, content is string));
 
 // A body was longer than limit.
 enum BodyLimitExceeded is Error = (limit(limit is int));
@@ -359,4 +564,200 @@ async test "a declared length over the limit is refused before reading" {
         body: TextBody(text: "two words").opening()
     );
     test.is(await streamed.text(limit: 9), "two words");
+}
+
+// A text body of unknown length, read once: what a stream from a socket is.
+hidden object StreamedContent does Content {
+    has text is string;
+
+    StreamedContent(text is string) {
+        self.text = text;
+    }
+
+    media_type() is string {
+        "text/plain; charset=utf-8";
+    }
+
+    opening() is BodyOpening {
+        let input = ByteBodyInput(Utf8Encoded(text).bytes());
+        OneShotBody(StreamBodyReading(input: input, owner: input, trailers: Headers()));
+    }
+}
+
+test "a head is the method, target, fields and version, checked to fit together" {
+    let head = RequestHead(url: "https://api.example.com/orders?x=1");
+    test.is(head::Head::method, Method.get);
+    test.is(head::Head::target.string(), "https://api.example.com/orders?x=1");
+    test.is(head::Head::headers.entries().size(), 0);
+    test.is(head::Head::version, HttpVersion.http_1_1);
+    let options = RequestHead(target: AsteriskTarget(), method: Method.options);
+    test.is(options::Head::target.string(), "*");
+    test.ok(try {
+        RequestHead(target: AsteriskTarget(), method: Method.get);
+        false;
+    }
+    catch failure is InvalidHttpMessage {
+        true;
+    });
+    let request = Request(
+        head: RequestHead(
+            target: OriginTarget(path: "/a", query: Maybe<string>.none),
+            method: Method.delete
+        )
+    );
+    test.is(request::Head::method, Method.delete);
+    test.is(request::Head::target.string(), "/a");
+    test.ok(request.body().replayable() && request.body().length().string() == "0");
+}
+
+async test "a request from a head and content gets its Content-Type and Content-Length" {
+    let order = Json(JsonField("id", 7));
+    let head = RequestHead(
+        method: Method.post,
+        url: "https://api.example.com/orders",
+        headers: Headers(Header(name: HeaderName("Accept"), value: "application/json"))
+    );
+    let request = Request(head: head, content: JsonBody(order));
+    let fields = request::Head::headers;
+    test.is(fields.first(HeaderName("Accept")), "application/json");
+    test.is(fields.first(HeaderName("Content-Type")), "application/json");
+    test.is(fields.first(HeaderName("Content-Length")), "8");
+    test.is(await request.text(limit: 64), "{\"id\":7}");
+    let short = Request(
+        url: "https://api.example.com/orders",
+        method: Method.post,
+        content: JsonBody(order)
+    );
+    test.is(short::Head::headers.entries().size(), 2);
+    test.is(short::Head::headers.first(HeaderName("Content-Type")), "application/json");
+    test.is(short::Head::headers.first(HeaderName("Content-Length")), "8");
+    let form = Request(
+        url: "https://example.com/search",
+        method: Method.post,
+        content: FormBody(
+            QueryParameters(
+                QueryParameter(name: "q", value: "tea & milk"),
+                QueryParameter(name: "q", value: "*~")
+            )
+        )
+    );
+    test.is(
+        form::Head::headers.first(HeaderName("Content-Type")),
+        "application/x-www-form-urlencoded"
+    );
+    test.is(await form.text(limit: 64), "q=tea+%26+milk&q=*%7E");
+}
+
+test "an explicit Content-Type stays when it fits the content and is refused when it contradicts it" {
+    let head = RequestHead(
+        method: Method.post,
+        url: "https://example.com/notes",
+        headers: Headers(
+            Header(
+                name: HeaderName("content-type"),
+                value: "Text/Plain; Charset=UTF-8; format=flowed"
+            )
+        )
+    );
+    let kept = Request(head: head, content: TextBody(text: "hi"));
+    test.is(kept::Head::headers.values(HeaderName("Content-Type")).size(), 1);
+    test.is(
+        kept::Head::headers.first(HeaderName("Content-Type")),
+        "Text/Plain; Charset=UTF-8; format=flowed"
+    );
+    let conflicts = [
+        "application/json",
+        "text/plain; charset=iso-8859-1",
+        "text/plain",
+        "text/html; charset=utf-8",
+    ];
+    for conflicts -> declared {
+        test.ok(try {
+            Request(
+                url: "https://example.com/notes",
+                method: Method.post,
+                content: TextBody(text: "hi"),
+                headers: Headers(Header(name: HeaderName("Content-Type"), value: declared))
+            );
+            false;
+        }
+        catch ConflictingContentType.declared(given, content) {
+            given == declared && content == "text/plain; charset=utf-8";
+        });
+    }
+    test.ok(try {
+        Request(
+            url: "https://example.com/notes",
+            method: Method.post,
+            content: TextBody(text: "hi"),
+            headers: Headers(
+                Header(name: HeaderName("Content-Type"), value: "text/plain; charset=utf-8"),
+                Header(name: HeaderName("Content-Type"), value: "text/plain; charset=utf-8")
+            )
+        );
+        false;
+    }
+    catch failure is ConflictingContentType {
+        true;
+    });
+}
+
+async test "explicit framing is kept or refused; a body of unknown length gets no length and is not read" {
+    let explicit = Request(
+        url: "https://example.com/notes",
+        method: Method.put,
+        content: TextBody(text: "four"),
+        headers: Headers(Header(name: HeaderName("Content-Length"), value: "4"))
+    );
+    test.is(explicit::Head::headers.values(HeaderName("Content-Length")).size(), 1);
+    test.ok(try {
+        Request(
+            url: "https://example.com/notes",
+            method: Method.put,
+            content: TextBody(text: "four"),
+            headers: Headers(Header(name: HeaderName("Content-Length"), value: "5"))
+        );
+        false;
+    }
+    catch failure is InvalidHttpMessage {
+        true;
+    });
+    test.ok(try {
+        Request(
+            url: "https://example.com/notes",
+            method: Method.put,
+            content: TextBody(text: "four"),
+            headers: Headers(
+                Header(name: HeaderName("Content-Length"), value: "4"),
+                Header(name: HeaderName("Transfer-Encoding"), value: "chunked")
+            )
+        );
+        false;
+    }
+    catch failure is InvalidHttpMessage {
+        true;
+    });
+    let chunked = Request(
+        url: "https://example.com/notes",
+        method: Method.put,
+        content: TextBody(text: "four"),
+        headers: Headers(Header(name: HeaderName("Transfer-Encoding"), value: "chunked"))
+    );
+    test.ok(!chunked::Head::headers.membership(HeaderName("Content-Length")));
+    let streamed = Request(
+        url: "https://example.com/upload",
+        method: Method.post,
+        content: StreamedContent("a stream")
+    );
+    test.ok(!streamed::Head::headers.membership(HeaderName("Content-Length")));
+    test.ok(!streamed::Head::headers.membership(HeaderName("Transfer-Encoding")));
+    test.is(streamed::Head::headers.first(HeaderName("Content-Type")), "text/plain; charset=utf-8");
+    test.ok(!streamed.body().replayable());
+    test.is(await streamed.text(limit: 64), "a stream");
+    let raw = Request(
+        head: RequestHead(url: "https://example.com/upload", method: Method.post),
+        body: StreamedContent("raw").opening()
+    );
+    test.is(raw::Head::headers.entries().size(), 0);
+    test.is(await raw.text(limit: 64), "raw");
 }
