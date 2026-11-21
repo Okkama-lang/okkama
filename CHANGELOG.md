@@ -24,6 +24,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Async ownership costs less (#932).** None of the ownership rules change.
+  - A Future whose retained inputs reach no free identity joins a region without the resource walk.
+  - A failure without cause or secondary skips the payload walk.
+  - An async body without inputs publishes its outcome as it completes.
+  - `await` and the consuming `await` share one runtime body.
+  - Programs without resources keep no retained-argument tail in their frames.
+  - A closing region sorts its slots in place and reuses its queues.
+
+  Instructions per iteration against 0.6.0: cancel-async-cleanup 14234 → 10666 (0.5.8: 7130, overhead halved);
+  async-await 824 → 774, spawn 860 → 816, channel 1672 → 1659 (0.5.8: 716, 760, 1420).
 - **A closure call goes straight to its body (#928, part 1).** Every call of a function value went through the
   runtime's helper (arguments spilled, a call into Rust, an arity trampoline). Machine code now reads the
   function from the closure, and for a synchronous body with up to two captures calls it directly with the
