@@ -110,11 +110,14 @@ pub(crate) fn command(args: &[String]) -> Outcome {
             other => return Outcome::usage(&format!("unknown format `{other}`: text, markdown, man, html or json")),
         };
     }
-    if all || output.is_some() {
-        if !all || output.is_none() || !positional.is_empty() || query.is_some()
-            || !matches!(format, Format::Man | Format::Html | Format::Json) {
-            return Outcome::usage("export needs --all --format man|html|json --output DIRECTORY, without MODULE or -k");
-        }
+    if (all || output.is_some())
+        && (!all
+            || output.is_none()
+            || !positional.is_empty()
+            || query.is_some()
+            || !matches!(format, Format::Man | Format::Html | Format::Json))
+    {
+        return Outcome::usage("export needs --all --format man|html|json --output DIRECTORY, without MODULE or -k");
     }
     if query.is_some() && !matches!(format, Format::Text | Format::Markdown) {
         return Outcome::usage("-k supports text or markdown");
