@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Worker values are serialized with one frame per open container (#452).** A map is read through its
+  iterator instead of a copied entry list, and an array's elements are not pushed onto a work list; the
+  traversal's scratch is bounded by depth. The wire format is unchanged.
 - **The language server shares document text and parses a file once per check (#472).** Open documents'
   text and their last good inspection are shared (`Rc`) with the loaders' overlays instead of copied on every
   check, and the full parse that decides test mode is the first pass's parse (without test items it is also

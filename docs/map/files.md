@@ -110,7 +110,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2034 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 686 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30666 lines
+## sparrow — 63 files, 30749 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -130,7 +130,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/runtime.rs` 910 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB
-- `sparrow-core/src/worker.rs` 420 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
+- `sparrow-core/src/worker.rs` 503 — Process workers (`worker.spawn`, `worker.bind`): a synchronous action runs
 - `sparrow-core/src/worker_process.rs` 352 — Process ownership and pipe I/O are delegated to Tokio. Cancellation kills and
 - `sparrow-core/src/host/arena.rs` 92 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 105 — POSIX record locks through nix's safe boundary. A process-wide reservation
