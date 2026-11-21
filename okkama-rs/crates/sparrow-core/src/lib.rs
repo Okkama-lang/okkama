@@ -498,3 +498,6 @@ impl DecodedProgram {
 fn decode_runtime(bytes: &[u8]) -> Result<DecodedProgram, okkama_sparrow::CodecError> {
     okkama_sparrow::decode(bytes).map(DecodedProgram::Legacy)
 }
+
+#[cfg(test)]
+mod session_tests;

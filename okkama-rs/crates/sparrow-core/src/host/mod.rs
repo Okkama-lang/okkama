@@ -232,6 +232,14 @@ impl Heap {
         heap
     }
 
+    /// #588: an extension may introduce the program's native failure object (appended, so no earlier value
+    /// depends on it).
+    pub(crate) fn extend(&mut self, program: &okkama_sparrow::Program) {
+        if self.native_failure.is_none() {
+            self.native_failure = program.objects.iter().position(|o| o.is_native_failure()).map(|d| d as u32);
+        }
+    }
+
     fn core(&self) -> &crate::heap::Heap {
         // SAFETY: `rt` is set for the duration of a call (see `call`).
         unsafe { &(*self.rt).heap }

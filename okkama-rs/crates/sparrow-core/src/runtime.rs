@@ -84,6 +84,14 @@ impl Payload for Failure {
 /// role and async calls. Only `code` changes, after code/maps publication.
 /// Captures are a per-closure prefix, not a per-function count: the same
 /// function may be closed over different prefixes with different fn types.
+/// #588: the capacities of a session runtime: functions (the invocation table) and object descriptors (the role
+/// dispatch tables).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capacities {
+    pub functions: usize,
+    pub objects: usize,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Invocation {
@@ -112,6 +120,8 @@ pub struct Runtime {
     pub jit: crate::jit::Jit,
     /// Stable allocation embedded in machine code; code is 0 until compiled.
     pub invocations: Box<[Invocation]>,
+    /// #588: the capacities of a session runtime (`Runtime::session`), which `extend` grows within.
+    capacities: Option<Capacities>,
     /// Same-binary diagnostic control, read once at runtime construction.
     pub(crate) closure_bridge_reference: bool,
     /// Constants embedded in machine code; always roots.
@@ -195,6 +205,100 @@ impl Runtime {
         Self::assemble(loaded)
     }
 
+    /// #588: a runtime that later programs may extend (`extend`), within `capacities`. Machine code embeds the
+    /// invocation table's base and each role dispatch table's base, so both are allocated at their capacity now
+    /// and never relocated.
+    pub fn session(loaded: Loaded, capacities: Capacities) -> Result<Self, Error> {
+        crate::contracts::check(&loaded)?;
+        let functions = loaded.program.functions.len();
+        if functions > capacities.functions || loaded.program.objects.len() > capacities.objects {
+            return Err(Error("the program exceeds the session's capacities".into()));
+        }
+        let mut runtime = Self::assemble(loaded)?;
+        let empty = Invocation { code: 0, params: 0, is_async: false };
+        let mut invocations = vec![empty; capacities.functions];
+        invocations[..functions].copy_from_slice(&runtime.invocations);
+        runtime.invocations = invocations.into_boxed_slice();
+        runtime.jit.object_capacity = capacities.objects;
+        runtime.capacities = Some(capacities);
+        Ok(runtime)
+    }
+
+    /// #588: extend a session runtime with `program`, which must begin with the loaded program: every published
+    /// function, object, type, role, variant, cap and global, its function metadata, its trace layouts and its
+    /// ownership metadata unchanged; only new entries after them. Prepared on copies, then committed by steps that
+    /// cannot fail, so a rejected extension leaves the runtime exactly as it was. Compiled code keeps working:
+    /// it refers only to published indices, through tables that are never relocated.
+    pub fn extend(&mut self, program: okkama_sparrow::Program) -> Result<(), Error> {
+        let Some(capacities) = self.capacities else {
+            return Err(Error("only a session runtime can be extended".into()));
+        };
+        if self.poisoned {
+            return Err(Error("internal error: the runtime is unusable after a panic in a native".into()));
+        }
+        // ---- prepare: nothing live changes ----
+        program.verify().map_err(|error| Error(error.to_string()))?;
+        let loaded = Loaded::new(program);
+        crate::contracts::check(&loaded)?;
+        let (old, new) = (&self.loaded.program, &loaded.program);
+        let prefix = |what: &str, same: bool| if same { Ok(()) } else {
+            Err(Error(format!("the extension changes published {what}")))
+        };
+        prefix("types", new.types.starts_with(&old.types))?;
+        prefix("enums", new.enums.starts_with(&old.enums))?;
+        prefix("roles", new.roles.starts_with(&old.roles))?;
+        prefix("objects", new.objects.starts_with(&old.objects))?;
+        prefix("variants", new.variants.starts_with(&old.variants))?;
+        prefix("handles", new.handles.starts_with(&old.handles))?;
+        prefix("caps", new.caps.starts_with(&old.caps))?;
+        prefix("globals", new.globals.starts_with(&old.globals))?;
+        prefix("functions", new.functions.starts_with(&old.functions))?;
+        // Ownership first: turning resources on also changes every frame's layout, and this is the reason to say.
+        let resources = crate::failures::Resources::new(new);
+        prefix("ownership metadata", self.resources.metadata_prefix_of(&resources))?;
+        prefix("function metadata", loaded.functions.starts_with(&self.loaded.functions))?;
+        let layouts = loaded.layouts();
+        let published = self.heap.layouts();
+        prefix("object layouts", layouts.objects.starts_with(&published.objects))?;
+        prefix("closure layouts", layouts.closures.starts_with(&published.closures))?;
+        prefix("frame layouts", layouts.frames.starts_with(&published.frames))?;
+        let (functions, objects) = (new.functions.len(), new.objects.len());
+        if functions > capacities.functions {
+            return Err(Error(format!("the session holds at most {} functions", capacities.functions)));
+        }
+        if objects > capacities.objects {
+            return Err(Error(format!("the session holds at most {} object types", capacities.objects)));
+        }
+        let from = old.functions.len();
+        let records = new.functions[from..].iter().map(|f| {
+            Ok(Invocation {
+                code: 0,
+                params: u32::try_from(f.params.len()).map_err(|_| Error("too many function parameters".into()))?,
+                is_async: f.is_async,
+            })
+        }).collect::<Result<Vec<_>, Error>>()?;
+        let natives: Vec<_> = new.functions[from..].iter()
+            .map(|f| f.native.as_deref().and_then(okkama_runtime_abi::Native::resolve)).collect();
+        let intrinsics: Vec<_> = new.functions[from..].iter()
+            .map(|f| f.intrinsic.as_ref().and_then(|i| crate::intrinsics::Intrinsic::resolve(&i.name))).collect();
+        let objects_before = old.objects.len();
+        let globals = new.globals.len();
+        // ---- commit: infallible steps; new functions are callable only once their records are written ----
+        self.heap.set_identity_words(resources.inline.iter().map(Option::is_some).collect());
+        self.heap.extend_layouts(layouts);
+        self.resources.extend_metadata(resources);
+        self.invocations[from..functions].copy_from_slice(&records);
+        self.natives.extend(natives);
+        self.intrinsics.extend(intrinsics);
+        self.globals.resize(globals, None);
+        self.jit.extend_dispatch(&loaded.program, objects_before);
+        if let Some(host) = &mut self.host {
+            host.extend(&loaded.program);
+        }
+        self.loaded = loaded;
+        Ok(())
+    }
+
 
     fn assemble(loaded: Loaded) -> Result<Self, Error> {
         let mut heap = Heap::new(loaded.layouts());
@@ -242,6 +346,7 @@ impl Runtime {
             heap,
             jit: crate::jit::Jit::new()?,
             invocations,
+            capacities: None,
             closure_bridge_reference: std::env::var_os("SPARROW_CORE_CLOSURE_BRIDGE").is_some_and(|value| value == "reference"),
             globals: vec![None; loaded.program.globals.len()],
             loaded,

@@ -43,7 +43,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionInfo {
     pub kinds: Vec<Kind>,
     /// Proven pointer-free for every definition of this SPB register (#535).

@@ -201,6 +201,22 @@ impl Resources {
             ..Self::default()
         }
     }
+    /// #588: the ownership metadata compiled code and allocated objects depend on is unchanged in `extended`
+    /// for every published descriptor (and resources stay on or off).
+    pub(crate) fn metadata_prefix_of(&self, extended: &Self) -> bool {
+        self.enabled == extended.enabled
+            && extended.flags.starts_with(&self.flags)
+            && extended.inline.starts_with(&self.inline)
+            && extended.leaf_capable.starts_with(&self.leaf_capable)
+    }
+
+    /// #588: take an extended program's ownership metadata (checked by `metadata_prefix_of`); runtime state stays.
+    pub(crate) fn extend_metadata(&mut self, extended: Self) {
+        self.flags = extended.flags;
+        self.inline = extended.inline;
+        self.leaf_capable = extended.leaf_capable;
+    }
+
     /// #909: machine code may count serials, write inline identities and destroy static resources itself when
     /// nothing observes those steps one by one (no destroy trace).
     pub(crate) fn inline_ownership(&self) -> bool {

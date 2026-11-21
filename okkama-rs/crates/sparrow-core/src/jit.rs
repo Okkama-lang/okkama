@@ -160,6 +160,10 @@ pub struct Jit {
     ranges: Vec<(u64, u64)>,
     /// (role, slot) → function index by object descriptor (u64::MAX: none).
     dispatch: BTreeMap<(u32, u32), Box<[u64]>>,
+    /// #588: the object capacity of a session runtime. Machine code embeds a dispatch table's address and indexes
+    /// it by descriptor, so a session's tables are this long from the start and an extension fills new entries in
+    /// place; 0 outside a session.
+    pub(crate) object_capacity: usize,
     /// The registers each `rt_exec` call site passes, in visit order: the
     /// helper reads them instead of visiting the instruction on every call
     /// (#325). Machine code holds their addresses, so they live as long.
@@ -235,6 +239,31 @@ impl Chosen {
     }
 }
 
+/// The implementation of role `role`'s slot `slot` per descriptor (`u64::MAX`: none), `length` entries long.
+fn dispatch_table(program: &okkama_sparrow::Program, role: u32, slot: u32, length: usize) -> Box<[u64]> {
+    let mut table = vec![u64::MAX; length];
+    for (entry, object) in table.iter_mut().zip(&program.objects) {
+        if let Some(witness) = object.does.iter().find(|w| w.role.0 == role) {
+            *entry = u64::from(witness.slots[slot as usize].0);
+        }
+    }
+    table.into_boxed_slice()
+}
+
+impl Jit {
+    /// #588: fill the dispatch entries of the objects an extension appended, in place (the tables are as long as
+    /// the session's object capacity).
+    pub(crate) fn extend_dispatch(&mut self, program: &okkama_sparrow::Program, from: usize) {
+        for (&(role, slot), table) in &mut self.dispatch {
+            for (descriptor, object) in program.objects.iter().enumerate().skip(from) {
+                if let Some(witness) = object.does.iter().find(|w| w.role.0 == role) {
+                    table[descriptor] = u64::from(witness.slots[slot as usize].0);
+                }
+            }
+        }
+    }
+}
+
 /// The target for compiled code, at a Cranelift optimization level.
 fn target(opt_level: &str) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, Error> {
     let mut flags = settings::builder();
@@ -300,6 +329,7 @@ impl Jit {
             maps: Vec::new(),
             ranges: Vec::new(),
             dispatch: BTreeMap::new(),
+            object_capacity: 0,
             operands: Vec::new(),
             helper_counts: vec![0; HELPERS.len()].into_boxed_slice(),
             largest_frame: 0,
@@ -2009,20 +2039,8 @@ impl Emitter<'_, '_> {
                 self.set(&dst.0, value);
             }
             I::CallRole { dst, receiver, role, slot, args } => {
-                let objects = program.objects.len();
-                let table = self.jit.dispatch.entry((role.0, *slot)).or_insert_with(|| {
-                    program
-                        .objects
-                        .iter()
-                        .map(|o| {
-                            o.does
-                                .iter()
-                                .find(|w| w.role == *role)
-                                .map_or(u64::MAX, |w| u64::from(w.slots[*slot as usize].0))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice()
-                });
+                let objects = program.objects.len().max(self.jit.object_capacity);
+                let table = self.jit.dispatch.entry((role.0, *slot)).or_insert_with(|| dispatch_table(program, role.0, *slot, objects));
                 debug_assert_eq!(table.len(), objects);
                 let table = table.as_ptr() as i64;
                 let object = self.get(receiver);
