@@ -9,7 +9,6 @@ module db/sqlite/backup v1.0.0;
 // The copy runs pages at a time, so other work goes on between steps.
 
 import "fs/path" take Path;
-import "numbers/bigint" take BigInt;
 import "time/clock" take Timing;
 import "time/duration" take Duration;
 import "compare" take Order;
@@ -56,23 +55,23 @@ object SqliteBackup {
 
 // How much a backup copied.
 object BackupReport {
-    has copies, total is BigInt;
+    has copies, total is int;
 
     // copies of total pages.
-    BackupReport(copies is BigInt, total is BigInt) {
-        confirm copies.order(BigInt(0)) != Order.less && total.order(copies) != Order.less
+    BackupReport(copies is int, total is int) {
+        confirm copies.order((0)) != Order.less && total.order(copies) != Order.less
             else throw InvalidSqliteBackup.invalid;
         self.copies = copies;
         self.total = total;
     }
 
     // Pages copied.
-    copies() is BigInt {
+    copies() is int {
         copies;
     }
 
     // Pages in the database.
-    total() is BigInt {
+    total() is int {
         total;
     }
 }
@@ -84,19 +83,19 @@ hidden object CountingBackup does SqliteBackupMaking {
     CountingBackup();
 
     async backup(target is Path, pages is int, clock is Timing, timeout is Duration) is BackupReport {
-        BackupReport(copies: BigInt(pages), total: BigInt(16));
+        BackupReport(copies: pages, total: 16);
     }
 }
 
 test "a backup report counts copied pages within the total" {
-    let report = BackupReport(copies: BigInt(4), total: BigInt(16));
+    let report = BackupReport(copies: 4, total: 16);
     test.is(report.copies().string(), "4");
     test.is(report.total().string(), "16");
     test.throws(InvalidSqliteBackup) {
-        BackupReport(copies: BigInt(17), total: BigInt(16));
+        BackupReport(copies: 17, total: 16);
     };
     test.throws(InvalidSqliteBackup) {
-        BackupReport(copies: BigInt(-1), total: BigInt(16));
+        BackupReport(copies: -1, total: 16);
     };
 }
 

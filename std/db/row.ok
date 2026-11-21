@@ -21,7 +21,6 @@ import "db/statement" take DbLimits, DbBoundaryLimit;
 import "collections/sequence" take Sequencing;
 import "encoding/utf" take Utf8Encoded;
 import "db/read" take RowValues, DbColumnReader, DbMaybeReader, DbPresenceReader, DbPage;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "db/read" take RowValueFailure;
 
@@ -270,8 +269,8 @@ object Row does RowValues {
         }
     }
 
-    // An integer column as BigInt.
-    integer(name is string) is BigInt {
+    // An integer column as int.
+    integer(name is string) is int {
         self.reader(name).integer();
     }
 

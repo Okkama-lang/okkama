@@ -25,7 +25,7 @@ object WebSocketMessageAssembly does Closing {
     WebSocketMessageAssembly(limits is WebSocketLimits) {
         bytes = ByteBuffer();
         opcode = Atomic(-1);
-        maximum = limits.message_bytes().int();
+        maximum = limits.message_bytes();
         frame_maximum = limits::Limits::frame_bytes;
     }
 

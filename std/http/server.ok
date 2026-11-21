@@ -65,7 +65,6 @@ import "async/timeout" take Within, TimedOut;
 import "time/clock" take Timing, SystemClock;
 import "time/duration" take Duration;
 import "http/body" take TextBody, EmptyBody, BodyOpening, UnknownBodyLength;
-import "numbers/bigint" take BigInt;
 import "http/client" take HttpClient;
 import "http/endpoint" take LoopbackEndpoints;
 import "net/ip" take IpAddress;
@@ -1101,7 +1100,7 @@ hidden object HttpServerFraming {
                 return origin;
             }
         let body = origin.body();
-        let length is @BigInt = try {
+        let length is @int = try {
             [body.length()];
         }
         catch e is UnknownBodyLength {
@@ -1534,7 +1533,9 @@ async test "a request body that pauses past the idle timeout is answered with 40
     ).started();
     // A body that keeps coming is read whole.
     let quick = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
-    await quick.output().write("POST /quick HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+    await quick.output().write(
+        "POST /quick HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"
+    );
     let answer = Atomic("");
     loop {
         let chunk = await quick.input().bytes(4096);

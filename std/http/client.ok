@@ -79,7 +79,6 @@ import "async/atomic" take Atomic;
 import "async/event" take Event;
 import "async/scope" take FutureGroup;
 import "io/stream" take Closing, InvalidReadLimit, AsyncReading;
-import "numbers/bigint" take BigInt;
 import "url/value" take UrlParts;
 import "net/dns" take FixedResolution;
 import "crypto/x509/trust" take TrustedCertificates, TrustStore, SystemTrustStore;
@@ -115,7 +114,7 @@ object HttpClient does Exchanging, Closing {
         chain = ClientChain(
             transport: built,
             redirects: redirects,
-            limit: limits.body_bytes().int()
+            limit: limits.body_bytes()
         ).exchanging();
     }
 
@@ -143,7 +142,7 @@ object HttpClient does Exchanging, Closing {
             transport: built,
             redirects: redirects,
             cookies: cookies,
-            limit: limits.body_bytes().int()
+            limit: limits.body_bytes()
         ).exchanging();
     }
 
@@ -1272,7 +1271,7 @@ hidden object HttpClientBody does BodyOpening {
         opened = Atomic(false);
     }
 
-    length() is BigInt {
+    length() is int {
         origin.length();
     }
 
@@ -2038,7 +2037,7 @@ hidden object HttpSharedClientBody does BodyOpening {
         opened = Atomic(false);
     }
 
-    length() is BigInt {
+    length() is int {
         origin.length();
     }
 

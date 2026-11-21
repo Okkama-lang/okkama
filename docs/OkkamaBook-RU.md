@@ -3197,6 +3197,21 @@ total > Money(cents: 300);                           // order() == Order.greater
   к нулю; `BigInt(7)` и `.int()`, потому что `BigInt` хранит `int`, #189), `Duration` (`+ -`, `-a`, сравнения), `Instant` и `MonotonicInstant`
   (`+ Duration`, `- Duration`, `- Instant`, сравнения), `Decimal` (сравнения).
 
+Обычные целочисленные величины std используют произвольный `int` (#511):
+`Json.integer()` и `Row.integer(name)` возвращают `int`, их необязательные
+читатели — `Maybe<int>` или `Presence<int>`, а `Duration.nanoseconds()` —
+`int`. `Json.int()` и `Row.int(name)` по-прежнему требуют диапазон знакового
+64-битного числа. `Decimal.coefficient()`, `BigRational.numerator()` /
+`denominator()`, длины HTTP-тел, целые plist и UID, размеры и счётчики тоже
+используют `int`. Доменные объекты и явная числовая обёртка `BigInt` остаются.
+
+Передавай `7` там, где обычный API раньше требовал `BigInt(7)`; используй
+целочисленный результат непосредственно, без `.int()`. Целое частное — явно
+`(a / b).int()` (усечение к нулю); `%` сохраняет знак делимого.
+Для недоверенных показателей степени используй
+`BoundedPower(base: 10).int(exponent, 4096)` из `numbers/bigint`: бюджет битов
+результата проверяется до вычисления слишком большого произведения.
+
 ## Глава 23. Фейки ролей и тестирование
 
 Elegant Objects утверждает, что интерфейс должен поставлять собственный
@@ -4020,7 +4035,7 @@ CommandCapture(origin:, limit:).completion()` собирает вывод: те�
 `plist` читает и пишет property list'ы Apple, XML или двоичные.
 `ParsedPlist(bytes).root()` — корневой `PlistValue`, чей `kind()` говорит,
 что это за значение: `PlistString(…).string()`, `PlistInteger.integer()`
-(`BigInt`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
+(`int`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
 `PlistDate.instant()`, `PlistUid.number()`, `PlistArray.values()` и
 `PlistDictionary.value(name)`. `EncodedPlist(origin:, format:).bytes()`
 записывает его.
@@ -6111,7 +6126,7 @@ await transaction.commit();
 `db/query` принимает `(origin: connection, statement: Statement(...))` или `(prepared:, values:)`;
 методы `one()`, `maybe()`, `all(limit)` и `rows()` используют один контракт результата.
 Колонки читаются прямо: `row.text(name)` или `row.maybe(name).text() else fallback`.
-`Execution.affected()` возвращает `Maybe<BigInt>`: неизвестное число отличается от нуля.
+`Execution.affected()` возвращает `Maybe<int>`: неизвестное число отличается от нуля.
 Query закрывает курсор; prepared statement и соединение остаются у вызывающего кода.
 
 
@@ -6205,7 +6220,7 @@ QueuedLogs хранит ограниченную FIFO-очередь и запу
 Supervising<int>. Лимит относится к ожидающим записям, ещё одна может доставляться.
 Перед ожиданием scope вызовите `await queue.drain(); queue.close();`. Close отменяет
 только собственную доставку, не scope и чужие задачи. Переполнение явно задаётся
-reject/drop_newest/drop_oldest, потери считает BigInt. Eager-start/Event способны
+reject/drop_newest/drop_oldest, потери считает int. Eager-start/Event способны
 выполнить форматирование или синхронный I/O внутри write(): ожидания места нет,
 гарантии времени вызова тоже нет. SyslogLogs заимствует подключённый UDP-владелец;
 drain подтверждает локальную отправку, не получение удалённой стороной. См.

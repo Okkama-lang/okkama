@@ -20,12 +20,36 @@ import "io/stream" take ByteSource, Closing, IncompleteWrite;
 import "encoding/utf" take Utf8Encoded;
 import "net/udp" take UdpConnection, DatagramTooLarge;
 import "async/scope" take Supervising;
-import "numbers/bigint" take BigInt;
 import "time/duration" take Duration, DurationUnit;
 import "time/rfc3339" take Rfc3339;
 
 // The syslog facility.
-enum SyslogFacility = (kernel, user, mail, daemon, authorization, syslog, printer, news, uucp, clock, private_authorization, ftp, ntp, audit, alert, clock2, local0, local1, local2, local3, local4, local5, local6, local7);
+enum SyslogFacility = (
+    kernel,
+    user,
+    mail,
+    daemon,
+    authorization,
+    syslog,
+    printer,
+    news,
+    uucp,
+    clock,
+    private_authorization,
+    ftp,
+    ntp,
+    audit,
+    alert,
+    clock2,
+    local0,
+    local1,
+    local2,
+    local3,
+    local4,
+    local5,
+    local6,
+    local7
+);
 
 hidden object SyslogFacilityCode {
     has origin is SyslogFacility;
@@ -346,7 +370,7 @@ object SyslogLogs does LogWriting, LogDraining, Closing {
     }
 
     // How many records were dropped.
-    dropped_records() is BigInt {
+    dropped_records() is int {
         queue.dropped_records();
     }
 

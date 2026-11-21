@@ -1,5 +1,6 @@
 module net/ip v1.0.0;
 
+import "numbers/bigint" take BoundedPower;
 // IP addresses and networks, IPv4 and IPv6.
 //
 //     let address = IpAddress("192.168.1.10");
@@ -15,7 +16,6 @@ import "runtime/net" take ip_parse, ip_format;
 import "compare" take Comparing, Order;
 import "collections/set" take Set, OrderedSet;
 import "net/ip_registry" take IpClassification;
-import "numbers/bigint" take BigInt;
 import "error" take InvalidArgument;
 import "collections/iteration" take Cursor, Iterating, IterationEnded;
 
@@ -23,7 +23,16 @@ import "collections/iteration" take Cursor, Iterating, IterationEnded;
 enum IpVersion = (v4, v6);
 
 // What an address is for, by the IANA registries.
-enum IpProperty = (unspecified, loopback, link_local, private_network, global, multicast, reserved, documentation);
+enum IpProperty = (
+    unspecified,
+    loopback,
+    link_local,
+    private_network,
+    global,
+    multicast,
+    reserved,
+    documentation
+);
 
 // Immutable numeric IPv4/IPv6 address, without a port, prefix or interface zone.
 //
@@ -168,7 +177,7 @@ enum InvalidIpAddress is Error = (origin(origin is string));
 // Inclusive CIDR interval. Host bits are masked at construction; the original
 // IpAddress stays unchanged. broadcast() means the final address for both IP
 // versions, not an IPv6 broadcast transport. membership includes both ends.
-// size() uses BigInt even for IPv4 and is exact for the entire IPv6 /0 space.
+// size() uses int even for IPv4 and is exact for the entire IPv6 /0 space.
 // Every observation uses at most 16 octets; no address list is materialized.
 object IpNetwork {
     has base is IpAddress;
@@ -207,8 +216,8 @@ object IpNetwork {
     }
 
     // How many addresses it has.
-    size() is BigInt {
-        BigInt(2).power(base.bytes().size() * 8 - length, 129);
+    size() is int {
+        BoundedPower(base: 2).int(base.bytes().size() * 8 - length, 129);
     }
 
     // The prefix length in bits.
@@ -434,4 +443,11 @@ test "interface preserves host bits alongside its normalized network" {
     test.is(interface.string(), "2001:db8::7/64");
     test.is(interface.address().string(), "2001:db8::7");
     test.is(interface.network().network().string(), "2001:db8::");
+}
+
+test "511 IPv6 full space size is an exact int" {
+    let size is int = IpNetwork(address: IpAddress("::"), prefix: 0).size();
+    test.is(size, 340282366920938463463374607431768211456);
+    test.is(IpNetwork(address: IpAddress("0.0.0.0"), prefix: 0).size(), 4294967296);
+    test.is(IpNetwork(address: IpAddress("::1"), prefix: 128).size(), 1);
 }

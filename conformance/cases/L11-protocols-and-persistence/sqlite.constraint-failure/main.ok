@@ -7,7 +7,6 @@ import "db/statement" take Statement;
 import "db/value" take DbInteger, DbText, DbDecimal, DbNull, ObservedDbValue;
 import "db/row" take RowsEnded;
 import "db/error" take DbFailure;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "compare" take Order;
 
@@ -17,11 +16,16 @@ async main() is int {
     defer await connection.settled();
     defer connection.close();
     await connection.execution(Statement("CREATE TABLE users(email TEXT UNIQUE)"));
-    await connection.execution(Statement(text: "INSERT INTO users VALUES(?)", values: [DbText("a@example.test")]));
+    await connection.execution(
+        Statement(text: "INSERT INTO users VALUES(?)", values: [DbText("a@example.test")])
+    );
     let outcome = try {
-        await connection.execution(Statement(text: "INSERT INTO users VALUES(?)", values: [DbText("a@example.test")]));
+        await connection.execution(
+            Statement(text: "INSERT INTO users VALUES(?)", values: [DbText("a@example.test")])
+        );
         "inserted twice";
-    } catch e is DbFailure {
+    }
+    catch e is DbFailure {
         "constraint rejected";
     };
     out.writeln(outcome);

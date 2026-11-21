@@ -16,7 +16,6 @@ import "async/channel" take Channel, Sending;
 import "async/lock" take Lock;
 import "async/event" take Event;
 import "async/scope" take FutureScope, Supervising;
-import "numbers/bigint" take BigInt;
 import "encoding/utf" take Utf8Encoded;
 import "error" take InvalidState;
 
@@ -53,7 +52,7 @@ object ImapCommandChannel does Closing {
         stopped = Event();
         let channel is Channel<ImapExchangeState> = Channel(1);
         states = channel;
-        initial = channel.sending().send(ImapExchangeState(prefix: prefix, serial: BigInt(1)));
+        initial = channel.sending().send(ImapExchangeState(prefix: prefix, serial: 1));
     }
 
     // A pending exchange of command.
@@ -118,7 +117,7 @@ object ImapCommandChannel does Closing {
         ).read();
         let following = ImapExchangeState(
             prefix: result.remainder(),
-            serial: (state.serial() + BigInt(1))
+            serial: (state.serial() + 1)
         );
         await states.sending().send(following);
         completed.set();
@@ -156,7 +155,7 @@ object ImapCommandChannel does Closing {
         let scope is FutureScope<int, ImapCommandRead> = FutureScope(action: action.run);
         let result = await scope.outcome();
         await states.sending().send(
-            ImapExchangeState(prefix: result.remainder(), serial: (state.serial() + BigInt(1)))
+            ImapExchangeState(prefix: result.remainder(), serial: (state.serial() + 1))
         );
         completed.set();
         [result];
@@ -184,9 +183,9 @@ object ImapCommandExchange {
 
 hidden object ImapExchangeState {
     has prefix is @byte;
-    has serial is BigInt;
+    has serial is int;
 
-    ImapExchangeState(prefix is @byte, serial is BigInt) {
+    ImapExchangeState(prefix is @byte, serial is int) {
         self.prefix = prefix;
         self.serial = serial;
     }
@@ -195,7 +194,7 @@ hidden object ImapExchangeState {
         prefix;
     }
 
-    serial() is BigInt {
+    serial() is int {
         serial;
     }
 }
@@ -333,7 +332,7 @@ hidden object ImapDoneWriting {
 }
 
 test "exchange state retains exact unread bytes and unbounded serial" {
-    let state = ImapExchangeState(prefix: [0.byte(), 255.byte()], serial: BigInt(4294967296));
+    let state = ImapExchangeState(prefix: [0.byte(), 255.byte()], serial: 4294967296);
     test.is(state.prefix(), [0.byte(), 255.byte()]);
     test.is(state.serial().string(), "4294967296");
 }

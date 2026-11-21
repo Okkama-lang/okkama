@@ -1,0 +1,39 @@
+module bench/integer_511 v1.0.0;
+
+// Narrow #511 A/B workloads. Each sample consumes its results in a checksum.
+import "json" take Json, ParsedJson;
+import "db/value" take DbInteger, ObservedDbValue;
+import "time/duration" take Duration;
+import "http/body" take ByteBody;
+import "numbers/bigint" take BigInt;
+import "runtime/time" take monotonic_clock;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let output = Stdout();
+    // First sample warms the JIT; five following samples are measured.
+    for (0..6) -> sample {
+        for (0..8) -> kind {
+            let start = monotonic_clock();
+            let checksum = (0..1000).reduce(0) -> sum, i {
+                let n = 123456789012345678901234567890 + i;
+                let result = match kind {
+                    case 0: ParsedJson("123456789012345678901234567890").root().integer().int();
+                    case 1: Json(BigInt(n)).string().length();
+                    case 2: ObservedDbValue(DbInteger(BigInt(n))).width();
+                    case 3: ObservedDbValue(DbInteger(BigInt(n))).integer().int();
+                    case 4: Duration(nanoseconds: n).nanoseconds().int();
+                    case 5: ByteBody([1.byte(), 2.byte()]).length().int();
+                    case 6: ((BigInt(n) * BigInt(n)) / BigInt(7) + BigInt(n) % BigInt(7)).int();
+                    else {
+                        BigInt(10).power(100, 4096).int();
+                    }
+                };
+                sum + result;
+            };
+            let elapsed = monotonic_clock() - start;
+            output.writeln(sample, " ", kind, " ", elapsed, " ", checksum);
+        }
+    }
+    0;
+}

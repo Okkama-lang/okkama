@@ -1,13 +1,12 @@
 module plist/value v1.0.0;
 
 import "collections/sequence" take Sequencing;
-import "numbers/bigint" take BigInt;
 import "time/clock" take Instant;
 import "async/atomic" take Atomic;
 
 // Immutable property-list values, independent from JSON and any wire format.
-// Scalars retain their exact payloads: arbitrary signed BigInt, finite float,
-// exact Unicode string/bytes, Instant, and nonnegative BigInt UID. No coercion,
+// Scalars retain their exact payloads: arbitrary signed int, finite float,
+// exact Unicode string/bytes, Instant, and nonnegative int UID. No coercion,
 // timezone conversion, reference resolution or serialization-specific narrowing.
 //
 //     let value = PlistDictionary(
@@ -40,7 +39,17 @@ import "async/atomic" take Atomic;
 // Run: okkama run -t std/plist/value.ok
 
 // Which of the plist kinds a value is.
-enum PlistKind = (boolean_value, integer_value, real_value, string_value, data_value, date_value, array_value, dictionary_value, uid_value);
+enum PlistKind = (
+    boolean_value,
+    integer_value,
+    real_value,
+    string_value,
+    data_value,
+    date_value,
+    array_value,
+    dictionary_value,
+    uid_value
+);
 
 // A property-list value.
 role PlistValue {
@@ -56,7 +65,7 @@ role PlistWriting {
     // A boolean.
     boolean(value is bool) is void;
     // An integer.
-    integer(value is BigInt) is void;
+    integer(value is int) is void;
     // A real.
     real(value is float) is void;
     // A string.
@@ -70,7 +79,7 @@ role PlistWriting {
     // A dictionary's members.
     members(values is Sequencing<PlistMember>) is void;
     // A UID (binary plists only).
-    uid(value is BigInt) is void;
+    uid(value is int) is void;
 }
 
 // A plist boolean.
@@ -100,10 +109,10 @@ object PlistBoolean does PlistValue {
 
 // A plist integer.
 object PlistInteger does PlistValue {
-    has origin is BigInt;
+    has origin is int;
 
     // An integer of any size.
-    PlistInteger(value is BigInt) {
+    PlistInteger(value is int) {
         origin = value;
     }
 
@@ -113,7 +122,7 @@ object PlistInteger does PlistValue {
     }
 
     // The value.
-    integer() is BigInt {
+    integer() is int {
         origin;
     }
 
@@ -226,10 +235,10 @@ object PlistDate does PlistValue {
 // UIDs are opaque nonnegative identifiers. This model never resolves them to
 // another object, and never narrows them to a particular binary field width.
 object PlistUid does PlistValue {
-    has origin is BigInt;
+    has origin is int;
 
     // A UID; it must not be negative.
-    PlistUid(value is BigInt) {
+    PlistUid(value is int) {
         confirm value.sign() >= 0 else throw InvalidPlistUid.invalid;
         origin = value;
     }
@@ -240,7 +249,7 @@ object PlistUid does PlistValue {
     }
 
     // The UID.
-    number() is BigInt {
+    number() is int {
         origin;
     }
 
@@ -510,7 +519,9 @@ object PlistMaybeReader {
 
 // A value of another kind than the read asked for: the key (with [index] for
 // an array item), the kind asked for and the kind found.
-enum PlistKindMismatch is Error = (member(name is string, expected is PlistKind, found is PlistKind));
+enum PlistKindMismatch is Error = (
+    member(name is string, expected is PlistKind, found is PlistKind)
+);
 
 // One value read as the kind asked for.
 hidden object PlistRead {
@@ -614,8 +625,8 @@ hidden object PlistCapture does PlistWriting {
         truth.replace(value);
     }
 
-    integer(value is BigInt) is void {
-        number.replace(value.int());
+    integer(value is int) is void {
+        number.replace(value);
     }
 
     real(value is float) is void {
@@ -648,7 +659,7 @@ hidden object PlistCapture does PlistWriting {
         member_values.replace(listed);
     }
 
-    uid(value is BigInt) is void {}
+    uid(value is int) is void {}
 
     bool() is bool {
         truth.value();

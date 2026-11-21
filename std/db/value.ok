@@ -1,5 +1,6 @@
 module db/value v1.0.0;
 
+import "strings/parse" take Number;
 // Database values: what is bound to a statement and what a row holds.
 //
 //     await db.execution("INSERT INTO users(name, age, nick) VALUES (?, ?, ?)",
@@ -14,7 +15,6 @@ module db/value v1.0.0;
 // callback of its kind.
 
 import "runtime/db" as native_db;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "encoding/utf" take Utf8Encoded;
 import "async/atomic" take Atomic;
@@ -38,7 +38,7 @@ role DbValueWriting {
     // A boolean.
     boolean(value is bool) is void;
     // An integer.
-    integer(value is BigInt) is void;
+    integer(value is int) is void;
     // A float.
     floating(value is float) is void;
     // A decimal.
@@ -124,35 +124,12 @@ object DbInteger does DbValue {
         present = true;
     }
 
-    // The value, at most 4096 digits.
-    DbInteger(value is BigInt) {
-        let number = value.int();
-        DbIntegerDigits(number).check();
-        origin = number;
-        present = true;
-    }
-
     // The value, or NULL for none.
     DbInteger(value is Maybe<int>) {
         let number = value else 0;
         DbIntegerDigits(number).check();
         origin = number;
         present = DbPresence(value != Maybe<int>.none).present();
-    }
-
-    // The value, or NULL for none.
-    DbInteger(value is Maybe<BigInt>) {
-        let number = match value {
-            case Maybe.some(given) {
-                given.int();
-            }
-            else {
-                0;
-            }
-        };
-        DbIntegerDigits(number).check();
-        origin = number;
-        present = DbPresence(value != Maybe<BigInt>.none).present();
     }
 
     // DbValueKind.integer, or null_value when made from none.
@@ -166,12 +143,12 @@ object DbInteger does DbValue {
     }
 
     // The value. InvalidDbValue for NULL.
-    integer() is BigInt {
+    integer() is int {
         confirm present else throw InvalidDbValue.because("NULL has no integer");
-        BigInt(origin);
+        origin;
     }
 
-    // The value as int; InvalidDbValue for NULL or a value outside int.
+    // The same exact int; InvalidDbValue for NULL.
     int() is int {
         confirm present else throw InvalidDbValue.because("NULL has no integer");
         origin;
@@ -180,7 +157,7 @@ object DbInteger does DbValue {
     // Calls the writer's integer callback, or null_value for NULL.
     print(output is DbValueWriting) is void {
         if present {
-            output.integer(BigInt(origin));
+            output.integer((origin));
         }
         else {
             output.null_value();
@@ -484,7 +461,7 @@ object ObservedDbValue {
     }
 
     // The integer; WrongDbValue for another kind.
-    integer() is BigInt {
+    integer() is int {
         captured.integer_value();
     }
 
@@ -612,15 +589,15 @@ object DbValueCapture does DbValueWriting {
     }
 
     // Takes an integer.
-    integer(value is BigInt) is void {
+    integer(value is int) is void {
         self.emit(DbValueKind.integer);
         self.published(native_db.db_integer(DbInteger(value).int().string()));
     }
 
     // The integer taken.
-    integer_value() is BigInt {
+    integer_value() is int {
         self.require(DbValueKind.integer);
-        BigInt(native_db.db_integer_value(self.state()));
+        Number(native_db.db_integer_value(self.state())).int();
     }
 
     // Takes a float.
@@ -725,6 +702,30 @@ enum InvalidDbValue is Error = (because(reason is string));
 // A value over a size limit; reason says which.
 enum DbValueLimit is Error = (because(reason is string));
 
+test "511 DB int callbacks and native cells preserve precision and nullability" {
+    let huge is int = -123456789012345678901234567890;
+    let value = DbInteger(huge);
+    test.is(value.integer(), huge);
+    test.is(ObservedDbValue(value).integer(), huge);
+    test.is(ObservedDbValue(DbInteger(Maybe<int>.some(huge))).integer(), huge);
+    test.ok(DbInteger(Maybe<int>.none).kind() == DbValueKind.null_value);
+    test.ok(try {
+        DbInteger(Maybe<int>.none).integer();
+        false;
+    }
+    catch error is InvalidDbValue {
+        true;
+    });
+    test.is(DbInteger(10.pow(4095)).integer(), 10.pow(4095));
+    test.ok(try {
+        DbInteger(10.pow(4096));
+        false;
+    }
+    catch error is DbValueLimit {
+        true;
+    });
+}
+
 test "database NULL remains separate from empty text" {
     test.ok(ObservedDbValue(DbNull()).kind() == DbValueKind.null_value);
     test.is(ObservedDbValue(DbText("")).text(), "");
@@ -754,7 +755,7 @@ object DbNativeValue does DbValue {
                 output.boolean(native_db.db_boolean_value(state));
             }
             case DbValueKind.integer {
-                output.integer(BigInt(native_db.db_integer_value(state)));
+                output.integer(Number(native_db.db_integer_value(state)).int());
             }
             case DbValueKind.floating {
                 output.floating(native_db.db_floating_value(state));

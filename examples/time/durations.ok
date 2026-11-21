@@ -14,5 +14,7 @@ main() is int {
     out.writeln("seconds: ", total::Span::seconds);
     out.writeln("tripled: ", DurationString(origin: total.times(3.rat())));
     out.writeln("longer than three minutes: ", total > Duration(minutes: 3));
+    let nanos is int = total.nanoseconds();
+    out.writeln("nanoseconds: ", nanos);
     0;
 }

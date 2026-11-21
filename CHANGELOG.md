@@ -133,6 +133,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 - **Mailboxes and saved cookie jars are written atomically and durably (#934).** `mail/mbox_store` and
   `SavedCookieJar` replace their files with `TemporaryFile.replace` / `File.replace` (fsync, rename, directory
   fsync) instead of a temporary file moved without fsync.
+- **std speaks `int`, not `BigInt` (#511).** The language's `int` is arbitrary precision, so 125 std signatures that
+  took or returned `BigInt` (JSON and plist integers, database values, sizes, HTTP lengths, counters, durations, …)
+  take and return `int`. Quotients still truncate toward zero and remainders keep the dividend's sign; every
+  bounded power over untrusted input keeps its bit budget through `BoundedPower`. `BigInt` stays as a type.
+  Migration: `Json(BigInt(n))` → `Json(n)`, `DbInteger(BigInt(n))` → `DbInteger(n)`,
+  `duration.nanoseconds().int()` → `duration.nanoseconds()`; `docs/std-int-511/inventory.md` lists every change.
 
 ## [0.6.1] — 2026-11-22
 
