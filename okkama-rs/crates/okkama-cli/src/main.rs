@@ -18,6 +18,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(feature = "allocation-stats")]
 use okkama_allocation_counter as allocation_stats;
+use sparrow_core::test_report;
 #[cfg(feature = "allocation-stats")]
 #[global_allocator]
 static ALLOCATOR: allocation_stats::Counting = allocation_stats::Counting;
@@ -47,6 +48,9 @@ use okkama_compiler::syntax::{self, ParseMode, ParseOptions, ast, lexer, prune};
 const EXIT_DIAGNOSTICS: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 const EXIT_IO: u8 = 3;
+/// `run -t` could not reach a verdict: a source error, no test to run, an
+/// engine error (#339). Failed tests are 1.
+const EXIT_TEST_RUN: u8 = 4;
 
 
 
@@ -70,7 +74,7 @@ USAGE:
     okkama ir <FILE|-> [--format text]
     okkama build <FILE|-> -o <FILE.spb>
     okkama exec [BUDGETS] <FILE.spb>
-    okkama run [-t [--filter TEXT]...] <FILE> [FILE.ok...] [ARGS...]
+    okkama run [-t [--filter TEXT]... [--report FORMAT] [--seed N]] <FILE> [FILE.ok...] [ARGS...]
     okkama <FILE.ok> [FILE.ok...]
     okkama help [COMMAND]
     okkama --version
@@ -118,6 +122,15 @@ RUN OPTIONS:
     --filter TEXT         With -t: run only the tests whose name contains
                           TEXT (literally, case-sensitive); repeated, the
                           tests that contain any of the texts
+    --report FORMAT       With -t: human (the default: each test as it
+                          runs, then PASS or FAIL), json (one JSON document)
+                          or junit (JUnit XML); json and junit own stdout,
+                          and what the tests print goes to stderr. Every
+                          report lists the tests in declaration order
+    --seed N              With -t: run the selected tests in the order the
+                          seed N (0..9007199254740991) shuffles them to;
+                          without it, in declaration order. The report
+                          names the seed. Properties keep their own seeds
     --max-steps N         Stop after N steps: function entries and loop
                           iterations (off by default)
     --max-memory SIZE     Stop when the run holds more than SIZE bytes
@@ -132,9 +145,12 @@ RUN OPTIONS:
 
 EXIT STATUS:
     0  success
-    1  a source, lowering or codegen error (including invalid UTF-8)
+    1  a source, lowering or codegen error (including invalid UTF-8);
+       with run -t, a test failed
     2  invalid command line
     3  an input/output error
+    4  run -t reached no verdict: a source error, no test to run, or an
+       engine error
 ";
 
 const TOKENS_HELP: &str = "\
@@ -292,11 +308,39 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
 }
 
 /// A test-profile program on the core: the report goes to stdout.
-fn core_tests(bytes: Vec<u8>) -> Outcome {
-    match sparrow_core::run_tests(bytes, Box::new(okkama_runtime_core::stdout::Buffered)) {
-        Ok(passed) => Outcome { stdout: String::new(), stderr: String::new(), code: u8::from(!passed) },
-        Err(error) => Outcome::failure(format!("okkama: {}\n", error.0), EXIT_DIAGNOSTICS),
+/// The tests of `bytes`, ordered by `seed`, reported as `format` (#339): 0 when
+/// none failed, 1 when one did, 4 when the run reached no verdict.
+fn core_tests(bytes: Vec<u8>, seed: Option<u64>, format: test_report::ReportFormat, suite: &str) -> Outcome {
+    use test_report::ReportFormat;
+    let progress: Option<Box<dyn Write + Send>> = match format {
+        ReportFormat::Human => Some(Box::new(okkama_runtime_core::stdout::Buffered)),
+        ReportFormat::Json | ReportFormat::Junit => None,
+    };
+    match sparrow_core::run_test_report(bytes, seed, progress) {
+        Ok(report) => Outcome {
+            stdout: match format {
+                ReportFormat::Human => String::new(),
+                ReportFormat::Json => test_report::json(&report, suite),
+                ReportFormat::Junit => test_report::junit(&report, suite),
+            },
+            stderr: String::new(),
+            code: u8::from(!report.passed()),
+        },
+        Err(error) => Outcome::failure(format!("okkama: {}\n", error.0), EXIT_TEST_RUN),
     }
+}
+
+/// `--seed`'s value: a decimal integer in 0..=2^53-1.
+fn test_seed(text: &str) -> Result<u64, String> {
+    text.parse::<u64>()
+        .ok()
+        .filter(|seed| *seed <= sparrow_core::test_report::MAX_SEED)
+        .ok_or_else(|| {
+            format!(
+                "--seed needs a whole number from 0 to {}, not `{text}`",
+                sparrow_core::test_report::MAX_SEED
+            )
+        })
 }
 
 /// `core_outcome` of `run_described`, with the failure's call stack.
@@ -1427,6 +1471,8 @@ fn run_command(args: &[String]) -> Outcome {
     let mut rest = args;
     let mut tests = false;
     let mut filters: Vec<String> = Vec::new();
+    let mut format: Option<test_report::ReportFormat> = None;
+    let mut seed: Option<u64> = None;
     let mut limits = sparrow_core::budget::Limits::default();
     while let Some(first) = rest.first() {
         match first.as_str() {
@@ -1444,6 +1490,26 @@ fn run_command(args: &[String]) -> Outcome {
                     return Outcome::usage("--filter needs a text to look for in test names");
                 };
                 filters.push(value.clone());
+                rest = &rest[1..];
+            }
+            "--report" => {
+                let Some(value) = rest.get(1) else {
+                    return Outcome::usage("--report needs a format: human, json or junit");
+                };
+                match test_report::ReportFormat::named(value) {
+                    Ok(named) => format = Some(named),
+                    Err(message) => return Outcome::usage(&message),
+                }
+                rest = &rest[1..];
+            }
+            "--seed" => {
+                let Some(value) = rest.get(1) else {
+                    return Outcome::usage("--seed needs a whole number");
+                };
+                match test_seed(value) {
+                    Ok(value) => seed = Some(value),
+                    Err(message) => return Outcome::usage(&message),
+                }
                 rest = &rest[1..];
             }
             "-h" | "--help" => return Outcome::success(HELP.to_string()),
@@ -1472,6 +1538,12 @@ fn run_command(args: &[String]) -> Outcome {
     if !filters.is_empty() && !tests {
         return Outcome::usage("--filter selects tests: use it with -t");
     }
+    if format.is_some() && !tests {
+        return Outcome::usage("--report reports tests: use it with -t");
+    }
+    if seed.is_some() && !tests {
+        return Outcome::usage("--seed orders tests: use it with -t");
+    }
     let Some((input, mut program_args)) = rest.split_first() else {
         return Outcome::usage("missing input file");
     };
@@ -1490,13 +1562,19 @@ fn run_command(args: &[String]) -> Outcome {
     if program_args.first().map(String::as_str) == Some("--") {
         program_args = &program_args[1..];
     }
+    // A test run that reaches no verdict exits 4, failed tests 1 (#339).
+    let unrun = |outcome: Outcome| if tests && outcome.code == EXIT_DIAGNOSTICS {
+        Outcome { code: EXIT_TEST_RUN, ..outcome }
+    } else {
+        outcome
+    };
     let sources = match load_all(&line) {
         Ok(sources) => sources,
-        Err(outcome) => return outcome,
+        Err(outcome) => return unrun(outcome),
     };
     let (mut module, warnings) = match lower_source(&sources, line.tests) {
         Ok(lowered) => lowered,
-        Err(outcome) => return outcome,
+        Err(outcome) => return unrun(outcome),
     };
     let _ = io::stderr().lock().write_all(warnings.as_bytes());
     if let Some(tests) = module.tests.as_mut()
@@ -1506,10 +1584,9 @@ fn run_command(args: &[String]) -> Outcome {
         tests.retain(|(name, _)| filters.iter().any(|text| name.contains(text.as_str())));
         if tests.is_empty() {
             let texts: Vec<String> = filters.iter().map(|text| format!("{text:?}")).collect();
-            return Outcome::failure(
-                format!("okkama: no test name contains {}\n", texts.join(" or ")),
-                EXIT_DIAGNOSTICS,
-            );
+            // The owner's review of #339: a filter that selects nothing keeps
+            // its existing error behaviour, exit 1 with this diagnostic.
+            return Outcome::failure(format!("okkama: no test name contains {}\n", texts.join(" or ")), EXIT_DIAGNOSTICS);
         }
     }
     if std::env::var_os("OKKAMA_ICU_LIBDIR").is_none()
@@ -1519,14 +1596,14 @@ fn run_command(args: &[String]) -> Outcome {
     }
     let program = match codegen::sparrow::generate(&module) {
         Ok(program) => program,
-        Err(error) => return Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS),
+        Err(error) => return unrun(Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS)),
     };
     let bytes = match okkama_sparrow::encode(&program) {
         Ok(bytes) => bytes,
-        Err(error) => return Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS),
+        Err(error) => return unrun(Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS)),
     };
     if tests {
-        return core_tests(bytes);
+        return core_tests(bytes, seed, format.unwrap_or(test_report::ReportFormat::Human), input);
     }
     let (command, _file) = match core::workers_for(&program, &bytes) {
         Ok(workers) => workers,
