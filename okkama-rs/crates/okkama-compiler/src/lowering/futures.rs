@@ -143,3 +143,78 @@ pub(super) fn take_unique(ctx: &mut Ctx<'_, '_>, functions: &mut [Function]) {
         }
     }
 }
+
+/// #932 (owner, 2026-11-21): a temporary Future taken at once by `await.take` belongs to the awaiting frame while it
+/// is awaited, as an awaited call's state does in Rust, Kotlin or Swift: its `region.track` leaves the hot path for
+/// the await's unwind edge, where a landing block admits it to the region before the handler closes it. Delivered,
+/// it is consumed (`take_outcome`) and never reaches a region; not delivered (the callee failed, the awaiter was
+/// cancelled before, during or after the callee ran), the existing close releases its inputs, failure cache or
+/// running body exactly as before.
+///
+/// Qualifies: `call %f = F(...)`, then only `region.track R, %f`, then `await.take %f`, in one block with an unwind
+/// edge, where F is an async Okkama action, or a runtime driver whose arguments are all plain (a driver keeps fresh
+/// inputs past its settlement, #587/#845, so the take would leave them without an owner).
+pub(super) fn own_awaited_temporaries(ctx: &Ctx<'_, '_>, functions: &mut [Function]) {
+    let drivers: Vec<bool> = functions.iter().map(|function| function.attrs.iter().any(|attr| {
+        matches!(attr, crate::ir::Attr::Extern(_) | crate::ir::Attr::Intrinsic { .. })
+    })).collect();
+    let async_calls: Vec<bool> = functions.iter().map(Function::is_async).collect();
+    for function in functions.iter_mut() {
+        let mut block = 0;
+        while block < function.blocks.len() {
+            if let Some(at) = awaited_temporary(ctx, function, block, &async_calls, &drivers) {
+                split_awaited_temporary(function, block, at);
+            }
+            block += 1;
+        }
+    }
+}
+
+/// The index of the call of a qualifying `call; region.track; await.take` triple in `block`.
+fn awaited_temporary(ctx: &Ctx<'_, '_>, function: &Function, block: usize, async_calls: &[bool], drivers: &[bool]) -> Option<usize> {
+    let body = &function.blocks[block];
+    body.unwind.as_ref()?;
+    body.insts.windows(3).position(|triple| {
+        let (Some(future), InstKind::Call { func, args }) = (triple[0].result, &triple[0].kind) else { return false };
+        async_calls[func.0]
+            && (!drivers[func.0] || args.iter().all(|arg| ctx.is_plain(&function.values[arg.0])))
+            && matches!(triple[1].kind, InstKind::RegionTrack { value, .. } if value == future)
+            && matches!(triple[2].kind, InstKind::AwaitTake(input) if input == future)
+    })
+}
+
+/// `[.. call %f; region.track R, %f; await.take %f; rest]` (unwind U) becomes `[.. call %f] -> [await.take %f]`
+/// (unwind L) `-> [rest]` (unwind U), with `L(failure): region.track R, %f; br U(args.., failure)`.
+fn split_awaited_temporary(function: &mut Function, block: usize, at: usize) {
+    use crate::ir::{Block, BlockId, Target, Terminator};
+    let InstKind::RegionTrack { region, value: future } = function.blocks[block].insts[at + 1].kind else {
+        unreachable!("checked by awaited_temporary")
+    };
+    let span = function.blocks[block].insts[at + 1].span;
+    let unwind = function.blocks[block].unwind.clone().expect("checked by awaited_temporary");
+    let mut rest = function.blocks[block].insts.split_off(at + 1);
+    let track = rest.remove(0);
+    let take = rest.remove(0);
+    let term = std::mem::replace(&mut function.blocks[block].term, Terminator { kind: TermKind::Br(Target::new(BlockId(0))), span });
+    let awaiting = BlockId(function.blocks.len());
+    let tail = BlockId(awaiting.0 + 1);
+    let landing = BlockId(awaiting.0 + 2);
+    function.blocks[block].term = Terminator { kind: TermKind::Br(Target::new(awaiting)), span };
+    function.blocks.push(Block {
+        params: Vec::new(),
+        unwind: Some(Target::new(landing)),
+        insts: vec![take],
+        term: Terminator { kind: TermKind::Br(Target::new(tail)), span },
+    });
+    function.blocks.push(Block { params: Vec::new(), unwind: Some(unwind.clone()), insts: rest, term });
+    let failure = crate::ir::ValueId(function.values.len());
+    function.values.push(Type::Failure);
+    let mut args = unwind.args.clone();
+    args.push(failure);
+    function.blocks.push(Block {
+        params: vec![failure],
+        unwind: None,
+        insts: vec![Inst { result: None, kind: InstKind::RegionTrack { region, value: future }, span: track.span }],
+        term: Terminator { kind: TermKind::Br(Target { block: unwind.block, args }), span },
+    });
+}

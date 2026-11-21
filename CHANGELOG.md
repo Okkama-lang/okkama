@@ -31,9 +31,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   - `await` and the consuming `await` share one runtime body.
   - Programs without resources keep no retained-argument tail in their frames.
   - A closing region sorts its slots in place and reuses its queues.
+  - Owner's decisions (2026-11-21):
+    - An async frame keeps its ownership regions behind the registers, and only in programs with resources: a frame
+      without resources is 0.5.8's size again (−25% heap per Future).
+    - A temporary Future awaited at once belongs to the awaiting frame, as in Rust, Kotlin and Swift. It joins the
+      scope's region only on the await's unwind edge, so the normal path tracks nothing (`t/lang/awaited.ok`).
 
-  Instructions per iteration against 0.6.0: cancel-async-cleanup 14234 → 10666 (0.5.8: 7130, overhead halved);
-  async-await 824 → 774, spawn 860 → 816, channel 1672 → 1659 (0.5.8: 716, 760, 1420).
+  Instructions per iteration against 0.6.0: cancel-async-cleanup 14234 → 9901 (0.5.8: 7130);
+  async-await 824 → 788, spawn 860 → 832, channel 1672 → 1651 (0.5.8: 716, 760, 1420).
 - **A closure call goes straight to its body (#928, part 1).** Every call of a function value went through the
   runtime's helper (arguments spilled, a call into Rust, an arity trampoline). Machine code now reads the
   function from the closure, and for a synchronous body with up to two captures calls it directly with the

@@ -761,6 +761,11 @@ fn await_future(ctx_ptr: *mut Ctx, this: Word, future: Word, take: bool) -> u64 
                 set(future, RESULT, UNBOUND);
                 set(future, FAILURE, UNBOUND);
                 set(future, STATE, CONSUMED);
+                // #932: a temporary taken at once has no owner but its awaiter, and no inputs left after its
+                // action (I3). Should some driver still hold inputs, the root closes them: never leaked.
+                if runtime.resources.enabled && runtime.held(future, Held::Inputs) != UNBOUND {
+                    runtime.release_taken_temporary(future);
+                }
             }
             AWAIT_READY
         }

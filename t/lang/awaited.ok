@@ -1,0 +1,81 @@
+module t v1.0.0;
+
+// t/lang: a temporary Future awaited at once belongs to the awaiting frame
+// (#932). Its fresh inputs are destroyed exactly once on every path: the
+// result taken, the callee failing, the awaiter cancelled before the callee
+// ran, and the awaiter cancelled while the callee waits.
+import "tap" take Tap;
+import "async/atomic" take Atomic;
+import "async/event" take Event;
+
+enum Stop is Error = (now);
+
+object Res {
+    has name is string;
+    has log is Atomic<string>;
+    Res(:name, :log);
+    destroy { log.replace(log.value() + name); }
+}
+
+// Its destroy waits for a gate: a region close awaits it shielded, so a
+// cancellation requested meanwhile stays pending for the next `await`.
+object Slow {
+    has gate is Event;
+    Slow(:gate);
+    async destroy { await gate.wait(); }
+}
+
+object Use {
+    Use();
+    async keep(res is Res) is int { 1; }
+    async fail(res is Res) is int { throw Stop.now; }
+    async hold(res is Res, gate is Event) is int {
+        await gate.wait();
+        2;
+    }
+}
+
+object Task {
+    has log is Atomic<string>;
+    has gate is Event;
+    Task(:log, :gate);
+    // The cancellation reaches the second await, before `keep` runs.
+    async before() is string {
+        { let slow = Slow(gate: gate); }
+        let n = await Use().keep(Res(name: "B", log: log));
+        "ran " + n.string();
+    }
+    // The cancellation reaches `hold` while it waits.
+    async during() is string {
+        let n = await Use().hold(Res(name: "D", log: log), gate);
+        "ran " + n.string();
+    }
+}
+
+async main() is int {
+    let t = Tap(8);
+    let log = Atomic("");
+    defer log.close();
+    t = t.is(await Use().keep(Res(name: "K", log: log)), 1, "a taken result");
+    t = t.is(log.value(), "K", "the input is destroyed when the action completes");
+    log.replace("");
+    let failed = try { await Use().fail(Res(name: "F", log: log)); } catch e is Stop { -1; };
+    t = t.is(failed, -1, "the callee's failure crosses the await");
+    t = t.is(log.value(), "F", "a failing callee's input is destroyed once");
+    log.replace("");
+    let gate = Event();
+    let early = spawn Task(log: log, gate: gate).before();
+    early.cancel();
+    gate.set();
+    let first = try { await early; } catch e is Cancelled { "cancelled"; };
+    t = t.is(first, "cancelled", "cancelled before the callee ran");
+    t = t.is(log.value(), "B", "the unstarted callee's input is destroyed once");
+    log.replace("");
+    let late = Event();
+    let waiting = spawn Task(log: log, gate: late).during();
+    waiting.cancel();
+    let second = try { await waiting; } catch e is Cancelled { "cancelled"; };
+    t = t.is(second, "cancelled", "cancelled while the callee waits");
+    t = t.is(log.value(), "D", "the waiting callee's input is destroyed once");
+    t.done();
+}

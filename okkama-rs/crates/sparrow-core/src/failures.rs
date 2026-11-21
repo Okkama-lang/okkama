@@ -1638,6 +1638,18 @@ impl Runtime {
 
     /// #817: a Future that outlives its owner (still running) or starts after its group's owner closed: the root
     /// owns it until shutdown.
+    /// #932: a Future taken by its awaiter with inputs still held (no awaited temporary should have any, I3) and
+    /// no region owning it: detached to the root, whose close releases them.
+    pub(crate) fn release_taken_temporary(&mut self, future: Word) {
+        let inputs = self.held(future, crate::tasks::Held::Inputs);
+        if self.region_len(inputs) == 0 || self.owner_of(future) != Some(Owner::Free) {
+            return;
+        }
+        okkama_devtrace::count!("runtime", "taken temporary with inputs detached");
+        debug_assert!(false, "an awaited temporary kept its inputs after the take (#932 I3)");
+        self.detach_to_root(future);
+    }
+
     pub(crate) fn detach_to_root(&mut self, future: Word) {
         okkama_devtrace::count!("runtime", "future detached to the root");
         let root = self.root_region();
