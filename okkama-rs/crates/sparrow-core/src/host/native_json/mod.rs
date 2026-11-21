@@ -95,7 +95,8 @@ struct ParsedDocument {
 }
 #[derive(Debug)]
 pub(crate) struct ParseState {
-    source: Vec<char>,
+    /// The source text, UTF-8 (#468: no character vector).
+    source: String,
     maximum_depth: BigInt,
     outcome: RefCell<Option<Rc<ParsedDocument>>>,
 }
@@ -120,19 +121,21 @@ impl JsonHandle {
         }
     }
 }
-/// Line and column of `offset` in `source`, from 1; CR LF is one line break.
-fn located(source: &[char], offset: usize) -> (i64, i64) {
-    let (mut line, mut column, mut position) = (1, 1, 0);
-    while position < offset {
-        match source[position] {
+/// Character offset, line and column of byte `offset` in `source` (lines and columns from 1; CR LF is one line
+/// break). The parser works in bytes (#468); what the program sees counts characters.
+fn located(source: &str, offset: usize) -> (i64, i64, i64) {
+    let (mut line, mut column, mut characters) = (1, 1, 0);
+    let mut chars = source[..offset].chars().peekable();
+    while let Some(c) = chars.next() {
+        characters += 1;
+        match c {
             '\r' => {
-                position += 1;
-                if position < offset && source[position] == '\n' {
-                    position += 1;
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                    characters += 1;
                 }
                 line += 1;
                 column = 1;
-                continue;
             }
             '\n' => {
                 line += 1;
@@ -140,9 +143,8 @@ fn located(source: &[char], offset: usize) -> (i64, i64) {
             }
             _ => column += 1,
         }
-        position += 1;
     }
-    (line, column)
+    (characters, line, column)
 }
 
 /// JSON as UTF-8 bytes (#135): the parser reads the decoded characters, with
@@ -151,17 +153,17 @@ fn located(source: &[char], offset: usize) -> (i64, i64) {
 fn bytes_state(bytes: &[u8], maximum_depth: BigInt) -> ParseState {
     match std::str::from_utf8(bytes) {
         Ok(text) => ParseState {
-            source: text.chars().collect(),
+            source: text.to_string(),
             maximum_depth,
             outcome: RefCell::new(None),
         },
         Err(error) => {
             let valid = std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or_default();
-            let source: Vec<char> = valid.chars().collect();
-            let (line, column) = located(&source, source.len());
+            let source = valid.to_string();
+            let (characters, line, column) = located(&source, source.len());
             let outcome = ParsedDocument {
                 root: None,
-                offset: source.len() as i64,
+                offset: characters,
                 line,
                 column,
                 message: "invalid UTF-8".into(),
@@ -226,8 +228,8 @@ impl Heap {
     }
     fn json_handle_new(&mut self, state: JsonHandle) -> Result<Slot, Error> {
         if let JsonHandle::Parse(parse) = &state {
-            // The source, as characters, lives until the state is released.
-            self.core_mut().charge_external(parse.source.len() * 4);
+            // The source text lives until the state is released.
+            self.core_mut().charge_external(parse.source.len());
         }
         Ok(Slot {
             tag: HANDLE,
@@ -291,10 +293,10 @@ impl Heap {
             }
             Err(error) => {
                 let overflow = error.message == "\u{0}overflow";
-                let (line, column) = located(&state.source, error.offset);
+                let (characters, line, column) = located(&state.source, error.offset);
                 ParsedDocument {
                     root: None,
-                    offset: error.offset as i64,
+                    offset: characters,
                     line: if overflow { 0 } else { line },
                     column: if overflow { 0 } else { column },
                     message: if overflow {
@@ -525,7 +527,7 @@ impl Heap {
                     Integer::Small(n) => BigInt::from(n),
                     Integer::Big(n) => (*n).clone(),
                 };
-                let source = self.text(args[0])?.chars().collect();
+                let source = self.text(args[0])?.to_string();
                 self.json_handle_new(JsonHandle::Parse(Rc::new(ParseState {
                     source,
                     maximum_depth,
@@ -764,6 +766,31 @@ impl Heap {
             _ => return Err(Error("invalid JSON provider".into()).into()),
         };
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    /// #468: the parser counts bytes; diagnostics count characters, lines and columns.
+    #[test]
+    fn byte_offsets_become_character_positions() {
+        let text = "\"é\"\r\n x";
+        let error = super::parser::parse(text, &num_bigint::BigInt::from(10)).unwrap_err();
+        assert_eq!(error.offset, 7, "byte offset of x");
+        assert_eq!(super::located(text, error.offset), (6, 2, 2));
+        assert_eq!(super::located("ab", 2), (2, 1, 3));
+    }
+
+    #[test]
+    fn strings_and_numbers_read_the_utf8_source() {
+        let (nodes, root) = super::parser::parse("{\"ключ\": [\"дом 🏠\", -1.5e3]}", &num_bigint::BigInt::from(10)).unwrap();
+        assert_eq!(root as usize, nodes.len() - 1);
+        let texts: Vec<String> = nodes.iter().filter_map(|node| match node {
+            super::Node::Text(text) => Some(text.to_string()),
+            super::Node::Number(number) => Some(number.to_string()),
+            _ => None,
+        }).collect();
+        assert_eq!(texts, ["дом 🏠", "-1.5e3"]);
     }
 }
 

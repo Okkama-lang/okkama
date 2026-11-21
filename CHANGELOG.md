@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **JSON parsing reads the UTF-8 text directly (#468).** The parser walks the source bytes instead of a
+  `Vec<char>` copy (4 bytes per character, kept alongside the text), so a parse state holds a quarter of the
+  memory for ASCII input, and a 100 KB document parses about 6% faster. Error offsets, lines and columns still
+  count characters.
 - **Regex results are shared, not copied (#464).** A query's spans and a parsed replacement template are cached
   behind `Rc`: repeated readers and the match a query produces share them, and only the strings handed to the
   program are copied.
