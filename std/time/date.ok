@@ -143,6 +143,42 @@ object Date does Comparing<Date> {
         GregorianDay(other).number() - GregorianDay(self).number();
     }
 
+    // This date `months` calendar months later (negative: earlier). A day
+    // the target month does not have becomes its last day:
+    // 2024-01-31 plus one month is 2024-02-29, plus two is 2024-03-31.
+    plus_months(months is int) is Date {
+        let index is int = year_value * 12 + month_value - 1 + months;
+        confirm index >= 12 && index < 120000
+            else throw InvalidDate.because("date is outside years 1..9999");
+        let year is int = (index / 12).int();
+        let month is int = index - year * 12 + 1;
+        let leap is bool = year % 4 == 0
+            && (year % 100 != 0 || year % 400 == 0);
+        let month_days is int = match month {
+            case 2 {
+                if leap {
+                    29;
+                }
+                else {
+                    28;
+                }
+            }
+            case 4, 6, 9, 11 {
+                30;
+            }
+            else {
+                31;
+            }
+        };
+        Date(year: year, month: month, day: if day_value > month_days: month_days else: day_value);
+    }
+
+    // This date `years` calendar years later (negative: earlier); February 29
+    // becomes February 28 in a year that is not a leap year.
+    plus_years(years is int) is Date {
+        self.plus_months(years * 12);
+    }
+
     // This date moved by `days` (negative: earlier).
     shifted(days is int) is Date {
         let number is int = GregorianDay(self).number();
@@ -314,6 +350,25 @@ test "a date counts its own days" {
     test.is(Date(year: 1970, month: 1, day: 1).day_number(), 719163);
     test.ok(Date(day_number: release.day_number()) == release);
     test.is(Date(day_number: 1).string(), "0001-01-01");
+    // #198: month and year arithmetic keeps the day when it can, else the month's last day.
+    let january = Date(year: 2024, month: 1, day: 31);
+    test.is(january.plus_months(1).string(), "2024-02-29");
+    test.is(january.plus_months(2).string(), "2024-03-31");
+    test.is(january.plus_months(13).string(), "2025-02-28");
+    test.is(january.plus_months(-1).string(), "2023-12-31");
+    test.is(january.plus_months(0).string(), "2024-01-31");
+    test.is(Date(year: 2024, month: 3, day: 31).plus_months(-1).string(), "2024-02-29");
+    test.is(Date(year: 2023, month: 5, day: 31).plus_months(1).string(), "2023-06-30");
+    test.is(Date(year: 2024, month: 2, day: 29).plus_years(1).string(), "2025-02-28");
+    test.is(Date(year: 2024, month: 2, day: 29).plus_years(4).string(), "2028-02-29");
+    test.is(Date(year: 2000, month: 2, day: 29).plus_years(100).string(), "2100-02-28");
+    test.is(Date(year: 9999, month: 12, day: 1).plus_months(0).string(), "9999-12-01");
+    test.throws(InvalidDate) {
+        Date(year: 9999, month: 12, day: 1).plus_months(1);
+    };
+    test.throws(InvalidDate) {
+        Date(year: 1, month: 1, day: 1).plus_years(-1);
+    };
     test.throws(InvalidDate) {
         Date(day_number: 0);
     };

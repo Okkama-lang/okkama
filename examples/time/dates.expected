@@ -2,5 +2,7 @@ release:  2026-11-11
 deadline: 2026-12-11
 days: 30
 after the leap day: 2028-03-01
+a month later: 2024-02-29
+a year after the leap day: 2029-02-28
 day number: 739931
 same day: true

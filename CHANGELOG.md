@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Added
+
+- **Month and year arithmetic, today and now (#198).** `date.plus_months(n)` and `date.plus_years(n)` keep the day
+  where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
+  2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and
+  `Now().instant()` the current instant; both take `clock:` (a `Timing`), so tests can pass a `ManualClock`.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.

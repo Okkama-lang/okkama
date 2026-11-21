@@ -4255,7 +4255,10 @@ URL-safe), Base32, Base85, hex, quoted-printable, ASCII и Latin-1 устрое�
 `Duration(milliseconds: 250)` принимают целые количества, `Duration(value:,
 unit:)` — любое рациональное; арифметика точна (`d.times(f)`). Дата сама
 считает дни: `date.shifted(days)`, `release.days_until(deadline)`,
-`date.day_number()` и `Date(day_number: n)`. Значения пишут себя сами:
+`date.day_number()` и `Date(day_number: n)`, и месяцы: `date.plus_months(n)` и `date.plus_years(n)`
+сохраняют день, если в целевом месяце он есть, и берут последний день месяца иначе (2024-01-31 плюс
+месяц — 2024-02-29). `Today(zone: berlin).date()` — дата там сейчас, `Now().instant()` — момент;
+оба принимают `clock:` для тестов. Значения пишут себя сами:
 `date.string()` и `local.string()` в ISO 8601, `instant.string()` в RFC 3339
 UTC. Чтения отвечают тем, что прочитали, а каждый форматтер читает свой текст
 обратно: `IsoText(t).date()`, `Rfc3339(t).instant()`,

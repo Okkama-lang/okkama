@@ -4098,7 +4098,10 @@ same float. `Crc32(bytes).checksum()`, `Adler32` and `Crc16Ccitt` checksum.
 90)` and `Duration(milliseconds: 250)` take whole amounts, and `Duration(value:,
 unit:)` any rational one; arithmetic is exact (`d.times(f)`). A date counts
 its own days: `date.shifted(days)`, `release.days_until(deadline)`,
-`date.day_number()` and `Date(day_number: n)`. Values write themselves:
+`date.day_number()` and `Date(day_number: n)`, and its months: `date.plus_months(n)` and
+`date.plus_years(n)` keep the day where the target month has it and take its last day otherwise
+(2024-01-31 plus one month is 2024-02-29). `Today(zone: berlin).date()` is the date there now, and
+`Now().instant()` the instant; both take `clock:` for tests. Values write themselves:
 `date.string()` and `local.string()` in ISO 8601, `instant.string()` in RFC
 3339 UTC. Readers answer with what they read, and each formatter reads its own
 text back: `IsoText(t).date()`, `Rfc3339(t).instant()`,
