@@ -87,9 +87,17 @@ fn add_workers(program: &mut Program) -> Vec<(Option<TypeRef>, usize)> {
                     }
         }
     }
+    // #588: a session's published program already holds the workers of earlier extensions; they keep their index.
+    let existing: Vec<(Option<TypeRef>, usize)> = program.functions.iter().enumerate()
+        .filter(|(_, f)| f.intrinsic.as_ref().is_some_and(|i| i.name == WORKER) && f.code.is_empty())
+        .map(|(index, f)| (f.result, index))
+        .collect();
     results
         .into_iter()
         .map(|result| {
+            if let Some(&(_, index)) = existing.iter().find(|(r, _)| *r == result) {
+                return (result, index);
+            }
             program.functions.push(okkama_sparrow::Function {
                 symbol: format!("$worker#{}", program.functions.len()),
                 is_async: true,
@@ -241,5 +249,27 @@ impl Loaded {
                 })
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    /// #588: a program that already holds the worker of a result type (a session's published program) keeps it at
+    /// its index; loading adds workers only for result types without one.
+    #[test]
+    fn loading_reuses_the_workers_a_program_already_has() {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"workers\" \"1.0.0\"\ntype t0 int\ntype t1 fn [] -> t0\ntype t2 future t0\n\
+             function f0 \"work\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 1\n 1: ret r0\n}\n\
+             function f1 \"spawner\" async {\n registers [t1, t2]\n params []\n result t2\n 0: fn.closure r0, f0, []\n 1: worker.spawn r1, r0, [], false\n 2: ret r1\n}\n",
+        ).unwrap();
+        let first = Loaded::new(program);
+        assert_eq!(first.program.functions.len(), 3, "one worker added");
+        assert_eq!(first.workers.len(), 1);
+        let again = Loaded::new(first.program.clone());
+        assert_eq!(again.program.functions, first.program.functions, "the existing worker is reused");
+        assert_eq!(again.workers, first.workers);
     }
 }

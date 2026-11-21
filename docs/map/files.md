@@ -94,14 +94,15 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/jit/mod.rs` 0 — Just-in-time compilation is not part of the compiler.
 - `okkama-compiler/src/source/mod.rs` 175 — Source text, byte spans and human-facing positions.
 
-## spb — 8 files, 4635 lines
+## spb — 9 files, 4926 lines
 
 - `okkama-sparrow/src/asm.rs` 779 — Текстовая форма Sparrow (ассемблер): [`disassemble`] печатает программу,
 - `okkama-sparrow/src/codec.rs` 634 — SPB 9: магия `SPRW`, версия u16 big-endian, затем таблицы и функции.
 - `okkama-sparrow/src/layout.rs` 30 — Word representations shared by the code generator and the runtime: how a word of a static type is traced
-- `okkama-sparrow/src/lib.rs` 502 — Программа Sparrow — регистровый байткод Okkama (SPB 9), независимый от
+- `okkama-sparrow/src/lib.rs` 503 — Программа Sparrow — регистровый байткод Okkama (SPB 9), независимый от
 - `okkama-sparrow/src/liveness.rs` 523 — Registers live before each instruction of a function.
 - `okkama-sparrow/src/operand.rs` 518 — Операнды инструкций: двоичная и текстовая форма и обход для проверки.
+- `okkama-sparrow/src/session.rs` 290 — #588 phase B: the program of a REPL session, append-only.
 - `okkama-sparrow/src/typing.rs` 1139 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
@@ -110,7 +111,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2242 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 721 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 31230 lines
+## sparrow — 63 files, 31255 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -126,7 +127,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/ops.rs` 1748 — Exact semantics of value instructions without an inline fast path.
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 372 — State of the async primitives (Atomic, Event and Cancellation, Lock and
-- `sparrow-core/src/program.rs` 189 — Static facts about a loaded SPB program: the machine representation of every
+- `sparrow-core/src/program.rs` 214 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/runtime.rs` 998 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB

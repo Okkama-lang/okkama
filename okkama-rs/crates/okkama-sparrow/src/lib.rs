@@ -10,6 +10,7 @@
 //! (ассемблер) — [`assemble`]/[`disassemble`]; обе однозначны и обратимы.
 
 pub mod layout;
+pub mod session;
 
 mod asm;
 mod codec;
