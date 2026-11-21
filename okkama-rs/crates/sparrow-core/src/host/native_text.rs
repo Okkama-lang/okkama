@@ -278,6 +278,26 @@ fn scan_prefix(bytes: &[u8], width: usize, big: bool, mut text: Option<&mut Stri
 mod tests {
     use super::*;
 
+    /// UTF-16/32 output for ASCII, 2- and 3-byte (BMP) and 4-byte (surrogate
+    /// pair) scalars, both byte orders, matches the standard encoders.
+    #[test]
+    fn utf16_and_utf32_match_the_standard_encoders() {
+        for text in ["", "abc", "é", "дом", "€", "😀", "a😀é€\u{10ffff}z", "\u{7f}\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}"] {
+            for big in [false, true] {
+                let utf16: Vec<u8> = text
+                    .encode_utf16()
+                    .flat_map(|unit| if big { unit.to_be_bytes() } else { unit.to_le_bytes() })
+                    .collect();
+                let utf32: Vec<u8> = text
+                    .chars()
+                    .flat_map(|c| if big { (c as u32).to_be_bytes() } else { (c as u32).to_le_bytes() })
+                    .collect();
+                assert_eq!(encode(text, 2, big), utf16, "{text:?}");
+                assert_eq!(encode(text, 4, big), utf32, "{text:?}");
+            }
+        }
+    }
+
     #[test]
     fn validity_459_utf_natives() {
         let program = okkama_sparrow::Program::default();

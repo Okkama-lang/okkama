@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Base85 and quoted-printable encoders reserve their output (#467)**, as base32/base64 already did: five
+  characters per started 4-octet group, and the input size. Pre-sizing UTF-16/32 output was measured and
+  rejected: counting the units costs more than the reallocations it saves (UTF-16 +15–30%, UTF-32 even), and
+  the buffer is transient either way.
 - **JSON writing keeps scratch to the depth of the tree (#466).** `string()`, `pretty()` and `pointer()` walk
   one frame per open container instead of queueing every child of a wide container, write escapes, numbers and
   pointer tokens straight into the output (no `format!` per control character or per number) and copy unescaped

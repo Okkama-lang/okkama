@@ -258,7 +258,8 @@ fn base85_alphabet(native: Native, name: &str) -> Result<Vec<u8>, Error> {
 }
 
 fn base85_encoded(octets: &[u8], name: &str, alphabet: &[u8]) -> String {
-    let mut result = String::new();
+    // Five characters per 4-octet group at most (`z` only shortens it).
+    let mut result = String::with_capacity(octets.len().div_ceil(4).checked_mul(5).unwrap_or(0));
     for chunk in octets.chunks(4) {
         let amount = chunk.len();
         let mut word: u64 = 0;
@@ -400,7 +401,8 @@ fn qp_folded(result: &mut Vec<u8>, column: &mut usize, octet: u8, trailing: bool
 }
 
 fn qp_encode(origin: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
+    // Never shorter than the input: plain text needs no growth at all.
+    let mut result = Vec::with_capacity(origin.len());
     let mut column = 0;
     let size = origin.len();
     let mut offset = 0;
@@ -500,6 +502,24 @@ fn qp_parsed(octets: &[u8], mut decoded: Option<&mut Vec<u8>>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #467: the base85 reservation (five characters per started 4-octet
+    /// group) is an upper bound at every group boundary, so encoding never
+    /// grows the string; quoted-printable reserves the input size.
+    #[test]
+    fn base85_reservation_bounds_the_output() {
+        for name in ["ascii85", "rfc1924"] {
+            let alphabet = base85_alphabet(Native::Base85Encode, name).unwrap();
+            for size in 0..=13usize {
+                for fill in [0u8, 0x41, 0xff] {
+                    let input = vec![fill; size];
+                    let encoded = base85_encoded(&input, name, &alphabet);
+                    assert!(encoded.len() <= size.div_ceil(4) * 5, "{name} {size} {fill}");
+                }
+            }
+        }
+        assert!(qp_encode(b"plain text").len() >= b"plain text".len());
+    }
 
     fn base85_result(
         source: &str,

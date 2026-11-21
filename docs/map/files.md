@@ -110,7 +110,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2034 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 686 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30628 lines
+## sparrow — 63 files, 30659 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -144,7 +144,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_debug.rs` 156 — `any` values for the bridged origin natives, and the parts of a value for
 - `sparrow-core/src/host/native_directory.rs` 293 — Host paths and directory snapshots, scoped to each VM's working directory.
 - `sparrow-core/src/host/native_dns.rs` 181 — System resolution on Tokio's blocking pool with shared admission. A started
-- `sparrow-core/src/host/native_encoding.rs` 838 — Portable wire encodings. Pure codec algorithms preserve the established
+- `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 200 — The program's environment is the run's host session
 - `sparrow-core/src/host/native_file.rs` 258 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
 - `sparrow-core/src/host/native_file_state.rs` 589 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
@@ -165,7 +165,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
 - `sparrow-core/src/host/native_sqlite.rs` 2333 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
 - `sparrow-core/src/host/native_temporary.rs` 198 — Temporary resources use exclusive OS creation and cryptographic random names.
-- `sparrow-core/src/host/native_text.rs` 353 — Pure codecs and exact numeric parsing at the independent native boundary.
+- `sparrow-core/src/host/native_text.rs` 370 — Pure codecs and exact numeric parsing at the independent native boundary.
 - `sparrow-core/src/host/native_tls.rs` 753 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 - `sparrow-core/src/host/native_udp.rs` 503 — Native UDP datagrams: one send/receive per request, Tokio readiness and
 - `sparrow-core/src/host/native_unix.rs` 319 — Unix streams share the TCP readiness/cancellation path. Filesystem listeners
