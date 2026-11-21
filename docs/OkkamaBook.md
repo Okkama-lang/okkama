@@ -3820,6 +3820,18 @@ that goes wrong is one `JsonError`, whose reading cases carry the RFC 6901
 pointer of the value: `catch JsonError.missing(pointer)`. The guide is
 `docs/std/json.md` in okkama-docs.
 
+`template/engine` is the one template engine, over `Json`:
+`Template(source:, escaping:, partials:, limits:)` compiles once and answers
+`string(data)` or `write(data, destination)`. The language is small:
+`{{path}}`, `{{.}}`, sections `{{#list}}…{{/list}}` and inverted ones,
+`{{>partial}}` from `TemplatePartials(["name": source])`, comments; no
+expressions. `TemplateEscaping.html` escapes each value for where it lands —
+HTML text, or a quoted ordinary attribute — and refuses every other place
+before anything is written, also across sections and partials, which must leave
+the HTML context as they found it. `TemplateLimits` bounds the source, nesting,
+iterations, partials and output. `TextTemplate`, `SectionTemplate` and
+`HtmlTemplate` remain as adapters; `examples/template/` renders an escaped list.
+
 `fs/file` makes a file a resource read through two symmetric views; the first
 one used picks the mode. `File(path: Path("notes.txt"))` opens for reading;
 `for file.text() -> line` walks the lines in batches, `lines()` and

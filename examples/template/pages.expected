@@ -4,5 +4,8 @@ Order 17:
   - Cake (3.00)
 Order 18:
   (empty)
-<p title="Ada &amp; &quot;friends&quot; &lt;3">Hello, Ada &amp; "friends" &lt;3</p>
-refused: InvalidHtmlTemplate.because("interpolation in restricted attribute: onclick")
+<ul title="Ada &quot;admin&quot;">
+  <li>Grace &amp; co</li>
+  <li>&lt;script&gt;alert(1)&lt;/script&gt;</li>
+</ul>
+refused: TemplateError.html("interpolation in restricted attribute: onclick")

@@ -140,6 +140,26 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   Migration: `Json(BigInt(n))` → `Json(n)`, `DbInteger(BigInt(n))` → `DbInteger(n)`,
   `duration.nanoseconds().int()` → `duration.nanoseconds()`; `docs/std-int-511/inventory.md` lists every change.
 
+### Changed
+
+- **std template: one engine over Json (#178).** `template/engine` adds `Template(source:, escaping:, partials:,
+  limits:)`, compiled once and reused (`string(data)`, `write(data:, destination:)`), with `TemplateEscaping` (text,
+  html), `TemplatePartials`, `TemplateLimits` and `TemplateError`. The language stays small (values, dotted paths,
+  `{{.}}`, sections, inverted sections, partials, comments; no expressions), and every JSON kind has defined value
+  and section semantics.
+  - **HTML fails closed.** Values are escaped in text and in quoted ordinary attributes (id, class, title, alt,
+    role, lang, dir, aria-*, data-*); every other place is refused before writing. Sections, inverted sections and
+    partials must leave the HTML context as they found it; partials are analysed in each context they are
+    included in. There is no raw-output bypass.
+  - **Partials.** Only reachable partials compile, each once; a missing or broken one fails before output;
+    recursion is bounded by partial depth, iterations and output.
+  - **Legacy types are adapters.** `SectionTemplate` and `HtmlTemplate` render through the engine with their API
+    and error types (`HtmlTemplate` now accepts sections and refuses partials). `TemplateBindings` keeps its values
+    in one Json document (no linear lookup, no quadratic duplicate check; a path that is both a value and a prefix
+    is `DuplicateTemplateValue`, found on first lookup); the libraries look names up through a map; `TextTemplate`
+    stays the flat loop over the shared scanner.
+  - **Speed.** Rendering is 3–9× faster than before (one-off release measurement).
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.
