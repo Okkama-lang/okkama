@@ -117,7 +117,11 @@ fn gc_layout_driver_state_and_runtime_object_overrides() {
     let register = (sparrow_core::tasks::REGISTERS / 8 - 1) as usize;
     let inputs = (sparrow_core::tasks::INPUTS / 8 - 1) as usize;
     assert_eq!(layouts.frames[driver][inputs], Repr::Ref);
-    assert_eq!(&layouts.frames[driver][register..], &[Repr::Ref, Repr::Ref, Repr::Ref]);
+    assert_eq!(&layouts.frames[driver][register..register + 3], &[Repr::Ref, Repr::Ref, Repr::Ref]);
+    // #931: a program with resources ends each frame with the Future's identity, two raw words.
+    let identity = if loaded.functions[driver].identity_at.is_some() { 2 } else { 0 };
+    assert_eq!(layouts.frames[driver].len(), register + 3 + identity);
+    assert!(layouts.frames[driver][register + 3..].iter().all(|&repr| repr == Repr::Raw));
     let mut runtime = sparrow_core::runtime::Runtime::new(loaded).unwrap();
     runtime.heap.set_stress(true);
     let waiter = runtime.heap.allocate_text("event waiter");
