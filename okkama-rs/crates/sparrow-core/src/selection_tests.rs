@@ -429,3 +429,83 @@ fn selection_commit_survives_cancellation_of_timeout_wrapper() {
         other => panic!("committed selection lost through timeout wrapper: {other:?}"),
     }
 }
+
+fn cancel_timeout_during_timer_cleanup(selected: bool, intrinsic: Intrinsic) {
+    let mut r = runtime();
+    let (a, channel) = endpoint(&mut r, 0);
+    let s = selector(&mut r, &[a]);
+    let origin = if selected { frame(&mut r, 0, &[s]) } else { frame(&mut r, 2, &[a]) };
+    assert!(run(&mut r, origin));
+    let value = r.heap.int(42);
+    let sender = frame(&mut r, 1, &[a, value]);
+    assert!(!run(&mut r, sender));
+    assert!(!run(&mut r, origin));
+    let committed = tasks::get(origin, RESULT);
+    assert!(channel.borrow().messages.is_empty());
+    assert!(channel.borrow().senders.is_empty());
+
+    // A parked driver stands in for a timer whose cancellation cleanup has
+    // not run yet. Run it explicitly only after cancelling the wrapper.
+    let (clock, timer_channel) = endpoint(&mut r, 0);
+    let timer = frame(&mut r, 2, &[clock]);
+    assert!(run(&mut r, timer));
+    let bounded = frame(&mut r, 0, &[s]);
+    set_state(&mut r, bounded, Box::new(Collection {
+        strategy: Strategy::Timeout, started: true, entries: vec![origin, timer],
+        consumed: vec![false; 2], cancelled: vec![false; 2], remaining: 2,
+        ready: VecDeque::from([0]), inbox: vec![], positions: vec![(timer, 1)],
+        winner: None, winner_repr: Repr::Ref, failures: vec![], failed: FastSet::default(),
+        external: None, finishing: false,
+    }));
+    tasks::set(bounded, FLAGS, tasks::get(bounded, FLAGS) | tasks::INBOX);
+    r.listen(timer, bounded);
+    assert!(matches!(super::collect(&mut r, std::ptr::null_mut(), bounded, 0, intrinsic, false), Pending));
+    let c = collection(&mut r, bounded);
+    assert!(c.finishing && c.consumed[0] && c.cancelled[1]);
+    assert_eq!(c.winner, Some(committed));
+    assert_eq!(c.remaining, 1);
+    assert_eq!(tasks::get(timer, tasks::STATE), tasks::RUNNING);
+
+    // Deliver cancellation while the wrapper is waiting for timer cleanup.
+    // Re-entry must still wait, and repeated delivery must preserve the winner.
+    for _ in 0..2 {
+        assert!(matches!(super::collect(&mut r, std::ptr::null_mut(), bounded, 0, intrinsic, true), Pending));
+    }
+    assert!(!run(&mut r, timer));
+    assert!(r.is_cancelled(tasks::get(timer, tasks::FAILURE)));
+    assert!(timer_channel.borrow().receivers.is_empty());
+    let result = super::collect(&mut r, std::ptr::null_mut(), bounded, 0, intrinsic, false);
+    if selected {
+        match result {
+            Done(item) => {
+                assert_eq!(item, committed);
+                assert_eq!(number(&r, r.heap.field(item, 0)), 0);
+                assert_eq!(number(&r, r.heap.field(item, 1)), 42);
+            }
+            other => panic!("committed selection lost during timer cleanup ({intrinsic:?}): {other:?}"),
+        }
+    } else {
+        match result {
+            Failed(failure) => assert!(r.is_cancelled(failure)),
+            other => panic!("ordinary future must still lose to cancellation ({intrinsic:?}): {other:?}"),
+        }
+    }
+    assert_eq!(collection(&mut r, bounded).remaining, 0);
+}
+
+#[test]
+fn selection_commit_survives_within_cancellation_during_timer_cleanup() {
+    cancel_timeout_during_timer_cleanup(true, Intrinsic::TimeoutWithin);
+}
+
+#[test]
+fn selection_commit_survives_before_cancellation_during_timer_cleanup() {
+    cancel_timeout_during_timer_cleanup(true, Intrinsic::TimeoutBefore);
+}
+
+#[test]
+fn timeout_cancellation_during_timer_cleanup_still_cancels_ordinary_future() {
+    for intrinsic in [Intrinsic::TimeoutWithin, Intrinsic::TimeoutBefore] {
+        cancel_timeout_during_timer_cleanup(false, intrinsic);
+    }
+}

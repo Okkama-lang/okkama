@@ -6,6 +6,15 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. #940 finding 1: cancellation during timeout timer cleanup.**
+  For a directly selected origin, `Collection.winner` with `consumed[0]`
+  preserves the irreversible receive commit until the wrapper publishes its
+  outcome, including `finishing` while it awaits the cancelled timer. Check
+  the `SelectionItem` intrinsic before applying this protection. Keep waiting
+  for timer cleanup; do not consume the origin twice or change cancellation
+  precedence for ordinary futures. Deterministic Rust regressions cover both
+  `Within` and `Before`, with an ordinary-future control and a mutation check.
+
 - **2026-11-22. Format native #13, diff (measured implementation decision).**
   Under the owner's one-module instruction, keep the existing public API and
   retain `runtime/diff::diff_script` (ID 141). A behavior-equivalent pure Okkama

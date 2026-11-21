@@ -1175,19 +1175,30 @@ fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
     }
 }
 
-/// Resolve a timeout's directly selected origin before attempting cancellation.
+/// Preserve a timeout's directly selected origin before attempting cancellation.
 /// This only publishes a receive already committed by the channel: it never
 /// starts or polls an uncommitted origin, nor changes ordinary future races.
 fn timeout_committed_selection(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize) -> bool {
     let c = collection(runtime, frame);
-    if c.strategy != Strategy::Timeout || c.finishing || c.consumed[0] {
+    if c.strategy != Strategy::Timeout {
         return false;
     }
     let origin = c.entries[0];
-    let selected = runtime.intrinsics[runtime.function_of(origin)] == Some(Intrinsic::SelectionItem);
+    if runtime.intrinsics[runtime.function_of(origin)] != Some(Intrinsic::SelectionItem) {
+        return false;
+    }
+    let c = collection(runtime, frame);
+    if c.consumed[0] {
+        // The committed value remains irrevocable while the wrapper waits
+        // for its cancelled timer to finish cleanup (#940).
+        return c.winner.is_some();
+    }
+    if c.finishing {
+        return false;
+    }
     let committed = tasks::get(origin, tasks::STATE) == DONE
         || (tasks::get(origin, tasks::STATE) == tasks::RUNNING && resume(origin) == COMPLETED);
-    if !selected || !committed {
+    if !committed {
         return false;
     }
     if tasks::get(origin, tasks::STATE) != DONE {
