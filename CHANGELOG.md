@@ -42,6 +42,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `sync()` on `FileText`, `FileBytes` and `TemporaryFile` is fsync (F_FULLFSYNC on macOS), and
   `TemporaryFile.replace(destination)` is the pair of `preserve()`. A binary write now finishes a short write
   instead of reporting it (`examples/fs/file/replace.ok`).
+- **Documentation links, hover from the doc model and `okkama man -k` (#513).** A doc comment links a declaration
+  as `[Stdout]`, `[Stdout.writeln]` or `[io/stream.Writing]`, resolved through the compiler's modules and scopes,
+  same-module and cross-module, with every public overload and without hidden declarations; code is never read
+  as a link. An unresolved link is an `unresolved-doc-link` warning in `man`, `lint` and the editor. LSP hover
+  and completion now come from the same model as `okkama man`, with the selected overload and unsaved buffers.
+  `okkama man -k QUERY` searches module paths, declaration names and summaries.
 
 ## [0.6.1] — 2026-11-22
 

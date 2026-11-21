@@ -22,7 +22,7 @@
 //! section of the page. Without a Synopsis heading, the overview's first code
 //! block is the synopsis.
 
-use super::{ItemDoc, ItemKind, MemberDoc, ModuleDoc, summary};
+use super::{ItemDoc, ItemKind, MemberDoc, MemberKind, ModuleDoc, summary};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 /// How terminal text looks.
@@ -57,7 +57,7 @@ struct Overview {
 }
 
 fn overview(doc: &ModuleDoc) -> Overview {
-    let text = doc.overview.as_ref().map(|overview| overview.text.clone()).unwrap_or_default();
+    let text = doc.overview.as_ref().map(|overview| overview.markdown()).unwrap_or_default();
     let mut parts = Overview {
         synopsis: None,
         description: String::new(),
@@ -150,12 +150,12 @@ fn code_of(text: &str) -> Option<String> {
 pub fn module_text(doc: &ModuleDoc, style: &Style) -> String {
     let parts = overview(doc);
     let mut out = String::new();
-    let summary = doc.summary();
+    let summary = doc.overview.as_ref().map(|doc| summary(&doc.markdown())).unwrap_or_default();
     section(&mut out, "NAME", style);
     if summary.is_empty() {
         line(&mut out, 4, &doc.path);
     } else {
-        wrapped(&mut out, 4, 4, &format!("{} - {summary}", doc.path), style.width);
+        markdown_text(&mut out, &format!("{} - {summary}", doc.path), 4, style);
     }
     if let Some(version) = &doc.version {
         section(&mut out, "VERSION", style);
@@ -220,14 +220,14 @@ pub fn item_text(doc: &ModuleDoc, item: &ItemDoc, members: Option<&[&MemberDoc]>
     }
     section(&mut out, "NAME", style);
     let summary = match members {
-        Some(members) => members.iter().find_map(|member| member.doc.as_ref()).map(|doc| summary(&doc.text)),
-        None => item.doc.as_ref().map(|doc| summary(&doc.text)),
+        Some(members) => members.iter().find_map(|member| member.doc.as_ref()).map(|doc| summary(&doc.markdown())),
+        None => item.doc.as_ref().map(|doc| summary(&doc.markdown())),
     }
     .unwrap_or_default();
     if summary.is_empty() {
         line(&mut out, 4, &title);
     } else {
-        wrapped(&mut out, 4, 4, &format!("{title} - {summary}"), style.width);
+        markdown_text(&mut out, &format!("{title} - {summary}"), 4, style);
     }
     if let Some(version) = &doc.version {
         section(&mut out, "VERSION", style);
@@ -285,7 +285,7 @@ fn item_block(out: &mut String, item: &ItemDoc, only: Option<&[&MemberDoc]>, ind
     if only.is_none()
         && let Some(doc) = &item.doc
     {
-        markdown_text(out, &doc.text, indent + 4, style);
+        markdown_text(out, &doc.markdown(), indent + 4, style);
     }
     let members: Vec<&MemberDoc> = match only {
         Some(members) => members.to_vec(),
@@ -299,7 +299,7 @@ fn item_block(out: &mut String, item: &ItemDoc, only: Option<&[&MemberDoc]>, ind
         }
         signature(out, indent + 4, &member.signature, style);
         if let Some(doc) = &member.doc {
-            markdown_text(out, &doc.text, indent + 8, style);
+            markdown_text(out, &doc.markdown(), indent + 8, style);
         }
         spaced = member.doc.is_some();
     }
@@ -594,7 +594,7 @@ impl TextWriter<'_> {
 pub fn module_markdown(doc: &ModuleDoc) -> String {
     let parts = overview(doc);
     let mut out = format!("# {}\n", doc.path);
-    let summary = doc.summary();
+    let summary = doc.overview.as_ref().map(|doc| summary(&doc.markdown())).unwrap_or_default();
     if !summary.is_empty() {
         out.push_str(&format!("\n{summary}\n"));
     }
@@ -649,6 +649,36 @@ pub fn item_markdown(doc: &ModuleDoc, item: &ItemDoc, members: Option<&[&MemberD
     out
 }
 
+/// IDE presentation of the same public declaration as `item_markdown`.
+/// A selected action includes only that overload; a type includes its public
+/// members and their comments. Signatures still come solely from the model.
+pub fn hover(doc: &ModuleDoc, item: &ItemDoc, member: Option<&MemberDoc>) -> String {
+    fn block(out: &mut String, signature: &str, doc: Option<&super::DocText>) {
+        if !out.is_empty() { out.push_str("\n\n"); }
+        out.push_str(&format!("```okkama\n{signature}\n```"));
+        if let Some(doc) = doc {
+            out.push_str(&format!("\n\n{}", doc.markdown()));
+        }
+    }
+    let mut out = String::new();
+    if member.is_none() {
+        block(&mut out, &item.signature, item.doc.as_ref());
+    }
+    let members: Vec<_> = member.map_or_else(|| item.members.iter().collect(), |member| vec![member]);
+    for member in members {
+        let signature = if member.kind == MemberKind::Action || member.kind == MemberKind::Signature {
+            member.signature.replacen(&format!("{}(", member.name), &format!("{}.{}(", item.name, member.name), 1)
+        } else { member.signature.clone() };
+        block(&mut out, &signature, member.doc.as_ref());
+    }
+    if member.is_some() {
+        out.push_str(&format!("\n\n**Owner:** `{}`", item.signature));
+    }
+    let version = doc.version.as_ref().map(|version| format!(" {version}")).unwrap_or_default();
+    out.push_str(&format!("\n\n**Module:** `{}{version}`", doc.path));
+    out
+}
+
 /// The index of modules as Markdown.
 pub fn index_markdown(entries: &[IndexEntry]) -> String {
     let mut out = "# Okkama standard library\n".to_string();
@@ -668,13 +698,35 @@ pub fn index_markdown(entries: &[IndexEntry]) -> String {
     out
 }
 
+pub fn search_text(entries: &[super::SearchEntry], style: &Style) -> String {
+    let mut out = String::new();
+    section(&mut out, "DOCUMENTATION SEARCH", style);
+    if entries.is_empty() { line(&mut out, 4, "No matches."); }
+    for entry in entries {
+        let name = entry.name.as_ref().map(|name| format!(" {name}")).unwrap_or_default();
+        let summary = if entry.summary.is_empty() { String::new() } else { format!(" - {}", entry.summary) };
+        wrapped(&mut out, 4, 8, &format!("{}{name}{summary}", entry.module), style.width);
+    }
+    out
+}
+
+pub fn search_markdown(entries: &[super::SearchEntry]) -> String {
+    let mut out = "# Documentation search\n\n".to_string();
+    if entries.is_empty() { out.push_str("No matches.\n"); }
+    for entry in entries {
+        let name = entry.name.as_ref().map(|name| format!(" {name}")).unwrap_or_default();
+        out.push_str(&format!("- `{}{name}`: {}\n", entry.module, entry.summary));
+    }
+    out
+}
+
 fn item_markdown_block(out: &mut String, item: &ItemDoc, only: Option<&[&MemberDoc]>, level: usize) {
     let hashes = "#".repeat(level);
     out.push_str(&format!("\n{hashes} {} {}\n\n```okkama\n{}\n```\n", item.kind.word(), item.name, item.signature));
     if only.is_none()
         && let Some(doc) = &item.doc
     {
-        out.push_str(&format!("\n{}\n", doc.text.trim()));
+        out.push_str(&format!("\n{}\n", doc.markdown().trim()));
     }
     let members: Vec<&MemberDoc> = match only {
         Some(members) => members.to_vec(),
@@ -683,7 +735,7 @@ fn item_markdown_block(out: &mut String, item: &ItemDoc, only: Option<&[&MemberD
     for member in members {
         out.push_str(&format!("\n{hashes}# {}.{}\n\n```okkama\n{}\n```\n", item.name, member.name, member.signature));
         if let Some(doc) = &member.doc {
-            out.push_str(&format!("\n{}\n", doc.text.trim()));
+            out.push_str(&format!("\n{}\n", doc.markdown().trim()));
         }
     }
 }

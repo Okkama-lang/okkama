@@ -609,6 +609,32 @@ pub fn inspect(
     inspect_parsed(source, None, loader, test_mode)
 }
 
+/// Documentation uses the import graph and declaration registry, without
+/// checking bodies or generating code (#513).
+pub(crate) fn document(
+    source: &SourceFile,
+    loader: &mut dyn ModuleLoader,
+) -> std::result::Result<crate::doc::ModuleDoc, String> {
+    let options = crate::syntax::ParseOptions {
+        mode: crate::syntax::ParseMode::Production,
+        ..crate::syntax::ParseOptions::default()
+    };
+    let mut program = crate::syntax::parse(source, &options).map_err(|errors| {
+        format!("{}: does not parse: {}", source.name(), errors.first().map(|error| error.message.as_str()).unwrap_or_default())
+    })?;
+    std_paths::desugar(&mut program).map_err(|error| error.message().to_string())?;
+    let roots = [(&program, source.name(), Some(source))];
+    let graph = modules::load_graph(&roots, loader).map_err(|error| match error {
+        LinkError::Load(message) => message,
+        LinkError::Lowering { error, .. } => error.message().to_string(),
+    })?;
+    let files: Vec<_> = graph.loaded.iter().map(|loaded| loaded.source.clone())
+        .chain(std::iter::once(source.clone())).collect();
+    let registry = crate::analysis::registry::Registry::build(modules::source_modules(&graph, &roots));
+    crate::doc::Documentation::new(&registry, &files, loader).modules.pop()
+        .ok_or_else(|| "no module to document".to_string())
+}
+
 /// [`inspect`] of a file the caller has already parsed (#472): `parsed` must
 /// be the parse `test_mode` asks for -- the full grammar when testing, the
 /// production one otherwise. A full parse of a file without `test` or `fake`
@@ -761,7 +787,8 @@ pub fn inspect_parsed(
     inspection
         .diagnostics
         .extend(crate::ide::lint(&registry, &bodies, source, root));
-    let index = crate::ide::build(&registry, &bodies, &files, root);
+    let index = crate::ide::build(&registry, &bodies, &files, root, loader);
+    inspection.diagnostics.extend(index.diagnostics);
     inspection.symbols = index.symbols;
     inspection.members = index.members;
     inspection.scopes = index.scopes;

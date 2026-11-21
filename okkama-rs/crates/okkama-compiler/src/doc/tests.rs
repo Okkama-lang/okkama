@@ -1,6 +1,88 @@
 use super::render::{Style, item_markdown, item_text, module_markdown, module_text};
 use super::{ItemKind, MemberKind, ModuleDoc};
 
+#[test]
+fn declaration_links_resolve_public_overload_sets_and_skip_markdown_code() {
+    let source = "module links;\r\n\r\n// Читай [Thing] и [Thing.write]; [Missing], [Secret], [Thing.secret].\r\n//\r\n// ```okkama\r\n// [Fenced]\r\n// ```\r\n//\r\n//     [Indented]\r\n//\r\n// `[Inline]`, [site](https://example.org), [ordinary words].\r\n\r\nobject Thing {\r\n    write(x is int) is void {}\r\n    write(x is string) is void {}\r\n    hidden secret() is void {}\r\n}\r\nhidden object Secret {}\r\n";
+    let file = crate::source::SourceFile::new("links.ok", source).unwrap();
+    let mut loader = NoModules;
+    let doc = super::document(&file, &mut loader).unwrap();
+    let text = doc.overview.as_ref().unwrap();
+    assert_eq!(text.links.len(), 5, "{:?}", text.links);
+    let link = &text.links[1];
+    assert_eq!(link.target.as_deref(), Some("okkama-doc:/links#Thing.write"));
+    assert_eq!(link.declarations.len(), 2);
+    assert_eq!(doc.link_warnings.len(), 3);
+    for warning in &doc.link_warnings {
+        assert_eq!(&source[warning.span.range()], format!("[{}]", warning.name));
+    }
+    let markdown = module_markdown(&doc);
+    assert!(markdown.lines().nth(2).unwrap().contains("[Thing](okkama-doc:/links#Thing)"));
+    assert!(markdown.contains("[Thing](okkama-doc:/links#Thing)"), "{markdown}");
+    assert!(markdown.contains("[Thing.write](okkama-doc:/links#Thing.write)"));
+    assert!(markdown.contains("[Fenced]\n```"));
+    assert!(markdown.contains("[Indented]"));
+    assert!(markdown.contains("`[Inline]`"));
+    let plain = module_text(&doc, &Style::default());
+    assert!(plain.contains("<okkama-doc:/links#Thing.write>"), "{plain}");
+}
+
+struct NoModules;
+
+impl crate::lowering::ModuleLoader for NoModules {
+    fn load(&mut self, _: &str, _: &str) -> Result<Option<crate::lowering::LoadedModule>, String> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn search_matches_paths_public_names_and_summaries_without_bodies() {
+    let doc = doc("module demo/path;\n\n// Module overview.\n\n// A special résumé.\nobject Thing {\n    // Writes bytes. More detail is not indexed.\n    write() is void {}\n    // Hidden needle.\n    hidden secret() is void {}\n}\n// Hidden needle.\nhidden object Secret {}\n");
+    for query in ["DEMO/PATH", "thing", "RÉSUMÉ", "writes bytes"] {
+        assert!(!doc.search(query).is_empty(), "{query}");
+    }
+    assert!(doc.search("needle").is_empty());
+    assert!(doc.search("More detail").is_empty());
+    assert!(doc.search("not present").is_empty());
+}
+
+#[test]
+fn links_keep_commonmark_links_images_and_code_and_report_separate_header_spans() {
+    let text = "module m;\n\n// First [Missing].\n\n// Second [Absent].\n//\n// [Thing][ref], [Thing](https://example.org), ![Thing], \\[Thing], `[Thing]`.\n//\n// [ref]: https://example.org\n\nobject Thing {}\n";
+    let source = crate::source::SourceFile::new("m.ok", text).unwrap();
+    let doc = super::document(&source, &mut NoModules).unwrap();
+    assert_eq!(doc.link_warnings.len(), 2, "{:?}", doc.link_warnings);
+    for warning in &doc.link_warnings {
+        assert_eq!(&text[warning.span.range()], format!("[{}]", warning.name));
+    }
+    let markdown = module_markdown(&doc);
+    assert!(markdown.contains("[Thing][ref]"));
+    assert!(markdown.contains("![Thing]"));
+    assert!(!markdown.contains("okkama-doc:/m#Thing"), "{markdown}");
+}
+
+#[test]
+fn links_use_public_inventory_across_files_and_keep_stable_versioned_targets() {
+    use crate::analysis::registry::{Registry, SourceModule};
+    use crate::source::SourceFile;
+    use crate::syntax::{self, ParseOptions};
+    let files = [
+        SourceFile::new("a.ok", "module multi v1.2.3;\n// See [Second] and [multi.Second].\nobject First {}\n").unwrap(),
+        SourceFile::new("b.ok", "module multi v1.2.3;\n// See [First].\nobject Second {}\n").unwrap(),
+    ];
+    let programs: Vec<_> = files.iter().map(|file| syntax::parse(file, &ParseOptions::default()).unwrap()).collect();
+    let registry = Registry::build_files(programs.iter().map(|program| SourceModule {
+        path: "multi".into(), program, imports: Vec::new(),
+    }).collect(), 2);
+    let docs = super::Documentation::new(&registry, &files, &mut NoModules);
+    let link = &docs.modules[0].item("First").unwrap().doc.as_ref().unwrap().links[0];
+    assert_eq!(link.target.as_deref(), Some("okkama-doc:/multi?version=v1.2.3#Second"));
+    assert_eq!(link.declarations[0].file, "b.ok");
+    let qualified = &docs.modules[0].item("First").unwrap().doc.as_ref().unwrap().links[1];
+    assert_eq!(qualified.target, link.target);
+    assert!(docs.modules.iter().all(|doc| doc.link_warnings.is_empty()));
+}
+
 fn doc(text: &str) -> ModuleDoc {
     ModuleDoc::parse("demo.ok".to_string(), text.to_string()).unwrap_or_else(|error| panic!("{error}"))
 }

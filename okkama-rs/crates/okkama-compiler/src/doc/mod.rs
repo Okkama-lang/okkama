@@ -24,6 +24,8 @@
 //! Hidden declarations, fields, tests, fakes and `destroy` never appear.
 
 pub mod render;
+mod links;
+pub use links::{DeclarationLink, Documentation, LinkDeclaration, LinkWarning, SearchEntry, document, target as declaration_target};
 #[cfg(test)]
 mod tests;
 
@@ -47,6 +49,8 @@ pub struct ModuleDoc {
     pub items: Vec<ItemDoc>,
     /// Where the attachment rules met something worth saying.
     pub notes: Vec<DocNote>,
+    /// Broken symbol references; consumers report these as warnings (#513).
+    pub link_warnings: Vec<LinkWarning>,
 }
 
 /// The text of one comment block, without its `//` markers.
@@ -55,6 +59,9 @@ pub struct DocText {
     pub text: String,
     /// From the first comment line to the end of the last.
     pub span: Span,
+    pub links: Vec<DeclarationLink>,
+    /// Original byte offsets, including the removed comment prefixes.
+    offsets: Vec<u32>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -194,14 +201,7 @@ impl ModuleDoc {
                     .to_string(),
             });
         }
-        let overview = (!overview_blocks.is_empty()).then(|| DocText {
-            text: overview_blocks
-                .iter()
-                .map(|block| lines.text(block))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-            span: lines.span(overview_blocks[0].first, overview_blocks[overview_blocks.len() - 1].last),
-        });
+        let overview = (!overview_blocks.is_empty()).then(|| lines.doc(&overview_blocks));
         let mut items = Vec::new();
         let mut owned = Vec::new();
         for item in &program.items {
@@ -238,6 +238,7 @@ impl ModuleDoc {
             overview,
             items,
             notes,
+            link_warnings: Vec::new(),
         }
     }
 
@@ -615,7 +616,7 @@ impl<'a> CommentLines<'a> {
         }
         (first < line).then(|| {
             let block = Block { first, last: line - 1 };
-            DocText { text: self.text(&block), span: self.span(block.first, block.last) }
+            self.doc(&[block])
         })
     }
 
@@ -636,15 +637,33 @@ impl<'a> CommentLines<'a> {
         out
     }
 
-    fn text(&self, block: &Block) -> String {
-        (block.first..=block.last)
-            .map(|line| {
-                let text = self.source.line_text(line).trim_start();
-                let text = text.strip_prefix("//").unwrap_or(text);
-                text.strip_prefix(' ').unwrap_or(text).trim_end_matches('\r').to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    fn doc(&self, blocks: &[Block]) -> DocText {
+        let mut text = String::new();
+        let mut offsets = Vec::new();
+        for (index, block) in blocks.iter().enumerate() {
+            if index > 0 {
+                text.push_str("\n\n");
+                offsets.extend([self.offset_of_line(block.first); 2]);
+            }
+            for line in block.first..=block.last {
+                let original = self.source.line_text(line);
+                let content = original.trim_start().strip_prefix("//").unwrap_or("");
+                let content = content.strip_prefix(' ').unwrap_or(content).trim_end_matches('\r');
+                let start = self.offset_of_line(line) + (content.as_ptr() as usize - original.as_ptr() as usize) as u32;
+                if line > block.first {
+                    text.push('\n');
+                    offsets.push(start.saturating_sub(1));
+                }
+                text.push_str(content);
+                offsets.extend((0..content.len()).map(|byte| start + byte as u32));
+            }
+        }
+        DocText {
+            text,
+            span: self.span(blocks[0].first, blocks[blocks.len() - 1].last),
+            links: Vec::new(),
+            offsets,
+        }
     }
 
     fn span(&self, first: u32, last: u32) -> Span {
