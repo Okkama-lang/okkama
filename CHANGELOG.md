@@ -24,6 +24,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The sweep keeps idle empty pages without walking them (#538).** A page that held no live cell at the last
+  sweep, and whose free chain no allocation has taken since, is empty again by construction; the sweep keeps
+  its chain instead of visiting every cell. A page's chain taken by the allocator marks the page for the next
+  walk. `bench/gc` against release/061: sweep −8 to −12% on ownership, bigint, burst and payload; steady time
+  −3 to −4% on ownership, burst and payload.
 - **Statistics no longer slow the sweep (#918).** `SPARROW_CORE_STATS` counted every live cell into a sorted map
   during the sweep (14.1 ms of sweep against 2.8 ms without, ownership.ok); it now adds into an array per kind and
   object descriptor and builds the report once per collection. Sweep and mark times with and without statistics

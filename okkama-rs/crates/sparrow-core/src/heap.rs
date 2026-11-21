@@ -226,6 +226,11 @@ impl TraceLayouts {
 struct Page {
     class: usize,
     memory: Box<[u64]>,
+    /// Stable identity (indices shift when empty pages are freed).
+    id: u32,
+    /// #538: the page held no live cell at the last sweep, which left this free chain (head, bytes). While no
+    /// allocation takes the chain, the next sweep keeps it without walking the page.
+    idle: Option<(Word, usize)>,
 }
 
 /// An integer read from a word.
@@ -271,7 +276,12 @@ pub struct Heap {
     /// uncounted, so without this a program that recycles its garbage
     /// reused every swept cell before a collection could come, then grew
     /// by new pages every cycle.
-    reserve: [Vec<(Word, usize)>; CLASSES.len()],
+    reserve: [Vec<(Word, usize, u32)>; CLASSES.len()],
+    /// Pages whose reserved chain an allocation took since the last sweep (#538).
+    touched: std::collections::HashSet<u32>,
+    next_page: u32,
+    /// Pages the sweeps kept idle without walking them (#538), for tests and statistics.
+    pub(crate) idle_pages_kept: u64,
     large: Vec<Box<[u64]>>,
     /// Bytes of the large objects, live or not yet swept.
     large_bytes: usize,
@@ -429,6 +439,9 @@ impl Heap {
             pages: Vec::new(),
             free: [0; CLASSES.len()],
             reserve: std::array::from_fn(|_| Vec::new()),
+            touched: std::collections::HashSet::new(),
+            next_page: 0,
+            idle_pages_kept: 0,
             large: Vec::new(),
             large_bytes: 0,
             allocated: 0,
@@ -561,9 +574,10 @@ impl Heap {
         okkama_devtrace::count!("runtime", "heap class allocations");
         if self.free[class] == 0 {
             match self.reserve[class].pop() {
-                Some((chain, bytes)) => {
+                Some((chain, bytes, page)) => {
                     self.free[class] = chain;
                     self.allocated += bytes;
+                    self.touched.insert(page);
                 }
                 None => self.add_page(class),
             }
@@ -596,7 +610,8 @@ impl Heap {
             }
             self.free[class] = address;
         }
-        self.pages.push(Page { class, memory });
+        self.next_page = self.next_page.wrapping_add(1);
+        self.pages.push(Page { class, memory, id: self.next_page, idle: None });
     }
 
     // ---- objects ----
@@ -1633,7 +1648,8 @@ impl Heap {
         let mut freed = Vec::new();
         for (count, (index, chain, bytes)) in empty.into_iter().enumerate() {
             if count < keep || self.stress {
-                self.reserve[self.pages[index].class].push((chain, bytes));
+                let page = &self.pages[index];
+                self.reserve[page.class].push((chain, bytes, page.id));
             } else {
                 freed.push(index);
             }
@@ -1656,7 +1672,7 @@ impl Heap {
     /// Overwrite every free cell past its link (collector stress).
     fn poison(&mut self) {
         for (class, &size) in CLASSES.iter().enumerate() {
-            let chains = self.reserve[class].iter().map(|&(chain, _)| chain);
+            let chains = self.reserve[class].iter().map(|&(chain, _, _)| chain);
             for mut cell in std::iter::once(self.free[class]).chain(chains) {
                 while cell != 0 {
                     for word in 2..size {
@@ -1673,7 +1689,7 @@ impl Heap {
         let _span = okkama_devtrace::span!("gc", "sweep");
         // Development counters (#538), per page, reported once per sweep. Nothing is counted per cell: the
         // cell loop stays the shape it had in 0.5.8, which #922 measured ~5% faster on allocation-heavy runs.
-        let (mut full_cells, mut empty_cells, mut visited) = (0, 0, 0);
+        let (mut full_cells, mut empty_cells, mut visited, mut idle_pages) = (0, 0, 0, 0u64);
         self.free = [0; CLASSES.len()];
         for chains in &mut self.reserve {
             chains.clear();
@@ -1686,10 +1702,22 @@ impl Heap {
         // Pages with no live cell (#435): their chains wait until the end of
         // the sweep decides how many empty pages the next cycle needs.
         let mut empty: Vec<(usize, Word, usize)> = Vec::new();
+        let touched = std::mem::take(&mut self.touched);
         for (index, page) in self.pages.iter_mut().enumerate() {
             let size = CLASSES[page.class];
-            let base = page.memory.as_mut_ptr() as Word;
             let cells = page.memory.len() / size;
+            // #538: empty at the last sweep and no allocation took its chain since: nothing on it can be marked,
+            // and its free chain is intact, so it is empty again without a walk.
+            if let Some((chain, bytes)) = page.idle
+                && !touched.contains(&page.id)
+            {
+                visited += cells;
+                empty_cells += cells;
+                idle_pages += 1;
+                empty.push((index, chain, bytes));
+                continue;
+            }
+            let base = page.memory.as_mut_ptr() as Word;
             let mut kept = 0;
             let mut chain = 0;
             let step = size * 8;
@@ -1722,9 +1750,13 @@ impl Heap {
                 empty_cells += cells;
             }
             if kept == 0 {
+                page.idle = Some((chain, cells * size * 8));
                 empty.push((index, chain, cells * size * 8));
-            } else if chain != 0 {
-                self.reserve[page.class].push((chain, (cells - kept) * size * 8));
+            } else {
+                page.idle = None;
+                if chain != 0 {
+                    self.reserve[page.class].push((chain, (cells - kept) * size * 8, page.id));
+                }
             }
         }
         let mut large_bytes = 0;
@@ -1774,6 +1806,8 @@ impl Heap {
         okkama_devtrace::count!("gc", "sweep cells visited", visited);
         okkama_devtrace::count!("gc", "sweep cells in full pages", full_cells);
         okkama_devtrace::count!("gc", "sweep cells in empty pages", empty_cells);
+        okkama_devtrace::count!("gc", "sweep pages kept idle without a walk", idle_pages);
+        self.idle_pages_kept += idle_pages;
     }
 }
 
@@ -2432,6 +2466,37 @@ mod tests {
         assert_eq!(heap.held_bytes(), heap.stats().pages * PAGE_BYTES + 2 * owner + owned);
         heap.collect(|_| {});
         assert_eq!(heap.stats().external_live_bytes, 0);
+    }
+
+    /// #538: a page found empty by a sweep is kept without a walk by the next one, as long as no allocation
+    /// took its chain; a page whose chain was taken is walked again, and its survivors stay intact.
+    #[test]
+    fn an_idle_empty_page_is_not_walked_until_an_allocation_takes_its_chain() {
+        let mut heap = Heap::new(layouts());
+        for i in 0..20_000 {
+            heap.object_new(0, &[UNBOUND, word::small(i).unwrap()]);
+        }
+        heap.collect(|_| {});
+        assert_eq!(heap.idle_pages_kept, 0, "the first sweep walks every page");
+        let pages = heap.pages.len() as u64;
+        assert!(pages > 2);
+        heap.collect(|_| {});
+        let kept = heap.idle_pages_kept;
+        assert!(kept > 0 && kept <= pages, "{kept} of {pages}");
+        // Allocation takes chains back: those pages are walked, the rest stay idle.
+        let node = heap.object_new(0, &[UNBOUND, word::small(41).unwrap()]);
+        let pair = heap.object_new(1, &[node, node]);
+        heap.collect(|visit| visit(pair, Repr::Ref));
+        assert!(heap.idle_pages_kept - kept < kept, "the touched page is walked");
+        assert_eq!(heap.field(heap.field(pair, 0), 1), word::small(41).unwrap());
+        // Cells from idle chains are handed out intact, cycle after cycle.
+        for round in 0..5 {
+            let fresh: Vec<Word> = (0..3_000).map(|i| heap.object_new(0, &[UNBOUND, word::small(i + round).unwrap()])).collect();
+            heap.collect(|visit| { visit(pair, Repr::Ref); for &f in &fresh { visit(f, Repr::Ref); } });
+            for (i, &f) in fresh.iter().enumerate() {
+                assert_eq!(heap.field(f, 1), word::small(i as i64 + round).unwrap());
+            }
+        }
     }
 
     /// #918: the sweep's census counts live cells per kind and per object descriptor in an array and reports
