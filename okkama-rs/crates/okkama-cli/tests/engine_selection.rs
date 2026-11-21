@@ -51,11 +51,10 @@ fn a_build_target_is_an_unknown_option() {
     }
 }
 
+/// One engine, no `--engine` option; the REPL is back on Sparrow (#588, owner 2026-11-14).
 #[test]
-fn repl_is_no_longer_a_command() {
-    let output = command().arg("repl").output().unwrap();
-    assert_eq!(output.status.code(), Some(2));
+fn help_lists_the_sparrow_repl_and_no_engine_option() {
     let help = command().arg("--help").output().unwrap();
-    assert!(!String::from_utf8_lossy(&help.stdout).contains("okkama repl"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("okkama repl"));
     assert!(!String::from_utf8_lossy(&help.stdout).contains("--engine"));
 }
