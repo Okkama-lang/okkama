@@ -22,6 +22,20 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   fallback takes parentheses: `if ready: (cache else 0) else: 1`. `okkama fmt` keeps the compact spelling. Book
   11.6, spec 8.11 and the grammar, conformance `L03.if.compact`/`L03.if.compact-without-else`, VS Code 0.11.0.
 
+- **`okkama repl` is back, on Sparrow (#588).** One live session: statements, expressions, declarations and
+  imports.
+  - Variables keep their values in the heap, and only the new input runs.
+  - Resources follow their variables: destroyed once when a variable is rebound or dropped, and on `:reset` or
+    exit, in reverse creation order.
+  - Async cells work. Closures and Futures are not kept.
+  - A declaration that would change how earlier values are owned is rejected.
+  - On a terminal, input is line-edited: the arrows move the cursor and walk the history (`~/.okkama_history`),
+    and Ctrl-R searches it.
+  - Under it:
+    - `Runtime::session` and `Runtime::extend`: append-only growth of a live runtime, prepared and then committed
+      by steps that cannot fail;
+    - `okkama_sparrow::session::extend`: a recompiled session merged into the published numbering.
+
 ### Changed
 
 - **The root scan resolves each return address once per collection (#916).** A deep stack repeats a few return

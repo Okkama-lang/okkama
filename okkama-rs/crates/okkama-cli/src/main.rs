@@ -27,6 +27,7 @@ mod import_paths;
 mod lsp;
 mod man;
 mod ocs;
+mod repl;
 mod trace;
 
 use blade::manifest;
@@ -64,6 +65,7 @@ USAGE:
     okkama lint <FILE>...
     okkama man [MODULE [NAME | NAME.ACTION]] [--format text|markdown]
     okkama lsp
+    okkama repl
     okkama env
     okkama ir <FILE|-> [--format text]
     okkama build <FILE|-> -o <FILE.spb>
@@ -83,6 +85,8 @@ COMMANDS:
               from its doc comments; without MODULE, the index of std
     env       Show where okkama finds std and ICU
     lsp       Run the language server (LSP over stdio) for editors
+    repl      Read-eval-print loop: statements, expressions and declarations
+              in one live Sparrow session (:help inside)
     ir        Lower a source module to IR and print its functions
     build     Compile a program to Sparrow bytecode (.spb)
     exec      Execute a Sparrow bytecode file in this process
@@ -391,6 +395,10 @@ fn main() -> ExitCode {
     // Сервер языка владеет stdin/stdout сам.
     if args.first().map(String::as_str) == Some("lsp") {
         return lsp::run();
+    }
+    // The REPL reads stdin and writes as it goes.
+    if args.first().map(String::as_str) == Some("repl") {
+        return repl::run();
     }
     let outcome = run(&args);
     // The program's buffered output goes before the command's own and before

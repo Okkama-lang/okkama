@@ -122,6 +122,8 @@ pub struct Runtime {
     pub invocations: Box<[Invocation]>,
     /// #588: the capacities of a session runtime (`Runtime::session`), which `extend` grows within.
     capacities: Option<Capacities>,
+    /// #588: the session region (what the REPL's variables own) and the values the last cell kept; GC roots.
+    session: (Option<Word>, Option<Word>),
     /// Same-binary diagnostic control, read once at runtime construction.
     pub(crate) closure_bridge_reference: bool,
     /// Constants embedded in machine code; always roots.
@@ -222,6 +224,62 @@ impl Runtime {
         runtime.jit.object_capacity = capacities.objects;
         runtime.capacities = Some(capacities);
         Ok(runtime)
+    }
+
+    /// The root Future of an async entry leaves the GC roots once its run is over.
+    fn drop_root(&mut self, root: Word) {
+        if let Some(index) = self.roots.iter().rposition(|&(word, _)| word == root) {
+            self.roots.remove(index);
+        }
+    }
+
+    /// #588: a cell's kept values become the session's: what the previous kept values own and `kept` still
+    /// reaches moves to a new session region, what the cell made and `kept` reaches is adopted, and the old
+    /// region closes with what no variable keeps any more (dropped and rebound variables), destroys in their
+    /// usual order. `kept` stays rooted until the next call. A destroy's failure is returned after all of them ran.
+    pub fn session_keep(self: &mut Box<Self>, kept: Word) -> Result<(), Error> {
+        self.roots.push((kept, Repr::Ref));
+        let region = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + crate::failures::REGION_SLOTS]);
+        self.roots.pop();
+        let old = self.session.0.replace(region);
+        self.session.1 = Some(kept);
+        if let Some(old) = old {
+            self.region_transfer(old, region, kept);
+        }
+        self.region_add(region, kept, true);
+        match old {
+            Some(old) => self.close_session_region(old),
+            None => Ok(()),
+        }
+    }
+
+    /// #588: `:reset` and exit: the session region closes; every value it owns is destroyed once.
+    pub fn session_close(self: &mut Box<Self>) -> Result<(), Error> {
+        self.session.1 = None;
+        match self.session.0.take() {
+            Some(region) => self.close_session_region(region),
+            None => Ok(()),
+        }
+    }
+
+    fn close_session_region(self: &mut Box<Self>, region: Word) -> Result<(), Error> {
+        let marker = 0u8;
+        let mut ctx = Ctx {
+            status: OK,
+            stack_limit: (&marker as *const u8 as u64).saturating_sub(crate::STACK_BYTES.saturating_sub(STACK_HEADROOM)),
+            failure: UNBOUND,
+            runtime: &mut **self,
+            entry_frame: frame_pointer!(),
+            scratch: UNBOUND,
+        };
+        self.roots.push((region, Repr::Ref));
+        let failure = self.region_close(&mut ctx, region, &[], None);
+        self.roots.pop();
+        match failure {
+            Some(failure) => Err(Error(self.describe(&mut ctx, failure))),
+            None if ctx.status == OK => Ok(()),
+            None => Err(Error(self.fatal.clone().unwrap_or_else(|| "engine failure".into()))),
+        }
     }
 
     /// #588: extend a session runtime with `program`, which must begin with the loaded program: every published
@@ -347,6 +405,7 @@ impl Runtime {
             jit: crate::jit::Jit::new()?,
             invocations,
             capacities: None,
+            session: (None, None),
             closure_bridge_reference: std::env::var_os("SPARROW_CORE_CLOSURE_BRIDGE").is_some_and(|value| value == "reference"),
             globals: vec![None; loaded.program.globals.len()],
             loaded,
@@ -377,6 +436,8 @@ impl Runtime {
         let states = &self.states;
         // #817: the root region of detached Futures, until the root closer closes it.
         let mut kept: Vec<Word> = self.resources.root.into_iter().collect();
+        // #588: the session region and the values the REPL keeps.
+        kept.extend(self.session.0.into_iter().chain(self.session.1));
         // #915: the pinned identities, their holders and pins waiting for a taker.
         kept.extend(self.pin_roots());
         // #882: the detached Futures registered as borrowers of open owners, until those owners close.
@@ -918,12 +979,14 @@ impl Runtime {
             if ctx.status == OK
                 && let Some(failure) = self.shutdown(&mut ctx) {
                     let message = self.describe(&mut ctx, failure);
+                    self.drop_root(root);
                     return Err(Error(message));
                 }
             // #817: the root closer, after the spawned tasks settled: outcomes of Futures that outlived their owners.
             if ctx.status == OK
                 && let Some(failure) = self.close_root(&mut ctx) {
                     let message = self.describe(&mut ctx, failure);
+                    self.drop_root(root);
                     return Err(Error(message));
                 }
             if ctx.status == OK {
@@ -933,7 +996,16 @@ impl Runtime {
                     ctx.status = FAILED;
                 }
             }
-            unsafe { *((root + crate::tasks::RESULT) as *const u64) }
+            let result = unsafe { *((root + crate::tasks::RESULT) as *const u64) };
+            // #588: a session's cell hands its result on, as `await.take` does: the root Future's cache gives up
+            // what it owns, so the session adopts the result exactly as after a synchronous cell.
+            if self.capacities.is_some() && ctx.status == OK {
+                self.take_outcome(root);
+            }
+            // #588: a session runs many entries; the root Future is not kept past its run. The caller roots the
+            // result before it allocates.
+            self.drop_root(root);
+            result
         } else {
             let code = rt_compile(&mut ctx, entry as u64);
             if ctx.status != OK {

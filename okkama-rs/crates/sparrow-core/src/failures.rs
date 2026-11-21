@@ -1513,7 +1513,7 @@ impl Runtime {
         }
     }
 
-    fn region_transfer(&mut self, from: Word, to: Word, value: Word) {
+    pub(crate) fn region_transfer(&mut self, from: Word, to: Word, value: Word) {
         if self.region_len(from) == 0 {
             return;
         }
@@ -1724,7 +1724,7 @@ impl Runtime {
 
     /// Close `region`, keeping `keep` (and its graph) alive, running destroys.
     /// Returns the primary failure (the given one, a destroy's, or none).
-    fn region_close(&mut self, ctx: *mut Ctx, region: Word, keep: &[Word], primary: Option<Word>) -> Option<Word> {
+    pub(crate) fn region_close(&mut self, ctx: *mut Ctx, region: Word, keep: &[Word], primary: Option<Word>) -> Option<Word> {
         match self.region_close_until(ctx, region, keep, primary, false) {
             Closed::Done(primary) => primary,
             Closed::Async(..) => unreachable!("a synchronous close awaits nothing"),

@@ -28,6 +28,8 @@ serde_json = "1.0.154"
 okkama-runtime-core = { path = "../okkama-runtime-core" }
 okkama-sparrow = { path = "../okkama-sparrow" }
 sparrow-core = { path = "../sparrow-core", features = ["mimalloc"] }
+# Line editing and history in `okkama repl` (#588, owner 2026-11-21).
+rustyline = { version = "14.0.0", default-features = false, features = ["with-file-history"] }
 
 [lints]
 workspace = true

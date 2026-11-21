@@ -1671,6 +1671,26 @@ impl Heap {
             .collect()
     }
 
+    /// #588: does `value` reach an async frame (a Future) or a closure? Such a value is not kept between REPL
+    /// cells. Payloads (maps, builders) are walked through their own trace.
+    pub fn reaches_frame_or_closure(&self, value: Word, repr: Repr) -> bool {
+        let mut pending = vec![(value, repr)];
+        let mut seen = std::collections::HashSet::new();
+        while let Some((word, repr)) = pending.pop() {
+            let Some(object) = repr.pointer(word) else { continue };
+            if !seen.insert(object) {
+                continue;
+            }
+            // SAFETY: a pointer reached from a live value is a live object.
+            let header = unsafe { *(object as *const u64) } & !MARK;
+            if matches!(kind(header), FRAME | CLOSURE) {
+                return true;
+            }
+            self.trace_object(object, &mut |child, repr| pending.push((child, repr)));
+        }
+        false
+    }
+
     /// The traced fields of one live object, as the collector reads them.
     fn trace_object(&self, object: Word, push: &mut dyn FnMut(Word, Repr)) {
         {

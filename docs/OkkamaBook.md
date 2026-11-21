@@ -24,8 +24,32 @@ sparrow out.spb
 
 `run` executes source on Sparrow (JIT) by default, including inline tests
 with `run -t`. Sparrow is the only Okkama engine (#584); the IR interpreter
-and its REPL were removed, and the JVM backend was removed in 0.6.0 (#585;
+was removed, and the JVM backend was removed in 0.6.0 (#585;
 0.5.8 is the last release with it).
+
+`okkama repl` is an interactive session (#588). Enter statements, expressions,
+declarations (`object`, `enum`, `role`) or imports; a trailing expression's
+value is printed:
+
+```text
+okkama> let total = 40
+okkama> total + 2
+42 (int)
+```
+
+- **One live session.** Variables keep their values between inputs, and only
+  the new input runs: earlier side effects never repeat.
+- **Real ownership lifetimes.** A variable that owns a resource keeps it alive.
+  The resource is destroyed once, by the usual rules, when the variable is
+  rebound or no longer kept, and on `:reset` or exit, in reverse creation order.
+- **Not kept between inputs:** closures and Futures.
+- **Rejected declarations.** A declaration that would change how earlier values
+  are owned (for example a new type with a `destroy` doing a role an existing
+  object holds) is rejected; `:reset` starts afresh.
+- **Commands:** `:vars`, `:decls`, `:reset`, `:help`, `:quit`.
+- **Terminal input:** the arrows move the cursor and walk the history
+  (`~/.okkama_history`), and Ctrl-R searches it. Without a terminal, stdin is
+  read line by line, so scripts can be piped in.
 `build` emits Sparrow
 bytecode, the only target; the `sparrow` binary runs `.spb` on the Sparrow runtime (its current
 version is called Tomato). `sparrow check out.spb` verifies without execution.

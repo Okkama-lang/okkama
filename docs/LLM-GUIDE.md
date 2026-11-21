@@ -179,7 +179,17 @@ okkama build x.ok -o x.spb [--tests]
 sparrow x.spb [args]   |  sparrow --test t.spb  |  sparrow --stats x.spb
 sparrow --disassemble x.spb   |  sparrow --native-capabilities
 okkama exec x.spb      # SPB on Sparrow inside okkama
+okkama repl            # REPL: one live Sparrow session (#588); scripts via stdin
 ```
+
+The REPL (`okkama-cli/src/repl.rs`, design `okkama-docs/runtime/repl-588.md`):
+- **Each input** compiles the declarations and the new cell.
+- **Merge:** `okkama_sparrow::session::extend` merges the result into the published program by stable identities.
+- **Runtime:** `Runtime::extend` grows the session runtime within fixed capacities (the invocation and dispatch
+  tables never move), and only the new cell runs.
+- **Ownership:** variables are owned by one session region (`Runtime::session_keep`, `session_close`).
+- **Tests:** `okkama-cli/tests/repl.rs` (stdin scripts, a destroy oracle, a pty test of the history),
+  `sparrow-core/src/session_tests.rs`, `okkama-sparrow/tests/session.rs`.
 
 Environment: `OKKAMA_STDLIB_DIR` (std root),
 `SPARROW_CORE_STATS=1` (= `--stats`: counts of natives, intrinsics, slow paths,
