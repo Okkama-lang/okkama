@@ -507,7 +507,7 @@ hidden object Secret {}
     assert!(html.contains("data-okkama-target=\"okkama-doc:/demo/api?version=v1.2.3#Thing.send\""));
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
-    let json: serde_json::Value = serde_json::from_str(&publish::json(&[doc.clone()])).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&publish::json(std::slice::from_ref(&doc))).unwrap();
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["modules"][0]["version"], "v1.2.3");
     assert_eq!(json["modules"][0]["items"][0]["members"].as_array().unwrap().len(), 2);
@@ -528,7 +528,7 @@ fn publishing_escapes_markup_omits_absent_version_and_keeps_source_data() {
     let man = publish::module_man(&doc);
     assert!(!man.contains(".SH \"VERSION\"") && !man.contains("v0.0.0"));
     assert!(!man.lines().any(|line| line.starts_with(".request")));
-    let value: serde_json::Value = serde_json::from_str(&publish::json(&[doc.clone()])).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&publish::json(std::slice::from_ref(&doc))).unwrap();
     assert!(value["modules"][0]["version"].is_null());
     assert_eq!(value["modules"][0]["file"], "demo.ok");
     assert_eq!(value["modules"][0]["items"][0]["span"]["start"], doc.items[0].span.start);
@@ -580,8 +580,12 @@ fn validate_doc_schema(value: &serde_json::Value, schema: &serde_json::Value, ro
     if let Some(choices) = schema.get("anyOf").and_then(|v| v.as_array()) {
         return choices.iter().any(|choice| validate_doc_schema(value, choice, root));
     }
-    if let Some(constant) = schema.get("const") { if value != constant { return false; } }
-    if let Some(choices) = schema.get("enum").and_then(|v| v.as_array()) { if !choices.contains(value) { return false; } }
+    if let Some(constant) = schema.get("const") && value != constant {
+        return false;
+    }
+    if let Some(choices) = schema.get("enum").and_then(|v| v.as_array()) && !choices.contains(value) {
+        return false;
+    }
     if let Some(types) = schema.get("type") {
         let types = types.as_array().cloned().unwrap_or_else(|| vec![types.clone()]);
         if !types.iter().any(|ty| match ty.as_str().unwrap() {
@@ -597,10 +601,14 @@ fn validate_doc_schema(value: &serde_json::Value, schema: &serde_json::Value, ro
             if !validate_doc_schema(child, property, root) { return false; }
         }
     }
-    if let Some(items) = schema.get("items") {
-        if !value.as_array().unwrap().iter().all(|child| validate_doc_schema(child, items, root)) { return false; }
+    if let Some(items) = schema.get("items")
+        && !value.as_array().unwrap().iter().all(|child| validate_doc_schema(child, items, root))
+    {
+        return false;
     }
-    if let Some(minimum) = schema.get("minimum") { if value.as_u64() < minimum.as_u64() { return false; } }
+    if let Some(minimum) = schema.get("minimum") && value.as_u64() < minimum.as_u64() {
+        return false;
+    }
     true
 }
 
