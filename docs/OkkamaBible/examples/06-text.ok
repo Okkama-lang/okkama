@@ -14,8 +14,8 @@ main() is int {
     out.writeln("replace: " + "banana".replace("na", "NA"));
     out.writeln("trim: [" + "  padded  ".trim() + "]");
     out.writeln("chomp: [" + "line\n".chomp() + "]");
-    out.writeln("contains: " + (word.contains("иве") ?? "yes" !! "no"));
-    out.writeln("find_last: " + ("мир и мир".find_last("мир") ?? .some(at): at.string() !! .none: "none"));
+    out.writeln("contains: " + (if word.contains("иве") { "yes"; } else { "no"; }));
+    out.writeln("find_last: " + (match "мир и мир".find_last("мир") { case Maybe.some(at): at.string(); case Maybe.none: "none"; }));
     out.writeln("upper: " + "Straße".upper());
     out.writeln("empty: " + "".empty().string());
     out.writeln("escape: caf\u{e9}");

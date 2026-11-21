@@ -443,7 +443,7 @@ the object wants a `destroy`.
 
 Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
 the type system makes the caller decide what absence means: a fallback with
-`else`, a compact choice with `??`/`!!`, or a `match` (Chapter 7). The
+`else` or a `match` (Chapter 7). The
 pattern is to put absence in the signature of the action that can produce
 it, and nowhere else. A lookup that can fail to find returns `Maybe`; a
 lookup that must find refuses with a typed error.

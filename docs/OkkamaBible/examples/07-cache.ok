@@ -35,7 +35,7 @@ main() is int {
     let prices = Cache(entries: empty).remembered("tea", 300).remembered("cake", 450);
     // Three ways to meet a Maybe: a fallback, a compact choice, a match.
     out.writeln("tea " + (prices.find("tea") else 0).string());
-    out.writeln(prices.find("jam") ?? .some(cents): "jam " + cents.string() !! .none: "no jam");
+    out.writeln(match prices.find("jam") { case Maybe.some(cents): "jam " + cents.string(); case Maybe.none: "no jam"; });
     let counted = prices.looked_up("tea").looked_up("jam").looked_up("cake");
     out.writeln(counted.report());
     // The same object with a value-object key and a string value.

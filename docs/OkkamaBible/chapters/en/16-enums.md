@@ -5,7 +5,7 @@ low, normal or urgent; an order is a draft, paid, shipped or cancelled. Some of
 those alternatives carry data of their own. A paid order has an amount, a
 shipped one has a carrier and a tracking number, and a draft has nothing.
 Okkama covers both with one declaration, `enum`, and takes them apart with
-`match` and the compact choice `?? !!`. The compiler knows every case, so it can
+`match`, in blocks or in compact one-line cases. The compiler knows every case, so it can
 tell when code forgets one.
 
 {{example:16-enums}}
@@ -14,8 +14,8 @@ tell when code forgets one.
 - `Stage` is a **variant enum**: some of its cases carry typed fields.
 - `match stage` has one branch per case and binds each case's fields to
   names. Drop the `cancelled` branch and the program no longer compiles.
-- `priority ?? .urgent: "!" !! _: " "` is the one-line form: one pattern, and
-  `_` for everything else.
+- `match priority { case Priority.urgent: "!"; case _: " "; }` is the one-line
+  form: compact cases, and `_` for everything else.
 
 This chapter covers enums of both kinds and the rules of matching, and then
 asks the design question that enums share with roles: when should a set of
@@ -76,7 +76,7 @@ fact about the domain, and the program states it: a `match` that maps each
 case to a weight, or an object that does `Comparing` (Chapter 14). The same
 goes for text. The word printed for a case is a presentation decision. It
 depends on the audience and the language. A `string()` on the enum would pick
-one silently. A `?? !!` or a `match` makes the choice where it is used.
+one silently. A `match` makes the choice where it is used.
 
 Declaration order is visible in maps: enum keys sort by their position in the declaration:
 
@@ -219,33 +219,34 @@ compiler, not from a search. This is the reason to prefer listing cases over
 it hides exactly the places that a new case should reach. Maranget describes
 the two checks a compiler can make on a match: *exhaustiveness*, whether some
 value is matched by no case, and *usefulness*, whether a case can never be
-reached [@maranget2007]. Okkama implements the first. The second is partial:
-a repeated variant pattern is an error (`Duplicate variant pattern`), but a
-repeated payload-free case, a repeated literal, or an `else` after every case
-is accepted without a word (issue #286).
+reached [@maranget2007]. Okkama implements both for the cases it can compare:
+a repeated case is an error (`Duplicate variant pattern`), so is a repeated
+literal (`Duplicate case pattern`), and so is an `else` after cases that already
+cover every value (`Unreachable else`). Until 0.6.0 only the first of those was
+reported (issue #286).
 
-## 16.4 Compact choices
+## 16.4 Compact cases
 
-Chapter 9 introduced `?? !!` on booleans and Chapter 7 on `Maybe`. On any enum
-it is a `match` written as one expression:
+A case that only computes a value fits on one line: `case pattern: value;`.
+With it, a whole `match` is one expression:
 
 ```okkama
-let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
-let flag = priority ?? .urgent: "!" !! _: " ";
-let label = reading ?? .single(value): value.string() !! _: "no single value";
+let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
+let flag = match priority { case Priority.urgent: "!"; case _: " "; };
+let label = match reading { case Reading.single(value): value.string(); case _: "no single value"; };
 ```
 
-- After `??` and each `!!` comes a pattern, a colon and the result. Patterns
-  drop the type name (`.urgent`, not `Priority.urgent`), because the subject
-  already fixes it.
-- `_` covers the cases not named.
-- Coverage must be complete, and a case may not repeat. Both rules apply to
-  payload-free enums as well, unlike `match`. Choices cannot nest.
+- A compact case is a pattern, a colon, the value and a semicolon. Block cases
+  and compact cases mix in one `match`.
+- `case _` covers the cases not named; it is another spelling of `else`.
+- Patterns are written in full (`Priority.urgent`), as in any `match`, and the
+  rules are the same: coverage, repeated cases, one result type.
 
-A compact choice that misses a case names it: ``match over enum `Priority`
-does not cover normal, so it has no value here; add the cases or a `_:`
-branch``. Until 0.5.0 the message described the form, not the case (issue
-#291). For anything longer than a line, `match` reads better.
+A `match` that produces a value and misses a case names it: ``match over enum
+`Priority` does not cover normal, so it has no value here; add the cases or an
+`else` branch``. Until 0.6.0 the same choices had a notation of their own,
+`priority ?? .urgent: "!" !! _: " "`; it was removed in favour of compact cases
+(issue #893), so that one construct does one job.
 
 ## 16.5 Closed or open: enums and roles
 
@@ -373,13 +374,11 @@ two are left out on purpose, for the reasons in §16.1.
   field does the same job in more lines (issue #288).
 - **Variants are not map keys.** A payload-free enum is a key; a variant is
   not: `Map key type Reading is not a scalar key type` (issue #289).
-- **Redundant cases pass silently.** A repeated payload-free case, a repeated
-  literal, or an `else` that can never run is accepted (issue #286).
 
 ## 16.10 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
-  priority takes a `match` or a `?? !!`. A language with `toString` and
+  priority takes a `match`. A language with `toString` and
   `ordinal` would do it implicitly. The cost is a few lines per enum, paid once
   and kept in one place.
 - **No list of cases.** There is no `values()`. Code that needs every case,

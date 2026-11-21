@@ -67,13 +67,13 @@ order of ceremony; the program below uses all four.
    present, the fallback otherwise. The fallback is evaluated only when
    needed, and it may be `else throw Error...` or `else panic "..."` when
    absence is not acceptable at that point.
-2. **A compact choice** `?? … !!` maps each case to a value, with the
-   case's payload bound by name: `?? .some(name): "hello, " + name !! .none:
-   "hello, stranger"`. It must cover every case, and it cannot be nested —
-   nested choices are a known source of unreadable code, and a separate
-   variable is always clearer.
-3. **`match`** handles each case with a block when the cases need statements,
-   not just expressions.
+2. **`match`** handles each case, with the case's payload bound by name. A
+   case that only computes a value fits on one line:
+   `match users.find(1) { case Maybe.some(name): "hello, " + name; case Maybe.none: "hello, stranger"; }`.
+   A case that needs statements takes a block, and both forms mix in one
+   `match`. It must cover every case.
+3. **Nesting stays readable** when each step has a name: a `match` inside a
+   case is allowed, but a separate variable is usually clearer.
 4. **`try?`** converts a typed error into absence: `try? users.require(4)` is
    `Maybe.some(name)` if the call returned and `Maybe.none` if it threw any
    error. Its counterpart `try!` asserts that a call cannot fail and turns a
@@ -264,8 +264,7 @@ its keys and values, and a lookup may miss.
 - **The miss belongs to the answer.** `find(key) is Maybe<V>` returns
   `Maybe.some(value)` or `Maybe.none`, whatever `V` is. The cache does not
   invent a default for a type it knows nothing about, and the caller decides
-  what a miss means: a fallback with `else`, a compact choice with `?? !!`,
-  or a `match` (Section 7.3).
+  what a miss means: a fallback with `else` or a `match` (Section 7.3).
 - **No sentinel can collide with a value.** A cache of prices that returned
   `0` or `-1` for a miss would be wrong for the first item that costs
   nothing. With `Maybe`, every value of `V`, including `0`, `""` and an empty
@@ -353,8 +352,8 @@ characters and large in culture: the shortest way to get a value out of a
 
 - `Maybe` has no library of combinators such as `map`, `and_then` or `filter`
   in the language today; chained optional computations are written with
-  compact choices or `match`. Whether to add them is an open question: each is
-  convenient, and each is another way to say what `??` already says.
+  `match`, often in its compact form. Whether to add them is an open question:
+  each is convenient, and each is another way to say what `match` already says.
 - A `Maybe` cannot be a map key, and a fallback cannot carry control flow:
   `else return` and `else next` do not exist. Both are deliberate, and both
   occasionally cost a few lines.

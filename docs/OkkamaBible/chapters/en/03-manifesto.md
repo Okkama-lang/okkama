@@ -104,7 +104,7 @@ words `null` and `nil` do not even parse.
 
 A value that may be absent has a type that says so — `Maybe<T>`, with cases
 `some(value)` and `none` — and the program must open it before using the
-value inside: with `else` for a fallback, with `match`, or with `??`. A map
+value inside: with `else` for a fallback or with `match`. A map
 lookup that may miss takes an explicit fallback; an action that cannot answer
 throws a typed error, and `try?` turns such an error into a `Maybe` when
 absence is the honest answer.

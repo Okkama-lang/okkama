@@ -13,7 +13,7 @@ main() is int {
         + ", last " + primes.last().string());
     out.writeln("slice(1, 4) = " + primes.slice(1, 4).map() -> p { p.string(); }.join(" "));
     out.writeln("index 9, or 0: " + (primes[9] else 0).string());
-    out.writeln("contains 7: " + (primes.contains(7) ?? "yes" !! "no")
+    out.writeln("contains 7: " + (if primes.contains(7) { "yes"; } else { "no"; })
         + ", reversed " + primes.reversed().map() -> p { p.string(); }.join(" ")
         + ", take(2) " + primes.take(2).map() -> p { p.string(); }.join(" ")
         + ", drop(4) " + primes.drop(4).map() -> p { p.string(); }.join(" "));

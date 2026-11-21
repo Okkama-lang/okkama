@@ -464,7 +464,7 @@ failure as a value, or as impossible:
 
 - **`try? value`** has the type `Maybe<T>`. It is `Maybe.some(value)`, or
   `.none` if evaluating it throws any error. It combines with `else`, which
-  supplies a fallback, and with the two-way choice `?? !!` of Chapter 7. A
+  supplies a fallback, and with `match` (Chapter 7). A
   void call cannot be wrapped, since there is no value to put in the
   `Maybe`, and neither can a successor result, since its must-use obligation
   would be lost.

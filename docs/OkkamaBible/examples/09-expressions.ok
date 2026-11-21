@@ -36,8 +36,8 @@ main() is int {
             case "C" { "pass"; }
             else { "retake"; }
         };
-        // `?? !!` is a two-way choice; both branches have one type.
-        let honours = score >= 95 ?? ", with honours" !! "";
+        // An `if` expression has two branches of one type.
+        let honours = if score >= 95 { ", with honours"; } else { ""; };
         out.writeln(name + ": " + score.string() + " " + letter + ", " + verdict + honours);
     }
 

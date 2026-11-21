@@ -79,8 +79,8 @@ finding.
 
 ## 27.2 Missing from the language
 
-Four open issues describe what the language plans to have and lacks. All
-four are about enums and patterns, and together they are the largest
+Three open issues describe what the language plans to have and lacks. All
+three are about enums and patterns, and together they are the largest
 difference between Okkama's enums and the algebraic data types of ML, Rust
 or Haskell (Section 16.7).
 
@@ -92,9 +92,6 @@ or Haskell (Section 16.7).
   rejected; the inner value is taken apart by a second `match` in the body.
 - **Variants as map keys (#289).** A payload-free enum can key a map; a
   variant cannot, even when its payloads could.
-- **Repeated cases pass silently (#286).** A `match` that repeats a
-  payload-free case or a literal compiles. The repetition is dead code, and
-  the compiler should say so.
 
 The first two are the ones that matter for programs. Interpreters, parsers
 and compilers are the classic programs written with recursive types and
@@ -172,7 +169,7 @@ bound usually serves.
 
 **Combinators on `Maybe`.** `map`, `and_then` and `filter` on a `Maybe`
 shorten chains of optional steps. Each is also a second way to say what a
-compact choice `?? !!` or a `match` already says (Section 7.14).
+`match` already says (Section 7.14).
 
 **Errors in signatures.** An Okkama signature does not list the errors an
 action may throw (Section 10.19). Listing them is what CLU and Java's

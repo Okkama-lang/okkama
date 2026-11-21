@@ -227,7 +227,7 @@
   - [16.1 Закрытый набор имён](#161-закрытый-набор-имён)
   - [16.2 Варианты с данными](#162-варианты-с-данными)
   - [16.3 `match`](#163-match)
-  - [16.4 Компактный выбор](#164-компактный-выбор)
+  - [16.4 Короткие ветки](#164-короткие-ветки)
   - [16.5 Закрытое или открытое: перечисления и роли](#165-закрытое-или-открытое-перечисления-и-роли)
   - [16.6 Разобранный пример: протокол и машина состояний](#166-разобранный-пример-протокол-и-машина-состояний)
   - [16.7 Откуда пришли перечисления](#167-откуда-пришли-перечисления)
@@ -609,7 +609,7 @@ Okkama выбирает простое вместо лёгкого везде, �
 
 | Убранная сущность | Что делает работу вместо неё | Глава |
 |---|---|---|
-| `null`, `nil`, неявные optional, `?.` | `Maybe<T>` и `Presence<T>`, раскрываемые через `else`, `??`, `match` | 7 |
+| `null`, `nil`, неявные optional, `?.` | `Maybe<T>` и `Presence<T>`, раскрываемые через `else` или `match` | 7 |
 | Истинность не-булевых значений (`if 1`, `if ""`) | условия — ровно `bool` | 9 |
 | Неявные числовые преобразования (`1 == 1.0`) | точные категории `int`, `byte`, `rat`, `float`; явные приведения | 5 |
 | Переполнение целых | арифметика `int` точна и переходит в большие целые | 5 |
@@ -1464,7 +1464,7 @@ main() is int {
 Значение, которое может отсутствовать, имеет тип, который об этом говорит, —
 `Maybe<T>` со случаями `some(value)` и `none`, — и программа должна его
 раскрыть, прежде чем использовать значение внутри: через `else` для
-запасного значения, через `match` или через `??`. Поиск в словаре, который
+запасного значения или через `match`. Поиск в словаре, который
 может промахнуться, принимает явное запасное значение; действие, которое не
 может ответить, бросает типизированную ошибку, а `try?` превращает такую
 ошибку в `Maybe`, когда отсутствие — честный ответ.
@@ -3391,8 +3391,8 @@ main() is int {
     out.writeln("replace: " + "banana".replace("na", "NA"));
     out.writeln("trim: [" + "  padded  ".trim() + "]");
     out.writeln("chomp: [" + "line\n".chomp() + "]");
-    out.writeln("contains: " + (word.contains("иве") ?? "yes" !! "no"));
-    out.writeln("find_last: " + ("мир и мир".find_last("мир") ?? .some(at): at.string() !! .none: "none"));
+    out.writeln("contains: " + (if word.contains("иве") { "yes"; } else { "no"; }));
+    out.writeln("find_last: " + (match "мир и мир".find_last("мир") { case Maybe.some(at): at.string(); case Maybe.none: "none"; }));
     out.writeln("upper: " + "Straße".upper());
     out.writeln("empty: " + "".empty().string());
     out.writeln("escape: caf\u{e9}");
@@ -4020,9 +4020,10 @@ main() is int {
     out.writeln("user 3 is " + (users.find(3) else "nobody"));
 
     // 2. A compact choice over the two cases.
-    let greeting = users.find(1)
-        ?? .some(name): "hello, " + name
-        !! .none: "hello, stranger";
+    let greeting = match users.find(1) {
+        case Maybe.some(name): "hello, " + name;
+        case Maybe.none: "hello, stranger";
+    };
     out.writeln(greeting);
 
     // 3. match, when each case needs more than an expression.
@@ -4033,7 +4034,7 @@ main() is int {
 
     // 4. try? turns a typed error into absence.
     let found = try? users.require(4);
-    out.writeln("require(4) gave " + (found ?? .some(name): name !! .none: "none"));
+    out.writeln("require(4) gave " + (match found { case Maybe.some(name): name; case Maybe.none: "none"; }));
     0;
 }
 ```
@@ -4051,13 +4052,13 @@ require(4) gave none
    значение, если оно есть, и запасное иначе. Запасное вычисляется только
    при необходимости и может быть `else throw Ошибка...` или `else panic
    "..."`, когда отсутствие в этом месте недопустимо.
-2. **Компактный выбор** `?? … !!` сопоставляет каждому случаю значение,
-   связывая полезную нагрузку случая по имени: `?? .some(name): "hello, " +
-   name !! .none: "hello, stranger"`. Он обязан покрыть все случаи и не может
-   быть вложенным: вложенные выборы — известный источник нечитаемого кода, а
-   отдельная переменная всегда яснее.
-3. **`match`** обрабатывает каждый случай блоком, когда случаям нужны
-   операторы, а не только выражения.
+2. **`match`** обрабатывает каждый случай, связывая полезную нагрузку по
+   имени. Ветка, которая только вычисляет значение, умещается в строку:
+   `match users.find(1) { case Maybe.some(name): "hello, " + name; case Maybe.none: "hello, stranger"; }`.
+   Ветке, которой нужны операторы, нужен блок, и обе формы смешиваются в
+   одном `match`. Он обязан покрыть все случаи.
+3. **Вложенность остаётся читаемой**, когда у каждого шага есть имя: `match`
+   внутри ветки допустим, но отдельная переменная обычно яснее.
 4. **`try?`** превращает типизированную ошибку в отсутствие: `try?
    users.require(4)` — это `Maybe.some(name)`, если вызов вернул значение, и
    `Maybe.none`, если он бросил любую ошибку. Его пара `try!` утверждает, что
@@ -4125,7 +4126,7 @@ main() is int {
     // try? turns an error into absence; a Maybe result is kept whole, never flattened.
     out.writeln(try? book.require("grace") else "unknown");
     let nested is Maybe<Maybe<string>> = try? book.phone("grace");
-    out.writeln(nested == Maybe.some(Maybe<string>.none) ?? "found the answer: no phone" !! "something else");
+    out.writeln(if nested == Maybe.some(Maybe<string>.none) { "found the answer: no phone"; } else { "something else"; });
     0;
 }
 ```
@@ -4241,10 +4242,11 @@ object NicknamePatch {
     NicknamePatch(:nickname);
 
     applied(current is string) is string {
-        nickname
-            ?? .some(value): value
-            !! .none: ""
-            !! .missing: current;
+        match nickname {
+            case Presence.some(value): value;
+            case Presence.none: "";
+            case Presence.missing: current;
+        };
     }
 }
 
@@ -4355,11 +4357,14 @@ object Settings {
 
     // Absent gives none; present but not a number is an error that names the setting.
     int(name is string) is Maybe<int> {
-        self.text(name) ?? .some(raw): Maybe.some(try {
+        match self.text(name) {
+            case Maybe.some(raw): Maybe.some(try {
             Number(raw).int();
         } catch failure is InvalidInteger {
             throw SettingError.malformed(name, raw);
-        }) !! .none: Maybe<int>.none;
+        });
+            case Maybe.none: Maybe<int>.none;
+        };
     }
 }
 
@@ -4369,7 +4374,7 @@ object Server {
     Server(:settings);
 
     port() is int { settings.int("port") else 8080; }
-    certificate() is string { settings.text("certificate") ?? .some(path): "TLS with " + path !! .none: "plain HTTP"; }
+    certificate() is string { match settings.text("certificate") { case Maybe.some(path): "TLS with " + path; case Maybe.none: "plain HTTP"; }; }
     workers() is int { settings.int("workers") else throw SettingError.malformed("workers", "(missing)"); }
 }
 
@@ -4455,7 +4460,7 @@ main() is int {
     let prices = Cache(entries: empty).remembered("tea", 300).remembered("cake", 450);
     // Three ways to meet a Maybe: a fallback, a compact choice, a match.
     out.writeln("tea " + (prices.find("tea") else 0).string());
-    out.writeln(prices.find("jam") ?? .some(cents): "jam " + cents.string() !! .none: "no jam");
+    out.writeln(match prices.find("jam") { case Maybe.some(cents): "jam " + cents.string(); case Maybe.none: "no jam"; });
     let counted = prices.looked_up("tea").looked_up("jam").looked_up("cake");
     out.writeln(counted.report());
     // The same object with a value-object key and a string value.
@@ -4483,8 +4488,8 @@ hits 2, misses 1
 - **Промах — часть ответа.** `find(key) is Maybe<V>` возвращает
   `Maybe.some(value)` или `Maybe.none`, каким бы ни был `V`. Кэш не
   придумывает значение по умолчанию для типа, о котором ничего не знает, а
-  что значит промах, решает вызывающий: запасное значение через `else`,
-  компактный выбор через `?? !!` или `match` (раздел 7.3).
+  что значит промах, решает вызывающий: запасное значение через `else` или
+  `match` (раздел 7.3).
 - **Никакой сигнальный признак не совпадёт со значением.** Кэш цен, который
   на промах возвращал бы `0` или `-1`, ошибся бы на первом же бесплатном
   товаре. С `Maybe` каждое значение `V`, включая `0`, `""` и пустой массив,
@@ -4572,9 +4577,9 @@ Kotlin, Swift и Rust сделали решающий шаг — простой 
 ## 7.14 Ограничения
 
 - У `Maybe` сегодня нет в языке библиотеки комбинаторов вроде `map`,
-  `and_then` или `filter`; цепочки вычислений с отсутствием пишутся
-  компактными выборами или `match`. Добавлять ли их — открытый вопрос: каждый
-  удобен, и каждый — ещё один способ сказать то, что уже говорит `??`.
+  `and_then` или `filter`; цепочки вычислений с отсутствием пишутся через
+  `match`, часто в короткой форме. Добавлять ли их — открытый вопрос: каждый
+  удобен, и каждый — ещё один способ сказать то, что уже говорит `match`.
 - `Maybe` не может быть ключом словаря, а запасное значение не может нести
   управление: `else return` и `else next` не существуют. Оба решения
   намеренные, и оба иногда стоят нескольких строк.
@@ -4613,7 +4618,7 @@ main() is int {
         + ", last " + primes.last().string());
     out.writeln("slice(1, 4) = " + primes.slice(1, 4).map() -> p { p.string(); }.join(" "));
     out.writeln("index 9, or 0: " + (primes[9] else 0).string());
-    out.writeln("contains 7: " + (primes.contains(7) ?? "yes" !! "no")
+    out.writeln("contains 7: " + (if primes.contains(7) { "yes"; } else { "no"; })
         + ", reversed " + primes.reversed().map() -> p { p.string(); }.join(" ")
         + ", take(2) " + primes.take(2).map() -> p { p.string(); }.join(" ")
         + ", drop(4) " + primes.drop(4).map() -> p { p.string(); }.join(" "));
@@ -5380,7 +5385,7 @@ still waiting before: 3, after: 4
 # Глава 9. Выражения и управление потоком
 
 Управление потоком в Okkama умещается в одно предложение. В языке два
-условных оператора, `if` и `match`, и компактный выбор из двух, `?? !!`. Два
+условных оператора, `if` и `match`, и у `match` есть короткая форма веток. Два
 цикла: `for` по источнику и неограниченный `loop`. Три выхода — `next`, `last`
 и `return` — и постфиксное условие. Нет `while`, нет `do`, нет `switch` с
 проваливанием, нет `goto`, меток, `+=` и `++`. Почти всё остальное —
@@ -5435,8 +5440,8 @@ main() is int {
             case "C" { "pass"; }
             else { "retake"; }
         };
-        // `?? !!` is a two-way choice; both branches have one type.
-        let honours = score >= 95 ?? ", with honours" !! "";
+        // An `if` expression has two branches of one type.
+        let honours = if score >= 95 { ", with honours"; } else { ""; };
         out.writeln(name + ": " + score.string() + " " + letter + ", " + verdict + honours);
     }
 
@@ -5547,7 +5552,6 @@ main() is int {
 
 | Операторы | Смысл |
 |---|---|
-| `?? … !!` | компактный выбор (9.4) |
 | `else` | запасное значение для `Maybe`, отсутствующего индекса или ключа |
 | `\|\|` | логическое «или» |
 | `&&` | логическое «и» |
@@ -5575,7 +5579,7 @@ main() is int {
 Каждый оператор требует операндов нужной категории и ничего не преобразует:
 
 - `&&`, `||`, `!` и любое условие принимают `bool`. Это относится и к
-  условиям `if`, `next if`, `confirm` и `??`. `if count { … }` — ошибка, а не
+  условиям `if`, `next if` и `confirm`. `if count { … }` — ошибка, а не
   проверка на ноль.
 - `==` и `!=` сравнивают значения одной категории. `1 == 1.0` отвергается
   (глава 5), как и сравнение `int` с диапазоном.
@@ -5643,43 +5647,38 @@ Kotlin и Rust тоже это отвергают. Если разрешить �
 случаи, а покрыть все случаи могут лишь перечисления (глава 16). Все ветви
 должны давать один тип.
 
-### `?? !!`
+### Короткие ветки
 
-`cond ?? a !! b` — типизированный выбор из двух:
-
-- условие — `bool`;
-- обе ветви одного типа;
-- вычисляется только выбранная ветвь.
-
-На перечислении тот же оператор выбирает по варианту и связывает полезную
-нагрузку (глава 7 использовала его на `Maybe`, остальное — в главе 16):
+Ветка `match` может дать значение одной строкой вместо блока:
+`case образец: значение;`. Обе формы смешиваются в одном `match`, а `case _`
+означает остаток, как `else`:
 
 ```okkama
-let greeting = users.find(1) ?? .some(name): "hello, " + name !! .none: "hello, stranger";
+let greeting = match users.find(1) {
+    case Maybe.some(name): "hello, " + name;
+    case Maybe.none: "hello, stranger";
+};
+let size = match count { case 0: "none"; case 1: "one"; case _: "many"; };
 ```
 
-Выборы нельзя вкладывать — ни в ветвь, ни в условие, ни через скобки:
+Это тот же `match`: субъект вычисляется один раз, выполняется только выбранная
+ветвь, привязка существует только в своей ветке, у всех ветвей один тип.
+Короткий `match` вкладывается, как любое выражение, хотя вложенный обычно
+читается лучше как именованное локальное имя.
 
-```text
-syntax error: Nested ?? / !! choices are not allowed; use a local variable or match.
-```
-
-Вложенный тернарный оператор в C и Java допустим, и в обоих языках его трудно
-читать. Okkama превращает обычный совет из руководств по стилю в правило, и
-соблюдение этого правила стоит одного именованного локального имени.
+До 0.6.0 в Okkama была ещё запись `cond ?? a !! b` и `x ?? .some(v): v !! _: 0` —
+отдельная нотация для тех же выборов. Её убрали (тикет #893): два написания
+одной идеи стоили больше, чем давала краткость, и `??` теперь синтаксическая
+ошибка, подсказывающая короткую ветку. Выбор из двух по `bool` — это
+`if`-выражение: `if ready { "yes"; } else { "no"; }`.
 
 До 0.4.1 `true.string()` было `"1"`, а `false.string()` — `"0"`: правило
 пришло из первой реализации на Perl, где истина печатается как `1`, а ложь —
 как пустая строка. Оно было точным, стабильным и удивляло каждого читателя
-вывода, ждавшего слова, поэтому программы выбирали слова через `?? !!`, как
-до сих пор делает пример о порядке вычисления ниже. С 0.4.1 `string()` даёт
-`"true"` и `"false"` (тикет #262); `?? !!` остаётся способом сказать `"yes"` и
+вывода, ждавшего слова, поэтому программы выбирали слова сами, как до сих пор
+делает пример о порядке вычисления ниже. С 0.4.1 `string()` даёт `"true"` и
+`"false"` (тикет #262); `if`-выражение остаётся способом сказать `"yes"` и
 `"no"` или `"on"` и `"off"`.
-
-`?? !!` — единственное место, где Okkama сознательно держит два написания
-одной идеи. Форма для перечислений выбирает по образцу в одном выражении, а
-без неё понадобился бы полный `match`. Булева форма идёт в комплекте: язык с
-формой для перечислений и без булевой был бы страннее языка с обеими.
 
 ## 9.5 Циклы
 
@@ -5849,11 +5848,11 @@ main() is int {
     out.writeln("|| stops at true:");
     let either = t.flag("left", true) || t.flag("right", false);
 
-    out.writeln("?? !! evaluates one branch:");
-    let chosen = t.flag("condition", true) ?? t.number("then", 1) !! t.number("otherwise", 2);
+    out.writeln("if evaluates one branch:");
+    let chosen = if t.flag("condition", true) { t.number("then", 1); } else { t.number("otherwise", 2); };
 
     out.writeln(total.string() + " " + product.string() + " "
-        + (both ?? "true" !! "false") + " " + (either ?? "true" !! "false") + " " + chosen.string());
+        + (if both { "true"; } else { "false"; }) + " " + (if either { "true"; } else { "false"; }) + " " + chosen.string());
     0;
 }
 ```
@@ -5872,7 +5871,7 @@ operands, left to right:
   left
 || stops at true:
   left
-?? !! evaluates one branch:
+if evaluates one branch:
   condition
   then
 6 42 false true 1
@@ -5884,8 +5883,7 @@ operands, left to right:
   всё — до вызова;
 - для любого бинарного оператора — левый операнд, затем правый. Только `&&` и
   `||` могут пропустить правый операнд, как только ответ известен;
-- для `if`, `match` и `?? !!` — один раз условие или субъект, затем одна
-  ветвь;
+- для `if` и `match` — один раз условие или субъект, затем одна ветвь;
 - для `else` — запасное значение только тогда, когда значения нет;
 - для `last value if c` — сначала `c`, а `value` только если `c` выполнено.
 
@@ -6130,7 +6128,7 @@ Okkama во второй группе. У блока есть значение (
 | `break`, `continue` | `last`, `next` |
 | `break outer` (метки) | действие и `return` или значение цикла |
 | `x = x + 1`, `x += 1`, `x++` | новое имя, `reduce`, преемник или `Cell` |
-| `c ? a : b` | `if c { a } else { b }` или `c ?? a !! b` |
+| `c ? a : b` | `if c { a; } else { b; }` |
 | `switch` с проваливанием | `match`, несколько значений в `case` |
 | `goto` | нет [[Dijkstra 1968](#ref-dijkstra1968)] |
 | `if (c) statement;` | всегда скобки |
@@ -6453,7 +6451,7 @@ object Amounts {
         texts.reduce(0) -> sum, text {
             let parsed = try? Number(text).int() else -1;
             let amount = if parsed >= 0 { parsed; } else {
-                policy.replacement(text) ?? .some(n): n !! .none: throw AmountError.invalid(text);
+                match policy.replacement(text) { case Maybe.some(n): n; case Maybe.none: throw AmountError.invalid(text); };
             };
             sum + amount;
         };
@@ -6895,7 +6893,7 @@ main() is int {
     let fallback = try? Number("http").int() else 80;
     out.writeln(port.string() + " " + fallback.string());
     let parsed = try? Number("12").int();
-    out.writeln(parsed ?? .some(n): "some " + n.string() !! .none: "none");
+    out.writeln(match parsed { case Maybe.some(n): "some " + n.string(); case Maybe.none: "none"; });
     let sure = try! Number("42").int();
     out.writeln(sure.string());
     let broken = try! Number("forty-two").int();
@@ -6915,7 +6913,7 @@ exit 1
 
 - **`try? value`** имеет тип `Maybe<T>`: `Maybe.some(value)` или `.none`,
   если при вычислении брошена любая ошибка. Он сочетается с `else`, дающим
-  запасное значение, и с двусторонним выбором `?? !!` из главы 7. Обернуть
+  запасное значение, и с `match` (глава 7). Обернуть
   вызов без значения нельзя — класть в `Maybe` нечего, — как нельзя и
   результат-преемник: его обязательство использования потерялось бы.
 - **`try! value`** сохраняет тип значения и превращает брошенную ошибку в
@@ -12890,7 +12888,7 @@ PASS
 отправленным или отменённым. У части вариантов есть собственные данные: у
 оплаченного заказа — сумма, у отправленного — перевозчик и трек-номер, а у
 черновика нет ничего. Okkama описывает и то и другое одним объявлением,
-`enum`, а разбирает конструкциями `match` и компактным выбором `?? !!`.
+`enum`, а разбирает конструкцией `match` — блоками или короткими ветками.
 Компилятор знает каждый вариант и поэтому замечает, когда код какой-то из них
 забыл.
 
@@ -12913,7 +12911,7 @@ object Order {
     Order(:number, :priority, :stage);
 
     line() is string {
-        let flag = priority ?? .urgent: "!" !! _: " ";
+        let flag = match priority { case Priority.urgent: "!"; case _: " "; };
         let state = match stage {
             case Stage.draft { "draft"; }
             case Stage.paid(amount) { "paid " + amount.string(); }
@@ -12952,8 +12950,8 @@ main() is int {
 - `match stage` разбирает каждый вариант отдельной ветвью и связывает его
   поля с именами. Уберите ветвь `cancelled`, и программа перестанет
   компилироваться.
-- `priority ?? .urgent: "!" !! _: " "` — однострочная форма: один образец и
-  `_` для всего остального.
+- `match priority { case Priority.urgent: "!"; case _: " "; }` — однострочная
+  форма: короткие ветки и `_` для всего остального.
 
 Глава описывает оба вида перечислений и правила сопоставления, а затем
 задаёт вопрос, общий для перечислений и ролей: когда набор вариантов должен
@@ -13029,8 +13027,8 @@ Priority.normal` молча меняет смысл, когда кто-то вс
 области, и программа его формулирует: `match`, сопоставляющий каждому варианту
 вес, или объект, который делает `Comparing` (глава 14). С текстом так же.
 Слово, которым печатается вариант, — решение о представлении. Оно зависит от
-аудитории и языка, и `string()` у перечисления выбирал бы его молча. `?? !!`
-или `match` делают этот выбор там, где значение используется.
+аудитории и языка, и `string()` у перечисления выбирал бы его молча. `match`
+делает этот выбор там, где значение используется.
 
 Порядок объявления виден в картах: ключи-enum сортируются по позиции варианта в объявлении:
 
@@ -13081,7 +13079,7 @@ object Sensor {
     Sensor(:name, :unit, :reading);
 
     text() is string {
-        let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+        let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
         let shown = match reading {
             case Reading.missing { "no data"; }
             case Reading.single(value) { value.string() + suffix; }
@@ -13296,34 +13294,34 @@ warning[non-exhaustive-match]: match over enum `Status` does not handle failed, 
 должен дойти новый вариант. Маранже описывает две проверки, которые компилятор
 может выполнить над сопоставлением: *полноту* — есть ли значение, которое не
 подходит ни под один `case`, и *полезность* — может ли `case` вообще
-сработать [[Maranget 2007](#ref-maranget2007)]. Okkama реализует первую. Вторую — частично: повтор
-образца варианта — ошибка (`Duplicate variant pattern`), но повтор варианта
-перечисления без данных, повтор литерала или `else` после всех вариантов
-принимаются молча (issue #286).
+сработать [[Maranget 2007](#ref-maranget2007)]. Okkama реализует обе для того, что умеет сравнить:
+повтор варианта — ошибка (`Duplicate variant pattern`), повтор литерала — тоже
+(`Duplicate case pattern`), как и `else` после ветвей, уже покрывших все
+значения (`Unreachable else`). До 0.6.0 сообщалось только о первом из этого
+(issue #286).
 
-## 16.4 Компактный выбор
+## 16.4 Короткие ветки
 
-Глава 9 ввела `?? !!` над булевыми значениями, глава 7 — над `Maybe`. Над любым
-перечислением это `match`, записанный одним выражением:
+Ветка, которая только вычисляет значение, умещается в строку:
+`case образец: значение;`. С ней весь `match` — одно выражение:
 
 ```okkama
-let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
-let flag = priority ?? .urgent: "!" !! _: " ";
-let label = reading ?? .single(value): value.string() !! _: "no single value";
+let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
+let flag = match priority { case Priority.urgent: "!"; case _: " "; };
+let label = match reading { case Reading.single(value): value.string(); case _: "no single value"; };
 ```
 
-- После `??` и каждого `!!` идут образец, двоеточие и результат. В образцах
-  имя типа опускается (`.urgent`, а не `Priority.urgent`): тип уже задан
-  предметом.
-- `_` покрывает неназванные варианты.
-- Покрытие должно быть полным, и вариант не может повторяться. В отличие от
-  `match`, оба правила действуют и для перечислений без данных. Выборы не
-  вкладываются друг в друга.
+- Короткая ветка — образец, двоеточие, значение и точка с запятой. Блочные и
+  короткие ветки смешиваются в одном `match`.
+- `case _` покрывает неназванные варианты; это другое написание `else`.
+- Образцы пишутся полностью (`Priority.urgent`), как в любом `match`, и правила
+  те же: полнота, повторы, один тип результата.
 
-Компактный выбор с пропущенным вариантом называет его: ``match over enum
-`Priority` does not cover normal, so it has no value here; add the cases or a
-`_:` branch``. До 0.5.0 сообщение описывало форму, а не вариант (issue #291).
-Для всего, что длиннее строки, `match` читается лучше.
+`match`, который даёт значение и пропускает вариант, называет его: ``match over
+enum `Priority` does not cover normal, so it has no value here; add the cases or
+an `else` branch``. До 0.6.0 у тех же выборов была своя запись,
+`priority ?? .urgent: "!" !! _: " "`; её убрали в пользу коротких веток
+(тикет #893), чтобы одна конструкция делала одну работу.
 
 ## 16.5 Закрытое или открытое: перечисления и роли
 
@@ -13550,14 +13548,11 @@ main() is int { 0; }
   полю делает то же, но длиннее (issue #288).
 - **Варианты — не ключи словаря.** Перечисление без данных — ключ, вариант —
   нет: `Map key type Reading is not a scalar key type` (issue #289).
-- **Лишние варианты проходят молча.** Повтор варианта перечисления без данных,
-  повтор литерала или `else`, который никогда не выполнится, принимаются
-  (issue #286).
 
 ## 16.10 Чего стоит такой замысел
 
 - **Текст и порядок выписываются явно.** Чтобы напечатать вариант или
-  отсортировать по приоритету, нужен `match` или `?? !!`. Язык с `toString` и
+  отсортировать по приоритету, нужен `match`. Язык с `toString` и
   `ordinal` сделал бы это неявно. Цена — несколько строк на перечисление,
   написанных один раз и в одном месте.
 - **Нет списка вариантов.** `values()` нет. Код, которому нужны все варианты,
@@ -13614,7 +13609,7 @@ object Least<T: Comparing<T>> {
         self.rest = rest...;
     }
     value() is T {
-        rest.reduce(first) -> best, item { item.order(best) == Order.less ?? item !! best; };
+        rest.reduce(first) -> best, item { if item.order(best) == Order.less { item; } else { best; }; };
     }
 }
 
@@ -20471,7 +20466,7 @@ main() is int {
         source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
     let settings = LayeredSettings(file, env);
     out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
-        + (settings.source("server.port")?? .some(source): source::Source::name !! .none: "nowhere"));
+        + match settings.source("server.port") { case Maybe.some(source): source::Source::name; case Maybe.none: "nowhere"; });
     out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
         + (settings.bool("server.debug") else false).string());
     let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
@@ -23834,8 +23829,7 @@ refused: Bad.row(-1)
 
 В Okkama нет null. Значение, которого может не быть, имеет тип `Maybe<T>`, и
 система типов заставляет вызывающего решить, что отсутствие значит: запасное
-значение через `else`, компактный выбор через `??`/`!!` или `match`
-(глава 7). Паттерн — поместить отсутствие в сигнатуру того действия, которое
+значение через `else` или `match` (глава 7). Паттерн — поместить отсутствие в сигнатуру того действия, которое
 может его породить, и больше никуда. Поиск, который может не найти,
 возвращает `Maybe`; поиск, который обязан найти, отказывает типизированной
 ошибкой.
@@ -24244,7 +24238,7 @@ object Urgent does Queued {
     has origin is Queued;
     Urgent(:origin);
     line() is Maybe<string> {
-        origin.line() ?? .some(text): Maybe.some("!" + text.slice(1, text.length())) !! .none: Maybe.none;
+        match origin.line() { case Maybe.some(text): Maybe.some("!" + text.slice(1, text.length())); case Maybe.none: Maybe.none; };
     }
 }
 
@@ -24893,8 +24887,8 @@ in the updated map: ada 700
 
 ## 27.2 Чего нет в языке
 
-Четыре открытых тикета описывают то, что язык собирается иметь и чего у
-него нет. Все четыре — о перечислениях и образцах, и вместе они составляют
+Три открытых тикета описывают то, что язык собирается иметь и чего у
+него нет. Все три — о перечислениях и образцах, и вместе они составляют
 самое большое отличие перечислений Okkama от алгебраических типов данных
 ML, Rust или Haskell (раздел 16.7).
 
@@ -24906,9 +24900,6 @@ ML, Rust или Haskell (раздел 16.7).
   отвергается; внутреннее значение разбирается вторым `match` в теле.
 - **Варианты как ключи словаря (#289).** Перечисление без полезной нагрузки
   может быть ключом; вариант — нет, даже если его нагрузки могли бы.
-- **Повторённые случаи проходят молча (#286).** `match`, повторяющий случай
-  без нагрузки или литерал, компилируется. Повтор — мёртвый код, и
-  компилятору следует об этом сказать.
 
 Для программ важны первые два. Интерпретаторы, парсеры и компиляторы —
 классические программы, которые пишут на рекурсивных типах и вложенных
@@ -24988,8 +24979,7 @@ Objects* утверждает, что такие объекты зовут ло�
 
 **Комбинаторы над `Maybe`.** `map`, `and_then` и `filter` над `Maybe`
 укорачивают цепочки необязательных шагов. Каждый из них — ещё и второй
-способ сказать то, что уже говорят компактный выбор `?? !!` или `match`
-(раздел 7.14).
+способ сказать то, что уже говорит `match` (раздел 7.14).
 
 **Ошибки в сигнатурах.** Сигнатура Okkama не перечисляет ошибок, которые
 может бросить действие (раздел 10.19). Перечислять их — то, что делали CLU

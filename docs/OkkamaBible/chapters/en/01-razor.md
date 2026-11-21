@@ -217,7 +217,7 @@ chapter that argues the case.
 
 | Removed entity | What does the work instead | Chapter |
 |---|---|---|
-| `null`, `nil`, implicit optionals, `?.` | `Maybe<T>` and `Presence<T>` opened with `else`, `??`, `match` | 7 |
+| `null`, `nil`, implicit optionals, `?.` | `Maybe<T>` and `Presence<T>` opened with `else` or `match` | 7 |
 | Truthiness (`if 1`, `if ""`) | conditions are exactly `bool` | 9 |
 | Implicit numeric conversion (`1 == 1.0`) | exact categories `int`, `byte`, `rat`, `float`; explicit casts | 5 |
 | Integer overflow | `int` arithmetic is exact and promotes to big integers | 5 |

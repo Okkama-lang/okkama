@@ -28,7 +28,7 @@ object Amounts {
         texts.reduce(0) -> sum, text {
             let parsed = try? Number(text).int() else -1;
             let amount = if parsed >= 0 { parsed; } else {
-                policy.replacement(text) ?? .some(n): n !! .none: throw AmountError.invalid(text);
+                match policy.replacement(text) { case Maybe.some(n): n; case Maybe.none: throw AmountError.invalid(text); };
             };
             sum + amount;
         };

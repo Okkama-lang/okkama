@@ -1,7 +1,7 @@
 # Chapter 9. Expressions and Control Flow
 
 Okkama's control flow fits in one sentence. It has two conditionals, `if` and
-`match`, plus a compact two-way choice, `?? !!`. It has two loops: `for` over a
+`match`, and `match` has a compact case form for one-line choices. It has two loops: `for` over a
 source and an unbounded `loop`. It has three exits — `next`, `last` and
 `return` — and a postfix condition. There is no `while`, no `do`, no `switch`
 with fall-through, no `goto`, no labels, no `+=` and no `++`. Most of what is
@@ -82,7 +82,6 @@ Operators, loosest first:
 
 | Operators | Meaning |
 |---|---|
-| `?? … !!` | compact choice (9.4) |
 | `else` | fallback for a `Maybe`, a missing index or key |
 | `\|\|` | boolean or |
 | `&&` | boolean and |
@@ -110,7 +109,7 @@ The table departs from C in two places:
 Every operator requires operands of the right category and converts nothing:
 
 - `&&`, `||`, `!` and every condition take a `bool`. That includes the
-  conditions of `if`, `next if`, `confirm` and `??`. `if count { … }` is an
+  conditions of `if`, `next if` and `confirm`. `if count { … }` is an
   error, not a test for zero.
 - `==` and `!=` compare values of one category. `1 == 1.0` is rejected
   (Chapter 5), and so is comparing an `int` with a range.
@@ -161,44 +160,38 @@ range and is rejected as such; a condition on a value belongs in `if`. A
 possibility, which only enums can do (Chapter 16). All its branches must have
 one type.
 
-### `?? !!`
+### Compact cases
 
-`cond ?? a !! b` is a typed two-way choice:
-
-- the condition is a `bool`;
-- both branches have one type;
-- only the chosen branch is evaluated.
-
-On an enum, the same operator chooses by case and binds the payload
-(Chapter 7 used it on `Maybe`; Chapter 16 covers the rest):
+A `match` case can give its value in one line instead of a block:
+`case pattern: value;`. The two forms mix in one `match`, and `case _` stands
+for the remainder, like `else`:
 
 ```okkama
-let greeting = users.find(1) ?? .some(name): "hello, " + name !! .none: "hello, stranger";
+let greeting = match users.find(1) {
+    case Maybe.some(name): "hello, " + name;
+    case Maybe.none: "hello, stranger";
+};
+let size = match count { case 0: "none"; case 1: "one"; case _: "many"; };
 ```
 
-Choices cannot be nested — not inside a branch, not in the condition, not
-inside parentheses:
+It is the same `match`: the subject is evaluated once, only the chosen case
+runs, a binding exists only in its case, and all cases have one type. A compact
+`match` nests like any other expression, though a nested one usually reads
+better as a named local.
 
-```text
-syntax error: Nested ?? / !! choices are not allowed; use a local variable or match.
-```
-
-A nested ternary is legal in C and Java and hard to read in both. Okkama turns
-the usual style advice into a rule, and following it costs one named local.
+Until 0.6.0 Okkama also had `cond ?? a !! b` and `x ?? .some(v): v !! _: 0`, a
+separate notation for the same choices. It was removed (issue #893): two
+spellings of one idea cost more than the brevity they bought, and `??` is now a
+syntax error that points to the compact case. A two-way choice on a `bool` is an
+`if` expression: `if ready { "yes"; } else { "no"; }`.
 
 Until 0.4.1 `true.string()` was `"1"` and `false.string()` was `"0"`, a rule
 inherited from the first implementation, written in Perl, where truth prints
 as `1` and falsehood as an empty string. It was exact, stable and surprising
 to every reader of output who expected a word, so programs chose the words
-with `?? !!`, as the order example below still does. Since 0.4.1 `string()`
-gives `"true"` and `"false"` (issue #262); `?? !!` remains the way to say
-`"yes"` and `"no"`, or `"on"` and `"off"`.
-
-`?? !!` is the one place where Okkama keeps two spellings of one idea, and it
-does so on purpose. The enum form chooses by pattern in a single expression,
-which otherwise would take a full `match`. The boolean form comes along
-because a language with the enum form and without the boolean one would be
-stranger than a language with both.
+themselves, as the order example below still does. Since 0.4.1 `string()`
+gives `"true"` and `"false"` (issue #262); an `if` expression remains the way to
+say `"yes"` and `"no"`, or `"on"` and `"off"`.
 
 ## 9.5 Loops
 
@@ -291,8 +284,7 @@ An expression is evaluated by these rules:
   all before the call;
 - the left operand, then the right one, for every binary operator. Only `&&`
   and `||` may skip their right operand, as soon as the answer is known;
-- for `if`, `match` and `?? !!`, the condition or subject once, then one
-  branch;
+- for `if` and `match`, the condition or subject once, then one branch;
 - for `else`, the fallback only when the value is missing;
 - for `last value if c`, `c` first, and `value` only if `c` holds.
 
@@ -401,7 +393,7 @@ and the expression form is the only one.
 | `break`, `continue` | `last`, `next` |
 | `break outer` (labels) | an action and `return`, or a loop value |
 | `x = x + 1`, `x += 1`, `x++` | a new name, `reduce`, a successor or a `Cell` |
-| `c ? a : b` | `if c { a } else { b }` or `c ?? a !! b` |
+| `c ? a : b` | `if c { a; } else { b; }` |
 | `switch` with fall-through | `match`, several values per `case` |
 | `goto` | none [@dijkstra1968] |
 | `if (c) statement;` | braces always |

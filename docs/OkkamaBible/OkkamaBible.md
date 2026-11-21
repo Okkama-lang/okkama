@@ -227,7 +227,7 @@
   - [16.1 A closed set of names](#161-a-closed-set-of-names)
   - [16.2 Cases that carry data](#162-cases-that-carry-data)
   - [16.3 `match`](#163-match)
-  - [16.4 Compact choices](#164-compact-choices)
+  - [16.4 Compact cases](#164-compact-cases)
   - [16.5 Closed or open: enums and roles](#165-closed-or-open-enums-and-roles)
   - [16.6 A worked example: a protocol and a state machine](#166-a-worked-example-a-protocol-and-a-state-machine)
   - [16.7 Where enums came from](#167-where-enums-came-from)
@@ -605,7 +605,7 @@ chapter that argues the case.
 
 | Removed entity | What does the work instead | Chapter |
 |---|---|---|
-| `null`, `nil`, implicit optionals, `?.` | `Maybe<T>` and `Presence<T>` opened with `else`, `??`, `match` | 7 |
+| `null`, `nil`, implicit optionals, `?.` | `Maybe<T>` and `Presence<T>` opened with `else` or `match` | 7 |
 | Truthiness (`if 1`, `if ""`) | conditions are exactly `bool` | 9 |
 | Implicit numeric conversion (`1 == 1.0`) | exact categories `int`, `byte`, `rat`, `float`; explicit casts | 5 |
 | Integer overflow | `int` arithmetic is exact and promotes to big integers | 5 |
@@ -1443,7 +1443,7 @@ The compiler answers:
 
 A value that may be absent has a type that says so — `Maybe<T>`, with cases
 `some(value)` and `none` — and the program must open it before using the
-value inside: with `else` for a fallback, with `match`, or with `??`. A map
+value inside: with `else` for a fallback or with `match`. A map
 lookup that may miss takes an explicit fallback; an action that cannot answer
 throws a typed error, and `try?` turns such an error into a `Maybe` when
 absence is the honest answer.
@@ -3348,8 +3348,8 @@ main() is int {
     out.writeln("replace: " + "banana".replace("na", "NA"));
     out.writeln("trim: [" + "  padded  ".trim() + "]");
     out.writeln("chomp: [" + "line\n".chomp() + "]");
-    out.writeln("contains: " + (word.contains("иве") ?? "yes" !! "no"));
-    out.writeln("find_last: " + ("мир и мир".find_last("мир") ?? .some(at): at.string() !! .none: "none"));
+    out.writeln("contains: " + (if word.contains("иве") { "yes"; } else { "no"; }));
+    out.writeln("find_last: " + (match "мир и мир".find_last("мир") { case Maybe.some(at): at.string(); case Maybe.none: "none"; }));
     out.writeln("upper: " + "Straße".upper());
     out.writeln("empty: " + "".empty().string());
     out.writeln("escape: caf\u{e9}");
@@ -3968,9 +3968,10 @@ main() is int {
     out.writeln("user 3 is " + (users.find(3) else "nobody"));
 
     // 2. A compact choice over the two cases.
-    let greeting = users.find(1)
-        ?? .some(name): "hello, " + name
-        !! .none: "hello, stranger";
+    let greeting = match users.find(1) {
+        case Maybe.some(name): "hello, " + name;
+        case Maybe.none: "hello, stranger";
+    };
     out.writeln(greeting);
 
     // 3. match, when each case needs more than an expression.
@@ -3981,7 +3982,7 @@ main() is int {
 
     // 4. try? turns a typed error into absence.
     let found = try? users.require(4);
-    out.writeln("require(4) gave " + (found ?? .some(name): name !! .none: "none"));
+    out.writeln("require(4) gave " + (match found { case Maybe.some(name): name; case Maybe.none: "none"; }));
     0;
 }
 ```
@@ -3999,13 +4000,13 @@ require(4) gave none
    present, the fallback otherwise. The fallback is evaluated only when
    needed, and it may be `else throw Error...` or `else panic "..."` when
    absence is not acceptable at that point.
-2. **A compact choice** `?? … !!` maps each case to a value, with the
-   case's payload bound by name: `?? .some(name): "hello, " + name !! .none:
-   "hello, stranger"`. It must cover every case, and it cannot be nested —
-   nested choices are a known source of unreadable code, and a separate
-   variable is always clearer.
-3. **`match`** handles each case with a block when the cases need statements,
-   not just expressions.
+2. **`match`** handles each case, with the case's payload bound by name. A
+   case that only computes a value fits on one line:
+   `match users.find(1) { case Maybe.some(name): "hello, " + name; case Maybe.none: "hello, stranger"; }`.
+   A case that needs statements takes a block, and both forms mix in one
+   `match`. It must cover every case.
+3. **Nesting stays readable** when each step has a name: a `match` inside a
+   case is allowed, but a separate variable is usually clearer.
 4. **`try?`** converts a typed error into absence: `try? users.require(4)` is
    `Maybe.some(name)` if the call returned and `Maybe.none` if it threw any
    error. Its counterpart `try!` asserts that a call cannot fail and turns a
@@ -4073,7 +4074,7 @@ main() is int {
     // try? turns an error into absence; a Maybe result is kept whole, never flattened.
     out.writeln(try? book.require("grace") else "unknown");
     let nested is Maybe<Maybe<string>> = try? book.phone("grace");
-    out.writeln(nested == Maybe.some(Maybe<string>.none) ?? "found the answer: no phone" !! "something else");
+    out.writeln(if nested == Maybe.some(Maybe<string>.none) { "found the answer: no phone"; } else { "something else"; });
     0;
 }
 ```
@@ -4185,10 +4186,11 @@ object NicknamePatch {
     NicknamePatch(:nickname);
 
     applied(current is string) is string {
-        nickname
-            ?? .some(value): value
-            !! .none: ""
-            !! .missing: current;
+        match nickname {
+            case Presence.some(value): value;
+            case Presence.none: "";
+            case Presence.missing: current;
+        };
     }
 }
 
@@ -4299,11 +4301,14 @@ object Settings {
 
     // Absent gives none; present but not a number is an error that names the setting.
     int(name is string) is Maybe<int> {
-        self.text(name) ?? .some(raw): Maybe.some(try {
+        match self.text(name) {
+            case Maybe.some(raw): Maybe.some(try {
             Number(raw).int();
         } catch failure is InvalidInteger {
             throw SettingError.malformed(name, raw);
-        }) !! .none: Maybe<int>.none;
+        });
+            case Maybe.none: Maybe<int>.none;
+        };
     }
 }
 
@@ -4313,7 +4318,7 @@ object Server {
     Server(:settings);
 
     port() is int { settings.int("port") else 8080; }
-    certificate() is string { settings.text("certificate") ?? .some(path): "TLS with " + path !! .none: "plain HTTP"; }
+    certificate() is string { match settings.text("certificate") { case Maybe.some(path): "TLS with " + path; case Maybe.none: "plain HTTP"; }; }
     workers() is int { settings.int("workers") else throw SettingError.malformed("workers", "(missing)"); }
 }
 
@@ -4398,7 +4403,7 @@ main() is int {
     let prices = Cache(entries: empty).remembered("tea", 300).remembered("cake", 450);
     // Three ways to meet a Maybe: a fallback, a compact choice, a match.
     out.writeln("tea " + (prices.find("tea") else 0).string());
-    out.writeln(prices.find("jam") ?? .some(cents): "jam " + cents.string() !! .none: "no jam");
+    out.writeln(match prices.find("jam") { case Maybe.some(cents): "jam " + cents.string(); case Maybe.none: "no jam"; });
     let counted = prices.looked_up("tea").looked_up("jam").looked_up("cake");
     out.writeln(counted.report());
     // The same object with a value-object key and a string value.
@@ -4426,8 +4431,7 @@ hits 2, misses 1
 - **The miss belongs to the answer.** `find(key) is Maybe<V>` returns
   `Maybe.some(value)` or `Maybe.none`, whatever `V` is. The cache does not
   invent a default for a type it knows nothing about, and the caller decides
-  what a miss means: a fallback with `else`, a compact choice with `?? !!`,
-  or a `match` (Section 7.3).
+  what a miss means: a fallback with `else` or a `match` (Section 7.3).
 - **No sentinel can collide with a value.** A cache of prices that returned
   `0` or `-1` for a miss would be wrong for the first item that costs
   nothing. With `Maybe`, every value of `V`, including `0`, `""` and an empty
@@ -4515,8 +4519,8 @@ characters and large in culture: the shortest way to get a value out of a
 
 - `Maybe` has no library of combinators such as `map`, `and_then` or `filter`
   in the language today; chained optional computations are written with
-  compact choices or `match`. Whether to add them is an open question: each is
-  convenient, and each is another way to say what `??` already says.
+  `match`, often in its compact form. Whether to add them is an open question:
+  each is convenient, and each is another way to say what `match` already says.
 - A `Maybe` cannot be a map key, and a fallback cannot carry control flow:
   `else return` and `else next` do not exist. Both are deliberate, and both
   occasionally cost a few lines.
@@ -4555,7 +4559,7 @@ main() is int {
         + ", last " + primes.last().string());
     out.writeln("slice(1, 4) = " + primes.slice(1, 4).map() -> p { p.string(); }.join(" "));
     out.writeln("index 9, or 0: " + (primes[9] else 0).string());
-    out.writeln("contains 7: " + (primes.contains(7) ?? "yes" !! "no")
+    out.writeln("contains 7: " + (if primes.contains(7) { "yes"; } else { "no"; })
         + ", reversed " + primes.reversed().map() -> p { p.string(); }.join(" ")
         + ", take(2) " + primes.take(2).map() -> p { p.string(); }.join(" ")
         + ", drop(4) " + primes.drop(4).map() -> p { p.string(); }.join(" "));
@@ -5318,7 +5322,7 @@ mutable collection beside them to fall back on.
 # Chapter 9. Expressions and Control Flow
 
 Okkama's control flow fits in one sentence. It has two conditionals, `if` and
-`match`, plus a compact two-way choice, `?? !!`. It has two loops: `for` over a
+`match`, and `match` has a compact case form for one-line choices. It has two loops: `for` over a
 source and an unbounded `loop`. It has three exits — `next`, `last` and
 `return` — and a postfix condition. There is no `while`, no `do`, no `switch`
 with fall-through, no `goto`, no labels, no `+=` and no `++`. Most of what is
@@ -5373,8 +5377,8 @@ main() is int {
             case "C" { "pass"; }
             else { "retake"; }
         };
-        // `?? !!` is a two-way choice; both branches have one type.
-        let honours = score >= 95 ?? ", with honours" !! "";
+        // An `if` expression has two branches of one type.
+        let honours = if score >= 95 { ", with honours"; } else { ""; };
         out.writeln(name + ": " + score.string() + " " + letter + ", " + verdict + honours);
     }
 
@@ -5485,7 +5489,6 @@ Operators, loosest first:
 
 | Operators | Meaning |
 |---|---|
-| `?? … !!` | compact choice (9.4) |
 | `else` | fallback for a `Maybe`, a missing index or key |
 | `\|\|` | boolean or |
 | `&&` | boolean and |
@@ -5513,7 +5516,7 @@ The table departs from C in two places:
 Every operator requires operands of the right category and converts nothing:
 
 - `&&`, `||`, `!` and every condition take a `bool`. That includes the
-  conditions of `if`, `next if`, `confirm` and `??`. `if count { … }` is an
+  conditions of `if`, `next if` and `confirm`. `if count { … }` is an
   error, not a test for zero.
 - `==` and `!=` compare values of one category. `1 == 1.0` is rejected
   (Chapter 5), and so is comparing an `int` with a range.
@@ -5581,44 +5584,38 @@ range and is rejected as such; a condition on a value belongs in `if`. A
 possibility, which only enums can do (Chapter 16). All its branches must have
 one type.
 
-### `?? !!`
+### Compact cases
 
-`cond ?? a !! b` is a typed two-way choice:
-
-- the condition is a `bool`;
-- both branches have one type;
-- only the chosen branch is evaluated.
-
-On an enum, the same operator chooses by case and binds the payload
-(Chapter 7 used it on `Maybe`; Chapter 16 covers the rest):
+A `match` case can give its value in one line instead of a block:
+`case pattern: value;`. The two forms mix in one `match`, and `case _` stands
+for the remainder, like `else`:
 
 ```okkama
-let greeting = users.find(1) ?? .some(name): "hello, " + name !! .none: "hello, stranger";
+let greeting = match users.find(1) {
+    case Maybe.some(name): "hello, " + name;
+    case Maybe.none: "hello, stranger";
+};
+let size = match count { case 0: "none"; case 1: "one"; case _: "many"; };
 ```
 
-Choices cannot be nested — not inside a branch, not in the condition, not
-inside parentheses:
+It is the same `match`: the subject is evaluated once, only the chosen case
+runs, a binding exists only in its case, and all cases have one type. A compact
+`match` nests like any other expression, though a nested one usually reads
+better as a named local.
 
-```text
-syntax error: Nested ?? / !! choices are not allowed; use a local variable or match.
-```
-
-A nested ternary is legal in C and Java and hard to read in both. Okkama turns
-the usual style advice into a rule, and following it costs one named local.
+Until 0.6.0 Okkama also had `cond ?? a !! b` and `x ?? .some(v): v !! _: 0`, a
+separate notation for the same choices. It was removed (issue #893): two
+spellings of one idea cost more than the brevity they bought, and `??` is now a
+syntax error that points to the compact case. A two-way choice on a `bool` is an
+`if` expression: `if ready { "yes"; } else { "no"; }`.
 
 Until 0.4.1 `true.string()` was `"1"` and `false.string()` was `"0"`, a rule
 inherited from the first implementation, written in Perl, where truth prints
 as `1` and falsehood as an empty string. It was exact, stable and surprising
 to every reader of output who expected a word, so programs chose the words
-with `?? !!`, as the order example below still does. Since 0.4.1 `string()`
-gives `"true"` and `"false"` (issue #262); `?? !!` remains the way to say
-`"yes"` and `"no"`, or `"on"` and `"off"`.
-
-`?? !!` is the one place where Okkama keeps two spellings of one idea, and it
-does so on purpose. The enum form chooses by pattern in a single expression,
-which otherwise would take a full `match`. The boolean form comes along
-because a language with the enum form and without the boolean one would be
-stranger than a language with both.
+themselves, as the order example below still does. Since 0.4.1 `string()`
+gives `"true"` and `"false"` (issue #262); an `if` expression remains the way to
+say `"yes"` and `"no"`, or `"on"` and `"off"`.
 
 ## 9.5 Loops
 
@@ -5788,11 +5785,11 @@ main() is int {
     out.writeln("|| stops at true:");
     let either = t.flag("left", true) || t.flag("right", false);
 
-    out.writeln("?? !! evaluates one branch:");
-    let chosen = t.flag("condition", true) ?? t.number("then", 1) !! t.number("otherwise", 2);
+    out.writeln("if evaluates one branch:");
+    let chosen = if t.flag("condition", true) { t.number("then", 1); } else { t.number("otherwise", 2); };
 
     out.writeln(total.string() + " " + product.string() + " "
-        + (both ?? "true" !! "false") + " " + (either ?? "true" !! "false") + " " + chosen.string());
+        + (if both { "true"; } else { "false"; }) + " " + (if either { "true"; } else { "false"; }) + " " + chosen.string());
     0;
 }
 ```
@@ -5811,7 +5808,7 @@ operands, left to right:
   left
 || stops at true:
   left
-?? !! evaluates one branch:
+if evaluates one branch:
   condition
   then
 6 42 false true 1
@@ -5823,8 +5820,7 @@ An expression is evaluated by these rules:
   all before the call;
 - the left operand, then the right one, for every binary operator. Only `&&`
   and `||` may skip their right operand, as soon as the answer is known;
-- for `if`, `match` and `?? !!`, the condition or subject once, then one
-  branch;
+- for `if` and `match`, the condition or subject once, then one branch;
 - for `else`, the fallback only when the value is missing;
 - for `last value if c`, `c` first, and `value` only if `c` holds.
 
@@ -6069,7 +6065,7 @@ and the expression form is the only one.
 | `break`, `continue` | `last`, `next` |
 | `break outer` (labels) | an action and `return`, or a loop value |
 | `x = x + 1`, `x += 1`, `x++` | a new name, `reduce`, a successor or a `Cell` |
-| `c ? a : b` | `if c { a } else { b }` or `c ?? a !! b` |
+| `c ? a : b` | `if c { a; } else { b; }` |
 | `switch` with fall-through | `match`, several values per `case` |
 | `goto` | none [[Dijkstra 1968](#ref-dijkstra1968)] |
 | `if (c) statement;` | braces always |
@@ -6385,7 +6381,7 @@ object Amounts {
         texts.reduce(0) -> sum, text {
             let parsed = try? Number(text).int() else -1;
             let amount = if parsed >= 0 { parsed; } else {
-                policy.replacement(text) ?? .some(n): n !! .none: throw AmountError.invalid(text);
+                match policy.replacement(text) { case Maybe.some(n): n; case Maybe.none: throw AmountError.invalid(text); };
             };
             sum + amount;
         };
@@ -6822,7 +6818,7 @@ main() is int {
     let fallback = try? Number("http").int() else 80;
     out.writeln(port.string() + " " + fallback.string());
     let parsed = try? Number("12").int();
-    out.writeln(parsed ?? .some(n): "some " + n.string() !! .none: "none");
+    out.writeln(match parsed { case Maybe.some(n): "some " + n.string(); case Maybe.none: "none"; });
     let sure = try! Number("42").int();
     out.writeln(sure.string());
     let broken = try! Number("forty-two").int();
@@ -6842,7 +6838,7 @@ exit 1
 
 - **`try? value`** has the type `Maybe<T>`. It is `Maybe.some(value)`, or
   `.none` if evaluating it throws any error. It combines with `else`, which
-  supplies a fallback, and with the two-way choice `?? !!` of Chapter 7. A
+  supplies a fallback, and with `match` (Chapter 7). A
   void call cannot be wrapped, since there is no value to put in the
   `Maybe`, and neither can a successor result, since its must-use obligation
   would be lost.
@@ -12758,7 +12754,7 @@ low, normal or urgent; an order is a draft, paid, shipped or cancelled. Some of
 those alternatives carry data of their own. A paid order has an amount, a
 shipped one has a carrier and a tracking number, and a draft has nothing.
 Okkama covers both with one declaration, `enum`, and takes them apart with
-`match` and the compact choice `?? !!`. The compiler knows every case, so it can
+`match`, in blocks or in compact one-line cases. The compiler knows every case, so it can
 tell when code forgets one.
 
 ```okkama
@@ -12780,7 +12776,7 @@ object Order {
     Order(:number, :priority, :stage);
 
     line() is string {
-        let flag = priority ?? .urgent: "!" !! _: " ";
+        let flag = match priority { case Priority.urgent: "!"; case _: " "; };
         let state = match stage {
             case Stage.draft { "draft"; }
             case Stage.paid(amount) { "paid " + amount.string(); }
@@ -12817,8 +12813,8 @@ Output:
 - `Stage` is a **variant enum**: some of its cases carry typed fields.
 - `match stage` has one branch per case and binds each case's fields to
   names. Drop the `cancelled` branch and the program no longer compiles.
-- `priority ?? .urgent: "!" !! _: " "` is the one-line form: one pattern, and
-  `_` for everything else.
+- `match priority { case Priority.urgent: "!"; case _: " "; }` is the one-line
+  form: compact cases, and `_` for everything else.
 
 This chapter covers enums of both kinds and the rules of matching, and then
 asks the design question that enums share with roles: when should a set of
@@ -12894,7 +12890,7 @@ fact about the domain, and the program states it: a `match` that maps each
 case to a weight, or an object that does `Comparing` (Chapter 14). The same
 goes for text. The word printed for a case is a presentation decision. It
 depends on the audience and the language. A `string()` on the enum would pick
-one silently. A `?? !!` or a `match` makes the choice where it is used.
+one silently. A `match` makes the choice where it is used.
 
 Declaration order is visible in maps: enum keys sort by their position in the declaration:
 
@@ -12944,7 +12940,7 @@ object Sensor {
     Sensor(:name, :unit, :reading);
 
     text() is string {
-        let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+        let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
         let shown = match reading {
             case Reading.missing { "no data"; }
             case Reading.single(value) { value.string() + suffix; }
@@ -13157,33 +13153,34 @@ compiler, not from a search. This is the reason to prefer listing cases over
 it hides exactly the places that a new case should reach. Maranget describes
 the two checks a compiler can make on a match: *exhaustiveness*, whether some
 value is matched by no case, and *usefulness*, whether a case can never be
-reached [[Maranget 2007](#ref-maranget2007)]. Okkama implements the first. The second is partial:
-a repeated variant pattern is an error (`Duplicate variant pattern`), but a
-repeated payload-free case, a repeated literal, or an `else` after every case
-is accepted without a word (issue #286).
+reached [[Maranget 2007](#ref-maranget2007)]. Okkama implements both for the cases it can compare:
+a repeated case is an error (`Duplicate variant pattern`), so is a repeated
+literal (`Duplicate case pattern`), and so is an `else` after cases that already
+cover every value (`Unreachable else`). Until 0.6.0 only the first of those was
+reported (issue #286).
 
-## 16.4 Compact choices
+## 16.4 Compact cases
 
-Chapter 9 introduced `?? !!` on booleans and Chapter 7 on `Maybe`. On any enum
-it is a `match` written as one expression:
+A case that only computes a value fits on one line: `case pattern: value;`.
+With it, a whole `match` is one expression:
 
 ```okkama
-let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
-let flag = priority ?? .urgent: "!" !! _: " ";
-let label = reading ?? .single(value): value.string() !! _: "no single value";
+let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
+let flag = match priority { case Priority.urgent: "!"; case _: " "; };
+let label = match reading { case Reading.single(value): value.string(); case _: "no single value"; };
 ```
 
-- After `??` and each `!!` comes a pattern, a colon and the result. Patterns
-  drop the type name (`.urgent`, not `Priority.urgent`), because the subject
-  already fixes it.
-- `_` covers the cases not named.
-- Coverage must be complete, and a case may not repeat. Both rules apply to
-  payload-free enums as well, unlike `match`. Choices cannot nest.
+- A compact case is a pattern, a colon, the value and a semicolon. Block cases
+  and compact cases mix in one `match`.
+- `case _` covers the cases not named; it is another spelling of `else`.
+- Patterns are written in full (`Priority.urgent`), as in any `match`, and the
+  rules are the same: coverage, repeated cases, one result type.
 
-A compact choice that misses a case names it: ``match over enum `Priority`
-does not cover normal, so it has no value here; add the cases or a `_:`
-branch``. Until 0.5.0 the message described the form, not the case (issue
-#291). For anything longer than a line, `match` reads better.
+A `match` that produces a value and misses a case names it: ``match over enum
+`Priority` does not cover normal, so it has no value here; add the cases or an
+`else` branch``. Until 0.6.0 the same choices had a notation of their own,
+`priority ?? .urgent: "!" !! _: " "`; it was removed in favour of compact cases
+(issue #893), so that one construct does one job.
 
 ## 16.5 Closed or open: enums and roles
 
@@ -13408,13 +13405,11 @@ The compiler answers:
   field does the same job in more lines (issue #288).
 - **Variants are not map keys.** A payload-free enum is a key; a variant is
   not: `Map key type Reading is not a scalar key type` (issue #289).
-- **Redundant cases pass silently.** A repeated payload-free case, a repeated
-  literal, or an `else` that can never run is accepted (issue #286).
 
 ## 16.10 What this design costs
 
 - **Text and order are written out.** Printing a case or sorting by
-  priority takes a `match` or a `?? !!`. A language with `toString` and
+  priority takes a `match`. A language with `toString` and
   `ordinal` would do it implicitly. The cost is a few lines per enum, paid once
   and kept in one place.
 - **No list of cases.** There is no `values()`. Code that needs every case,
@@ -13470,7 +13465,7 @@ object Least<T: Comparing<T>> {
         self.rest = rest...;
     }
     value() is T {
-        rest.reduce(first) -> best, item { item.order(best) == Order.less ?? item !! best; };
+        rest.reduce(first) -> best, item { if item.order(best) == Order.less { item; } else { best; }; };
     }
 }
 
@@ -20261,7 +20256,7 @@ main() is int {
         source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
     let settings = LayeredSettings(file, env);
     out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
-        + (settings.source("server.port")?? .some(source): source::Source::name !! .none: "nowhere"));
+        + match settings.source("server.port") { case Maybe.some(source): source::Source::name; case Maybe.none: "nowhere"; });
     out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
         + (settings.bool("server.debug") else false).string());
     let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),
@@ -23608,7 +23603,7 @@ the object wants a `destroy`.
 
 Okkama has no null. A value that may be missing has the type `Maybe<T>`, and
 the type system makes the caller decide what absence means: a fallback with
-`else`, a compact choice with `??`/`!!`, or a `match` (Chapter 7). The
+`else` or a `match` (Chapter 7). The
 pattern is to put absence in the signature of the action that can produce
 it, and nowhere else. A lookup that can fail to find returns `Maybe`; a
 lookup that must find refuses with a typed error.
@@ -24013,7 +24008,7 @@ object Urgent does Queued {
     has origin is Queued;
     Urgent(:origin);
     line() is Maybe<string> {
-        origin.line() ?? .some(text): Maybe.some("!" + text.slice(1, text.length())) !! .none: Maybe.none;
+        match origin.line() { case Maybe.some(text): Maybe.some("!" + text.slice(1, text.length())); case Maybe.none: Maybe.none; };
     }
 }
 
@@ -24660,8 +24655,8 @@ finding.
 
 ## 27.2 Missing from the language
 
-Four open issues describe what the language plans to have and lacks. All
-four are about enums and patterns, and together they are the largest
+Three open issues describe what the language plans to have and lacks. All
+three are about enums and patterns, and together they are the largest
 difference between Okkama's enums and the algebraic data types of ML, Rust
 or Haskell (Section 16.7).
 
@@ -24673,9 +24668,6 @@ or Haskell (Section 16.7).
   rejected; the inner value is taken apart by a second `match` in the body.
 - **Variants as map keys (#289).** A payload-free enum can key a map; a
   variant cannot, even when its payloads could.
-- **Repeated cases pass silently (#286).** A `match` that repeats a
-  payload-free case or a literal compiles. The repetition is dead code, and
-  the compiler should say so.
 
 The first two are the ones that matter for programs. Interpreters, parsers
 and compilers are the classic programs written with recursive types and
@@ -24753,7 +24745,7 @@ bound usually serves.
 
 **Combinators on `Maybe`.** `map`, `and_then` and `filter` on a `Maybe`
 shorten chains of optional steps. Each is also a second way to say what a
-compact choice `?? !!` or a `match` already says (Section 7.14).
+`match` already says (Section 7.14).
 
 **Errors in signatures.** An Okkama signature does not list the errors an
 action may throw (Section 10.19). Listing them is what CLU and Java's

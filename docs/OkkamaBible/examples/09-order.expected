@@ -9,7 +9,7 @@ operands, left to right:
   left
 || stops at true:
   left
-?? !! evaluates one branch:
+if evaluates one branch:
   condition
   then
 6 42 false true 1

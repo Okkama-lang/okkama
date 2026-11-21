@@ -9,10 +9,11 @@ object NicknamePatch {
     NicknamePatch(:nickname);
 
     applied(current is string) is string {
-        nickname
-            ?? .some(value): value
-            !! .none: ""
-            !! .missing: current;
+        match nickname {
+            case Presence.some(value): value;
+            case Presence.none: "";
+            case Presence.missing: current;
+        };
     }
 }
 

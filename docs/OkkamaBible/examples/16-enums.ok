@@ -16,7 +16,7 @@ object Order {
     Order(:number, :priority, :stage);
 
     line() is string {
-        let flag = priority ?? .urgent: "!" !! _: " ";
+        let flag = match priority { case Priority.urgent: "!"; case _: " "; };
         let state = match stage {
             case Stage.draft { "draft"; }
             case Stage.paid(amount) { "paid " + amount.string(); }

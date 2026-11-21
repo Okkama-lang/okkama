@@ -26,7 +26,7 @@ object Urgent does Queued {
     has origin is Queued;
     Urgent(:origin);
     line() is Maybe<string> {
-        origin.line() ?? .some(text): Maybe.some("!" + text.slice(1, text.length())) !! .none: Maybe.none;
+        match origin.line() { case Maybe.some(text): Maybe.some("!" + text.slice(1, text.length())); case Maybe.none: Maybe.none; };
     }
 }
 
