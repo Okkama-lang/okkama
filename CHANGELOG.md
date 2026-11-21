@@ -24,6 +24,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The collector waits for 4 MB of allocation, not 1 MB (#920, owner's approval).** After a collection the next
+  one comes when max(live, 4 MB) has been allocated. `bench/gc`: steady time −11% on ownership, −17% on
+  payload, −28% on deep, −9% on burst, unchanged on bigint and tiny; peak RSS +1–4 MB (+12.6 MB on burst), the
+  same at 10 and at 100 iterations. An adaptive floor (by survival rate) was measured and rejected: never better,
+  more memory on burst.
 - **The sweep keeps idle empty pages without walking them (#538).** A page that held no live cell at the last
   sweep, and whose free chain no allocation has taken since, is empty again by construction; the sweep keeps
   its chain instead of visiting every cell. A page's chain taken by the allocator marks the page for the next

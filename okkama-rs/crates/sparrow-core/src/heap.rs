@@ -120,11 +120,14 @@ const CLASS_BY_WORDS: [u8; SMALL_CLASS_LIMIT + 1] = {
 
 /// The words of a reclaimed cell under collector stress.
 const POISON: u64 = 0xdead_dead_dead_dead;
-/// Collections start once this much has been allocated, at least.
 /// The ephemeron pass of a collection (#503): given which objects are marked,
 /// it visits what marked keys keep alive.
 pub type Ephemerons<'a> = dyn FnMut(&dyn Fn(Word) -> bool, &mut dyn FnMut(Word, Repr)) + 'a;
-const COLLECTION_FLOOR: usize = 1 << 20;
+/// Collections start once this much has been allocated, at least (after a collection: max(live, floor)).
+/// #920, owner's approval (no leak, bounded RSS): 4 MB instead of 1 MB. On bench/gc it cut steady time 11% on
+/// ownership, 17% on payload, 28% on deep and 9% on burst, for +1–4 MB of peak RSS (+12.6 MB on burst);
+/// allocating micro loops stayed within noise; RSS does not grow with the number of iterations.
+const COLLECTION_FLOOR: usize = 4 << 20;
 /// Spare builder payloads kept at most, each with a buffer of at most
 /// [`SPARE_CAPACITY`] words.
 const SPARE_PAYLOADS: usize = 64;
@@ -2245,7 +2248,10 @@ mod tests {
                 warmed = heap.stats().pages;
             }
         }
-        assert!(heap.stats().collections >= 10, "{:?}", heap.stats());
+        // A collection at least every two floors of garbage (#920 made the floor 4 MB).
+        let stats = heap.stats();
+        assert!(stats.collections >= stats.allocated_bytes / (2 * COLLECTION_FLOOR), "{stats:?}");
+        assert!(stats.collections >= 3, "{stats:?}");
         assert!(heap.stats().pages <= warmed + 1, "{warmed} pages after warm-up: {:?}", heap.stats());
     }
 
