@@ -2,7 +2,7 @@
   "schema": "ocs-case/2",
   "id": "L05.choice.empty-collections",
   "title": "a boolean choice with an untagged [] or [:] on one side: literal and variable conditions, typed uses",
-  "purpose": "Observe that a compact choice keeps the analyzed collection type when its condition is a literal (#298).",
+  "purpose": "Verify compact match cases (case pattern: expression;): evaluation, typing, nesting and scope; the removed ?? !! form is a syntax error (#893).",
   "level": "L05",
   "contracts": [
     {
@@ -38,8 +38,8 @@
     "timeout_s": 30
   },
   "provenance": {
-    "origin": "authored for #298 from the Book (24.3) and the spec",
-    "expected_basis": "Book 24.3: the left side is bool, the branch types agree, only the selected branch is evaluated (the other panics); an empty literal takes the collection type of the other branch, so every comparison with [] or [:] holds and sizes are 0, 0 and 1."
+    "origin": "Authored for compact choices; migrated to compact match cases (#893)",
+    "expected_basis": "One evaluation of the subject, only the chosen case runs, exhaustive enum cases, nesting allowed like any match; ?? and !! are no longer syntax."
   },
   "status": "mandatory"
 }

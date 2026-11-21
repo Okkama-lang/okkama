@@ -2,30 +2,27 @@
   "schema": "ocs-case/2",
   "id": "L05.choice.nested-subject",
   "title": "choice.nested-subject",
-  "purpose": "Verify compact choice evaluation, typing and the nesting prohibition.",
+  "purpose": "Verify compact match cases (case pattern: expression;): evaluation, typing, nesting and scope; the removed ?? !! form is a syntax error (#893).",
   "level": "L05",
   "contracts": [
     {
       "contract": "TYPE.COMPACT-CHOICE",
       "aspects": [
-        "invalid"
+        "normal",
+        "interaction"
       ]
     }
   ],
-  "mode": "check",
+  "mode": "run",
   "sources": [
     "main.ok"
   ],
   "entry": "main.ok",
   "expect": {
-    "outcome": "reject",
-    "rejection": {
-      "stages": [
-        "parse"
-      ],
-      "categories": [
-        "syntax"
-      ]
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {
+      "text": ""
     }
   },
   "spec_refs": [
@@ -35,8 +32,8 @@
     "timeout_s": 30
   },
   "provenance": {
-    "origin": "Authored for compact choices",
-    "expected_basis": "One evaluation of the subject, lazy branches, exhaustive enum cases, and no nested compact choices."
+    "origin": "Authored for compact choices; migrated to compact match cases (#893)",
+    "expected_basis": "One evaluation of the subject, only the chosen case runs, exhaustive enum cases, nesting allowed like any match; ?? and !! are no longer syntax."
   },
   "status": "mandatory"
 }

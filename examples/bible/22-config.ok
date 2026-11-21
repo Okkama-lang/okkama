@@ -38,7 +38,7 @@ main() is int {
         source: SettingSource(kind: SettingSourceKind.environment, name: "environment"));
     let settings = LayeredSettings(file, env);
     out.writeln("port " + (settings.int("server.port") else 80).string() + " from "
-        + (settings.source("server.port")?? .some(source): source::Source::name !! .none: "nowhere"));
+        + match settings.source("server.port") { case Maybe.some(source): source::Source::name; case Maybe.none: "nowhere"; });
     out.writeln("host " + (settings.text("server.host") else "?") + ", debug "
         + (settings.bool("server.debug") else false).string());
     let log = Logger(name: "shop.auth", destination: RedactedLogs(origin: Lines(), names: ["password"]),

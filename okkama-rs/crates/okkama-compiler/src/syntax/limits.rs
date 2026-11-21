@@ -191,8 +191,7 @@ fn push_defaults<'a>(members: &'a [ObjectMember], stack: &mut Vec<(Node<'a>, usi
 fn expr_children<'a>(expr: &'a Expr, push: &mut impl FnMut(Node<'a>)) {
     let mut expr_node = |child: &'a Expr| push(Node::Expr(child));
     match &expr.kind {
-        ExprKind::Choice(operand)
-        | ExprKind::Throw(operand)
+        ExprKind::Throw(operand)
         | ExprKind::Grouping(operand)
         | ExprKind::Unary { operand, .. }
         | ExprKind::Unpack { operand, .. }

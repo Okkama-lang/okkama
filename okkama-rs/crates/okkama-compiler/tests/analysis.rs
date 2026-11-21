@@ -895,18 +895,18 @@ fn a_match_that_leaves_enum_cases_out_names_them_at_the_match() {
         located(&action(&format!("let n = {inner};\nn;"))),
         [(inner.to_string(), missing("normal, urgent", "an `else` branch"))]
     );
-    // A compact choice: one error, with its own fallback branch.
-    let choice = "p ?? .urgent: 1 !! .low: 2";
+    // Compact cases (#893): the same match, the same one error.
+    let compact = "match p { case Priority.urgent: 1; case Priority.low: 2; }";
     assert_eq!(
-        located(&action(&format!("let f = {choice};\nf;"))),
-        [(choice.to_string(), missing("normal", "a `_:` branch"))]
+        located(&action(&format!("let f = {compact};\nf;"))),
+        [(compact.to_string(), missing("normal", "an `else` branch"))]
     );
     // Complete matches, an `else`, a `_:` and a statement are fine.
     for body in [
         "match p { case Priority.low { 1; } case Priority.normal { 2; } case Priority.urgent { 3; } }",
         "match p { case Priority.low { 1; } else { 2; } }",
-        "p ?? .urgent: 1 !! .low: 2 !! .normal: 3;",
-        "p ?? .urgent: 1 !! _: 2;",
+        "match p { case Priority.urgent: 1; case Priority.low: 2; case Priority.normal: 3; }",
+        "match p { case Priority.urgent: 1; case _: 2; }",
         "match p { case Priority.low { 1; } }\n0;",
     ] {
         assert_eq!(located(&action(body)), [], "{body}");
@@ -918,12 +918,11 @@ fn a_match_that_leaves_enum_cases_out_names_them_at_the_match() {
     );
     assert_eq!(messages(&action("match missing { case Priority.low { 1; } }")), ["Undefined variable \"missing\""]);
     assert_eq!(messages(&action("\"x\";")), ["Action result must be int, got string"]);
-    assert_eq!(messages(&action("p ?? .urgent: 1 !! .missing: 2 !! .low: 3 !! .normal: 4")), ["Unknown enum variant"]);
     // Variants with payloads keep their own message, once.
     let shapes = |body: &str| {
         format!("enum Shape = (dot, circle(r is int), square(side is int));\nobject Q {{\n Q();\n f(s is Shape) is int {{\n{body}\n }}\n}}\nmain() is int {{ 0; }}")
     };
-    for body in ["match s { case Shape.dot { 1; } case Shape.circle(r) { r; } }", "s ?? .dot: 1 !! .circle(r): r"] {
+    for body in ["match s { case Shape.dot { 1; } case Shape.circle(r) { r; } }", "match s { case Shape.dot: 1; case Shape.circle(r): r; }"] {
         assert_eq!(messages(&shapes(body)), ["Non-exhaustive match: missing square"], "{body}");
     }
 }
@@ -1208,7 +1207,7 @@ fn try_optional_keeps_its_type_when_operand_paths_throw() {
         "let m is Maybe<int> = try? (if c { throw E.a; } else { throw E.b; });",
         "let m = try? (if c { throw E.a; } else { throw E.b; }) else 8; let n is int = m;",
         "let m = try? loop { throw E.a; } else 9;",
-        "let m = try? (true ?? throw E.a !! 2) else 5;",
+        "let m = try? (match true { case true: throw E.a; case false: 2; }) else 5;",
         "let m = try! (if true { throw E.a; } else { 2; }); let n is int = m;",
     ] {
         assert!(check(body).is_empty(), "{body}: {:?}", check(body));

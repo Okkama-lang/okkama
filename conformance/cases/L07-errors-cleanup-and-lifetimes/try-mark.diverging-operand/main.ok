@@ -45,13 +45,13 @@ main() is int {
     let e is Maybe<int> = try? (if yes { throw Fault.lost; } else { throw Fault.late; });
     let f = try? (if yes { throw Fault.lost; } else { throw Fault.late; }) else 8;
     let g = try? loop { throw Fault.late; } else 9;
-    out.writeln((e == Maybe<int>.none ?? "none" !! "some") + " " + f.string() + " " + g.string());
+    out.writeln((if e == Maybe<int>.none { "none"; } else { "some"; }) + " " + f.string() + " " + g.string());
     // match, compact choices and loops.
     let probe = Probe();
     let h = try? probe.pick(1) else -1;
     let i = try? probe.pick(4) else -1;
-    let j = try? (true ?? throw Fault.lost !! 2) else 5;
-    let k = try? (false ?? throw Fault.lost !! 2) else 5;
+    let j = try? (if true { throw Fault.lost; } else { 2; }) else 5;
+    let k = try? (if false { throw Fault.lost; } else { 2; }) else 5;
     let counter = Counter(value: 0);
     let l = try? loop {
         counter = counter.bumped();
@@ -75,6 +75,6 @@ main() is int {
     out.writeln(r.string() + " " + s.string() + " " + t.string());
     // Code after a recovered try? is reachable.
     let u = try? (if true { throw Fault.lost; } else { 1; });
-    out.writeln(u == Maybe<int>.none ?? "reached none" !! "reached some");
+    out.writeln(if u == Maybe<int>.none { "reached none"; } else { "reached some"; });
     0;
 }

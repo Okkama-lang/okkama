@@ -33,10 +33,10 @@ main() is int {
     out.writeln("|| stops at true:");
     let either = t.flag("left", true) || t.flag("right", false);
 
-    out.writeln("?? !! evaluates one branch:");
-    let chosen = t.flag("condition", true) ?? t.number("then", 1) !! t.number("otherwise", 2);
+    out.writeln("if evaluates one branch:");
+    let chosen = if t.flag("condition", true) { t.number("then", 1); } else { t.number("otherwise", 2); };
 
     out.writeln(total.string() + " " + product.string() + " "
-        + (both ?? "true" !! "false") + " " + (either ?? "true" !! "false") + " " + chosen.string());
+        + (if both { "true"; } else { "false"; }) + " " + (if either { "true"; } else { "false"; }) + " " + chosen.string());
     0;
 }

@@ -16,7 +16,7 @@ main() is int {
     t = t.is(directory.find(1) else "nobody", "Ada", "else unwraps some");
     t = t.is(directory.find(2) else "nobody", "nobody", "else takes the fallback on none");
     let found = directory.find(1);
-    t = t.is(found ?? .some(name): name !! .none: "-", "Ada", "?? !! opens a Maybe");
+    t = t.is(match found { case Maybe.some(name): name; case Maybe.none: "-"; }, "Ada", "a compact match opens a Maybe");
     let typed is Maybe<string> = Maybe.none;
     t = t.ok(typed == Maybe<string>.none, "a typed none");
     t = t.ok(Maybe.some(0) != Maybe.none, "zero is present");
@@ -24,7 +24,7 @@ main() is int {
     let missing is Presence<int> = Presence.missing;
     t = t.is(missing.fold() else 7, 7, "fold turns missing into none");
     let cleared is Presence<int> = Presence.none;
-    t = t.is(cleared ?? .some(v): v !! .none: -1 !! .missing: -2, -1, "none is not missing");
+    t = t.is(match cleared { case Presence.some(v): v; case Presence.none: -1; case Presence.missing: -2; }, -1, "none is not missing");
     t = t.ok(Maybe.some(1).as_presence() == Presence.some(1), "as_presence keeps some");
     let prices = ["apple": 120];
     t = t.is(prices["fig"] else 0, 0, "a missing map key with else");

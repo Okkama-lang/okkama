@@ -12,8 +12,6 @@ pub struct Expr {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExprKind {
-    /// Compact choice, represented internally by an If or Match expression.
-    Choice(Box<Expr>),
     TypeValue(super::TypeExpr),
     Throw(Box<Expr>),
     Coalesce {
@@ -318,8 +316,7 @@ impl ExprKind {
             ));
         };
         match self {
-            ExprKind::Choice(operand)
-            | ExprKind::Throw(operand)
+            ExprKind::Throw(operand)
             | ExprKind::Grouping(operand)
             | ExprKind::Unary { operand, .. }
             | ExprKind::Unpack { operand, .. }

@@ -1094,16 +1094,30 @@ impl<'s> Printer<'s> {
                     }
                     p.expr(pattern);
                 }
-                p.word(" ");
-                p.block(&case.body);
+                if case.compact {
+                    p.word(": ");
+                    p.compact_value(&case.body);
+                    p.word(";");
+                } else {
+                    p.word(" ");
+                    p.block(&case.body);
+                }
             });
         }
         if let Some(block) = &body.else_block {
-            let span = Span::new(self.else_keyword(block.span.start), block.span.end);
-            self.line(span, body.cases.is_empty(), false, |p| {
-                p.word("else ");
-                p.block(block);
-            });
+            if body.else_compact {
+                self.line(block.span, body.cases.is_empty(), false, |p| {
+                    p.word("case _: ");
+                    p.compact_value(block);
+                    p.word(";");
+                });
+            } else {
+                let span = Span::new(self.else_keyword(block.span.start), block.span.end);
+                self.line(span, body.cases.is_empty(), false, |p| {
+                    p.word("else ");
+                    p.block(block);
+                });
+            }
         }
         self.leading_comments(body.span.end.saturating_sub(1), false);
         self.newline();
@@ -1163,70 +1177,15 @@ impl<'s> Printer<'s> {
 
     // ---- выражения ----
 
-    fn choice_result(&mut self, block: &Block) {
+    /// The value of a compact match case (#893): its one expression statement.
+    fn compact_value(&mut self, block: &Block) {
         if let StmtKind::Expr { expr, .. } = &block.stmts[0].kind {
             self.expr(expr);
         }
     }
 
-    fn choice(&mut self, inner: &Expr) {
-        match &inner.kind {
-            ExprKind::If {
-                condition,
-                then_block,
-                else_block,
-            } => {
-                self.expr(condition);
-                self.word(" ?? ");
-                self.choice_result(then_block);
-                self.word(" !! ");
-                self.choice_result(else_block);
-            }
-            ExprKind::Match(body) => {
-                self.expr(&body.subject);
-                let mut separator = " ?? ";
-                for arm in &body.cases {
-                    self.word(separator);
-                    separator = " !! ";
-                    let pattern = &arm.patterns[0];
-                    let (callee, args) = match &pattern.kind {
-                        ExprKind::Call { callee, args } => (&**callee, &args[..]),
-                        _ => (pattern, &[][..]),
-                    };
-                    if let ExprKind::Get { name, .. } = &callee.kind {
-                        self.word(".");
-                        self.word(&name.text);
-                    }
-                    if !args.is_empty() {
-                        self.word("(");
-                        for (i, arg) in args.iter().enumerate() {
-                            if i > 0 {
-                                self.word(", ");
-                            }
-                            if let Some(name) = &arg.name {
-                                self.word(&name.text);
-                                self.word(": ");
-                            }
-                            self.expr(&arg.value);
-                        }
-                        self.word(")");
-                    }
-                    self.word(": ");
-                    self.choice_result(&arm.body);
-                }
-                if let Some(block) = &body.else_block {
-                    self.word(separator);
-                    self.word("_: ");
-                    self.choice_result(block);
-                }
-            }
-            _ => unreachable!("compact choice is an if or match"),
-        }
-    }
-
     fn expr(&mut self, expr: &Expr) {
         match &expr.kind {
-            ExprKind::Choice(inner) => self.choice(inner),
             ExprKind::Throw(value) => {
                 self.word("throw ");
                 self.expr(value);

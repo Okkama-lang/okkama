@@ -546,7 +546,7 @@ test "errors name the path; locks are taken without waiting and reported by mode
     let lock = file.lock(FileLockMode.exclusive) else panic "a free file locks";
     test.ok(file.locked(FileLockMode.exclusive) && !file.locked(FileLockMode.shared));
     let other = File(path: path, mode: FileMode.reading_and_writing);
-    test.ok(other.lock(FileLockMode.shared) ?? .none: true !! _: false);
+    test.ok(match other.lock(FileLockMode.shared) { case Maybe.none: true; case _: false; });
     lock.close();
     test.ok(!file.locked(FileLockMode.exclusive));
     let shared = other.lock(FileLockMode.shared) else panic "a released file locks";

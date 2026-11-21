@@ -387,7 +387,7 @@
         },
         {
           "name": "invalid.illegal.removed-operator.okkama",
-          "match": "\\?\\.|(?<!\\?)\\?(?!\\?)|\\*\\*"
+          "match": "\\?\\?|\\?\\.|\\?|\\*\\*"
         },
         {
           "name": "invalid.illegal.unknown-character.okkama",
@@ -397,10 +397,6 @@
     },
     "operators": {
       "patterns": [
-        {
-          "name": "keyword.operator.choice.okkama",
-          "match": "\\?\\?|!!"
-        },
         {
           "name": "keyword.operator.successor.okkama",
           "match": "\\^(?=\\s*[A-Za-z_][A-Za-z0-9_]*\\s*=)"
@@ -672,18 +668,6 @@
         {
           "comment": "Case of an applied generic enum: Maybe<int>.none, Reading<T>.empty.",
           "match": "(?<=>)(\\.)([a-z_][a-zA-Z0-9_]*)\\b",
-          "captures": {
-            "1": {
-              "name": "punctuation.accessor.okkama"
-            },
-            "2": {
-              "name": "constant.other.enum.okkama"
-            }
-          }
-        },
-        {
-          "comment": "Leading-dot case in compact choices: ?? .some(v): v !! .none: 0.",
-          "match": "(?<![\\w)\\]>])(\\.)([a-z_][a-zA-Z0-9_]*)\\b",
           "captures": {
             "1": {
               "name": "punctuation.accessor.okkama"

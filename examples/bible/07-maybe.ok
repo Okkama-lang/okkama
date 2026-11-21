@@ -28,9 +28,10 @@ main() is int {
     out.writeln("user 3 is " + (users.find(3) else "nobody"));
 
     // 2. A compact choice over the two cases.
-    let greeting = users.find(1)
-        ?? .some(name): "hello, " + name
-        !! .none: "hello, stranger";
+    let greeting = match users.find(1) {
+        case Maybe.some(name): "hello, " + name;
+        case Maybe.none: "hello, stranger";
+    };
     out.writeln(greeting);
 
     // 3. match, when each case needs more than an expression.
@@ -41,6 +42,6 @@ main() is int {
 
     // 4. try? turns a typed error into absence.
     let found = try? users.require(4);
-    out.writeln("require(4) gave " + (found ?? .some(name): name !! .none: "none"));
+    out.writeln("require(4) gave " + (match found { case Maybe.some(name): name; case Maybe.none: "none"; }));
     0;
 }

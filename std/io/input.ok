@@ -14,7 +14,7 @@ import "runtime/bytes" take bytes_join;
 //         let tag is byte = input.peek(0);
 //         let size is int = input.range(1, 5).integer(Signedness.signed, ByteOrder.big);
 //         input.skip(5);
-//         let body is @byte = await input.ensure(size) ?? input.take(size) !! [];
+//         let body is @byte = if await input.ensure(size) { input.take(size); } else { []; };
 //     }
 //
 // ensure(count) reads from the source until count unconsumed bytes are

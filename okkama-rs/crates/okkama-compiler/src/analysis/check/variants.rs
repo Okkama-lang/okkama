@@ -161,12 +161,7 @@ impl Checker<'_, '_> {
                     self.error(pattern.span, "Expected an enum variant pattern");
                     continue;
                 };
-                let receiver = if matches!(&object.kind, ast::ExprKind::Name(n) if n.text == "$choice")
-                {
-                    Some((id, None))
-                } else {
-                    self.variant_receiver(object)
-                };
+                let receiver = self.variant_receiver(object);
                 match receiver {
                     Some((other, explicit)) if other == id => {
                         if let Some(explicit) = explicit {

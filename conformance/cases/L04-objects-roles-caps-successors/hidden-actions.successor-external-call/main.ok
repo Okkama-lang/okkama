@@ -5,7 +5,7 @@ import "io/stdout" take Stdout;
 object Door {
     has open is bool = false;
     Door();
-    state() is string { open ?? "open" !! "closed"; }
+    state() is string { if open { "open"; } else { "closed"; }; }
     hidden opened() is ^Door { ^open = true; }
 }
 

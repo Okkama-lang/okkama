@@ -991,7 +991,6 @@ Complete list (a test checks it against the compiler's table, `analysis/check/bu
 In precedence order (loosest first), as parsed:
 
 ```text
-?? … !!                compact choice    (Chapter 24.3; never nested)
 else                   optional fallback (Maybe<T> else T, map[k] else v)
 ||                     boolean or        (bool operands only)
 &&                     boolean and       (bool operands only)
@@ -1010,7 +1009,7 @@ postfix                calls, member access, indexing, unpack `...`
 ```
 
 `try?` and `try!` (Chapter 14.5) are prefix forms written without a space
-after `try`; they cover the whole operand to their right up to `else` or `??`,
+after `try`; they cover the whole operand to their right up to `else`,
 so `try? f() + 1 else 0` is `(try? (f() + 1)) else 0`.
 
 Binary bitwise operators are left-associative. `flags & mask != 0` means
@@ -1658,9 +1657,10 @@ separate structured model through `Interpreter.diagnostic(failure)`.
 
 ```okkama
 let rows = try? db.query(sql) else 0;       // Maybe<int>, then a fallback
-let text = try? fetch(url)
-    ?? .some(body): body
-    !! .none: "offline";
+let text = match try? fetch(url) {
+    case Maybe.some(body): body;
+    case Maybe.none: "offline";
+};
 let config = try! Config.parse(source);     // "cannot fail" → panic if it does
 ```
 
@@ -1679,7 +1679,7 @@ let config = try! Config.parse(source);     // "cannot fail" → panic if it doe
   A thrown error becomes the panic `Unexpected error: <text()>` located at the
   `try!`.
 - Both are written without a space after `try` and cover the whole operand to
-  the right up to `else` or `??`. Both catch thrown errors only: panics and
+  the right up to `else`. Both catch thrown errors only: panics and
   programming errors pass through, and cleanup runs as for `try`.
 
 ## Chapter 15. `defer`
@@ -3285,44 +3285,45 @@ A statement-level `if`, `loop`, `match` or `try … catch` may take one
 optional `;` (#302); two are an error, and the rule is not a general one for
 expressions. The formatter keeps the chosen spelling.
 
-### 24.3 Compact choices: `?? … !!`
+### 24.3 Compact match cases
 
-A boolean choice has exactly two branches — a typed ternary:
-
-```okkama
-let label = enabled ?? "enabled" !! "disabled";
-```
-
-The left side must be `bool`; the branch types must agree; only the selected
-branch is evaluated.
-
-On an enum, patterns and results follow `??` and `!!` separated by `:`:
+`match` is one construct with two forms of case body (#893). A block case runs
+statements; a compact case gives one expression as the case's value:
 
 ```okkama
-let description = patch.name()
-    ?? .some(value): "New name: " + value
-    !! .none: "Clear the name"
-    !! .missing: "Keep the current name";
+let message = match result {
+    case Result.success(value): value;
+    case Result.failure(code): "Error: " + code.string();
+    case Result.timeout: "Timeout";
+};
 
-let shown = order.status()
-    ?? .paid(amount): "paid " + amount.string()
-    !! _: "not paid";                          // `_` covers the remaining cases
+let value = match option { case Maybe.some(x): x; case Maybe.none: 0; };
 ```
 
-The subject is evaluated once, bindings exist only in their branch, coverage
-must be complete and repeats are rejected. Ordinary enums work too:
-`Status.ready ?? .ready: "go" !! .failed: "stop" !! .done: "done"`.
-
-**Nested `?? … !!` are forbidden**, including in the condition, in call
-arguments inside a branch and through parentheses. Use separate variables:
+Both forms mix in one `match`, and `case _` is the remainder, another spelling
+of `else` (`case _: value;` or `case _ { … }`):
 
 ```okkama
-let active_label = ready ?? "go" !! "wait";
-let label = enabled ?? active_label !! "off";
+let shown = match order.status() {
+    case Status.paid(amount): "paid " + amount.string();
+    case Status.refunded(amount) {
+        audit.note(amount);
+        "refunded";
+    }
+    case _: "not paid";
+};
 ```
 
-`if` and `match` remain for complex logic. Prefix `!!flag` keeps its meaning
-of double negation.
+A compact case body may `throw`: `case Presence.missing: throw Missing.key;`.
+Everything else is the ordinary `match`: the subject is evaluated once, only
+the chosen case runs, bindings exist only in their case, patterns are written in
+full (`Maybe.some(x)`, `Status.ready`), coverage and repeated cases are checked
+as in Chapter 12.4, and the case values must have one type. A compact match nests
+like any expression. For a two-way choice on a `bool`, use an `if` expression:
+`if enabled { "on"; } else { "off"; }`.
+
+The earlier `?? … !!` selection was removed; `??` is now a syntax error that
+points to the compact form. Prefix `!!flag` keeps its meaning of double negation.
 
 ### 24.4 Error enums and exhaustiveness
 
@@ -5093,8 +5094,9 @@ null nil optional ?. isa super abstract protected with setters mutable var
 ```
 
 `none` is not a value: it exists only as the case `Maybe.none` /
-`Presence.none`. A single `?` is an error; `??` and `!!` form compact choices,
-and `try?` / `try!` are prefix forms written without a space.
+`Presence.none`. A single `?` is an error, `??` is a removed selection syntax
+(use a compact `match`, Chapter 24.3), and `try?` / `try!` are prefix forms
+written without a space.
 
 Keyword inventory in active use: `module`, `import`, `as`, `take`, `object`,
 `role`, `enum`, `has`, `is`, `does`, `self`, `let`, `if`, `else`, `match`,
@@ -5137,7 +5139,7 @@ Runtime-supported and covered by tests (`okkama-pl/t/interpreter`,
 - ownership by identity and automatic `destroy` on scope exit;
 - strict lexical scope boundaries;
 - enums, payload enums with exhaustive patterns, `Maybe` / `Presence` with
-  `else` and `fold()`, compact choices `?? … !!`;
+  `else` and `fold()`, compact `match` cases;
 - error enums (`enum E is Error`), catch patterns and type lists, `try?` /
   `try!`;
 - hidden successor actions; `hidden` declarations with the public-signature
@@ -5240,10 +5242,8 @@ main() is int {
 
     let n = try? risky() else 0;       // Maybe<int>, then fallback
     let nick = user.nickname() else "anon";   // Maybe<string>
-    let label = n > 0 ?? "some" !! "none";    // typed ternary
-    let area = Shape.circle(1.0)
-        ?? .circle(r): r * r
-        !! .point: 0.0;
+    let label = if n > 0 { "some"; } else { "none"; };
+    let area = match Shape.circle(1.0) { case Shape.circle(r): r * r; case Shape.point: 0.0; };
 
     prices["fig"] else 0;              // explicit fallback, no null
     return 0;

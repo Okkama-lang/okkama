@@ -424,12 +424,12 @@ fn program_size_is_limited() {
 }
 
 #[test]
-fn optional_and_compact_choices_obey_tree_budgets() {
+fn optional_fallbacks_and_compact_matches_obey_tree_budgets() {
     on_small_stack(|| {
         let deep = vec!["1"; 300].join(" + ");
         for body in [
-            format!("true ?? {deep} !! 0"),
-            format!("Maybe.some(1) ?? .some(v): {deep} !! .none: 0"),
+            format!("match true {{ case true: {deep}; case false: 0; }}"),
+            format!("match Maybe.some(1) {{ case Maybe.some(v): {deep}; case Maybe.none: 0; }}"),
             format!("Maybe<int>.none else {deep}"),
             format!("Maybe<int>.none else throw Failure({deep})"),
         ] {
@@ -467,7 +467,7 @@ fn optional_and_choice_nodes_drop_without_recursion() {
         let mut expr = leaf();
         for index in 0..100_000 {
             let kind = match index % 3 {
-                0 => ExprKind::Choice(Box::new(expr)),
+                0 => ExprKind::Grouping(Box::new(expr)),
                 1 => ExprKind::Throw(Box::new(expr)),
                 _ => ExprKind::Coalesce {
                     value: Box::new(expr),

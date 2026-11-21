@@ -51,7 +51,7 @@ async main() is int {
     c=c.ok("concurrent next rejected",try { await serial.next();false; } catch e is DbBusy { true; });
     c=c.same_int("busy does not close active reader",competing.count(),0);
     competing.release();
-    c=c.ok("first read still succeeds",(await first) ?? .some(row): row.int("id")==1 !! _: false);
+    c=c.ok("first read still succeeds",match (await first) { case Maybe.some(row): row.int("id")==1; case _: false; });
     serial.close();
     let closing=WaitingRows(false,false);
     let revoked=QueryRows(closing);

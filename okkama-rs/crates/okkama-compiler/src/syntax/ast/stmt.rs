@@ -113,6 +113,8 @@ pub struct MatchBody {
     pub subject: Expr,
     pub cases: Vec<MatchCase>,
     pub else_block: Option<Block>,
+    /// The remainder was written compactly, `case _: value;` (#893).
+    pub else_compact: bool,
     pub span: Span,
 }
 
@@ -121,6 +123,8 @@ pub struct MatchBody {
 pub struct MatchCase {
     pub patterns: Vec<Expr>,
     pub body: Block,
+    /// Written `case p: value;` (#893): `body` is that one expression statement.
+    pub compact: bool,
     pub span: Span,
 }
 

@@ -65,6 +65,7 @@ pub enum TokenKind {
     DoubleColon,
     /// `?` — removed optional-type marker (reserved).
     Question,
+    /// `??` — removed `?? … !!` selection (#893), reserved: a compact `match` does it.
     Choice,
     /// `?.` — removed optional chaining (reserved).
     QuestionDot,
@@ -213,6 +214,7 @@ impl TokenKind {
                 | With
                 | Finally
                 | Question
+                | Choice
                 | QuestionDot
                 | StarStar
         )

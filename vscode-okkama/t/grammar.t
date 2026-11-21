@@ -91,7 +91,7 @@ for my $type (qw(int float rat decimal string char bool byte number any void Nat
 }
 
 for my $operator (
-    qw(... .. ..= -> <- && || ! == != < <= > >= + - * / % = ^ & | ~ << >> >>> ?? !!)
+    qw(... .. ..= -> <- && || ! == != < <= > >= + - * / % = ^ & | ~ << >> >>>)
 ) {
     ok(section_matches('operators', $operator),
         qq{current operator "$operator" is highlighted});
@@ -128,7 +128,7 @@ for my $reserved (qw(isa super abstract protected null none nil with finally)) {
 
 ok(!exists($repository->{directives}), 'removed directives have no highlighting');
 ok(!exists($repository->{namedConstructorProjections}), 'removed projections have no highlighting');
-ok(!section_matches('invalidSyntax', '??'), 'compact choice is not a removed operator');
+ok(section_matches('invalidSyntax', '??'), 'the removed ?? selection is marked invalid (#893)');
 ok(section_matches('optionalVariants', '.none'), 'qualified none is a variant');
 ok(!section_matches('invalidSyntax', '&'),
     'binary ampersand is valid; the parser rejects prefix projections');

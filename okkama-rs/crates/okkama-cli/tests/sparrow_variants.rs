@@ -180,19 +180,20 @@ fn formatter_preserves_variant_payloads_and_fallback() {
     assert_eq!(formatted, twice);
 }
 
+// #893: one match, two case forms. The compact form `case pattern: value;` mixes with block cases; the removed
+// `?? !!` selection is a syntax error.
 #[test]
-fn compact_choices_are_lazy_typed_and_preserve_payloads() {
+fn compact_match_cases_choose_lazily_and_keep_payloads() {
     check(
         r#"
         enum Color = (red, blue);
         main() is int {
-            let a = true ?? 20 !! panic "unused";
-            let b = false ?? panic "unused" !! 22;
-            let name = Presence.some("") ?? .some(v): v !! .none: "null" !! .missing: "missing";
-            let n = Maybe<int>.none ?? .some(v): v !! _: 42;
-            let color = Color.red ?? .red: 42 !! .blue: 0;
-            let negated = !!false ?? 0 !! 42;
-            if name == "" && n == 42 && color == 42 && negated == 42 { a + b; } else { 0; }
+            let a = match true { case true: 20; case false: panic "unused"; };
+            let b = match false { case true: panic "unused"; case false: 22; };
+            let name = match Presence.some("") { case Presence.some(v): v; case Presence.none: "null"; case Presence.missing: "missing"; };
+            let n = match Maybe<int>.none { case Maybe.some(v): v; case _: 42; };
+            let color = match Color.red { case Color.red: 42; case Color.blue: 0; };
+            if name == "" && n == 42 && color == 42 { a + b; } else { 0; }
         }
     "#,
         "42",
@@ -200,78 +201,78 @@ fn compact_choices_are_lazy_typed_and_preserve_payloads() {
 }
 
 #[test]
-fn compact_choice_rejects_nesting_and_invalid_contracts() {
-    for choice in [
-        "true ?? Sink().write() !! 0",
-        "Maybe.some(1) ?? .some(v): Sink().write() !! .none: 0",
-    ] {
-        let code = format!(
-            "object Sink {{ Sink(); write() is void {{}} }} main() is int {{ {choice}; 0; }}"
-        );
-        assert!(lower(&code).unwrap_err().contains("must produce a value"));
-    }
-
-    for source in [
-        "true ?? (false ?? 1 !! 2) !! 3",
-        "true ?? 1 !! (false ?? 2 !! 3)",
-        "(true ?? true !! false) ?? 1 !! 2",
-        "true ?? [false ?? 1 !! 2][0] !! 3",
-    ] {
-        let error = lower(&format!("main() is int {{ {source}; }}")).unwrap_err();
-        assert!(error.contains("Nested ?? / !!"), "{error}");
-    }
-
-    for source in [
-        "true ?? (false ?? 1 !! 2) !! 3",
-        "true ?? 1 !! (false ?? 2 !! 3)",
-        "(true ?? true !! false) ?? 1 !! 2",
-        "true ?? [false ?? 1 !! 2][0] !! 3",
-        "Maybe.some(1) ?? .some(v): (true ?? v !! 0) !! .none: 0",
-        "1 ?? 2 !! 3",
-        "true ?? 1 !! false",
-        "true ?? 1",
-        "true ?? 1 !! 2 !! 3",
-        "Maybe.some(1) ?? .some(v): v",
-        "Maybe.some(1) ?? .some(v): v !! .some(w): w !! .none: 0",
-        "Maybe.some(1) ?? .some(v): v !! .none: v",
-        "Maybe.some(1) ?? _: 0 !! .none: 1",
-        "Presence<int>.missing ?? .some(v): v !! .none: 0",
-        "true ?? _: 1",
-    ] {
-        assert!(
-            lower(&format!("main() is int {{ {source}; }}")).is_err(),
-            "accepted: {source}"
-        );
-    }
-    assert!(lower("enum Color = (red, blue); main() is int { Color.red ?? .red: 1; }").is_err());
+fn compact_and_block_cases_mix_nest_and_go_anywhere_an_expression_goes() {
+    check(
+        r#"
+        enum Shape = (dot, square(side is int), pair(left is int, right is int));
+        object Box { has v is int; Box(:v); value() is int { v; } }
+        main() is int {
+            let one = match Shape.dot { case Shape.dot: 1; case _: 0; };
+            let mixed = match Shape.square(5) {
+                case Shape.dot: 0;
+                case Shape.square(side) {
+                    let doubled = side * 2;
+                    doubled;
+                }
+                case Shape.pair(l, r): l + r;
+            };
+            let nested = match Shape.pair(2, 3) { case Shape.pair(l, r): match l > r { case true: l; case false: r; }; case _: 0; };
+            let box = Box(v: match Maybe.some(7) { case Maybe.some(x): x; case Maybe.none: 0; });
+            let listed = [match true { case true: 1; case false: 2; }, 3];
+            let once = match [1, 2].size() { case 2: 10; case 1: 20; else { 30; } };
+            if one == 1 && mixed == 10 && nested == 3 && box.value() == 7 && listed[0] == 1 && once == 10 { 42; } else { 0; }
+        }
+    "#,
+        "42",
+    );
 }
 
 #[test]
-fn compact_choice_formatter_roundtrip() {
-    let code = "module app v1.0.0; main() is int { let a=true??20!!0; let b=Maybe.some(22)??.some(v):v!!.none:0; a+b; }";
-    let source = SourceFile::new("choice.ok", code.to_owned()).unwrap();
-    let formatted = syntax::format::format(&source).unwrap();
-    assert!(formatted.contains(" ?? ") && formatted.contains(" !! "));
-    check(formatted.split_once(';').unwrap().1, "42");
-    let twice =
-        syntax::format::format(&SourceFile::new("choice.ok", formatted.clone()).unwrap()).unwrap();
-    assert_eq!(formatted, twice);
-}
-
-#[test]
-fn compact_choices_compose_without_nesting_and_can_throw() {
+fn compact_cases_can_throw_and_keep_failures() {
     check(
         r#"
         enum Absent is Error = (absent);
-        object Pair { has a is int; has b is int; Pair(:a, :b); sum() is int { a + b; } }
         main() is int {
-            let pair = Pair(a: true ?? 20 !! 0, b: Maybe.some(22) ?? .some(v): v !! _: 0);
-            try { Presence<int>.missing ?? .some(v): v !! _: throw Absent.absent; }
-            catch e is Absent { pair.sum(); }
+            try { match Presence<int>.missing { case Presence.some(v): v; case _: throw Absent.absent; }; }
+            catch e is Absent { 42; }
         }
     "#,
         "42",
     );
+}
+
+#[test]
+fn compact_cases_keep_match_rules() {
+    for (source, message) in [
+        ("enum Color = (red, blue); main() is int { let c = match Color.red { case Color.red: 1; }; c; }", "does not cover blue"),
+        ("main() is int { match Maybe.some(1) { case Maybe.some(v): v; case Maybe.none: \"x\"; }; }", ""),
+        ("main() is int { let x = match Maybe.some(1) { case Maybe.some(v): v; case Maybe.none: v; }; x; }", "Undefined variable"),
+        ("enum Color = (red, blue); main() is int { match Color.red { case Color.red: 1; case Color.red: 2; case Color.blue: 3; }; }", "Duplicate variant pattern"),
+        ("main() is int { match 1 { case 1: 1 case 2: 2; else { 0; } }; }", ""),
+    ] {
+        let error = lower(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}
+
+#[test]
+fn the_removed_choice_syntax_is_a_syntax_error() {
+    for source in ["true ?? 1 !! 2", "Maybe.some(1) ?? .some(v): v !! .none: 0"] {
+        let error = lower(&format!("main() is int {{ {source}; }}")).unwrap_err();
+        assert!(error.contains("?? / !! selection was removed"), "{source}: {error}");
+    }
+}
+
+#[test]
+fn compact_match_formatter_roundtrip() {
+    let code = "module app v1.0.0; main() is int { let a = match true { case true: 20; case false: 0; }; let b = match Maybe.some(22) { case Maybe.some(v): v; case _: 0; }; a+b; }";
+    let source = SourceFile::new("compact.ok", code.to_owned()).unwrap();
+    let formatted = syntax::format::format(&source).unwrap();
+    assert!(formatted.contains("case true: 20;") && formatted.contains("case _: 0;"), "{formatted}");
+    check(formatted.split_once(';').unwrap().1, "42");
+    let twice =
+        syntax::format::format(&SourceFile::new("compact.ok", formatted.clone()).unwrap()).unwrap();
+    assert_eq!(formatted, twice);
 }
 
 #[test]
@@ -307,14 +308,14 @@ fn tail_expression_semicolons_are_optional_without_changing_values() {
 }
 
 #[test]
-fn postfix_functionals_compose_with_optional_and_compact_choices() {
+fn postfix_functionals_compose_with_optional_and_compact_matches() {
     check(
         r#"main() is int {
             let total = 1 + [20, 21].reduce(0) -> sum, value { sum + value };
             let fallback = Maybe<int>.none else [20, 22].reduce(0) -> sum, value { sum + value };
-            let selected = total == 42 ?? [20, 22].reduce(0) -> sum, value { sum + value } !! 0;
+            let selected = if total == 42 { [20, 22].reduce(0) -> sum, value { sum + value }; } else { 0; };
             let values = [Maybe.some(42), Maybe<int>.none].map() -> item { item else 42 };
-            for (values.map() -> value { value == 42 ?? value !! 0 }) -> value {
+            for (values.map() -> value { match value == 42 { case true: value; case false: 0; } }) -> value {
                 if value != 42 { return 0; }
             }
             if total == fallback && fallback == selected { total } else { 0 };

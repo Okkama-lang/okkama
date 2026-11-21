@@ -36,6 +36,6 @@ main() is int {
     // try? turns an error into absence; a Maybe result is kept whole, never flattened.
     out.writeln(try? book.require("grace") else "unknown");
     let nested is Maybe<Maybe<string>> = try? book.phone("grace");
-    out.writeln(nested == Maybe.some(Maybe<string>.none) ?? "found the answer: no phone" !! "something else");
+    out.writeln(if nested == Maybe.some(Maybe<string>.none) { "found the answer: no phone"; } else { "something else"; });
     0;
 }

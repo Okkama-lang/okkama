@@ -23,7 +23,7 @@ object Least<T: Comparing<T>> {
         self.rest = rest...;
     }
     value() is T {
-        rest.reduce(first) -> best, item { item.order(best) == Order.less ?? item !! best; };
+        rest.reduce(first) -> best, item { if item.order(best) == Order.less { item; } else { best; }; };
     }
 }
 

@@ -27329,7 +27329,7 @@
     "docs/okkama-spec-11072026.md#15"
    ],
    "status": "mandatory",
-   "title": "Non-nested lazy boolean and exhaustive enum choices with ?? and !!"
+   "title": "Compact match cases (case pattern: expression;), mixed with block cases; the removed ?? !! form is a syntax error"
   },
   {
    "aspects": {

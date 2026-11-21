@@ -14,7 +14,7 @@ object Sensor {
     Sensor(:name, :unit, :reading);
 
     text() is string {
-        let suffix = unit ?? .celsius: " C" !! .kelvin: " K";
+        let suffix = match unit { case Unit.celsius: " C"; case Unit.kelvin: " K"; };
         let shown = match reading {
             case Reading.missing { "no data"; }
             case Reading.single(value) { value.string() + suffix; }

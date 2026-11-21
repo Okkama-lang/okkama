@@ -7,7 +7,7 @@
 //!
 //! | level          | operators                       |
 //! |----------------|---------------------------------|
-//! | choice/fallback | `?? … !!`, `else`              |
+//! | fallback        | `else`                         |
 //! | logic_or       | `\|\|`                          |
 //! | logic_and      | `&&`                            |
 //! | stream_write   | `<-`                            |
@@ -32,7 +32,7 @@ use crate::syntax::ast::{
 use crate::syntax::token::{StrLiteral, StringForm, TokenKind, TokenValue, is_lower_word, is_type_word};
 
 impl Parser<'_> {
-    /// `expr = logic_or optional_else? compact_choice?`.
+    /// `expr = logic_or optional_else?`.
     ///
     /// The functional suffix `-> bindings { }` is a postfix form of a member
     /// call (`receiver.map(args)`, see [`Self::finish_postfix`]), so it binds
@@ -71,9 +71,6 @@ impl Parser<'_> {
                     },
                 };
             }
-            if parser.eat(TokenKind::Choice) {
-                expr = parser.finish_choice(expr)?;
-            }
             Ok(expr)
         });
         self.for_source = enclosing;
@@ -100,26 +97,8 @@ impl Parser<'_> {
         Ok(true)
     }
 
-    fn choice_separator(&self) -> bool {
-        self.check(TokenKind::Bang)
-            && self.nth(1).kind == TokenKind::Bang
-            && self.peek().span.end == self.nth(1).span.start
-    }
-
-    fn choice_value(&mut self) -> PResult<Expr> {
-        if self.eat(TokenKind::Throw) {
-            let start = self.previous().span;
-            let value = self.expression()?;
-            Ok(Expr {
-                span: start.to(value.span),
-                kind: ExprKind::Throw(Box::new(value)),
-            })
-        } else {
-            self.expression()
-        }
-    }
-
-    fn choice_block(value: Expr) -> crate::syntax::ast::Block {
+    /// A block holding `value` alone, spanning exactly it.
+    fn expression_block(value: Expr) -> crate::syntax::ast::Block {
         let span = value.span;
         crate::syntax::ast::Block {
             stmts: vec![crate::syntax::ast::Stmt {
@@ -131,109 +110,6 @@ impl Parser<'_> {
             }],
             span,
         }
-    }
-
-    fn finish_choice(&mut self, subject: Expr) -> PResult<Expr> {
-        use crate::syntax::ast::{MatchBody, MatchCase};
-        let start = subject.span;
-        let patterned = self.check(TokenKind::Dot)
-            || (self.lexeme(self.peek()) == "_" && self.nth(1).kind == TokenKind::Colon);
-        let kind = if patterned {
-            let mut cases = Vec::new();
-            let mut else_block = None;
-            loop {
-                let arm_start = self.peek().span;
-                let pattern = if self.lexeme(self.peek()) == "_" {
-                    self.advance();
-                    None
-                } else {
-                    self.consume(TokenKind::Dot, "Expect .variant or _ in compact match.")?;
-                    let name = self.consume_member_name("Expect enum variant after dot.")?;
-                    let owner = Expr {
-                        kind: ExprKind::Name(Name {
-                            text: "$choice".into(),
-                            span: arm_start,
-                        }),
-                        span: arm_start,
-                    };
-                    let mut pattern = Expr {
-                        span: arm_start.to(name.span),
-                        kind: ExprKind::Get {
-                            object: Box::new(owner),
-                            name,
-                        },
-                    };
-                    if self.eat(TokenKind::LeftParen) {
-                        pattern = self.finish_call(pattern)?;
-                    }
-                    Some(pattern)
-                };
-                self.consume(TokenKind::Colon, "Expect : after compact match pattern.")?;
-                let body = Self::choice_block(self.choice_value()?);
-                if let Some(pattern) = pattern {
-                    cases.push(MatchCase {
-                        span: arm_start.to(body.span),
-                        patterns: vec![pattern],
-                        body,
-                    });
-                } else {
-                    else_block = Some(body);
-                    if self.choice_separator() {
-                        return Err(
-                            self.error_here("Wildcard must be the last compact match branch.")
-                        );
-                    }
-                    break;
-                }
-                if !self.choice_separator() {
-                    break;
-                }
-                self.advance();
-                self.advance();
-            }
-            ExprKind::Match(Box::new(MatchBody {
-                subject,
-                cases,
-                else_block,
-                span: start.to(self.previous().span),
-            }))
-        } else {
-            let then_block = Self::choice_block(self.choice_value()?);
-            if !self.choice_separator() {
-                return Err(self.error_here("Boolean choice requires !! and a false branch."));
-            }
-            self.advance();
-            self.advance();
-            let else_block = Self::choice_block(self.choice_value()?);
-            if self.choice_separator() {
-                return Err(self.error_here("Boolean choice has exactly two branches."));
-            }
-            ExprKind::If {
-                condition: Box::new(subject),
-                then_block,
-                else_block,
-            }
-        };
-        let span = start.to(self.previous().span);
-        // Include the subject and every branch, even choices hidden in parentheses,
-        // calls or blocks. Sibling expressions outside this span remain independent.
-        let first = self.tokens.partition_point(|t| t.span.start < span.start);
-        if self.tokens[first..self.pos]
-            .iter()
-            .filter(|t| t.kind == TokenKind::Choice)
-            .take(2)
-            .count()
-            > 1
-        {
-            return Err(self.error_at_span(
-                span,
-                "Nested ?? / !! choices are not allowed; use a local variable or match.",
-            ));
-        }
-        Ok(Expr {
-            kind: ExprKind::Choice(Box::new(Expr { kind, span })),
-            span,
-        })
     }
 
     fn error_at_name(&self, name: &Name, message: &str) -> crate::diagnostics::Diagnostic {
@@ -859,7 +735,7 @@ impl Parser<'_> {
         if self.try_mark_follows() {
             self.advance();
             let force = self.advance().kind == TokenKind::Bang;
-            // The mark covers the whole operand to its right, up to `else`/`??`.
+            // The mark covers the whole operand to its right, up to `else`.
             let value = self.logic_or()?;
             return Ok(Expr {
                 span: start.to(value.span),
@@ -1048,7 +924,7 @@ impl Parser<'_> {
 
     /// After `if` in expression position: `expr block "else" (if_expr |
     /// block)`. An `else if` link is an else block holding the nested `if`
-    /// alone and spanning exactly it, the shape of a choice branch; the
+    /// alone and spanning exactly it; the
     /// formatter prints it back as `else if`. Each link counts against the
     /// nesting limit.
     fn if_expression(&mut self, start: Span) -> PResult<Expr> {
@@ -1058,7 +934,7 @@ impl Parser<'_> {
             parser.consume(TokenKind::Else, "If expression requires else branch.")?;
             let else_block = if parser.eat(TokenKind::If) {
                 let nested_start = parser.previous().span;
-                Self::choice_block(parser.if_expression(nested_start)?)
+                Self::expression_block(parser.if_expression(nested_start)?)
             } else {
                 parser.block()?
             };

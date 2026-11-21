@@ -419,25 +419,38 @@ impl Parser<'_> {
         })
     }
 
-    /// After `match`: `expr "{" ("case" exprs block | "else" block)* "}"`.
+    /// After `match`: `expr "{" ("case" patterns body | "else" body)* "}"`, where a body is a block or, in the
+    /// compact form (#893), `":" expression ";"`. `case _` is the remainder, another spelling of `else`.
     /// Shared by statements and expressions.
     pub(super) fn finish_match(&mut self, start: Span) -> PResult<MatchBody> {
         let subject = self.expression()?;
         self.consume(TokenKind::LeftBrace, "Expect \"{\" after match subject.")?;
         let mut cases = Vec::new();
         let mut else_block = None;
+        let mut else_compact = false;
         while !self.check(TokenKind::RightBrace) && !self.is_at_end() {
             if self.eat(TokenKind::Case) {
-                let keyword = self.previous().span;
+                let keyword = self.previous().clone();
+                if self.lexeme(self.peek()) == "_" && matches!(self.nth(1).kind, TokenKind::Colon | TokenKind::LeftBrace) {
+                    self.advance();
+                    if else_block.is_some() {
+                        return Err(self.error_at(&keyword, "Match cannot have multiple else branches."));
+                    }
+                    let (body, compact) = self.case_body()?;
+                    else_block = Some(body);
+                    else_compact = compact;
+                    continue;
+                }
                 let mut patterns = vec![self.expression()?];
                 while self.eat(TokenKind::Comma) {
                     patterns.push(self.expression()?);
                 }
-                let body = self.block()?;
+                let (body, compact) = self.case_body()?;
                 cases.push(MatchCase {
                     patterns,
-                    span: keyword.to(body.span),
+                    span: keyword.span.to(body.span),
                     body,
+                    compact,
                 });
                 continue;
             }
@@ -456,8 +469,33 @@ impl Parser<'_> {
             subject,
             cases,
             else_block,
+            else_compact,
             span: start.to(close.span),
         })
+    }
+
+    /// A match case body: a block, or `":" expression ";"` (#893), whose expression is the case's value
+    /// (`throw` allowed), normalized to a one-statement block.
+    fn case_body(&mut self) -> PResult<(crate::syntax::ast::Block, bool)> {
+        if !self.eat(TokenKind::Colon) {
+            return Ok((self.block()?, false));
+        }
+        let value = if self.eat(TokenKind::Throw) {
+            let start = self.previous().span;
+            let value = self.expression()?;
+            Expr { span: start.to(value.span), kind: ExprKind::Throw(Box::new(value)) }
+        } else {
+            self.expression()?
+        };
+        self.consume(TokenKind::Semicolon, "Expect \";\" after a compact match case.")?;
+        let span = value.span;
+        Ok((crate::syntax::ast::Block {
+            stmts: vec![crate::syntax::ast::Stmt {
+                kind: crate::syntax::ast::StmtKind::Expr { expr: value, condition: None },
+                span,
+            }],
+            span,
+        }, true))
     }
 
     /// `for source "->" binding ("," binding)* block`.

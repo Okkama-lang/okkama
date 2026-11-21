@@ -10,9 +10,9 @@ main() is int {
     let small = items.all() -> x { out.writeln("all sees " + x.string()); x < 5; };
     out.writeln("all " + small.string());
     let first = items.find() -> x { x > 4; };
-    out.writeln(first ?? .some(v): "find " + v.string() !! .none: "none");
+    out.writeln(match first { case Maybe.some(v): "find " + v.string(); case Maybe.none: "none"; });
     let missing = (1..=10).find() -> n { n > 100; };
-    out.writeln(missing ?? .some(v): v.string() !! .none: "range none");
+    out.writeln(match missing { case Maybe.some(v): v.string(); case Maybe.none: "range none"; });
     let empty is @int = [];
     out.writeln((empty.any() -> x { true; }).string() + " " + (empty.all() -> x { false; }).string());
     let prices is %string:int = ["apple": 120, "pear": 140];

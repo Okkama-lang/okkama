@@ -182,7 +182,7 @@ object Execution {
 
     // Compatibility observations; new callers can use affected() with else/match.
     affected_known() is bool {
-        count ?? .some(_): true !! .none: false;
+        match count { case Maybe.some(_): true; case Maybe.none: false; };
     }
 
     // The count; AffectedRowsUnknown when it is not known.

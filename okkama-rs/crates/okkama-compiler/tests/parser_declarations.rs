@@ -583,7 +583,7 @@ fn type_references() {
         ),
         (
             "value() is User?;",
-            "Single ? is not supported; use Maybe<T> or Presence<T> for optional types, or ?? / !! for selection.",
+            "Single ? is not supported; use Maybe<T> or Presence<T> for optional types.",
         ),
     ] {
         assert_rejects(

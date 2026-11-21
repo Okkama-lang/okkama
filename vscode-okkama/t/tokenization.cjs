@@ -37,8 +37,8 @@ let checks = 0;
     try { assert.equal(Boolean(found), !absent, `${JSON.stringify(word)}: ${scope} in ${JSON.stringify(row.line)}; got ${JSON.stringify(token?.scopes)}`); }
     catch (error) { failures.push(error.message); }
   }
-  check('let name = p ?? .some(v): v !! .none: "none";', 0, '??', 'keyword.operator.choice.okkama');
-  check('let name = p ?? .some(v): v !! .none: "none";', 0, '!!', 'keyword.operator.choice.okkama');
+  check('let name = match p { case Maybe.some(v): v; case Maybe.none: "none"; };', 0, 'some', 'constant.other.enum.okkama');
+  check('let name = p ?? 1;', 0, '??', 'invalid.illegal.removed-operator.okkama');
   check('let name = Presence<string>.none;', 0, 'none', 'invalid.illegal.reserved-word.okkama', true);
   check('let name = Presence<string>.none;', 0, 'none', 'constant.other.enum.okkama');
   check('let result = spawn Worker().run();', 0, 'spawn', 'keyword.control.async.okkama');
@@ -116,8 +116,8 @@ let checks = 0;
   check('catch DbError.closed, NetError.reset {', 0, 'reset', 'constant.other.enum.okkama');
   check('case Shape.circle(radius) { radius; }', 0, 'circle', 'constant.other.enum.okkama');
   check('let r = Reading<int>.empty;', 0, 'empty', 'constant.other.enum.okkama');
-  check('let s = order.status() ?? .paid(amount): "paid" !! _: "other";', 0, 'paid', 'constant.other.enum.okkama');
-  check('let s = order.status() ?? .paid(amount): "paid" !! _: "other";', 0, 'status', 'constant.other.enum.okkama', true);
+  check('let s = match order.status() { case Status.paid(amount): "paid"; case _: "other"; };', 0, 'paid', 'constant.other.enum.okkama');
+  check('let s = match order.status() { case Status.paid(amount): "paid"; case _: "other"; };', 0, 'status', 'constant.other.enum.okkama', true);
   check('let package is Package = Package.fake();', 0, 'fake', 'constant.other.enum.okkama', true);
   check('Stdout().writeln(text);', 0, 'writeln', 'constant.other.enum.okkama', true);
   check('for 1..10 -> i { i; }', 0, '10', 'constant.numeric.integer.okkama');

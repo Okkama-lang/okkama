@@ -503,7 +503,8 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         let message = match token.kind {
-            TokenKind::Question => "Single ? is not supported; use Maybe<T> or Presence<T> for optional types, or ?? / !! for selection.".to_string(),
+            TokenKind::Question => "Single ? is not supported; use Maybe<T> or Presence<T> for optional types.".to_string(),
+            TokenKind::Choice => "?? / !! selection was removed; use a match with compact cases: match value { case Maybe.some(v): v; case _: 0; }".to_string(),
             TokenKind::QuestionDot => {
                 "Optional chaining is not part of Okkama v1.0 syntax.".to_string()
             }

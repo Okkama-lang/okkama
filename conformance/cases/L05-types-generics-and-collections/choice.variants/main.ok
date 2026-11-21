@@ -1,3 +1,3 @@
 module app v1.0.0;
 
-main() is int { let name = Presence.some("") ?? .some(v): v !! .none: "null" !! .missing: "missing"; let n = Maybe<int>.none ?? .some(v): v !! _: 42; if name == "" && n == 42 { 0; } else { 1; } }
+main() is int { let name = match Presence.some("") { case Presence.some(v): v; case Presence.none: "null"; case Presence.missing: "missing"; }; let n = match Maybe<int>.none { case Maybe.some(v): v; case _: 42; }; if name == "" && n == 42 { 0; } else { 1; } }

@@ -54,7 +54,7 @@ async main() is int{
     let stream=await Query(connection,many).rows();
     let seen=Atomic(0);
     for await stream -> row{seen.replace(seen.value()+1);}
-    c=c.ok("expanded stream has stable EOF",seen.value()==137 && ((await stream.next()) ?? .none: true !! _: false));
+    c=c.ok("expanded stream has stable EOF",seen.value()==137 && (match (await stream.next()) { case Maybe.none: true; case _: false; }));
     let cursor=await connection.rows(many);
     let pending=spawn ReadTask(cursor).read();pending.cancel();
     c=c.ok("fetch cancellation propagates",try{await pending;false;}catch e is Cancelled{true;});

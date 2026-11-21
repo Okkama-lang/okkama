@@ -23,12 +23,13 @@ main() is int {
     out.writeln(a.string() + " " + b.string());
     let c = try? db.query(0) + 1 else 99;
     out.writeln(c.string());
-    let d = try? db.query(3)
-        ?? .some(v): "some " + v.string()
-        !! .none: "none";
+    let d = match try? db.query(3) {
+        case Maybe.some(v): "some " + v.string();
+        case Maybe.none: "none";
+    };
     out.writeln(d);
     let nested is Maybe<Maybe<int>> = try? db.lookup(0);
-    out.writeln(nested == Maybe.some(Maybe<int>.none) ?? "kept" !! "flattened");
+    out.writeln(if nested == Maybe.some(Maybe<int>.none) { "kept"; } else { "flattened"; });
     let f = try! db.query(4);
     out.writeln(f.string());
     0;

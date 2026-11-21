@@ -8,6 +8,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **`match` gets compact cases; `?? … !!` is removed (#893).** A case body is a block or `case pattern: value;`, and
+  the two forms mix in one `match`; `case _` is the remainder (another spelling of `else`). Nothing else about
+  `match` changes: one evaluation of the subject, only the chosen case runs, bindings stay in their case, the
+  usual exhaustiveness, repeated-case and typing rules. The experimental `?? … !!` selection is gone from the
+  lexer, parser, AST, checker, formatter and the VS Code grammar (0.10.0); `??` is now a syntax error that points
+  to the compact form. A two-way choice on a `bool` is an `if` expression. 190 uses in std, examples, t/ and
+  conformance were migrated with the compiler's own spans and enum names; the t/ generator writes compact
+  cases and now also nests them. Book EN/RU 24.3 and spec §15.1 describe `match` as one construct with two case
+  forms.
+
 - **A `match` case that can never run is an error (#286).** A repeated enum case (`Duplicate variant pattern`), a
   repeated literal (`Duplicate case pattern`) and an `else` after cases that cover every value of an enum or `bool`
   (`Unreachable else: the cases already cover every value`). Thirteen dead `else` branches in std were removed.

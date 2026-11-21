@@ -273,7 +273,7 @@ fn try_throw_and_return() {
         "try { x; } catch e is DbError, NetError {} catch DbError.failed(code, _) {} \
          catch DbError.closed, net.NetError.reset, Denied {}",
     ));
-    parse_ok(&wrap("let a = try? f() else 0; try! g(); let b = try? h() ?? .some(v): v !! .none: 0;"));
+    parse_ok(&wrap("let a = try? f() else 0; try! g(); let b = match try? h() { case Maybe.some(v): v; case Maybe.none: 0; };"));
     for (body, expected) in [
         ("try {}", "Expect \"catch\" after try block."),
         (

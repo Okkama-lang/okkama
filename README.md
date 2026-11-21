@@ -68,7 +68,7 @@ main() is int {
 |---|---|
 | **Enums with payloads** | `enum Shape = (circle(radius is float), point);` and an exhaustive `match` |
 | **`Maybe<T>` / `Presence<T>`** | explicit absence instead of `null`; `value else fallback`; *missing* ≠ *null* ≠ *value* |
-| **Ternary and compact choice** | `ok ?? "yes" !! "no"` and `maybe ?? .some(v): v !! .none: 0` |
+| **Compact match cases** | `match maybe { case Maybe.some(v): v; case Maybe.none: 0; }`, mixed freely with block cases |
 | **Errors are enums** | `enum DbError is Error = (...)`, generated `text()`, causes as payloads |
 | **`try?` / `try!`** | Swift-style: an error becomes `Maybe.none`, or a panic when it "cannot happen" |
 | **Catch by case** | `catch DbError.query(sql, code)`, `catch DbError.closed, NetError.reset`, `catch e is A, B` |
@@ -238,21 +238,25 @@ let email = patch.email().fold() else "default";  // merge missing + none explic
 implicitly: an empty string, `0` and `false` are present values, and
 `Presence else …` is a compile error until you `fold()` it.
 
-### Ternaries and compact choices
+### Compact match cases
 
 ```okkama
-let label = stock > 0 ?? "in stock" !! "sold out";          // bool → typed ternary
+let label = if stock > 0 { "in stock"; } else { "sold out"; };   // a typed if expression
 
-let text = cache.lookup(key)                                // enum → compact match
-    ?? .some(hit): hit
-    !! .none: "miss";
+let text = match cache.lookup(key) { case Maybe.some(hit): hit; case Maybe.none: "miss"; };
 
-let shown = order.status()
-    ?? .paid(amount): "paid " + amount.string()
-    !! _: "not paid";                                        // `_` covers the rest
+let shown = match order.status() {
+    case Status.paid(amount): "paid " + amount.string();
+    case Status.refunded(amount) {
+        audit.note(amount);
+        "refunded";
+    }
+    case _: "not paid";                                          // `_` covers the rest
+};
 ```
 
-Both branches are lazy, the subject is evaluated once, and the branch types
+`match` has one meaning and two case forms: a block, or `case pattern: value;`.
+Only the chosen case runs, the subject is evaluated once, and the case types
 must agree — no implicit common type, no truthiness.
 
 ### Errors are enums — catch by case, recover with `try?`

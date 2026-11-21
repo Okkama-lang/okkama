@@ -604,7 +604,6 @@ fn map_values_may_start_with_a_parenthesis() {
         ("[1: (2) + 1]", "(map 1:(+ (group 2) 1))"),
         ("[\"x\": (-1)]", "(map \"x\":(group (- 1)))"),
         ("[\"a\": 1, \"b\": (2 + 3) * 2]", "(map \"a\":1 \"b\":(* (group (+ 2 3)) 2))"),
-        ("[\"x\": (true ?? 1 !! 2)]", "(map \"x\":(group (CompactChoice expression=(if true {1} {2}))))"),
         ("[x: (2)]", "(map x:(group 2))"),
         ("[LIMIT:(4)]", "(map LIMIT:(group 4))"),
         ("[\"o\": [\"i\": (7)]]", "(map \"o\":(map \"i\":(group 7)))"),
