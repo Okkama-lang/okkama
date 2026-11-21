@@ -1,5 +1,7 @@
 """Independent mathematical/content oracles; never learn expected output from a VM."""
 import base64
+import datetime
+import zlib
 import hashlib
 import json
 from functools import lru_cache
@@ -58,6 +60,18 @@ def contribution(name, i):
     if name=='string-replace':return (12+len(str(i)))%7
     if name=='string-split':return 4
     if name=='utf8-encode':return (13+len(str(i)))%7
+    data8=bytes([i%256,1,2,3,4,5,6,7])
+    if name=='hex-decode':return (i%256)%7
+    if name=='crc32':return zlib.crc32(data8)%7
+    if name=='adler32':return zlib.adler32(data8)%7
+    if name=='sha512':return hashlib.sha512(data8).digest()[0]%7
+    if name=='percent-encode':return len('a%20b%2F'+str(i))%7
+    if name=='percent-decode':return len('a b/'+str(i))%7
+    if name=='date-shift':return (datetime.date(2026,8,11)+datetime.timedelta(days=i%400)).day%7
+    if name=='locale-case':return len('İSTANBUL'+str(i))%7
+    if name=='normalize-nfc':return len('é'+str(i))%7
+    if name=='json-render':return len(json.dumps({'id':i,'ok':True},separators=(',',':')))%7
+    if name=='template-render':return len('Hello, Ada #'+str(i)+'!')%7
     raise ValueError('No independent oracle: '+name)
 
 

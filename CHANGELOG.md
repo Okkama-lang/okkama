@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **Eleven more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
+  percent encoding and decoding, date shifting, Turkish case, NFC normalization, JSON rendering and template
+  rendering, each with an independent Python oracle; 17 of 435 std modules now have a declared measured action.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second

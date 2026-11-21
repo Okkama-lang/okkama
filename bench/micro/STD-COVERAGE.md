@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-10 of 430 non-runtime module files have an explicitly declared measured action.
+17 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -25,8 +25,8 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `async/timeout` | — |
 | `calendar` | — |
 | `cell` | — |
-| `checksum/adler32` | — |
-| `checksum/crc` | — |
+| `checksum/adler32` | adler32 |
+| `checksum/crc` | crc32 |
 | `checksum/state` | — |
 | `cli/arguments` | — |
 | `cli/command` | — |
@@ -107,7 +107,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `digest/host` | — |
 | `digest/legacy` | — |
 | `digest/read` | — |
-| `digest/sha2` | sha256 |
+| `digest/sha2` | sha256, sha512 |
 | `digest/sha3` | — |
 | `digest/shake` | — |
 | `digest/state` | — |
@@ -116,7 +116,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `encoding/base85` | — |
 | `encoding/binary` | — |
 | `encoding/bytes` | — |
-| `encoding/hex` | hex-encode |
+| `encoding/hex` | hex-encode, hex-decode |
 | `encoding/pem` | — |
 | `encoding/quoted_printable` | — |
 | `encoding/single_byte` | — |
@@ -252,7 +252,8 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `io/stream` | — |
 | `io/text` | — |
 | `io/transfer` | — |
-| `json` | json-parse, json-round-trip |
+| `json` | json-parse, json-round-trip, json-render |
+| `locale/case` | locale-case |
 | `locale/collation` | — |
 | `locale/currency` | — |
 | `locale/data` | — |
@@ -316,6 +317,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `mail/smtp_data` | — |
 | `mail/smtp_reading` | — |
 | `mail/smtp_reply` | — |
+| `mail/smtp_session` | — |
 | `math/aggregate` | — |
 | `math/constants` | — |
 | `math/decimal` | — |
@@ -354,6 +356,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `os/platform` | — |
 | `os/process` | — |
 | `os/run` | — |
+| `os/signal` | — |
 | `os/storage` | — |
 | `parallel/map` | — |
 | `plist/parse` | — |
@@ -375,6 +378,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `strings/join` | — |
 | `strings/parse` | int-parse |
 | `template/compile` | — |
+| `template/engine` | template-render |
 | `template/html` | — |
 | `template/html_library` | — |
 | `template/json` | — |
@@ -401,11 +405,12 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `testing/report` | — |
 | `testing/result` | — |
 | `testing/runner` | — |
+| `testing/signal` | — |
 | `testing/snapshot` | — |
 | `testing/time` | — |
 | `text/layout` | — |
 | `time/clock` | — |
-| `time/date` | — |
+| `time/date` | date-shift |
 | `time/day` | — |
 | `time/duration` | — |
 | `time/format` | — |
@@ -416,9 +421,9 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `toml/parse` | — |
 | `toml/value` | — |
 | `unicode/character` | — |
-| `unicode/normalization` | — |
+| `unicode/normalization` | normalize-nfc |
 | `url/form` | — |
-| `url/percent` | — |
+| `url/percent` | percent-encode, percent-decode |
 | `url/query` | — |
 | `url/value` | — |
 | `uuid/generation` | — |
