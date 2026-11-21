@@ -120,6 +120,9 @@ def contribution(name, i):
     if name=='regex-escape':return (len('price: $5.00 '+str(i))+4)%7
     if name=='unicode-category':return 1 if i%52<26 else 2
     if name=='xml-escape':return len('a &lt; b &amp; c'+str(i))%7
+    if name=='csv-round-trip':return len('name,note\r\nAda,"x, '+str(i)+'"\r\n')%7
+    if name=='text-buffer':return len('<li>'+str(i)+'</li>!\n')%7
+    if name=='formatted':return len(str(i)+' of 9 done')%7
     raise ValueError('No independent oracle: '+name)
 
 

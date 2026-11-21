@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-48 of 435 non-runtime module files have an explicitly declared measured action.
+51 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -79,7 +79,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `crypto/x509/name` | — |
 | `crypto/x509/trust` | — |
 | `crypto/x509/value` | — |
-| `csv` | — |
+| `csv` | csv-round-trip |
 | `csv/input` | — |
 | `csv/stream` | — |
 | `db/acquisition` | — |
@@ -373,8 +373,8 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `regex/split` | — |
 | `size` | — |
 | `statistics` | statistics-median |
-| `strings/buffer` | — |
-| `strings/format` | — |
+| `strings/buffer` | text-buffer |
+| `strings/format` | formatted |
 | `strings/join` | joined |
 | `strings/parse` | int-parse, hex-number-parse |
 | `template/compile` | — |
