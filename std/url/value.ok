@@ -28,7 +28,8 @@ import "encoding/utf" take InvalidUtf8;
 import "error" take InvalidArgument;
 import "net/endpoint" take HostName, InvalidHostName;
 import "net/ip" take IpAddress, IpVersion, InvalidIpAddress;
-import "runtime/url_text" take url_dot_segments;
+import "collections/list" take List, EmptyList;
+import "cell" take Cell;
 
 // Presence is separate from text. Inputs are URI/IRI component text, with
 // existing escapes; plain field data must first be encoded explicitly.
@@ -918,8 +919,8 @@ hidden object UrlSchemeText {
     }
 }
 
-// Resolution, rather than reference construction, removes dot segments. The
-// profiled bulk operation avoids VM ownership walks over a persistent stack.
+// Resolution, rather than reference construction, removes dot segments
+// (RFC 3986 §5.2.4). A path without "." or ".." segments comes back as it is.
 hidden object UrlDotSegments {
     has origin is string;
 
@@ -930,16 +931,59 @@ hidden object UrlDotSegments {
     path() is string {
         confirm origin.length() <= 8192
             else throw InvalidUrl.located(8192, "dot path source limit exceeded");
-        let path = try {
-            url_dot_segments(origin);
+        // Under 1024 characters a path has at most 1024 segments.
+        if origin.length() < 1024 && !origin.starts_with(".") && !origin.contains("/.") {
+            return origin;
         }
-        catch failure is NativeFailure {
-            if failure.domain() == "core.url_text" && failure.code() == "invalid_input" {
-                throw InvalidUrl.located(0, "invalid bounded dot path");
+        let parts = origin.split("/");
+        confirm parts.size() <= 1024
+            else throw InvalidUrl.located(0, "invalid bounded dot path");
+        let final_index = parts.size() - 1;
+        let empty is List<string> = EmptyList();
+        // Kept segments, the last one first.
+        let kept = Cell(empty);
+        // Whether a segment was kept since the start: later ones follow a "/".
+        let started = Cell(false);
+        // Whether the first kept segment was the path's first: no leading "/".
+        let relative = Cell(false);
+        for (0..parts.size()) -> at {
+            let part = parts[at];
+            if part == "." || part == ".." {
+                if part == ".." && kept.value().size() > 0 {
+                    kept.replace(kept.value().tail());
+                    if kept.value().size() == 0 {
+                        relative.replace(false);
+                    }
+                }
+                // A final dot segment leaves a trailing "/".
+                if at == final_index && started.value() {
+                    kept.replace(kept.value().prefix(""));
+                }
             }
-            throw;
+            else {
+                if !started.value() {
+                    relative.replace(true);
+                }
+                kept.replace(kept.value().prefix(part));
+                started.replace(true);
+            }
+        }
+        let backwards is @string = kept.value().map() -> segment {
+            segment;
         };
-        path;
+        let count = backwards.size();
+        if count == 0 {
+            return "";
+        }
+        let joined = (0..count).map() -> index {
+            backwards[count - 1 - index];
+        }.join("/");
+        if relative.value() {
+            joined;
+        }
+        else {
+            "/" + joined;
+        }
     }
 }
 
@@ -1871,5 +1915,44 @@ test "RFC 3986 normal and abnormal reference resolution stays distinct from join
     ];
     for cases -> pair {
         test.is(base.resolved(ParsedUrl(pair[0]).parts()).string(), pair[1]);
+    }
+}
+
+test "dot segment removal follows RFC 3986 section 5.2.4 within the path limits" {
+    let cases = [
+        ["", ""],
+        ["/", "/"],
+        ["/a/b/c/./../../g", "/a/g"],
+        ["mid/content=5/../6", "mid/6"],
+        ["/a/b/c", "/a/b/c"],
+        ["a/b/", "a/b/"],
+        [".", ""],
+        ["..", ""],
+        ["./", ""],
+        ["../a", "a"],
+        ["/../a", "/a"],
+        ["a/..", "/"],
+        ["a/../b", "/b"],
+        ["a/.", "a/"],
+        ["/a/b/..", "/a/"],
+        ["/a/b/.", "/a/b/"],
+        ["/a/./b/../../..", "/"],
+        [".a/b./..c", ".a/b./..c"],
+        ["a/.b/c..", "a/.b/c.."],
+        ["//a//./b", "//a//b"],
+        ["/é/./ü/../z", "/é/z"],
+    ];
+    for cases -> pair {
+        test.is(UrlDotSegments(pair[0]).path(), pair[1]);
+    }
+    // 1024 segments are the limit, with or without dot segments.
+    test.is(UrlDotSegments("/".repeat(1023)).path(), "/".repeat(1023));
+    test.is(UrlDotSegments("x" + "/.".repeat(1023)).path(), "x/");
+    test.is(UrlDotSegments("/" + "a".repeat(1023)).path(), "/" + "a".repeat(1023));
+    test.is(UrlDotSegments("a".repeat(8192)).path(), "a".repeat(8192));
+    for ["/".repeat(1024), "x" + "/.".repeat(1024), "a".repeat(8193)] -> path {
+        test.throws(InvalidUrl) {
+            UrlDotSegments(path).path();
+        };
     }
 }

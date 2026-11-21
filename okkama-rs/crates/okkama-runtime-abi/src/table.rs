@@ -471,7 +471,6 @@ natives! {
     UnicodeCharacterDisplayWidths = 506, "runtime/unicode_character@1::display_widths/1", "(string) -> @int";
     UnicodeCharacterDisplayInvalidIndex = 507, "runtime/unicode_character@1::display_invalid_index/1", "(string) -> int";
     UnicodeNormalizationNormalizedText = 508, "runtime/unicode_normalization@1::normalized_text/2", "(string, string) -> string";
-    UrlTextUrlDotSegments = 509, "runtime/url_text@1::url_dot_segments/1", "(string) -> string";
     UuidUuidValid = 510, "runtime/uuid@1::uuid_valid/1", "(string) -> bool";
     UuidUuidBytes = 511, "runtime/uuid@1::uuid_bytes/1", "(string) -> @byte";
     UuidUuidString = 512, "runtime/uuid@1::uuid_string/1", "(@byte) -> string";
@@ -634,4 +633,4 @@ natives! {
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
-// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 441, 442, 443, 444, 445, 446, 447, 448, 449, 539, 540, 541, 542, 543, 544, 545, 546
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 441, 442, 443, 444, 445, 446, 447, 448, 449, 509, 539, 540, 541, 542, 543, 544, 545, 546

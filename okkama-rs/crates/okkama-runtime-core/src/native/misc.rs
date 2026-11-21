@@ -1,6 +1,6 @@
 //! Небольшие natives std: `runtime/crypto`,
 //! `runtime/secret`, `runtime/debug`, `runtime/diff`, `runtime/math_aggregate`,
-//! `runtime/url_text`, `runtime/layout`. Тексты отказов — как у Perl-provider.
+//! `runtime/layout`. Тексты отказов — как у Perl-provider.
 use super::support::{
     byte_array, bytes, failure, float, handle, int, int_value, items, new_handle, string, text,
 };
@@ -272,35 +272,6 @@ fn diff_script(left: &[String], right: &[String]) -> Vec<Value> {
     script
 }
 
-// ---- runtime/url_text ----
-
-fn dot_segments(native: Native, source: &str) -> Result<String, Error> {
-    let invalid = |message: &str| failure("core.url_text", "invalid_input", native, message);
-    if length(source) > 8192 {
-        return Err(invalid("invalid bounded dot path"));
-    }
-    let parts: Vec<&str> = source.split('/').collect();
-    if parts.len() > 1024 {
-        return Err(invalid("dot path segment limit exceeded"));
-    }
-    let mut stack: Vec<String> = Vec::new();
-    let mut history = false;
-    for (at, part) in parts.iter().enumerate() {
-        if *part == "." || *part == ".." {
-            if *part == ".." {
-                stack.pop();
-            }
-            if at == parts.len() - 1 && history {
-                stack.push("/".into());
-            }
-        } else {
-            stack.push(format!("{}{part}", if history { "/" } else { "" }));
-            history = true;
-        }
-    }
-    Ok(stack.concat())
-}
-
 // ---- runtime/layout ----
 
 /// Строки с их окончаниями (`\r\n`, `\n`, `\r` или конец текста).
@@ -466,9 +437,6 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
                 ));
             }
             Ok(Value::Float(value.sqrt()))
-        }
-        ("runtime/url_text", "url_dot_segments") => {
-            Ok(text(dot_segments(native, string(&args[0])?)?))
         }
         ("runtime/layout", "indent") => Ok(text(indent(string(&args[0])?, string(&args[1])?))),
         ("runtime/layout", "dedent") => Ok(text(dedent(string(&args[0])?))),

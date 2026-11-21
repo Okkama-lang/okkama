@@ -6533,22 +6533,6 @@
       "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
     },
     {
-      "id": "STD.RUNTIME.URL_TEXT",
-      "title": "std runtime/url_text public contract (no public declarations)",
-      "family": "Standard library: runtime",
-      "spec_refs": [
-        "std/runtime/url_text.ok"
-      ],
-      "status": "informative",
-      "aspects": {
-        "normal": "required",
-        "boundary": "n/a: module owns no public declarations",
-        "invalid": "n/a: module owns no public declarations",
-        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
-      },
-      "notes": "Native substrate module; its behaviour is observed through the public modules that compose it."
-    },
-    {
       "id": "STD.RUNTIME.UTF",
       "title": "std runtime/utf public contract (no public declarations)",
       "family": "Standard library: runtime",

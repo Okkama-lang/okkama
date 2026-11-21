@@ -186,20 +186,20 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 
 - `okkama-devtrace/src/lib.rs` 312 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 4956 lines
+## cli — 10 files, 4959 lines
 
 - `okkama-cli/src/core.rs` 64 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
 - `okkama-cli/src/import_paths.rs` 173 — Подсказки путей зависимостей в `import "pkg/…"` (spec §5.2.2): `pkg/`,
 - `okkama-cli/src/lsp.rs` 927 — `okkama lsp` — сервер языка (Language Server Protocol, stdio).
 - `okkama-cli/src/main.rs` 1692 — `okkama` — command-line front end for the Okkama compiler library.
-- `okkama-cli/src/man.rs` 408 — `okkama man` (#512): reference pages from the doc comments of modules, read
+- `okkama-cli/src/man.rs` 411 — `okkama man` (#512): reference pages from the doc comments of modules, read
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 409 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 238 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36471 lines
+## other — 87 files, 36441 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 634
+- `okkama-runtime-abi/src/table.rs` 633
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
@@ -266,7 +266,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/json_split.rs` 256 — JSON items cut from a stream (#136): the elements of one top-level array,
 - `okkama-runtime-core/src/native/markup.rs` 1378 — `runtime/toml` (TOML 1.0 в дерево узлов) и `runtime/html` (поток событий
 - `okkama-runtime-core/src/native/math.rs` 786 — Числовые natives: `runtime/format::sprintf_values`
-- `okkama-runtime-core/src/native/misc.rs` 509 — Небольшие natives std: `runtime/crypto`,
+- `okkama-runtime-core/src/native/misc.rs` 480 — Небольшие natives std: `runtime/crypto`,
 - `okkama-runtime-core/src/native/net.rs` 193 — `runtime/net` (числовые IP-адреса): текст
 - `okkama-runtime-core/src/native/network.rs` 1677 — `runtime/network`: TCP-слушатели и потоки, UDP, multicast, Unix-сокеты и
 - `okkama-runtime-core/src/native/numbers.rs` 216 — `runtime/bigint` и `runtime/decimal` — перенос `BigIntNatives` и части

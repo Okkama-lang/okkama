@@ -197,7 +197,7 @@ fn route(native: Native) -> Provider {
         "runtime/bytes" => return Provider::Bytes,
         "runtime/postgres" => return Provider::Postgres,
         "runtime/crypto" | "runtime/secret" | "runtime/debug" | "runtime/diff"
-        | "runtime/math_aggregate" | "runtime/url_text" | "runtime/layout" => {
+        | "runtime/math_aggregate" | "runtime/layout" => {
             return Provider::Misc;
         }
         "runtime/idna" | "runtime/public_suffix" => return Provider::Idna,
