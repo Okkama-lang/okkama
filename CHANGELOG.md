@@ -18,6 +18,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed write after half its bytes); `File.replace` is shown to keep the old file and leave no temporary file when
   the write, the file fsync or the rename fails, and to report `not_durable` with the new content when only the
   directory fsync fails. `bench/io/replace.ok` compares write, write + sync and replace on the machine at hand.
+- **Eleven more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
+  percent encoding and decoding, date shifting, Turkish case, NFC normalization, JSON rendering and template
+  rendering, each with an independent Python oracle; 17 of 435 std modules now have a declared measured action.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second
