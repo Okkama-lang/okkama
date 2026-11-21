@@ -1435,14 +1435,18 @@ impl Heap {
         let mut worklist = std::mem::take(&mut self.worklist);
         // An object is marked when it is queued, not when it is traced
         // (#438): one shared by many edges enters the worklist once.
+        let roots_span = okkama_devtrace::span!("gc", "mark roots");
         roots(&mut |word, repr| {
             if let Some(pointer) = repr.pointer(word) {
                 // SAFETY: a root is a live object pointer.
                 unsafe { mark_and_queue(pointer, &mut worklist) };
             }
         });
+        drop(roots_span);
         loop {
+            let trace_span = okkama_devtrace::span!("gc", "mark trace");
             self.mark_reachable(&mut worklist);
+            drop(trace_span);
             // SAFETY: keys are live object pointers; their headers are read.
             let marked = |object: Word| unsafe { *(object as *const u64) } & MARK != 0;
             let mut found = false;
@@ -1637,6 +1641,9 @@ impl Heap {
     }
 
     fn sweep(&mut self) {
+        let _span = okkama_devtrace::span!("gc", "sweep");
+        // Development counters (#538), summed locally and reported once per sweep.
+        let (mut dead_cells, mut free_cells, mut full_cells, mut empty_cells, mut visited) = (0, 0, 0, 0, 0);
         self.free = [0; CLASSES.len()];
         for chains in &mut self.reserve {
             chains.clear();
@@ -1649,32 +1656,51 @@ impl Heap {
         // Pages with no live cell (#435): their chains wait until the end of
         // the sweep decides how many empty pages the next cycle needs.
         let mut empty: Vec<(usize, Word, usize)> = Vec::new();
+        let census_on = self.allocations.is_some();
         for (index, page) in self.pages.iter_mut().enumerate() {
             let size = CLASSES[page.class];
             let base = page.memory.as_mut_ptr() as Word;
             let cells = page.memory.len() / size;
             let mut kept = 0;
             let mut chain = 0;
+            // #538: a tight loop. Only big integers and payloads own Rust memory (`owned_bytes`, `release`);
+            // the census runs only with statistics on.
+            let step = size * 8;
             for cell in (0..cells).rev() {
-                let address = base + (cell * size * 8) as Word;
+                let address = base + (cell * step) as Word;
                 // SAFETY: every cell of a page starts with a header.
                 let header = unsafe { *(address as *const u64) };
+                let owns = matches!(kind(header), BIGINT | PAYLOAD);
                 if header & MARK != 0 {
                     unsafe { *(address as *mut u64) = header & !MARK };
-                    live += size * 8;
                     kept += 1;
-                    external_live += unsafe { owned_bytes(address, header) };
-                    if let Some(allocations) = &mut self.allocations {
-                        census(&mut allocations.live, header, size * 8);
+                    if owns {
+                        external_live += unsafe { owned_bytes(address, header) };
+                    }
+                    if census_on && let Some(allocations) = &mut self.allocations {
+                        census(&mut allocations.live, header, step);
                     }
                     continue;
                 }
                 if kind(header) != FREE {
-                    unsafe { release(address, header) };
+                    dead_cells += 1;
+                    if owns {
+                        unsafe { release(address, header) };
+                    }
                     unsafe { *(address as *mut u64) = 0 };
+                } else {
+                    free_cells += 1;
                 }
                 unsafe { *((address + 8) as *mut u64) = chain };
                 chain = address;
+            }
+            live += kept * step;
+            visited += cells;
+            if kept == cells {
+                full_cells += cells;
+            }
+            if kept == 0 {
+                empty_cells += cells;
             }
             if kept == 0 {
                 empty.push((index, chain, cells * size * 8));
@@ -1722,6 +1748,11 @@ impl Heap {
         self.threshold = if self.stress { 0 } else { (live + external_live).max(COLLECTION_FLOOR) };
         self.release_empty_pages(empty);
         self.collections += 1;
+        okkama_devtrace::count!("gc", "sweep cells visited", visited);
+        okkama_devtrace::count!("gc", "sweep cells newly dead", dead_cells);
+        okkama_devtrace::count!("gc", "sweep cells already free", free_cells);
+        okkama_devtrace::count!("gc", "sweep cells in full pages", full_cells);
+        okkama_devtrace::count!("gc", "sweep cells in empty pages", empty_cells);
     }
 }
 
