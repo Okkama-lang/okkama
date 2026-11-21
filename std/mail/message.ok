@@ -14,7 +14,9 @@ module mail/message v1.0.0;
 //     back.headers().first("Subject");
 //
 // MailMessage(from:, to:, subject:, text:) adds Date, a fresh Message-ID,
-// MIME-Version and a UTF-8 Content-Type. A message knows nothing of the SMTP
+// MIME-Version and a UTF-8 Content-Type. Text beyond ASCII goes out
+// quoted-printable, which every transport carries (RFC 2045 §6.7); ASCII text
+// stays 7bit. A message knows nothing of the SMTP
 // envelope; DeliveredMail is the copy to hand to a server, without Bcc.
 
 import "mime/part" take MimeBody, MimePart, MimeLimits, ParsedMime, InvalidMime, BinaryBody,
@@ -63,7 +65,8 @@ object MailMessage does ByteSource {
 
     // MailMessage(from: "Ada <ada@example.test>", to: ["grace@example.test"],
     // subject: "Lunch?", text: "Shall we?"): Date is now, Message-ID is fresh
-    // and the body is UTF-8 text. clock: and random: fix them, as tests do.
+    // and the body is UTF-8 text, quoted-printable when it is not ASCII.
+    // clock: and random: fix them, as tests do.
     MailMessage(
         from is string,
         to is Sequencing<string>,
@@ -123,10 +126,24 @@ object MailMessage does ByteSource {
                 value: "text/plain; charset=utf-8"
             ),
         );
+        let plain = Utf8Encoded(text).bytes().reduce(true) -> seven, octet {
+            seven && octet.int() < 128;
+        };
+        let fields = if plain {
+            headers;
+        }
+        else {
+            headers.addition(
+                MessageHeader(
+                    name: MessageHeaderName("Content-Transfer-Encoding"),
+                    value: "quoted-printable"
+                )
+            );
+        };
         let limits = MimeLimits();
         bounds = limits;
         content = MimePart(
-            headers: headers,
+            headers: fields,
             body: TextBody(origin: text, charset: "utf-8"),
             limits: limits
         );
@@ -836,6 +853,40 @@ test "a message from its fields sets its date, identifier and content type" {
             random: PcgRandom(1)
         );
     };
+}
+
+test "a text beyond ASCII goes out quoted-printable and comes back whole (#935)" {
+    let clock = ManualClock(Instant(Duration(seconds: 1700000000)));
+    let text = "Café à midi? = oui\r\n" + "é".repeat(60) + "\r\n";
+    let message = MailMessage(
+        from: "Ada <ada@example.test>",
+        to: ["grace@example.test"],
+        subject: "Déjeuner",
+        text: text,
+        clock: clock,
+        random: PcgRandom(7)
+    );
+    test.is(
+        message.headers().first(MessageHeaderName("Content-Transfer-Encoding")),
+        "quoted-printable"
+    );
+    let wire = message.bytes();
+    test.ok(wire.reduce(true) -> seven, octet {
+        seven && octet.int() < 128;
+    });
+    test.ok(message.string().contains("\n\nCaf=C3=A9 =C3=A0 midi? =3D oui\n"));
+    let back = ParsedMail(wire).message();
+    test.is(Utf8Decoded(back.body().bytes()).string(), text);
+    let ascii = MailMessage(
+        from: "a@b.test",
+        to: ["c@d.test"],
+        subject: "x",
+        text: "plain\r\n",
+        clock: clock,
+        random: PcgRandom(1)
+    );
+    test.ok(!ascii.headers().membership(MessageHeaderName("Content-Transfer-Encoding")));
+    test.ok(ascii.string().ends_with("\n\nplain\n"));
 }
 
 test "a message from its fields drops the fraction of the clock's second (#518)" {
