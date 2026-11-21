@@ -1373,3 +1373,25 @@ fn unreachable_match_cases_are_errors() {
     }
 }
 
+
+/// #475: every repeated enum case is reported once per repetition, in source
+/// order, at the repetition; the first declaration keeps the case, so the
+/// enum stays usable and a wide unique enum has no errors.
+#[test]
+fn repeated_enum_cases_are_reported_in_order_at_the_repetition() {
+    let text = "module app v1.0.0; enum E = (a, b, a, c, b, a); main() is int { let e = E.c; 0; }";
+    let found = errors(text);
+    let reported: Vec<&str> = found.iter().map(|error| error.message.as_str()).collect();
+    assert_eq!(reported, [
+        "Enum \"E\" already has case \"a\"",
+        "Enum \"E\" already has case \"b\"",
+        "Enum \"E\" already has case \"a\"",
+    ]);
+    let starts: Vec<usize> = found.iter().map(|error| error.span.start as usize).collect();
+    let at = |nth: usize, name: &str| text.match_indices(name).filter(|(i, _)| {
+        text[..*i].ends_with(", ") || text[..*i].ends_with('(')
+    }).nth(nth).map(|(i, _)| i).unwrap();
+    assert_eq!(starts, [at(1, "a"), at(1, "b"), at(2, "a")]);
+    let wide: Vec<String> = (0..3000).map(|i| format!("c{i}")).collect();
+    assert!(messages(&format!("enum W = ({}); main() is int {{ let w = W.c2999; 0; }}", wide.join(", "))).is_empty());
+}

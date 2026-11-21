@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Enum case duplicates are found with a set (#475).** Registration kept a growing list and searched it
+  for every case, quadratic in the number of cases; the ordered list still gives the ordinals, a set answers
+  "declared already?". Checking an enum of 16 000 cases: ~425 → ~115 ms (≈100 ms of it start-up); the same
+  diagnostics, in the same order.
 - **Base85 and quoted-printable encoders reserve their output (#467)**, as base32/base64 already did: five
   characters per started 4-octet group, and the input size. Pre-sizing UTF-16/32 output was measured and
   rejected: counting the units costs more than the reallocations it saves (UTF-16 +15–30%, UTF-32 even), and

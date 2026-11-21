@@ -922,9 +922,11 @@ impl<'a> Registry<'a> {
                         );
                         continue;
                     }
-                    let mut cases: Vec<String> = Vec::new();
+                    // Ordinals follow `cases`; `seen` answers "declared already?" (#475).
+                    let mut cases: Vec<String> = Vec::with_capacity(decl.cases.len());
+                    let mut seen: HashSet<&str> = HashSet::with_capacity(decl.cases.len());
                     for case in &decl.cases {
-                        if cases.contains(&case.text) {
+                        if !seen.insert(case.text.as_str()) {
                             self.error(
                                 case.span,
                                 format!("Enum \"{name}\" already has case \"{}\"", case.text),
