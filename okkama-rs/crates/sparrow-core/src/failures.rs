@@ -382,6 +382,13 @@ impl Runtime {
     #[inline]
     fn inline_slot(&self, object: Word) -> Option<Word> {
         let header = self.heap.header_of(object);
+        if heap::kind(header) == heap::FRAME {
+            // A Future's identity lives at the end of its frame (#931); serial 0 means it has none.
+            let at = self.loaded.functions[heap::payload(header) as usize].identity_at?;
+            let slot = object + at;
+            // SAFETY: a frame of a function with `identity_at` has those two words.
+            return (unsafe { *(slot as *const u64) } != 0).then_some(slot);
+        }
         if heap::kind(header) != heap::OBJECT || header & heap::IDENTITY == 0 {
             return None;
         }
@@ -442,8 +449,16 @@ impl Runtime {
     pub(crate) fn future_created(&mut self, frame: Word) {
         if self.resources.enabled {
             self.resources.serial += 1;
-            self.resources.identities.insert(frame, Identity { serial: self.resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
-            self.heap.watch(frame);
+            let function = heap::payload(self.heap.header_of(frame)) as usize;
+            if let Some(at) = self.loaded.functions[function].identity_at {
+                // Inline, at the end of the frame (#931): no hash-table entry, nothing for the collector to report.
+                crate::tasks::set(frame, at, self.resources.serial);
+                crate::tasks::set(frame, at + 8, encode_owner(Owner::Free));
+            } else {
+                // A runtime whose resources were switched on by hand (tests): the side table, as before.
+                self.resources.identities.insert(frame, Identity { serial: self.resources.serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
+                self.heap.watch(frame);
+            }
         }
     }
 
@@ -868,7 +883,13 @@ impl Runtime {
                 owned
             }
         };
-        let identity = self.resources.identities.get_mut(&future).expect("Future identity");
+        // A Future's identity is inline (#931); the side entry keeps only the groups that list it.
+        if !self.resources.identities.contains_key(&future) {
+            let serial = self.serial_of(future);
+            self.resources.identities.insert(future, Identity { serial, owner: Owner::Free, cache_rehomed: false, groups: Vec::new() });
+            self.heap.watch(future);
+        }
+        let identity = self.resources.identities.get_mut(&future).expect("group entry");
         if !identity.groups.contains(&owned) { identity.groups.push(owned); }
         // Registration adds a lifetime rather than stealing one: the group lists the Future, and the scope that
         // made it, bound or a temporary its region tracks, keeps it. When that scope closes, it hands the Future
@@ -1012,8 +1033,8 @@ impl Runtime {
                     // The outcome has a private owner. Only retained inputs
                     // follow the Future through lexical ownership transfers.
                     events += 1;
-                    let Some(identity) = self.resources.identities.get(&object) else { continue };
-                    if identity.owner == Owner::Free || Some(identity.owner) == via.map(Owner::Region) {
+                    let Some(owner) = self.owner_of(object) else { continue };
+                    if owner == Owner::Free || Some(owner) == via.map(Owner::Region) {
                         found.push(object);
                     }
                     // Retained inputs keep the #578 transfer rules even when
@@ -1021,8 +1042,10 @@ impl Runtime {
                     let function = heap::payload(header) as usize;
                     let source = &self.loaded.program.functions[function];
                     let layout = &self.heap.layouts().frames[function];
-                    let retained = layout.len() - source.params.len();
-                    for index in (retained..layout.len()).rev() {
+                    // The retained arguments end before the inline identity's two words (#931).
+                    let end = layout.len() - if self.loaded.functions[function].identity_at.is_some() { 2 } else { 0 };
+                    let retained = end - source.params.len();
+                    for index in (retained..end).rev() {
                         pending.push((self.heap.field(object, index), layout[index]));
                     }
                     continue;
@@ -2352,11 +2375,33 @@ mod inline_identity_tests {
              function f0 \"main\" {\n registers [t0]\n params []\n result t0\n\
              0: const r0, int 0\n 1: ret r0\n}\n\
              function f1 \"Vault.destroy\" {\n registers [t1]\n params [r0]\n result void\n 0: ret _\n}\n\
+             function f2 \"work\" async {\n registers [t0]\n params [r0]\n result t0\n 0: ret r0\n}\n\
              entry f0\n",
         ).unwrap();
         let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
         runtime.resources.enabled = true;
         runtime
+    }
+
+    /// #931: in a program with resources a Future's serial and owner live at the end of its frame, after the
+    /// retained arguments; the identity map never sees it, and a collection keeps the words.
+    #[test]
+    fn a_future_keeps_its_identity_at_the_end_of_its_frame() {
+        let mut runtime = runtime();
+        let at = runtime.loaded.functions[2].identity_at.expect("a program with resources");
+        let argument = runtime.heap.int(5);
+        let frame = runtime.future_new(2, &[argument]);
+        assert!(!runtime.resources.identities.contains_key(&frame), "no map entry");
+        assert_eq!(runtime.serial_of(frame), runtime.resources.serial);
+        assert_eq!(runtime.owner_of(frame), Some(Owner::Free));
+        assert_eq!(crate::tasks::get(frame, at - 8), argument, "the retained argument comes before the identity");
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.set_owner(frame, Owner::Region(region));
+        runtime.heap.collect(|visit| { visit(frame, Repr::Ref); visit(region, Repr::Ref); });
+        assert_eq!(runtime.owner_of(frame), Some(Owner::Region(region)));
+        assert_eq!(runtime.serial_of(frame), runtime.resources.serial);
+        let layout = &runtime.heap.layouts().frames[2];
+        assert_eq!(&layout[layout.len() - 2..], &[Repr::Raw, Repr::Raw], "the collector skips the identity words");
     }
 
     /// #528: an object with a destroy of its own carries its serial and owner in two words after its fields;

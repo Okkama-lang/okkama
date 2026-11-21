@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A Future keeps its ownership identity in its frame (#931).** Since #581 every Future of a program with
+  resources got its serial and owner through two hash tables (the identity map and the collector's watch list),
+  and every ownership step on it hashed. They are two words at the end of the frame now, as #528 did for
+  objects; only a Future a group lists keeps a side entry for its groups. `cancel-async-cleanup` 17.9k → 14.1k
+  instructions per iteration (1056 → 730 ns); async-await, spawn and channel pay the two words (+1–1.5%).
+  Programs without resources keep 0.5.8's frame size.
 - **Linux release builds keep their frame pointers (#930).** The collector finds its roots by walking frame
   records, so `okkama-rs/.cargo/config.toml` forces frame pointers on every non-Apple target; the release
   builds' `RUSTFLAGS="--cfg okkama_release"` (packages, `tools/package.sh`, `make build`) replaced that

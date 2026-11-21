@@ -135,7 +135,8 @@ impl Runtime {
         let source = &self.loaded.program.functions[function];
         let registers = source.registers.len();
         let retained = FIXED_WORDS + registers + usize::from(self.loaded.functions[function].driver);
-        let words = 1 + retained + source.params.len();
+        // Programs with resources add the inline identity's two words (#931).
+        let words = 1 + retained + source.params.len() + if self.loaded.functions[function].identity_at.is_some() { 2 } else { 0 };
         self.heap.counted("async frame", 0, words);
         let frame = self.heap.allocate(words);
         // SAFETY: fresh storage of `words` words.

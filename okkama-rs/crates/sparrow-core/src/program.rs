@@ -51,6 +51,10 @@ pub struct FunctionInfo {
     pub result: Option<Kind>,
     /// See [`is_driver`].
     pub driver: bool,
+    /// Byte offset of the Future's inline ownership identity (serial, owner) in this function's frame, after the
+    /// retained arguments (#931). Only programs with resources (a type with `destroy`) have it; others keep 0.5.8's
+    /// frame size.
+    pub identity_at: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -113,6 +117,7 @@ impl Loaded {
         let pointer_free = std::env::var_os("SPARROW_CORE_POINTER_FREE").is_none_or(|value| value != "0");
         let int_ranges = std::env::var_os("SPARROW_CORE_INT_RANGE").is_none_or(|value| value != "0");
         let profile = std::env::var("SPARROW_CORE_PROFILE_COMPILE").is_ok_and(|value| !value.is_empty() && value != "0");
+        let resources = program.objects.iter().any(|o| o.destroy.is_some());
         let functions = program
             .functions
             .iter()
@@ -130,12 +135,11 @@ impl Loaded {
                 if let Some(started) = started {
                     eprintln!("; pointer-free analysis\t{}\t{} microseconds", f.symbol, started.elapsed().as_micros());
                 }
-                FunctionInfo {
-                    kinds,
-                    pointer_free,
-                    result: f.result.map(|t| Kind::of(&program, t)),
-                    driver: is_driver(f),
-                }
+                let driver = is_driver(f);
+                // header, fixed words, registers, the driver slot, retained arguments; then the identity
+                let identity_at = resources
+                    .then(|| (1 + crate::tasks::FIXED_WORDS + kinds.len() + usize::from(driver) + f.params.len()) as u64 * 8);
+                FunctionInfo { kinds, pointer_free, result: f.result.map(|t| Kind::of(&program, t)), driver, identity_at }
             })
             .collect();
         // A cell is what its constructor intrinsic makes, whatever its name.
@@ -225,6 +229,9 @@ impl Loaded {
                         layout.push(Repr::Ref);
                     }
                     layout.extend(source.params.iter().map(|param| f.kinds[param.0 as usize].repr()));
+                    if f.identity_at.is_some() {
+                        layout.extend([Repr::Raw, Repr::Raw]); // identity serial and owner (#931)
+                    }
                     layout
                 })
                 .collect(),
