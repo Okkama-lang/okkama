@@ -1,5 +1,6 @@
 """Independent mathematical/content oracles; never learn expected output from a VM."""
 import base64
+import statistics
 import hmac
 import ipaddress
 import gzip
@@ -82,6 +83,10 @@ def contribution(name, i):
     if name=='sha3-256':return hashlib.sha3_256(data8).digest()[0]%7
     if name=='gzip-round-trip':return (i%256)%7
     if name=='uuid-parse':return (4+36)%7
+    if name=='xml-attribute':return len(str(i))%7
+    if name=='toml-parse':return (1+len(str(i)))%7
+    if name=='statistics-median':return int(statistics.median([1.0,5.0,float(i%10)]))%7
+    if name=='text-indent':return len('  first\n  second'+str(i))%7
     raise ValueError('No independent oracle: '+name)
 
 

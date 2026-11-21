@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-23 of 435 non-runtime module files have an explicitly declared measured action.
+27 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -372,7 +372,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `regex/search` | regex-first-match |
 | `regex/split` | — |
 | `size` | — |
-| `statistics` | — |
+| `statistics` | statistics-median |
 | `strings/buffer` | — |
 | `strings/format` | — |
 | `strings/join` | — |
@@ -408,7 +408,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `testing/signal` | — |
 | `testing/snapshot` | — |
 | `testing/time` | — |
-| `text/layout` | — |
+| `text/layout` | text-indent |
 | `time/clock` | — |
 | `time/date` | date-shift |
 | `time/day` | — |
@@ -418,7 +418,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `time/local_datetime` | — |
 | `time/rfc3339` | — |
 | `time/zone` | — |
-| `toml/parse` | — |
+| `toml/parse` | toml-parse |
 | `toml/value` | — |
 | `unicode/character` | — |
 | `unicode/normalization` | normalize-nfc |
@@ -439,5 +439,5 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `web/testing` | — |
 | `xml/name` | — |
 | `xml/node` | — |
-| `xml/parse` | — |
+| `xml/parse` | xml-attribute |
 | `xml/write` | — |
