@@ -1,7 +1,7 @@
 module uuid/value v1.0.0;
 
 import "compare" take Comparing, Order;
-import "runtime/uuid" take uuid_valid, uuid_bytes, uuid_string, uuid_version, uuid_variant;
+import "encoding/hex" take HexEncoded, HexDecoded, InvalidHex;
 
 // A UUID is a role: whatever makes one, it answers the same questions.
 //
@@ -49,15 +49,13 @@ object UuidText does Uuid, Comparing<Uuid> {
 
     // Reads `8-4-4-4-12` hexadecimal text, either case; InvalidUuid otherwise.
     UuidText(origin is string) {
-        confirm uuid_valid(origin)
-            else throw InvalidUuid.because("invalid canonical UUID text");
         // The bytes are the value, so uppercase and lowercase text are equal.
-        self.origin = uuid_bytes(origin);
+        self.origin = UuidCanonicalText(origin).bytes();
     }
 
     // The canonical lowercase text: `6ba7b810-9dad-11d1-80b4-00c04fd430c8`.
     string() is string {
-        uuid_string(origin);
+        UuidValue(bytes: origin).string();
     }
 
     // The 16 bytes.
@@ -67,7 +65,7 @@ object UuidText does Uuid, Comparing<Uuid> {
 
     // Its version number.
     version() is int {
-        uuid_version(origin);
+        UuidValue(bytes: origin).version();
     }
 
     // Its variant.
@@ -94,7 +92,7 @@ object UuidBytes does Uuid, Comparing<Uuid> {
 
     // The canonical lowercase text: `6ba7b810-9dad-11d1-80b4-00c04fd430c8`.
     string() is string {
-        uuid_string(origin);
+        UuidValue(bytes: origin).string();
     }
 
     // The 16 bytes.
@@ -104,7 +102,7 @@ object UuidBytes does Uuid, Comparing<Uuid> {
 
     // Its version number.
     version() is int {
-        uuid_version(origin);
+        UuidValue(bytes: origin).version();
     }
 
     // Its variant.
@@ -118,27 +116,63 @@ object UuidBytes does Uuid, Comparing<Uuid> {
     }
 }
 
+// Canonical `8-4-4-4-12` text: hyphens in place, ASCII hexadecimal digits
+// between them.
+hidden object UuidCanonicalText {
+    has origin is string;
+
+    UuidCanonicalText(origin is string) {
+        self.origin = origin;
+    }
+
+    bytes() is @byte {
+        confirm origin.length() == 36
+            && origin.slice(8, 9) == "-"
+            && origin.slice(13, 14) == "-"
+            && origin.slice(18, 19) == "-"
+            && origin.slice(23, 24) == "-"
+            else throw InvalidUuid.because("invalid canonical UUID text");
+        let digits = origin.slice(0, 8) + origin.slice(9, 13) + origin.slice(14, 18) +
+            origin.slice(19, 23) + origin.slice(24, 36);
+        try {
+            HexDecoded(origin: digits).bytes();
+        }
+        catch failure is InvalidHex {
+            throw InvalidUuid.because("invalid canonical UUID text");
+        };
+    }
+}
+
 // The answers every UUID gives from its sixteen bytes.
 hidden object UuidValue {
     has bytes is @byte;
 
     UuidValue(:bytes);
 
+    string() is string {
+        let digits = HexEncoded(origin: bytes).string();
+        digits.slice(0, 8) + "-" + digits.slice(8, 12) + "-" + digits.slice(12, 16) + "-" +
+            digits.slice(16, 20) + "-" + digits.slice(20, 32);
+    }
+
+    // The high four bits of byte 6.
+    version() is int {
+        bytes[6].int() >> 4;
+    }
+
+    // The bit prefix of byte 8: 0xxx, 10xx, 110x or 111x.
     variant() is UuidVariant {
-        match uuid_variant(bytes) {
-            case "rfc" {
-                UuidVariant.rfc;
-            }
-            case "microsoft" {
-                UuidVariant.microsoft;
-            }
-            case "reserved" {
-                UuidVariant.reserved;
-            }
-            else {
-                UuidVariant.future;
-            }
+        let prefix = bytes[8].int();
+        if (prefix & 128) == 0 {
+            return UuidVariant.reserved;
         }
+        if (prefix & 64) == 0 {
+            return UuidVariant.rfc;
+        }
+        if (prefix & 32) == 0 {
+            return UuidVariant.microsoft;
+        }
+        UuidVariant.future;
     }
 }
 
@@ -171,4 +205,68 @@ test "bytes make the same UUID; the variant follows the bit prefix" {
     test.throws(InvalidUuid) {
         UuidBytes(origin: [byte(1)]);
     };
+}
+
+test "canonical text needs 36 characters, every hyphen in place and ASCII digits" {
+    let id = UuidText(origin: "00112233-4455-6677-8899-AaBbCcDdEeFf");
+    let expected is @byte = (0..16).map() -> index {
+        (17 * index).byte();
+    };
+    test.is(id.bytes(), expected);
+    test.is(id.string(), "00112233-4455-6677-8899-aabbccddeeff");
+    let valid = "550e8400-e29b-41d4-a716-446655440000";
+    let moved is @string = [8, 13, 18, 23].map() -> at {
+        valid.slice(0, at) + "0" + valid.slice(at + 1, 36);
+    };
+    let others = [
+        valid + "0",
+        valid.slice(0, 35),
+        valid.slice(0, 10) + "-" + valid.slice(11, 36),
+        valid.slice(0, 35) + "é",
+        valid.slice(0, 35) + "０",
+        valid.slice(0, 8) + "‐" + valid.slice(9, 36),
+        "------------------------------------",
+        "",
+    ];
+    for moved + others -> bad {
+        test.throws(InvalidUuid) {
+            UuidText(origin: bad);
+        };
+    }
+}
+
+test "version is the high nibble of byte 6 and the variant the prefix of byte 8" {
+    let base is @byte = (0..16).map() -> index {
+        byte(0);
+    };
+    let cases = [[0x7f, 0], [0x80, 1], [0xbf, 1], [0xc0, 2], [0xdf, 2], [0xe0, 3], [0xff, 3]];
+    let variants = [
+        UuidVariant.reserved,
+        UuidVariant.rfc,
+        UuidVariant.microsoft,
+        UuidVariant.future
+    ];
+    for cases -> pair {
+        let bytes is @byte = (0..16).map() -> index {
+            if index == 8 {
+                pair[0].byte();
+            }
+            else {
+                base[index];
+            }
+        };
+        test.ok(UuidBytes(origin: bytes).variant() == variants[pair[1]]);
+    }
+    for [[0xf0, 15], [0x0f, 0], [0x4a, 4]] -> pair {
+        let bytes is @byte = (0..16).map() -> index {
+            if index == 6 {
+                pair[0].byte();
+            }
+            else {
+                base[index];
+            }
+        };
+        test.is(UuidBytes(origin: bytes).version(), pair[1]);
+        test.is(UuidText(origin: UuidBytes(origin: bytes).string()).version(), pair[1]);
+    }
 }

@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 238 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36441 lines
+## other — 87 files, 36346 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 633
+- `okkama-runtime-abi/src/table.rs` 626
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
@@ -282,7 +282,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/time.rs` 593 — `runtime/time_format` (шаблоны `%Y-%m-%d …`) и `runtime/time_zone`
 - `okkama-runtime-core/src/native/tls.rs` 797 — `runtime/tls_transport`: TLS-клиент и (#209)
 - `okkama-runtime-core/src/native/unicode.rs` 158 — `runtime/unicode_character`: свойства символов по таблицам Unicode::UCD
-- `okkama-runtime-core/src/native/value.rs` 145 — `runtime/uuid` и `runtime/unicode_normalization` — перенос части
+- `okkama-runtime-core/src/native/value.rs` 57 — `runtime/uuid` и `runtime/unicode_normalization` — перенос части
 - `okkama-runtime-core/src/native/x509.rs` 2044 — `runtime/x509`: строгий DER-конверт и снимок
 - `okkama-runtime-core/src/native/xml.rs` 434 — `runtime/xml` (#144): a bounded, non-validating tokenizer of a whole XML
 - `okkama-runtime-core/src/native/compression/brotli_codec.rs` 107 — Brotli (RFC 7932) on the `brotli` crate, pure Rust (#184). The decoder is
