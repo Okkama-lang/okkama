@@ -99,11 +99,11 @@ impl Heap {
                             return Ok(Slot {
                                 tag: HANDLE,
                                 bits: self.handles.allocate(Handle::TemporaryDirectory(
-                                    TemporaryDirectory {
+                                    Box::new(TemporaryDirectory {
                                         path,
                                         shown,
                                         closed: false,
-                                    },
+                                    }),
                                 ))?,
                             });
                         }

@@ -110,7 +110,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2034 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 686 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30659 lines
+## sparrow — 63 files, 30666 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -134,7 +134,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/worker_process.rs` 352 — Process ownership and pipe I/O are delegated to Tokio. Cancellation kills and
 - `sparrow-core/src/host/arena.rs` 92 — Reusable typed storage with generational handles. No per-value ownership walk.
 - `sparrow-core/src/host/file_lock.rs` 105 — POSIX record locks through nix's safe boundary. A process-wide reservation
-- `sparrow-core/src/host/handle.rs` 134 — Typed native state in the engine's generational arena. No legacy Value or
+- `sparrow-core/src/host/handle.rs` 141 — Typed native state in the engine's generational arena. No legacy Value or
 - `sparrow-core/src/host/mod.rs` 864 — Native provider host. The providers of the previous engine (`sparrow-engine`
 - `sparrow-core/src/host/native_binary.rs` 188 — Binary integer/float wire formats. Conversion uses Rust byte primitives and
 - `sparrow-core/src/host/native_buffer.rs` 136 — Mutable byte storage lives entirely in Rust. Front reads do not shift the

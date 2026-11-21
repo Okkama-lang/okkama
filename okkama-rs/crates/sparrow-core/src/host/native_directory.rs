@@ -233,12 +233,12 @@ impl Heap {
                 if n == FsOpendir {
                     return Ok(Slot {
                         tag: HANDLE,
-                        bits: self.handles.allocate(Handle::Directory(Directory {
+                        bits: self.handles.allocate(Handle::Directory(Box::new(Directory {
                             path,
                             names,
                             index: 0,
                             closed: false,
-                        }))?,
+                        })))?,
                     });
                 }
                 let values = names

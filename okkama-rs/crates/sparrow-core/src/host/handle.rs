@@ -8,13 +8,13 @@ pub(crate) enum Handle {
     #[cfg(unix)]
     Process(crate::host::native_process::ProcessHandle),
     #[cfg(unix)]
-    Rooted(crate::host::native_root::Rooted),
+    Rooted(Box<crate::host::native_root::Rooted>),
     #[cfg(unix)]
     Watch(std::rc::Rc<crate::host::native_watch::Watch>),
-    TemporaryDirectory(crate::host::native_temporary::TemporaryDirectory),
+    TemporaryDirectory(Box<crate::host::native_temporary::TemporaryDirectory>),
     FileState(std::rc::Rc<std::cell::RefCell<crate::host::native_file_state::FileState>>),
     FileLock(std::rc::Rc<crate::host::native_file_state::FileLock>),
-    Directory(crate::host::native_directory::Directory),
+    Directory(Box<crate::host::native_directory::Directory>),
     File(crate::host::native_file::RawFile),
     Network(crate::host::native_network::NetworkHandle),
     Db(crate::host::native_db::DbHandle),
@@ -138,3 +138,14 @@ impl Heap {
     }
 }
 
+
+#[cfg(test)]
+mod size_tests {
+    /// #439: every arena slot pays for the largest variant, so provider state
+    /// larger than a few words goes behind a Box (Rooted, Directory and
+    /// TemporaryDirectory were 184, 64 and 56 bytes; the slot was 192).
+    #[test]
+    fn a_handle_stays_within_six_words() {
+        assert!(std::mem::size_of::<super::Handle>() <= 48, "{}", std::mem::size_of::<super::Handle>());
+    }
+}

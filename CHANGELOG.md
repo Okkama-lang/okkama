@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Native handles take 48 bytes instead of 184 (#439).** Every slot of the handle arena paid for the largest
+  provider state; the three large ones (an open rooted file, a directory listing, a temporary directory) now
+  live behind a box, allocated once per open. 100 000 live parsed JSON documents: peak RSS 92.6 → 71.0 MB,
+  time unchanged.
 - **Enum case duplicates are found with a set (#475).** Registration kept a growing list and searched it
   for every case, quadratic in the number of cases; the ordered list still gives the ordinals, a set answers
   "declared already?". Checking an enum of 16 000 cases: ~425 → ~115 ms (≈100 ms of it start-up); the same

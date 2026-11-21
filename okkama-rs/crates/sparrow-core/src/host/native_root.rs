@@ -175,12 +175,12 @@ impl Heap {
         let regular = opened.as_ref().is_some_and(|meta| meta.is_file());
         Ok(Slot {
             tag: HANDLE,
-            bits: self.handles.allocate(Handle::Rooted(Rooted {
+            bits: self.handles.allocate(Handle::Rooted(Box::new(Rooted {
                 file: Some(Arc::new(file)),
                 regular,
                 opened,
                 cached: Default::default(),
-            }))?,
+            })))?,
         })
     }
     fn rooted_state(&self, v: Slot) -> Result<&Rooted, ProviderError> {
