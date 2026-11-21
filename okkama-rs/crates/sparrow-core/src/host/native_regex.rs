@@ -1131,6 +1131,11 @@ impl State {
     }
 }
 
+/// Capture spans of one search: (start, end) per group, -1 when unmatched.
+type Spans = Rc<[(i64, i64)]>;
+/// A parsed replacement template: (failed, error offset, literal/group tokens).
+type PreparedTemplate = Rc<(i64, i64, Vec<String>)>;
+
 #[derive(Debug)]
 pub(crate) struct Query {
     pattern: std::rc::Rc<State>,
@@ -1139,12 +1144,12 @@ pub(crate) struct Query {
     end: BigInt,
     mode: i64,
     /// The search result, computed once and shared with the match it produces (#464).
-    spans: RefCell<Option<Rc<[(i64, i64)]>>>,
+    spans: RefCell<Option<Spans>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Match {
-    spans: Rc<[(i64, i64)]>,
+    spans: Spans,
     names: BTreeMap<String, usize>,
 }
 
@@ -1152,7 +1157,7 @@ pub(crate) struct Match {
 pub(crate) struct Replacement {
     template: String,
     /// The parsed template, computed once; readers share it (#464).
-    prepared: RefCell<Option<Rc<(i64, i64, Vec<String>)>>>,
+    prepared: RefCell<Option<PreparedTemplate>>,
 }
 
 #[derive(Debug, Default)]
@@ -1164,7 +1169,7 @@ fn invalid_input(native: Native, message: &str) -> ProviderError {
     failure(DOMAIN, "invalid_input", native, message)
 }
 
-fn prepare_query(native: Native, query: &Query) -> Result<Rc<[(i64, i64)]>, ProviderError> {
+fn prepare_query(native: Native, query: &Query) -> Result<Spans, ProviderError> {
     if let Some(spans) = query.spans.borrow().as_ref() {
         return Ok(Rc::clone(spans));
     }
@@ -1180,7 +1185,7 @@ fn prepare_query(native: Native, query: &Query) -> Result<Rc<[(i64, i64)]>, Prov
     };
     match result {
         Ok(spans) => {
-            let spans: Rc<[(i64, i64)]> = spans.into();
+            let spans: Spans = spans.into();
             *query.spans.borrow_mut() = Some(Rc::clone(&spans));
             Ok(spans)
         }
@@ -1202,7 +1207,7 @@ fn prepare_query(native: Native, query: &Query) -> Result<Rc<[(i64, i64)]>, Prov
     }
 }
 
-fn prepare_replacement(state: &Replacement) -> Rc<(i64, i64, Vec<String>)> {
+fn prepare_replacement(state: &Replacement) -> PreparedTemplate {
     if let Some(prepared) = state.prepared.borrow().as_ref() {
         return Rc::clone(prepared);
     }
