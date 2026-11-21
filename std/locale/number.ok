@@ -1,5 +1,6 @@
 module locale/number v1.0.0;
 
+import "numbers/bigint" take BoundedPower;
 // Numbers as a locale writes them, and read back (CLDR 46.1).
 //
 //     let format = NumberFormat(notation: NumberNotation.standard, grouping: NumberGrouping.automatic,
@@ -17,7 +18,6 @@ import "locale/data" take LocaleFallbacks;
 import "locale/internal/numbers" take CldrNumbers;
 import "math/decimal" take Decimal, InvalidDecimal;
 import "math/rounding" take Rounding;
-import "numbers/bigint" take BigInt;
 import "numbers/float" take ShortestFloat;
 import "strings/parse" take Number;
 import "compare" take Order;
@@ -451,12 +451,12 @@ object NumberLocaleData does NumberRenderingData {
 
 // An exact number: coefficient × 10^exponent, with a sign.
 object NumberMagnitude {
-    has coefficient is BigInt;
+    has coefficient is int;
     has exponent is rat;
     has negative is bool;
 
     // As given.
-    NumberMagnitude(coefficient is BigInt, exponent is rat, negative is bool) {
+    NumberMagnitude(coefficient is int, exponent is rat, negative is bool) {
         confirm coefficient.sign() >= 0
             && coefficient.string().length() <= 1024
             && exponent.denominator() == 1
@@ -469,7 +469,7 @@ object NumberMagnitude {
     }
 
     // The coefficient.
-    coefficient() is BigInt {
+    coefficient() is int {
         coefficient;
     }
 
@@ -507,7 +507,7 @@ object DecimalNumberMagnitude {
     DecimalNumberMagnitude(origin is Decimal, shift is int, negative_zero is bool) {
         let coefficient = origin.coefficient();
         let absolute = if coefficient.sign() < 0 {
-            (BigInt(0) - coefficient);
+            ((0) - coefficient);
         }
         else {
             coefficient;
@@ -528,7 +528,7 @@ object DecimalNumberMagnitude {
 // Scaled integer arithmetic avoids float intermediates and huge-exponent powers.
 // Very small magnitudes can be directed to zero/one without allocating 10^N.
 object NumberQuantized {
-    has coefficient is BigInt;
+    has coefficient is int;
     has scale is int;
     has negative is bool;
 
@@ -537,31 +537,31 @@ object NumberQuantized {
         let absolute = origin.coefficient();
         let shift = origin.exponent() + precision::Digits::maximum_fraction.rat();
         let coefficient = if absolute.sign() == 0 {
-            BigInt(0);
+            0;
         }
         else {
             if shift >= 0.rat() {
                 confirm shift <= 2048.rat()
                     && absolute.string().length().rat() + shift <= 2048.rat()
                     else throw InvalidLocalizedNumber.because("integer/output digit budget");
-                (absolute * BigInt(10).power(shift.int(), 8192));
+                (absolute * BoundedPower(base: 10).int(shift.int(), 8192));
             }
             else {
-                if shift < (-1025).rat() {
+                if shift < -1025.rat() {
                     let direction = precision::Digits::rounding;
                     let up = direction == Rounding.away_from_zero
                         || (direction == Rounding.floor && origin.negative())
                         || (direction == Rounding.ceiling && !origin.negative());
                     if up {
-                        BigInt(1);
+                        1;
                     }
                     else {
-                        BigInt(0);
+                        0;
                     }
                 }
                 else {
-                    let divisor = BigInt(10).power((-shift).int(), 8192);
-                    let quotient = (absolute / divisor);
+                    let divisor = BoundedPower(base: 10).int((-shift).int(), 8192);
+                    let quotient = (absolute / divisor).int();
                     let remainder = (absolute % divisor);
                     let increment = NumberRounding(
                         quotient: quotient,
@@ -571,7 +571,7 @@ object NumberQuantized {
                         direction: precision::Digits::rounding
                     ).increment();
                     if increment {
-                        (quotient + BigInt(1));
+                        (quotient + 1);
                     }
                     else {
                         quotient;
@@ -587,7 +587,7 @@ object NumberQuantized {
     }
 
     // The rounded coefficient.
-    coefficient() is BigInt {
+    coefficient() is int {
         coefficient;
     }
 
@@ -675,14 +675,14 @@ object NumberZeroes {
 }
 
 hidden object NumberRounding {
-    has quotient, remainder, divisor is BigInt;
+    has quotient, remainder, divisor is int;
     has negative is bool;
     has direction is Rounding;
 
     NumberRounding(
-        quotient is BigInt,
-        remainder is BigInt,
-        divisor is BigInt,
+        quotient is int,
+        remainder is int,
+        divisor is int,
         negative is bool,
         direction is Rounding
     ) {
@@ -711,7 +711,7 @@ hidden object NumberRounding {
                 !negative;
             }
             else {
-                let twice = (remainder * BigInt(2)).order(divisor);
+                let twice = (remainder * 2).order(divisor);
                 if twice == Order.greater {
                     true;
                 }
@@ -728,7 +728,7 @@ hidden object NumberRounding {
                                 false;
                             }
                             else {
-                                (quotient % BigInt(2)).sign() != 0;
+                                (quotient % 2).sign() != 0;
                             }
                         }
                     }
@@ -1251,14 +1251,14 @@ object LocalizedInteger {
     }
 }
 
-// A BigInt in a locale.
+// A int in a locale.
 object LocalizedBigInteger {
-    has origin is BigInt;
+    has origin is int;
     has locale is Locale;
     has format is NumberFormat;
 
     // origin as locale writes it with format.
-    LocalizedBigInteger(origin is BigInt, locale is Locale, format is NumberFormat) {
+    LocalizedBigInteger(origin is int, locale is Locale, format is NumberFormat) {
         self.origin = origin;
         self.locale = locale;
         self.format = format;
@@ -1618,14 +1618,14 @@ hidden object NumberReading {
                 sign: NumberSign.automatic
             ).text();
             let digits = NumberDigitReading(origin: frame.text(), data: data).string();
-            let exponent = BigInt((if frame.negative() {
+            let exponent = Number(((if frame.negative() {
                 "-";
             }
             else {
                 "";
-            }) + digits);
+            }) + digits)).int();
             if notation == NumberNotation.engineering {
-                confirm (exponent % BigInt(3)).sign() == 0
+                confirm (exponent % 3).sign() == 0
                     else throw InvalidLocalizedNumber.because(
                         "engineering exponent must be a multiple of three"
                     );
@@ -1688,7 +1688,7 @@ object LocalizedIntegerFromString {
     }
 
     // The integer; InvalidLocalizedNumber for text that is not one.
-    integer() is BigInt {
+    integer() is int {
         let format = NumberFormat(
             notation: NumberNotation.standard,
             grouping: grouping,
@@ -1701,7 +1701,7 @@ object LocalizedIntegerFromString {
             )
         );
         let value = NumberReading(origin: origin, locale: locale, format: format).decimal();
-        (value.coefficient() * BigInt(10).power(value.exponent(), 8192));
+        (value.coefficient() * BoundedPower(base: 10).int(value.exponent(), 8192));
     }
 }
 
@@ -1757,5 +1757,53 @@ test "digits follow the locale's numbering system both ways" {
             grouping: NumberGrouping.automatic
         ).integer().string(),
         "123"
+    );
+}
+
+test "511 locale int quantization preserves quotient remainder and negative rounding" {
+    for [false, true] -> negative {
+        let magnitude = NumberMagnitude(
+            coefficient: 123456789012345678901234567895,
+            exponent: -1.rat(),
+            negative: negative
+        );
+        let precision = NumberPrecision(
+            minimum_integer: 1,
+            minimum_fraction: 0,
+            maximum_fraction: 0,
+            rounding: Rounding.half_even
+        );
+        test.is(
+            NumberQuantized(origin: magnitude, precision: precision).coefficient(),
+            12345678901234567890123456790
+        );
+        let toward = NumberPrecision(
+            minimum_integer: 1,
+            minimum_fraction: 0,
+            maximum_fraction: 0,
+            rounding: Rounding.toward_zero
+        );
+        test.is(
+            NumberQuantized(origin: magnitude, precision: toward).coefficient(),
+            12345678901234567890123456789
+        );
+    }
+    test.ok(try {
+        NumberQuantized(
+            origin: NumberMagnitude(coefficient: 1, exponent: 2049.rat(), negative: false),
+            precision: NumberPrecision(1, 0, 0, Rounding.toward_zero)
+        );
+        false;
+    }
+    catch error is InvalidLocalizedNumber {
+        true;
+    });
+    test.is(
+        LocalizedIntegerFromString(
+            origin: "123456789012345678901234567890",
+            locale: Locale("en"),
+            grouping: NumberGrouping.never
+        ).integer(),
+        123456789012345678901234567890
     );
 }

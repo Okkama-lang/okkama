@@ -13,12 +13,20 @@ module fs/stat v1.0.0;
 // Every platform's metadata comes in the same shape. Not every file system
 // records a creation time: creation() then throws MissingCreationTime.
 
-import "numbers/bigint" take BigInt;
 import "time/clock" take Instant;
 import "time/duration" take Duration, DurationUnit;
 
 // What an entry is.
-enum FileKind = (other, file, directory, symbolic_link, block_device, character_device, fifo, socket);
+enum FileKind = (
+    other,
+    file,
+    directory,
+    symbolic_link,
+    block_device,
+    character_device,
+    fifo,
+    socket
+);
 
 // The metadata of one entry.
 object FileStat {
@@ -112,10 +120,10 @@ object FileTimes {
 // Which file an entry is: its device and inode.
 object FileIdentity {
     has device_number is int;
-    has inode_number is BigInt;
+    has inode_number is int;
 
     // An identity as given.
-    FileIdentity(device is int, inode is BigInt) {
+    FileIdentity(device is int, inode is int) {
         device_number = device;
         inode_number = inode;
     }
@@ -133,7 +141,7 @@ object FileIdentity {
     }
 
     // The inode number.
-    inode() is BigInt {
+    inode() is int {
         inode_number;
     }
 }
@@ -221,7 +229,7 @@ object FileStatFromMap {
             ),
             identity: FileIdentity(
                 device: origin["device"],
-                inode: BigInt(origin["inode"]),
+                inode: (origin["inode"]),
             ),
         );
     }

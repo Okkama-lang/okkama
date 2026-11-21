@@ -25,7 +25,6 @@ import "mail/message" take MailMessage, ParsedMail;
 import "message/header" take MessageHeaders;
 import "collections/sequence" take Sequencing;
 import "mime/media_type" take MimeItems;
-import "numbers/bigint" take BigInt;
 
 // One FETCH item: a name and its value.
 object ImapFetchAttribute {
@@ -131,7 +130,7 @@ object ImapFetch {
 
     // The UID; MissingImapDatum when it did not come.
     uid() is ImapUid {
-        ImapUid(BigInt(self.attribute("UID").string()));
+        ImapUid(ImapUnsigned(origin: self.attribute("UID").string(), nonzero: true).int());
     }
 
     // Whether FLAGS came.

@@ -16,7 +16,6 @@ import "http/method" take Method;
 import "http/header" take Headers;
 import "http/body" take BodyOpening, UnknownBodyLength, ByteBody, OneShotBody, StreamBodyReading,
     ByteBodyInput;
-import "numbers/bigint" take BigInt;
 
 // Prepare an ordinary direct request before DNS or socket effects. CONNECT and
 // OPTIONS * require separate explicitly routed consumers.
@@ -90,11 +89,11 @@ hidden object Http1OutgoingFraming {
             || origin.membership(HeaderName("Transfer-Encoding")) {
                 return origin;
             }
-        let known is @BigInt = try {
+        let known is @int = try {
             [body.length()];
         }
         catch e is UnknownBodyLength {
-            let unknown is @BigInt = [];
+            let unknown is @int = [];
             unknown;
         };
         if known.size() == 0 {

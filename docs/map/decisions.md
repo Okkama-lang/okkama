@@ -6,6 +6,16 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Std integers (#511).** The owner authorizes the whole supplied
+  review for this release, replacing its planning/report workflow with an
+  implementation summary and excluding CHANGELOG/Git changes. Ordinary std
+  integer quantities use int, including BigRational components and optional
+  readers; domain objects and BigInt remain. Keep existing explicitly bounded
+  readers, format/driver constraints and every power budget. One int-based
+  BoundedPower beside BigInt serves both parsers and BigInt.power; exact rat
+  handles rational normalization. [Audit, decisions and evidence](../std-int-511/README.md).
+
+
 - **2026-11-22. Documentation Phase C (#514).** The entire supplied ticket is
   authorized, without approval or language/API changes. Implementation choices
   under #512 §§12, 14, 16, 18: compile tagged Okkama examples by default; run

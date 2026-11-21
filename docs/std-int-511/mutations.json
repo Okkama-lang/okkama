@@ -1,0 +1,171 @@
+[
+  {
+    "name": "quotient",
+    "module": "std/numbers/bigint.ok",
+    "filter": "511 int quotient",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 int quotient' std/numbers/bigint.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "BigInt(((value - value % divisor) / divisor).int());",
+      "BigInt(((value - value % divisor) / divisor).int().abs());"
+    ],
+    "output": "=== RUN   511 int quotient and remainder agree with BigInt for every sign\n--- FAIL: 511 int quotient and remainder agree with BigInt for every sign\n    expected 3, got -3\n    expected 3, got -3\n    expected 61728394506172839450617283945, got -61728394506172839450617283945\n    expected 61728394506172839450617283945, got -61728394506172839450617283945\nFAIL\n"
+  },
+  {
+    "name": "remainder",
+    "module": "std/numbers/bigint.ok",
+    "filter": "511 int quotient",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 int quotient' std/numbers/bigint.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "BigInt(value % divisor);",
+      "BigInt((value % divisor).abs());"
+    ],
+    "output": "=== RUN   511 int quotient and remainder agree with BigInt for every sign\n--- FAIL: 511 int quotient and remainder agree with BigInt for every sign\n    expected 1, got -1\n    expected 1, got -1\n    expected 1, got -1\n    expected 1, got -1\nFAIL\n"
+  },
+  {
+    "name": "bounded-product",
+    "module": "std/numbers/bigint.ok",
+    "filter": "511 bounded powers",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 bounded powers' std/numbers/bigint.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "confirm result.value() <= (ceiling / factor.value()).int()",
+      "confirm true"
+    ],
+    "output": "=== RUN   511 bounded powers keep every parser budget and reject oversized products\n--- FAIL: 511 bounded powers keep every parser budget and reject oversized products\n    expected true, got false\nFAIL\n"
+  },
+  {
+    "name": "json-limit",
+    "module": "std/json.ok",
+    "filter": "511 exact int JSON",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 exact int JSON' std/json.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "BoundedPower(base: 10).int(exact.exponent(), 4096)",
+      "BoundedPower(base: 10).int(exact.exponent(), 8192)"
+    ],
+    "output": "=== RUN   511 exact int JSON preserves large values presence and bounded reads\n--- FAIL: 511 exact int JSON preserves large values presence and bounded reads\n    expected true, got false\nFAIL\n"
+  },
+  {
+    "name": "rational-normalization",
+    "module": "std/numbers/bigrational.ok",
+    "filter": "511 rational int",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 rational int' std/numbers/bigrational.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "lower = canonical.denominator();",
+      "lower = denominator.abs();"
+    ],
+    "output": "=== RUN   511 rational int components normalize every sign without narrowing\n--- FAIL: 511 rational int components normalize every sign without narrowing\n    expected 61728394506172839450617283945, got 61728394506172839450617283945/2\n    expected -61728394506172839450617283945, got -61728394506172839450617283945/2\n    expected -61728394506172839450617283945, got -61728394506172839450617283945/2\n    expected 61728394506172839450617283945, got 61728394506172839450617283945/2\n    expected \"-2/3\", got \"-2/18\"\n    expected \"0/1\", got \"0/18\"\nFAIL\n"
+  },
+  {
+    "name": "db-precision",
+    "module": "std/db/value.ok",
+    "filter": "511 DB int",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 DB int' std/db/value.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "Number(native_db.db_integer_value(self.state())).int();",
+      "Number(native_db.db_integer_value(self.state())).int() + 1;"
+    ],
+    "output": "=== RUN   511 DB int callbacks and native cells preserve precision and nullability\n--- FAIL: 511 DB int callbacks and native cells preserve precision and nullability\n    expected -123456789012345678901234567890, got -123456789012345678901234567889\n    expected -123456789012345678901234567890, got -123456789012345678901234567889\nFAIL\n"
+  },
+  {
+    "name": "db-limit",
+    "module": "std/db/value.ok",
+    "filter": "511 DB int",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 DB int' std/db/value.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "value.abs().string().length() <= 4096",
+      "value.abs().string().length() <= 4097"
+    ],
+    "output": "=== RUN   511 DB int callbacks and native cells preserve precision and nullability\n--- FAIL: 511 DB int callbacks and native cells preserve precision and nullability\n    expected true, got false\nFAIL\n"
+  },
+  {
+    "name": "plist-bytes",
+    "module": "std/plist/write.ok",
+    "filter": "511 plist int byte",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 plist int byte' std/plist/write.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "(origin + BoundedPower(base: 256).int(size, 129))",
+      "(origin - BoundedPower(base: 256).int(size, 129))"
+    ],
+    "output": "=== RUN   511 plist int byte extraction keeps signed and unsigned 128 bit limits\n--- FAIL: 511 plist int byte extraction keeps signed and unsigned 128 bit limits\n    RuntimeError: Cannot convert int value -1 to byte: expected 0..255\nFAIL\n"
+  },
+  {
+    "name": "plist-read-sign",
+    "module": "std/plist/parse.ok",
+    "filter": "511 plist int round",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 plist int round' std/plist/parse.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "(value - BoundedPower(base: 256).int(payload.size(), 129))",
+      "(value + BoundedPower(base: 256).int(payload.size(), 129))"
+    ],
+    "output": "=== RUN   511 plist int round trips preserve large signed values in both formats\n--- FAIL: 511 plist int round trips preserve large signed values in both formats\n    expected -1, got 36893488147419103231\n    expected -170141183460469231731687303715884105728, got 510423550381407695195061911147652317184\nFAIL\n"
+  },
+  {
+    "name": "locale-quotient",
+    "module": "std/locale/number.ok",
+    "filter": "511 locale int",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 locale int' std/locale/number.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "let quotient = (absolute / divisor).int();",
+      "let quotient = (absolute / divisor).int() + 1;"
+    ],
+    "output": "=== RUN   511 locale int quantization preserves quotient remainder and negative rounding\n--- FAIL: 511 locale int quantization preserves quotient remainder and negative rounding\n    expected 12345678901234567890123456789, got 12345678901234567890123456790\n    expected 12345678901234567890123456789, got 12345678901234567890123456790\nFAIL\n"
+  },
+  {
+    "name": "ip-size",
+    "module": "std/net/ip.ok",
+    "filter": "511 IPv6",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 IPv6' std/net/ip.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "base.bytes().size() * 8 - length, 129",
+      "base.bytes().size() * 8 - length - 1, 129"
+    ],
+    "output": "=== RUN   511 IPv6 full space size is an exact int\n--- FAIL: 511 IPv6 full space size is an exact int\n    expected 340282366920938463463374607431768211456, got 170141183460469231731687303715884105728\n    expected 4294967296, got 2147483648\n    InvalidBigExponent: InvalidBigExponent.exponent(-1)\nFAIL\n"
+  },
+  {
+    "name": "duration",
+    "module": "std/time/duration.ok",
+    "filter": "511 duration",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 duration' std/time/duration.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "(origin * 1000000000.rat()).numerator();",
+      "(origin * 1000000000.rat()).numerator() + 1;"
+    ],
+    "output": "=== RUN   511 duration nanoseconds preserve large signed ints\n--- FAIL: 511 duration nanoseconds preserve large signed ints\n    expected 0, got 1\n    expected 1, got 2\n    expected -1, got 0\n    expected 123456789012345678901234567890, got 123456789012345678901234567891\n    expected -123456789012345678901234567890, got -123456789012345678901234567889\nFAIL\n"
+  },
+  {
+    "name": "http-length",
+    "module": "std/http/http1_framing.ok",
+    "filter": "511 HTTP lengths",
+    "command": "OKKAMA_STDLIB_DIR=/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/std okkama run -t --filter '511 HTTP lengths' std/http/http1_framing.ok",
+    "baseline": 0,
+    "mutant": 1,
+    "change": [
+      "Number(original).int();",
+      "0;"
+    ],
+    "output": "=== RUN   511 HTTP lengths retain exact int values and reject invalid grammar\n--- FAIL: 511 HTTP lengths retain exact int values and reject invalid grammar\n    expected [123456789012345678901234567890], got [0]\n    expected true, got false\n    expected true, got false\n    expected true, got false\nFAIL\n"
+  }
+]

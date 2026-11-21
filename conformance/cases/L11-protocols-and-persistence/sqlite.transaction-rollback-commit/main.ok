@@ -7,7 +7,6 @@ import "db/statement" take Statement;
 import "db/value" take DbInteger, DbText, DbDecimal, DbNull, ObservedDbValue;
 import "db/row" take RowsEnded;
 import "db/error" take DbFailure;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "compare" take Order;
 

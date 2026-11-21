@@ -35,7 +35,6 @@ import "http/internal/hpack_tables" take HpackField;
 import "http/internal/hpack" take HpackBudget;
 import "io/stream" take AsyncReading, AsyncWriting, Closing;
 import "io/decorators" take InvalidReading;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -213,7 +212,7 @@ hidden object Http2ServerState does Http2ReceivingEvents, Http2ReceivingBarrier,
     }
 
     body_limit() is int {
-        policy.limits().body_bytes().int();
+        policy.limits().body_bytes();
     }
 
     budget() is HpackBudget {
@@ -667,7 +666,7 @@ hidden object Http2ServerStream {
     has owner is Http2ServerState;
     has block is Http2HeaderBlock;
     has head is ParsedHttp2Request;
-    has declared is @BigInt;
+    has declared is @int;
     has buffers is Atomic<@Http2BodyBuffer>;
     has group is FutureGroup<bool>;
     has aborted, completed is Event;
@@ -681,7 +680,7 @@ hidden object Http2ServerStream {
         owner is Http2ServerState,
         block is Http2HeaderBlock,
         head is ParsedHttp2Request,
-        declared is @BigInt
+        declared is @int
     ) {
         self.owner = owner;
         self.block = block;
@@ -912,7 +911,7 @@ hidden object Http2ServerStream {
             || status == Status.not_modified;
         confirm status != Status.no_content || declared.size() == 0
             else throw InvalidHttpMessage.because("204 forbids Content-Length");
-        let known is @BigInt = if suppressed {
+        let known is @int = if suppressed {
             [];
         }
         else {
@@ -926,7 +925,7 @@ hidden object Http2ServerStream {
         if !suppressed {
             for known -> length {
                 confirm length.sign() >= 0
-                    && length.order(BigInt(owner.body_limit().string())) != Order.greater
+                    && length.order((owner.body_limit())) != Order.greater
                     else throw InvalidHttpMessage.because("response source length limit");
                 for declared -> expected {
                     confirm length.order(expected) == Order.equal
@@ -980,7 +979,7 @@ hidden object Http2ServerBodySending {
     has budget is HpackBudget;
     has stream, maximum is int;
     has opening is BodyOpening;
-    has declared, known is @BigInt;
+    has declared, known is @int;
 
     Http2ServerBodySending(
         sender is Http2DataScheduler,
@@ -988,8 +987,8 @@ hidden object Http2ServerBodySending {
         budget is HpackBudget,
         stream is int,
         opening is BodyOpening,
-        declared is @BigInt,
-        known is @BigInt,
+        declared is @int,
+        known is @int,
         maximum is int
     ) {
         self.sender = sender;
@@ -1022,7 +1021,7 @@ hidden object Http2ServerBodySending {
             confirm total <= maximum else throw InvalidHttpMessage.because("response byte limit");
             for [declared, known] -> batch {
                 for batch -> length {
-                    let order = BigInt(total).order(length);
+                    let order = total.order(length);
                     confirm order != Order.greater && (bytes.size() > 0 || order == Order.equal)
                         else throw InvalidHttpMessage.because("response length mismatch");
                 }
@@ -1071,7 +1070,7 @@ hidden object Http2ServerBody does BodyOpening {
         self.clock = clock;
     }
 
-    length() is BigInt {
+    length() is int {
         origin.length();
     }
 

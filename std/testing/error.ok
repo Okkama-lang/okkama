@@ -1,5 +1,6 @@
 module testing/error v1.0.0;
 
+import "strings/parse" take Number;
 // Checking that code throws, and what.
 //
 //     Throwing(action: () is int { Number("x").int(); }, matching: ErrorTextMatching("InvalidInteger.source(\"x\")")).check();

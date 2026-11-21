@@ -3066,6 +3066,20 @@ total > Money(cents: 300);                           // order() == Order.greater
   `Duration` (`+ -`, `-a`, ordering), `Instant` and `MonotonicInstant`
   (`+ Duration`, `- Duration`, `- Instant`, ordering), `Decimal` (ordering).
 
+Ordinary std integer quantities use arbitrary-precision `int` (#511):
+`Json.integer()` and `Row.integer(name)` return `int`, their optional readers
+return `Maybe<int>` or `Presence<int>`, and `Duration.nanoseconds()` returns
+`int`. `Json.int()` and `Row.int(name)` still require the signed 64-bit range.
+`Decimal.coefficient()`, `BigRational.numerator()` / `denominator()`, HTTP body
+lengths, plist integers and UIDs, sizes and counters also use `int`. Domain
+objects and the explicit `BigInt` numeric wrapper remain available.
+
+Pass `7` where an ordinary API formerly needed `BigInt(7)`; use an integer
+result directly instead of appending `.int()`. Integer quotient is explicitly
+`(a / b).int()` (truncation toward zero); `%` keeps the dividend's sign.
+For untrusted exponents use `BoundedPower(base: 10).int(exponent, 4096)` from
+`numbers/bigint`; it checks the result-bit budget before an oversized product.
+
 ## Chapter 23. Role Fakes and Testing
 
 Elegant Objects argues that an interface should ship its own fake so tests
@@ -3859,7 +3873,7 @@ stays 60) and `offset::Offset::known` (`-00:00` is not UTC).
 `plist` reads and writes Apple property lists, XML or binary.
 `ParsedPlist(bytes).root()` is the root `PlistValue`, whose `kind()` tells
 which value it is: `PlistString(…).string()`, `PlistInteger.integer()`
-(a `BigInt`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
+(an `int`), `PlistReal.float()`, `PlistBoolean.bool()`, `PlistData.bytes()`,
 `PlistDate.instant()`, `PlistUid.number()`, `PlistArray.values()` and
 `PlistDictionary.value(name)`. `EncodedPlist(origin:, format:).bytes()`
 writes one.
@@ -5727,7 +5741,7 @@ Bind values with the typed objects from `db/value` (#188): `DbInteger(7)`,
 `db/query` accepts either `(origin: connection, statement: Statement(...))` or `(prepared:, values:)`;
 `one()`, `maybe()`, `all(limit)` and `rows()` share the same result contract.
 Read columns directly with `row.text(name)` or `row.maybe(name).text() else fallback`.
-`Execution.affected()` returns `Maybe<BigInt>`: unknown is distinct from zero.
+`Execution.affected()` returns `Maybe<int>`: unknown is distinct from zero.
 The query closes its cursor, while the caller owns preparation and the connection.
 
 
@@ -5822,7 +5836,7 @@ QueuedLogs keeps a bounded persistent FIFO and starts one worker in a supplied
 Supervising<int>. Capacity applies to waiting records, with one extra in flight.
 Call `await queue.drain(); queue.close();` before waiting for the scope. Close
 cancels only its pending delivery, not the scope or unrelated children. Overflow
-is reject/drop_newest/drop_oldest with a BigInt loss count. An eager scope/Event
+is reject/drop_newest/drop_oldest with an int loss count. An eager scope/Event
 can run formatting or synchronous I/O in write(); the queue promises no capacity
 wait, not a caller latency bound. SyslogLogs borrows a connected UDP owner and
 reuses this lifecycle. Successful drain is local send completion, not delivery

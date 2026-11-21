@@ -1,6 +1,7 @@
 module i18n/plural v1.0.0;
 
-// Plural categories (CLDR): which form of a word a number takes in a language.
+import "strings/parse" take Number;
+// Plural categories CLDR: which form of a word a number takes in a language.
 //
 //     PluralCategoryOf(origin: PluralNumber("21"), locale: Locale("ru"), kind: PluralKind.cardinal).category();   // one
 //     PluralCategoryOf(origin: PluralNumber("1.5"), locale: Locale("en"), kind: PluralKind.cardinal).category();  // other
@@ -11,7 +12,6 @@ module i18n/plural v1.0.0;
 
 import "locale/tag" take Locale;
 import "math/decimal" take Decimal;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "encoding/utf" take Utf8Encoded;
 import "i18n/operands" take PluralOperands;
@@ -27,7 +27,7 @@ enum PluralKind = (cardinal, ordinal);
 // identity. Plain ASCII decimal only, no exponent/compact notation; 1024 scalars.
 object PluralNumber does PluralOperands {
     has origin is string;
-    has integer, fraction, trimmed_fraction is BigInt;
+    has integer, fraction, trimmed_fraction is int;
     has visible, trimmed is int;
 
     // A plain decimal such as `21` or `1.50`; InvalidPluralNumber otherwise.
@@ -65,21 +65,21 @@ object PluralNumber does PluralOperands {
             }
         };
         self.origin = origin;
-        integer = BigInt(parts[0]);
+        integer = Number(parts[0]).int();
         visible = digits.length();
         trimmed = width;
-        fraction = BigInt(if digits == "" {
+        fraction = Number((if digits == "" {
             "0";
         }
         else {
             digits;
-        });
-        trimmed_fraction = BigInt(if width == 0 {
+        })).int();
+        trimmed_fraction = Number((if width == 0 {
             "0";
         }
         else {
             digits.slice(0, width);
-        });
+        })).int();
     }
 
     // The number as written.
@@ -93,7 +93,7 @@ object PluralNumber does PluralOperands {
     }
 
     // A CLDR operand: n, i, v, w, f, t, c or e.
-    operand(name is string) is BigInt {
+    operand(name is string) is int {
         match name {
             case "i" {
                 integer;
@@ -105,16 +105,16 @@ object PluralNumber does PluralOperands {
                 trimmed_fraction;
             }
             case "v" {
-                BigInt(visible);
+                visible;
             }
             case "w" {
-                BigInt(trimmed);
+                trimmed;
             }
             case "c" {
-                BigInt(0);
+                0;
             }
             case "e" {
-                BigInt(0);
+                0;
             }
             else {
                 throw InvalidPluralNumber.because("unknown integer operand: " + name);
@@ -140,10 +140,10 @@ object PluralNumber does PluralOperands {
             value;
         }
         else {
-            (value % BigInt(modulus));
+            (value % modulus);
         };
-        selected.order(BigInt(minimum)) != Order.less
-            && selected.order(BigInt(maximum)) != Order.greater;
+        selected.order((minimum)) != Order.less
+            && selected.order((maximum)) != Order.greater;
     }
 }
 

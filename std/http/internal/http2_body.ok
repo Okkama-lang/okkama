@@ -1,5 +1,6 @@
 module http/internal/http2_body v1.0.0;
 
+import "strings/parse" take Number;
 // Bodies of HTTP/2 streams: a buffer per stream filled by DATA frames and read
 // by the application, returning flow-control credit as it is read.
 //
@@ -15,7 +16,6 @@ import "http/internal/hpack_tables" take HpackField;
 import "http/internal/http2_flow" take Http2DataPayload, Http2FlowWindow;
 import "http/internal/http2_frame" take Http2Fault, Http2FaultScope;
 import "runtime/buffer" as buffer;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "encoding/single_byte" take Latin1Encoded;
 import "async/atomic" take Atomic;
@@ -38,7 +38,7 @@ role Http2BodyEvents {
 object Http2BodyBuffer does BodyReading {
     has stream, maximum is int;
     has events is Http2BodyEvents;
-    has expected is Atomic<@BigInt>;
+    has expected is Atomic<@int>;
     has empty is Atomic<bool>;
     has configured, needs_fields is Event;
     has state is buffer.BufferState;
@@ -58,7 +58,7 @@ object Http2BodyBuffer does BodyReading {
         initial is int,
         maximum is int,
         events is Http2BodyEvents,
-        expected is @BigInt,
+        expected is @int,
         empty is bool
     ) {
         confirm stream > 0
@@ -83,7 +83,7 @@ object Http2BodyBuffer does BodyReading {
                     "negative incoming length"
                 );
             if !empty {
-                confirm length.order(BigInt(maximum)) != Order.greater
+                confirm length.order((maximum)) != Order.greater
                     else throw Http2Fault.detailed(
                         Http2FaultScope.stream,
                         11,
@@ -116,7 +116,7 @@ object Http2BodyBuffer does BodyReading {
     }
 
     // Sets the declared length and whether the body must be empty.
-    configure(expected is @BigInt, empty is bool) is void {
+    configure(expected is @int, empty is bool) is void {
         self.check();
         confirm !configured.ready() && received.value() == 0 && !ended.ready()
             else throw InvalidState.because("incoming body already configured or started");
@@ -136,7 +136,7 @@ object Http2BodyBuffer does BodyReading {
                     "negative incoming length"
                 );
             if !empty {
-                confirm length.order(BigInt(maximum)) != Order.greater
+                confirm length.order((maximum)) != Order.greater
                     else throw Http2Fault.detailed(
                         Http2FaultScope.stream,
                         11,
@@ -199,7 +199,7 @@ object Http2BodyBuffer does BodyReading {
     exact(total is int) is void {
         if !empty.value() {
             for expected.value() -> length {
-                confirm BigInt(total).order(length) == Order.equal
+                confirm total.order(length) == Order.equal
                     else throw Http2Fault.detailed(
                         Http2FaultScope.stream,
                         1,
@@ -257,7 +257,7 @@ object Http2BodyBuffer does BodyReading {
             );
         if !empty.value() {
             for expected.value() -> length {
-                confirm BigInt(total).order(length) != Order.greater
+                confirm total.order(length) != Order.greater
                     else throw Http2Fault.detailed(
                         Http2FaultScope.stream,
                         1,
@@ -388,11 +388,11 @@ hidden object Http2BodyReadCleanup {
 // The body of a stream as a one-shot opening.
 object Http2IncomingBody does BodyOpening {
     has origin is Http2BodyBuffer;
-    has known is @BigInt;
+    has known is @int;
     has opened is Atomic<bool>;
 
     // origin, with its declared length if known.
-    Http2IncomingBody(origin is Http2BodyBuffer, known is @BigInt) {
+    Http2IncomingBody(origin is Http2BodyBuffer, known is @int) {
         confirm known.size() <= 1;
         self.origin = origin;
         self.known = known;
@@ -400,7 +400,7 @@ object Http2IncomingBody does BodyOpening {
     }
 
     // The declared length; UnknownBodyLength without one.
-    length() is BigInt {
+    length() is int {
         confirm known.size() == 1 else throw UnknownBodyLength.unknown;
         known[0];
     }
@@ -448,7 +448,7 @@ object Http2BodyLength {
 
     // The length if one valid Content-Length is given, else none; Http2Fault
     // for a bad one.
-    known() is @BigInt {
+    known() is @int {
         let values = origin.values(HeaderName("content-length"));
         if values.size() == 0 {
             return [];
@@ -488,7 +488,7 @@ object Http2BodyLength {
                 }
             }
         }
-        [BigInt(original.value())];
+        [Number(original.value()).int()];
     }
 }
 

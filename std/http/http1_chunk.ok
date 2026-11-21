@@ -9,7 +9,6 @@ import "http/version" take HttpVersion;
 import "http/header" take Headers, Header, HeaderName, HeaderLimits, InvalidHeader;
 import "http/message" take InvalidHttpMessage;
 import "http/internal/trailers" take HttpTrailerRules;
-import "numbers/bigint" take BigInt;
 import "runtime/single_byte" take latin1_representable_prefix;
 
 // Chunk extensions are bounded wire grammar, not application metadata. Unknown
@@ -33,7 +32,7 @@ object ParsedHttp1ChunkLine {
     // chunk-line = 1*HEXDIG *( BWS ";" BWS token [ BWS "=" BWS ( token /
     // quoted-string ) ] ), scanned once by character codes instead of a regex
     // compiled for every chunk (#114).
-    size() is BigInt {
+    size() is int {
         confirm origin.length() <= limits::Limits::line_bytes
             else throw Http1LimitExceeded.kind("line_bytes");
         confirm latin1_representable_prefix(origin) == origin.length()
@@ -67,7 +66,7 @@ object ParsedHttp1ChunkLine {
         };
         confirm value <= limits::Limits::body_bytes
             else throw Http1LimitExceeded.kind("body_bytes");
-        BigInt(value);
+        value;
     }
 
     // States: 0 before the size, 1 in the size, 2 blanks before ';', 3 after

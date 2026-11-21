@@ -1,5 +1,8 @@
 module plist/parse v1.0.0;
 
+import "strings/parse" take Number;
+import "numbers/bigint" take BoundedPower;
+import "plist/write" take EncodedPlist, PlistFormat;
 // Property lists read from XML or binary bytes.
 //
 //     let info = ParsedPlist(bytes).dictionary();
@@ -13,7 +16,6 @@ import "plist/value" take PlistValue, PlistBoolean, PlistInteger, PlistReal, Pli
     PlistDate, PlistUid, PlistArray, PlistDictionary, PlistMember, PlistKindMismatch, PlistKind,
     MissingPlistMember;
 import "collections/list" take List, EmptyList;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal, InvalidDecimal;
 import "compare" take Order;
 import "encoding/utf" take Utf8Decoded, Utf8Encoded, Utf16Decoded, Utf32Decoded, ByteOrder,
@@ -690,12 +692,12 @@ hidden object PlistXmlEvents {
                         else throw self.failure(token, "numeric spelling limit exceeded");
                     confirm scalar.length() < 2 || !scalar.starts_with("+-")
                         else throw self.failure(token, "invalid integer sign");
-                    PlistInteger(BigInt(if scalar.starts_with("+") {
+                    PlistInteger(Number((if scalar.starts_with("+") {
                         scalar.slice(1, scalar.length());
                     }
                     else {
                         scalar;
-                    }));
+                    })).int());
                 }
                 case "real" {
                     PlistReal(PlistDecimalReal(scalar).float());
@@ -1075,12 +1077,12 @@ hidden object PlistBinaryDocument {
         }
     }
 
-    hidden integer(payload is @byte, signed is bool) is BigInt {
-        let value = payload.reduce(BigInt(0)) -> number, part {
-            ((number * BigInt(256)) + BigInt(part.int().string()));
+    hidden integer(payload is @byte, signed is bool) is int {
+        let value = payload.reduce((0)) -> number, part {
+            ((number * 256) + (part.int()));
         };
         if signed && payload[0].int() >= 128 {
-            (value - BigInt(256).power(payload.size(), 129));
+            (value - BoundedPower(base: 256).int(payload.size(), 129));
         }
         else {
             value;
@@ -1426,7 +1428,7 @@ test "a plist dictionary reads like json (#141)" {
     test.is(info.float("Scale"), 1.5);
     test.is(info.boolean("LSUIElement"), true);
     test.is(info.data("Icon"), [byte(1), byte(2), byte(3)]);
-    test.is(info.date("Built").unix_duration().nanoseconds().int(), 1794564000000000000);
+    test.is(info.date("Built").unix_duration().nanoseconds(), 1794564000000000000);
     test.is(info.texts("Tags"), ["a", "b"]);
     test.is(info.get("Window").int("Width"), 800);
     let names is @string = info.dictionaries("Documents").map() -> document {
@@ -1463,4 +1465,15 @@ test "an XML real's exponent takes only digits, and its value reads digit by dig
     test.throws(InvalidPlist) {
         let empty = PlistDecimalReal("1e+").float();
     };
+}
+
+test "511 plist int round trips preserve large signed values in both formats" {
+    for [0, -1, 123456789012345678901234567890, -170141183460469231731687303715884105728] -> n {
+        let origin = PlistDictionary(PlistMember(name: "n", value: PlistInteger(n)));
+        for [PlistFormat.xml, PlistFormat.binary] -> format {
+            let bytes = EncodedPlist(origin: origin, format: format).bytes();
+            let value is int = ParsedPlist(bytes).dictionary().int("n");
+            test.is(value, n);
+        }
+    }
 }

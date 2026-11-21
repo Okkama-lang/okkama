@@ -17,7 +17,6 @@ import "web/exception" take Exception, ProblemReply;
 import "http/message" take Request, Response, Responding;
 import "http/status" take Status, StatusCode;
 import "http/header" take Headers, Header, HeaderName, HeadersWithout;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "http/method" take Method, MethodName;
 import "http/request_context" take HttpRequestContext;
@@ -304,7 +303,7 @@ object Compression does Surrounding {
             }
             else {
                 try {
-                    body.length().order(BigInt(minimum)) == Order.less;
+                    body.length().order((minimum)) == Order.less;
                 }
                 catch failure is UnknownBodyLength {
                     false;

@@ -22,7 +22,6 @@ module http/xmlrpc v1.0.0;
 
 import "collections/sequence" take Sequencing;
 import "collections/list" take List, EmptyList;
-import "numbers/bigint" take BigInt;
 import "math/decimal" take Decimal;
 import "compare" take Order;
 import "time/local_datetime" take LocalDateTime;
@@ -146,6 +145,7 @@ object XmlRpcInteger does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.integer(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.integer);
@@ -205,6 +205,7 @@ object XmlRpcBoolean does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.boolean(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.boolean);
@@ -264,6 +265,7 @@ object XmlRpcText does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.text(origin);
     }
+
     // The text.
     text() is string {
         origin;
@@ -328,6 +330,7 @@ object XmlRpcFloat does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.floating(Decimal(origin.string()));
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.floating);
@@ -395,6 +398,7 @@ object XmlRpcDouble does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.floating(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.floating);
@@ -456,6 +460,7 @@ object XmlRpcDateTime does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.datetime(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.datetime);
@@ -515,6 +520,7 @@ object XmlRpcBinary does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.binary(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.binary);
@@ -590,6 +596,7 @@ object XmlRpcArray does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.elements(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.array);
@@ -723,6 +730,7 @@ object XmlRpcStruct does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.members(origin);
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.structure);
@@ -783,6 +791,7 @@ object XmlRpcNil does XmlRpcValue {
     print(to is XmlRpcWriting) is void {
         to.nil_value();
     }
+
     // Not text: WrongXmlRpcValue.
     text() is string {
         throw WrongXmlRpcValue.kind(XmlRpcKind.text, XmlRpcKind.nil_value);
@@ -979,7 +988,7 @@ object XmlRpcLimits {
     }
 
     // The limits as given, without nil.
-    XmlRpcLimits(depth is int, values is int, text_bytes is BigInt, binary_bytes is BigInt) {
+    XmlRpcLimits(depth is int, values is int, text_bytes is int, binary_bytes is int) {
         XmlRpcBudget(
             depth: depth,
             values: values,
@@ -988,8 +997,8 @@ object XmlRpcLimits {
         );
         self.depth = depth;
         self.values = values;
-        self.text_bytes = text_bytes.int();
-        self.binary_bytes = binary_bytes.int();
+        self.text_bytes = text_bytes;
+        self.binary_bytes = binary_bytes;
         nil_enabled = false;
     }
 
@@ -997,8 +1006,8 @@ object XmlRpcLimits {
     XmlRpcLimits(
         depth is int,
         values is int,
-        text_bytes is BigInt,
-        binary_bytes is BigInt,
+        text_bytes is int,
+        binary_bytes is int,
         nil_enabled is bool
     ) {
         XmlRpcBudget(
@@ -1009,19 +1018,19 @@ object XmlRpcLimits {
         );
         self.depth = depth;
         self.values = values;
-        self.text_bytes = text_bytes.int();
-        self.binary_bytes = binary_bytes.int();
+        self.text_bytes = text_bytes;
+        self.binary_bytes = binary_bytes;
         self.nil_enabled = nil_enabled;
     }
 
     // Bytes of text in all.
-    text_bytes() is BigInt {
-        BigInt(text_bytes);
+    text_bytes() is int {
+        text_bytes;
     }
 
     // Bytes of binary in all.
-    binary_bytes() is BigInt {
-        BigInt(binary_bytes);
+    binary_bytes() is int {
+        binary_bytes;
     }
 
     // The largest document these limits allow, at most 16 MiB.
@@ -1052,11 +1061,11 @@ object XmlRpcLimits {
 }
 
 hidden object XmlRpcBudget {
-    XmlRpcBudget(depth is int, values is int, text_bytes is BigInt, binary_bytes is BigInt) {
+    XmlRpcBudget(depth is int, values is int, text_bytes is int, binary_bytes is int) {
         confirm depth >= 0 && depth <= 64 && values >= 0 && values <= 4096
             else throw InvalidXmlRpc.because("structural budgets");
         for [text_bytes, binary_bytes] -> bytes {
-            confirm bytes.sign() >= 0 && bytes.order(BigInt(8388608)) != Order.greater
+            confirm bytes.sign() >= 0 && bytes.order((8388608)) != Order.greater
                 else throw InvalidXmlRpc.because("byte budget");
         }
     }
@@ -1082,13 +1091,13 @@ hidden object XmlRpcUsage {
 
     text(origin is string) is void {
         let bytes = Utf8Encoded(origin).bytes().size();
-        confirm bytes <= limits.text_bytes().int() - text.value()
+        confirm bytes <= limits.text_bytes() - text.value()
             else throw XmlRpcLimitExceeded.kind("text_bytes");
         text.replace(text.value() + bytes);
     }
 
     binary(bytes is int) is void {
-        confirm bytes <= limits.binary_bytes().int() - binary.value()
+        confirm bytes <= limits.binary_bytes() - binary.value()
             else throw XmlRpcLimitExceeded.kind("binary_bytes");
         binary.replace(binary.value() + bytes);
     }
@@ -1684,7 +1693,7 @@ hidden object XmlRpcParsing {
                         "\r",
                         ""
                     ).replace("\n", "");
-                    let remaining = usage.limits().binary_bytes().int();
+                    let remaining = usage.limits().binary_bytes();
                     confirm text.length() <= ((remaining + 2) / 3).int() * 4
                         else throw XmlRpcLimitExceeded.kind("binary_bytes");
                     let bytes = try {

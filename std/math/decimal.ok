@@ -1,7 +1,6 @@
 module math/decimal v1.0.0;
 
 import "compare" take Comparing, Order;
-import "numbers/bigint" take BigInt;
 import "math/rounding" take Rounding;
 import "runtime/number_text" take int_parse, float_parse;
 import "runtime/decimal" take decimal_valid, decimal_canonical, decimal_coefficient,
@@ -46,8 +45,8 @@ object Decimal does Comparing<Decimal> {
     }
 
     // The integer the value is made of: 1999 for 19.99.
-    coefficient() is BigInt {
-        BigInt(decimal_coefficient(origin));
+    coefficient() is int {
+        int_parse(decimal_coefficient(origin), 10);
     }
 
     // The power of ten: -2 for 19.99.
@@ -230,7 +229,7 @@ hidden object DecimalZeros {
     }
 
     string() is string {
-        (10).pow(count).string().slice(1, count + 1);
+        10.pow(count).string().slice(1, count + 1);
     }
 }
 
@@ -244,7 +243,7 @@ hidden object DecimalShift {
     }
 
     power() is int {
-        (10).pow(shift.abs());
+        10.pow(shift.abs());
     }
 }
 

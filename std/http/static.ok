@@ -36,7 +36,6 @@ import "url/percent" take PercentDecoded, PercentEncoded, UrlComponent, InvalidP
 import "encoding/utf" take Utf8Encoded, Utf8Decoded, InvalidUtf8;
 import "html/entities" take EscapedHtml;
 import "collections/sequence" take Sequencing;
-import "numbers/bigint" take BigInt;
 import "strings/parse" take Number;
 import "compare" take Order;
 import "async/atomic" take Atomic;
@@ -629,8 +628,8 @@ object StaticFiles does Handling {
                 );
                 pieces = pieces.following(
                     StaticPiece(
-                        start: part.start().int(),
-                        size: part.size().int()
+                        start: part.start(),
+                        size: part.size()
                     )
                 );
             }
@@ -653,8 +652,8 @@ object StaticFiles does Handling {
                     );
                     pieces = pieces.following(
                         StaticPiece(
-                            start: part.start().int(),
-                            size: part.size().int()
+                            start: part.start(),
+                            size: part.size()
                         )
                     );
                     pieces = pieces.following(StaticPiece("\r\n"));
@@ -1066,7 +1065,7 @@ hidden object StaticRanges {
                     origin: fields.item(0),
                     limits: ConditionalLimits(8192, maximum)
                 ).ranges(
-                    BigInt(size)
+                    size
                 );
                 accepted.replace(true);
                 (0..entries.size()).map() -> index {
@@ -1147,8 +1146,8 @@ hidden object StaticBody does BodyOpening {
         opened = Atomic(false);
     }
 
-    length() is BigInt {
-        BigInt(size);
+    length() is int {
+        size;
     }
 
     replayable() is bool {

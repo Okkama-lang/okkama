@@ -1,5 +1,6 @@
 module fs/file v1.0.0;
 
+import "strings/parse" take Number;
 import "fs/path" take Path;
 import "fs/error" take FileError, FileFailure;
 import "fs/lock" take FileLock, FileLockMode;

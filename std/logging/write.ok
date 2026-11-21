@@ -10,7 +10,6 @@ module logging/write v1.0.0;
 import "logging/record" take LogRecord, LogContext;
 import "collections/sequence" take Sequencing;
 import "async/atomic" take Atomic;
-import "numbers/bigint" take BigInt;
 import "logging/name" take LogName;
 import "logging/level" take LogLevel;
 import "logging/field" take LogFields;
@@ -171,12 +170,12 @@ object FallbackLogs does LogWriting {
 // Writes and swallows failures, counting them.
 object BestEffortLogs does LogWriting {
     has origin is LogWriting;
-    has count is Atomic<BigInt>;
+    has count is Atomic<int>;
 
     // Writes to origin.
     BestEffortLogs(origin is LogWriting) {
         self.origin = origin;
-        count = Atomic(BigInt(0));
+        count = Atomic((0));
     }
 
     // Writes record; a failure is counted, not thrown.
@@ -185,7 +184,7 @@ object BestEffortLogs does LogWriting {
             origin.write(record);
         }
         catch failure is Error {
-            count.replace((count.value() + BigInt(1)));
+            count.replace((count.value() + 1));
         }
     }
 
@@ -195,7 +194,7 @@ object BestEffortLogs does LogWriting {
     }
 
     // How many writes failed.
-    failures() is BigInt {
+    failures() is int {
         count.value();
     }
 }

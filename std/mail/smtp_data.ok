@@ -20,7 +20,6 @@ import "mime/part" take MimeLimits, MimeLimitFailure, ParsedMime, MimePart, Mime
     MimeMultipartParsing, MimeContent, MimeMetadata, MimeParsedNode;
 import "mime/transfer" take TransferEncoding;
 import "mime/media_type" take MimePosition, MediaType;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "io/stream" take ByteSource;
 import "io/buffer" take ByteBuffer;
@@ -170,7 +169,7 @@ hidden object SmtpDataValue {
         if capabilities.has_maximum_size() {
             let maximum = capabilities.maximum_size();
             confirm maximum.sign() == 0
-                || BigInt(content.size().string()).order(maximum) != Order.greater
+                || (content.size()).order(maximum) != Order.greater
                 else throw SmtpLimitExceeded.kind("server_size");
         }
         let buffer = ByteBuffer();

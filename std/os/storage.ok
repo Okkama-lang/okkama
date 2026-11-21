@@ -1,7 +1,7 @@
 module os/storage v1.0.0;
 
+import "strings/parse" take Number;
 import "fs/path" take Path;
-import "numbers/bigint" take BigInt;
 import "compare" take Order;
 import "runtime/system" take storage_usage;
 
@@ -40,19 +40,19 @@ object Storage {
             throw StorageFailure.detailed(failure.code(), failure.message());
         };
         StorageUsage(
-            capacity: BigInt(origin: snapshot["capacity"]),
-            available: BigInt(origin: snapshot["available"]),
+            capacity: Number(snapshot["capacity"]).int(),
+            available: Number(snapshot["available"]).int(),
         );
     }
 }
 
 // Capacity, used and available bytes of a storage, at one moment.
 object StorageUsage {
-    has total_capacity is BigInt;
-    has available_capacity is BigInt;
+    has total_capacity is int;
+    has available_capacity is int;
 
     // Usage as given; available must not exceed capacity.
-    StorageUsage(capacity is BigInt, available is BigInt) {
+    StorageUsage(capacity is int, available is int) {
         total_capacity = capacity;
         available_capacity = available;
 
@@ -63,22 +63,22 @@ object StorageUsage {
     }
 
     // All the bytes it holds.
-    capacity() is BigInt {
+    capacity() is int {
         total_capacity;
     }
 
     // capacity() minus available().
-    used() is BigInt {
+    used() is int {
         (total_capacity - available_capacity);
     }
 
     // The bytes this process may still write, after reservations and quotas.
-    available() is BigInt {
+    available() is int {
         available_capacity;
     }
 
     // Whether amount bytes would fit in what is available.
-    fits(amount is BigInt) is bool {
+    fits(amount is int) is bool {
         confirm amount.sign() >= 0 else throw InvalidStorageUsage.invalid;
         amount.order(available_capacity) != Order.greater;
     }
@@ -91,27 +91,27 @@ enum InvalidStorageUsage is Error = (invalid);
 enum StorageFailure is Error = (detailed(code is string, message is string));
 
 test "usage counts what is used and what fits" {
-    let usage = StorageUsage(capacity: BigInt(origin: "100"), available: BigInt(origin: "30"));
-    test.is(usage.capacity(), BigInt(origin: "100"));
-    test.is(usage.available(), BigInt(origin: "30"));
-    test.is(usage.used(), BigInt(origin: "70"));
-    test.ok(usage.fits(BigInt(origin: "30")));
-    test.ok(!usage.fits(BigInt(origin: "31")));
-    test.ok(usage.fits(BigInt(origin: "0")));
+    let usage = StorageUsage(capacity: 100, available: 30);
+    test.is(usage.capacity(), 100);
+    test.is(usage.available(), 30);
+    test.is(usage.used(), 70);
+    test.ok(usage.fits(30));
+    test.ok(!usage.fits(31));
+    test.ok(usage.fits(0));
     test.throws(InvalidStorageUsage) {
-        usage.fits(BigInt(origin: "-1"));
+        usage.fits(-1);
     };
 }
 
 test "impossible usage is refused" {
     test.throws(InvalidStorageUsage) {
-        StorageUsage(capacity: BigInt(origin: "10"), available: BigInt(origin: "11"));
+        StorageUsage(capacity: 10, available: 11);
     };
     test.throws(InvalidStorageUsage) {
-        StorageUsage(capacity: BigInt(origin: "-1"), available: BigInt(origin: "0"));
+        StorageUsage(capacity: -1, available: 0);
     };
-    let empty = StorageUsage(capacity: BigInt(origin: "0"), available: BigInt(origin: "0"));
-    test.is(empty.used(), BigInt(origin: "0"));
+    let empty = StorageUsage(capacity: 0, available: 0);
+    test.is(empty.used(), 0);
 }
 
 test "the volume of the working directory reports a consistent usage" {

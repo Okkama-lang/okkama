@@ -5105,7 +5105,7 @@
     },
     {
       "id": "STD.NUMBERS.BIGINT",
-      "title": "std numbers/bigint public contract (BigDivisionByZero, BigInt, BigPowerLimitExceeded, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)",
+      "title": "std numbers/bigint public contract (BigDivisionByZero, BigInt, BigPowerLimitExceeded, BoundedPower, InvalidBigExponent, InvalidBigInt, InvalidBigPowerLimit)",
       "family": "Standard library: numbers",
       "spec_refs": [
         "std/numbers/bigint.ok"

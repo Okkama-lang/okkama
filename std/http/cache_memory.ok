@@ -2,7 +2,7 @@ module http/cache_memory v1.0.0;
 
 // Cached responses and a cache in memory.
 //
-//     let cache = MemoryHttpCache(clock: SystemClock(), maximum: BigInt(67108864));
+//     let cache = MemoryHttpCache(clock: SystemClock(), maximum: 67108864);
 //     Caching(origin: HttpClient(), cache: cache, clock: SystemClock());
 //
 // An entry holds a whole response: its head, its body bytes and trailers, read
@@ -27,7 +27,6 @@ import "http/media_type" take HttpMediaItems;
 import "time/clock" take Timing, MonotonicInstant, Instant;
 import "async/atomic" take Atomic;
 import "io/stream" take Closing;
-import "numbers/bigint" take BigInt;
 import "encoding/single_byte" take AsciiEncoded;
 import "compare" take Order;
 
@@ -271,7 +270,7 @@ object MemoryHttpCache does ResponseCaching, Closing {
     has revision is Atomic<int>;
 
     // At most maximum bytes; requests with Authorization are not cached.
-    MemoryHttpCache(clock is Timing, maximum is BigInt) {
+    MemoryHttpCache(clock is Timing, maximum is int) {
         let config = CacheMemoryBudget(maximum);
         self.clock = clock;
         self.maximum = config.bytes();
@@ -282,7 +281,7 @@ object MemoryHttpCache does ResponseCaching, Closing {
     }
 
     // The same; authenticated caches requests with Authorization too.
-    MemoryHttpCache(clock is Timing, maximum is BigInt, authenticated is bool) {
+    MemoryHttpCache(clock is Timing, maximum is int, authenticated is bool) {
         let config = CacheMemoryBudget(maximum);
         self.clock = clock;
         self.maximum = config.bytes();
@@ -514,8 +513,8 @@ hidden object CacheHeaderSize {
 hidden object CacheMemoryBudget {
     has value is int;
 
-    CacheMemoryBudget(maximum is BigInt) {
-        confirm maximum.sign() >= 0 && maximum.order(BigInt(1073741824)) != Order.greater
+    CacheMemoryBudget(maximum is int) {
+        confirm maximum.sign() >= 0 && maximum.order((1073741824)) != Order.greater
             else throw InvalidCachedResponse.invalid;
         value = AsciiEncoded(maximum.string()).bytes().reduce(0) -> sum, octet {
             sum * 10 + octet.int() - 48;
@@ -536,8 +535,8 @@ hidden object CachedByteBody does BodyOpening {
         self.trailers = trailers;
     }
 
-    length() is BigInt {
-        BigInt(bytes.size().string());
+    length() is int {
+        (bytes.size());
     }
 
     replayable() is bool {
