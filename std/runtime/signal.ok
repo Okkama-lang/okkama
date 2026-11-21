@@ -1,6 +1,6 @@
 module runtime/signal v1.0.0;
 
-// The native layer under web/app: the calls those modules make into the host
+// The native layer under os/signal and web/app: the calls those modules make into the host
 // runtime. Programs use those modules instead; these declarations may change
 // with the runtime.
 //
@@ -11,3 +11,19 @@ module runtime/signal v1.0.0;
 
 // Waits for one of the named signals; the one that came.
 native async signal_wait(names is @string) is string;
+
+// Watches the named signals from now on without waiting (#638): a number for
+// the calls below. The handlers stay until one of the signals comes or the
+// watch is let go; then the signal gets its earlier action back, so a second
+// one ends the process as usual.
+native signal_watch(names is @string) is int;
+
+// The name of the watched signal that came, or "" while none has.
+native signal_arrived(watch is int) is string;
+
+// Lets the watch go; again does nothing.
+native signal_unwatch(watch is int) is bool;
+
+// Waits until a watched signal comes; its name. Cancelling the wait keeps the
+// watch.
+native async signal_arrival(watch is int) is string;

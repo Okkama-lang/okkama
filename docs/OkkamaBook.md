@@ -3900,6 +3900,17 @@ the help text and bash/zsh/fish completion. `call.settings()` layers the
 command line over configuration. `examples/cli/` shows a tool with
 subcommands.
 
+`os/signal` lets a program stop cleanly. Without it, Ctrl-C (SIGINT) or
+SIGTERM ends the process at once by the system's default action, and no
+`defer` or `destroy` runs. `Interruption()` takes SIGINT and SIGTERM from
+when it is made: `interruption.check()` throws `Interrupted.signal(signal)`
+once one came, so a loop that checks at each step unwinds through its
+cleanup like any failure, and `interruption.status()` is the conventional
+exit status, 130 or 143. An asynchronous program awaits
+`interruption.arrival()`. After the first signal a second one ends the
+process at once. Tests raise signals with `ManualSignals` (`testing/signal`):
+`Interruption(source: signals)`.
+
 `digest` and `crypto` work on bytes, through the host's vetted
 implementations.
 - A digest is a running state: `Sha256(bytes).bytes()`, or

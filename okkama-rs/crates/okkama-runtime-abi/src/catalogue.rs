@@ -262,8 +262,8 @@ mod tests {
         let total: usize = counts.values().sum();
         assert_eq!(total, Native::ALL.len());
         // A change to the table changes these counts: review its classification with it.
-        let expected = [((AbiKind::Sync, Transport::Data), 236), ((AbiKind::Sync, Transport::Handle), 361),
-            ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 4),
+        let expected = [((AbiKind::Sync, Transport::Data), 239), ((AbiKind::Sync, Transport::Handle), 361),
+            ((AbiKind::Sync, Transport::Opaque), 9), ((AbiKind::Async, Transport::Data), 5),
             ((AbiKind::Async, Transport::Handle), 47)];
         assert_eq!(counts, expected.into_iter().collect());
         let mut roles = std::collections::BTreeMap::new();
@@ -275,10 +275,10 @@ mod tests {
             }
         }
         // #601 N1: the 51 async natives are admitted too (4 data, 20 using and 27 publishing a handle, all host).
-        let roles_expected = [(HandleRole::None, 240), (HandleRole::Uses, 283), (HandleRole::Publishes, 101),
+        let roles_expected = [(HandleRole::None, 244), (HandleRole::Uses, 283), (HandleRole::Publishes, 101),
             (HandleRole::Closes, 24)];
         assert_eq!(roles, roles_expected.into_iter().collect());
-        let effects_expected = [(Effect::Pure, 340), (Effect::Stdio, 3), (Effect::Host, 305)];
+        let effects_expected = [(Effect::Pure, 340), (Effect::Stdio, 3), (Effect::Host, 309)];
         assert_eq!(effects, effects_expected.into_iter().collect());
     }
 
@@ -299,7 +299,7 @@ mod tests {
             *modules.entry(contract.native.module()).or_insert(0) += 1;
         }
         let expected = [("runtime/application", 5), ("runtime/database", 19), ("runtime/fs", 1),
-            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 1),
+            ("runtime/fs_root", 1), ("runtime/network", 13), ("runtime/process", 6), ("runtime/signal", 2),
             ("runtime/time", 1), ("runtime/tls_transport", 4)];
         assert_eq!(modules, expected.into_iter().collect());
     }

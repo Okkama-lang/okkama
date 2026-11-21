@@ -26,7 +26,7 @@ import "http/endpoint" take LoopbackEndpoints;
 import "http/body" take TextBody;
 import "http/status" take Status;
 import "time/duration" take Duration;
-import "runtime/signal" take signal_wait;
+import "os/signal" take Interruption, CaughtSignal;
 import "net/tls" take TlsIdentity, TlsServerPolicy;
 import "http/version" take HttpVersion;
 import "collections/set" take Set, OrderedSet;
@@ -132,20 +132,22 @@ object WebApplication {
     }
 }
 
-// Serving that stops on SIGTERM or SIGINT. The wait for the signal begins when
-// the object is made, before the port is bound: signal_wait installs its
-// handlers when called, so a signal that comes as soon as the port accepts
-// finds them. On the signal the server stops accepting, the requests in flight
-// get 10 seconds, and the server closes, which ends serve(). close() cancels
-// the wait if no signal came, which gives the signals their earlier actions
-// back.
+// Serving that stops on SIGTERM or SIGINT. The signals are taken when the
+// object is made, before the port is bound (Interruption), so a signal that
+// comes as soon as the port accepts is not missed. On the signal the server
+// stops accepting, the requests in flight get 10 seconds, and the server
+// closes, which ends serve(); a second signal ends the process at once.
+// close() gives the signals their earlier actions back if none came.
 hidden object AppStopping {
-    has signals is FutureGroup<string>;
+    has interruption is Interruption;
+    has signals is FutureGroup<CaughtSignal>;
     has draining is FutureGroup<bool>;
 
     AppStopping() {
-        let waiting is FutureGroup<string> = FutureGroup();
-        waiting.start(signal_wait(["TERM", "INT"]));
+        let taking = Interruption(signals: [CaughtSignal.terminate, CaughtSignal.interrupt]);
+        let waiting is FutureGroup<CaughtSignal> = FutureGroup();
+        waiting.start(taking.arrival());
+        interruption = taking;
         signals = waiting;
         draining = FutureGroup();
     }
@@ -174,6 +176,7 @@ hidden object AppStopping {
             await signals.wait();
         }
         catch e is Cancelled {}
+        interruption.close();
     }
 }
 
