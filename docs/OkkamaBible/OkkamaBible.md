@@ -12733,6 +12733,32 @@ body and its cleanup before it records the result. Tasks still pending at
 the end are cancelled and drained. There is no implicit timeout, so a test
 that may hang should bound itself with a budget or a deadline.
 
+A table of cases is one test with named sub-cases. `test.case(name) { … }`
+runs one row as a case of its own, in the same block shape as
+`test.throws`: a failed check or a thrown error fails that sub-case, and the
+rows after it still run.
+
+```okkama
+test "postage at every boundary" {
+    for cases -> row {
+        test.case(row.name()) { test.is(row.got(tariff), row.wanted()); };
+    }
+}
+```
+
+The report shows each sub-case as `Test/name`, and `--filter "postage/50 g"`
+runs only the matching rows.
+
+The runner itself has three more switches:
+- **`--report json` or `--report junit`** writes one report of the run for a
+  machine, the tests in declaration order. What the tests print then goes to
+  standard error, so the report owns standard output.
+- **`--seed N`** runs the tests in a reproducible shuffled order. A
+  property's generator keeps its own seed.
+- **`--workers N`** runs every test in a process of its own and captures
+  what it prints. **`--test-timeout SECONDS`** then stops a test that passes
+  its deadline and reports it as timed out.
+
 ## 15.10 Okkama among other languages
 
 Every language with a test culture answers the same four questions: where a
@@ -12765,8 +12791,9 @@ production, by passing a different object that does the role.
 
 ## 15.11 What does not work yet
 
-- Report formats, seeds and parallel workers are not in the command line;
-  they are planned with the rewritten standard library (#339).
+- TAP is not a report format, and a per-test deadline needs `--workers`:
+  a test running in the runner's own process cannot be stopped from outside
+  (#339, #938).
 
 Until 0.4.1, a successor passed to `test.is` crashed the compiler and did
 not count as used (#275). It is now an ordinary argument:
@@ -21226,6 +21253,30 @@ after: 0 lines to change
 - The example works inside a `TemporaryDirectory` made in the current
   directory, and `defer scratch.close()` removes it with everything in it, so
   the run leaves nothing behind.
+
+`File(path: path).text().replace(text)` does all of this in one call: it
+writes a temporary file beside the original, synchronizes it, renames it
+over the original and synchronizes the directory, so after a crash or a
+power cut the file is the whole old text or the whole new one (#122).
+
+A rewrite of many files should also stop cleanly when the user presses
+Ctrl-C. Without help a signal ends the process at once, between two files or
+in the middle of one, and no `defer` runs. An `Interruption` from `os/signal`
+takes SIGINT and SIGTERM instead, and the loop decides where stopping is
+safe:
+
+```okkama
+let interruption = Interruption();
+for files -> file {
+    interruption.check();      // throws Interrupted between two files
+    Tidy(file).applied();
+}
+```
+
+`interruption.status()` is then the conventional exit status, 130 after
+Ctrl-C, and a second Ctrl-C during the cleanup ends the process at once
+(#638).
+
 ## 23.10 Configuration and the environment
 
 `tally` has two options and no configuration, and many tools should stay

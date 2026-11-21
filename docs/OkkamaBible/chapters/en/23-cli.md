@@ -336,6 +336,30 @@ writing it is a separate step:
 - The example works inside a `TemporaryDirectory` made in the current
   directory, and `defer scratch.close()` removes it with everything in it, so
   the run leaves nothing behind.
+
+`File(path: path).text().replace(text)` does all of this in one call: it
+writes a temporary file beside the original, synchronizes it, renames it
+over the original and synchronizes the directory, so after a crash or a
+power cut the file is the whole old text or the whole new one (#122).
+
+A rewrite of many files should also stop cleanly when the user presses
+Ctrl-C. Without help a signal ends the process at once, between two files or
+in the middle of one, and no `defer` runs. An `Interruption` from `os/signal`
+takes SIGINT and SIGTERM instead, and the loop decides where stopping is
+safe:
+
+```okkama
+let interruption = Interruption();
+for files -> file {
+    interruption.check();      // throws Interrupted between two files
+    Tidy(file).applied();
+}
+```
+
+`interruption.status()` is then the conventional exit status, 130 after
+Ctrl-C, and a second Ctrl-C during the cleanup ends the process at once
+(#638).
+
 ## 23.10 Configuration and the environment
 
 `tally` has two options and no configuration, and many tools should stay
