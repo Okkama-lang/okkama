@@ -1,0 +1,24 @@
+{
+  "before": {
+    "heap bytes allocated": 831321416,
+    "alloc runtime array, bytes": 96000088,
+    "region add": 4000000,
+    "alloc runtime array, count": 2000006,
+    "run, microseconds": 913965,
+    "collection, microseconds": 11625,
+    "collections": 195,
+    "alloc runtime async frame, bytes": 624000224,
+    "alloc runtime async frame, count": 4000001
+  },
+  "after": {
+    "heap bytes allocated": 831321416,
+    "alloc runtime array, bytes": 96000088,
+    "region add": 4000000,
+    "alloc runtime array, count": 2000006,
+    "run, microseconds": 906378,
+    "collection, microseconds": 11067,
+    "collections": 195,
+    "alloc runtime async frame, bytes": 624000224,
+    "alloc runtime async frame, count": 4000001
+  }
+}

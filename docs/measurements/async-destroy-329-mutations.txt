@@ -1,0 +1,249 @@
+Mutation: order
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_keeps_reverse_creation_order_and_destroys_once ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_keeps_reverse_creation_order_and_destroys_once stdout ----
+
+thread 'failures::async_destroy_tests::single_async_close_keeps_reverse_creation_order_and_destroys_once' (75935601) panicked at crates/sparrow-core/src/async_destroy_tests.rs:76:9:
+assertion failed: matches!(next(&mut r, home, &[]), Closed::Async(object, None) if object ==
+    expected)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_keeps_reverse_creation_order_and_destroys_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+   Compiling ring v0.17.14
+   Compiling zstd-sys v2.1.3+zstd.1.5.7
+   Compiling aws-lc-sys v0.46.0
+   Compiling libsqlite3-sys v0.39.1
+   Compiling rustls v0.23.46
+   Compiling rustls-webpki v0.103.16
+   Compiling rusqlite v0.41.1
+   Compiling zstd-safe v7.4.1
+   Compiling zstd v0.13.5
+   Compiling aws-lc-rs v1.18.2
+   Compiling okkama-native v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-native)
+   Compiling okkama-runtime-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-runtime-core)
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.21s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: keep
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_preserves_a_kept_graph_and_a_foreign_owner ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_preserves_a_kept_graph_and_a_foreign_owner stdout ----
+
+thread 'failures::async_destroy_tests::single_async_close_preserves_a_kept_graph_and_a_foreign_owner' (75936053) panicked at crates/sparrow-core/src/async_destroy_tests.rs:94:5:
+assertion failed: matches!(next(&mut r, home, &[kept]), Closed::Done(None))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_preserves_a_kept_graph_and_a_foreign_owner
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: pin
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_hands_a_pinned_object_to_its_holder ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_hands_a_pinned_object_to_its_holder stdout ----
+
+thread 'failures::async_destroy_tests::single_async_close_hands_a_pinned_object_to_its_holder' (75936563) panicked at crates/sparrow-core/src/async_destroy_tests.rs:111:5:
+assertion failed: matches!(next(&mut r, home, &[]), Closed::Done(None))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_hands_a_pinned_object_to_its_holder
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.11s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: failure
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_links_destroy_failure_and_keeps_unwind_primary ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_links_destroy_failure_and_keeps_unwind_primary stdout ----
+
+thread 'sparrow-core' (75937068) panicked at crates/sparrow-core/src/async_destroy_tests.rs:131:17:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'failures::async_destroy_tests::single_async_close_links_destroy_failure_and_keeps_unwind_primary' (75937067) panicked at crates/sparrow-core/src/async_destroy_tests.rs:141:8:
+called `Result::unwrap()` on an `Err` value: Error("internal error: assertion `left == right` failed\n  left: 0\n right: 1")
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_links_destroy_failure_and_keeps_unwind_primary
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+warning: unused variable: `runtime`
+   --> crates/sparrow-core/src/tasks.rs:821:17
+    |
+821 |     let link = |runtime: &mut Runtime, primary: Option<Word>, cleanup: Word| match primary {
+    |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_runtime`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sparrow-core` (lib test) generated 1 warning (run `cargo fix --lib -p sparrow-core --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: shield
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_shields_a_suspended_destroy_and_roots_it_through_gc ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_shields_a_suspended_destroy_and_roots_it_through_gc stdout ----
+
+thread 'sparrow-core' (75937540) panicked at crates/sparrow-core/src/async_destroy_tests.rs:158:9:
+cancellation must not resume the shielded destroy
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'failures::async_destroy_tests::single_async_close_shields_a_suspended_destroy_and_roots_it_through_gc' (75937539) panicked at crates/sparrow-core/src/async_destroy_tests.rs:180:8:
+called `Result::unwrap()` on an `Err` value: Error("internal error: cancellation must not resume the shielded destroy")
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_shields_a_suspended_destroy_and_roots_it_through_gc
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.65s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: membership
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_region_insertion_is_idempotent_inline_and_overflow ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_region_insertion_is_idempotent_inline_and_overflow stdout ----
+
+thread 'failures::async_destroy_tests::single_async_close_region_insertion_is_idempotent_inline_and_overflow' (75938056) panicked at crates/sparrow-core/src/async_destroy_tests.rs:194:5:
+assertion `left == right` failed
+  left: 10
+ right: 6
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_region_insertion_is_idempotent_inline_and_overflow
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.64s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: root
+
+running 1 test
+test failures::async_destroy_tests::single_async_close_roots_the_receiver_before_its_future_exists ... FAILED
+
+failures:
+
+---- failures::async_destroy_tests::single_async_close_roots_the_receiver_before_its_future_exists stdout ----
+
+thread 'failures::async_destroy_tests::single_async_close_roots_the_receiver_before_its_future_exists' (75954681) panicked at crates/sparrow-core/src/async_destroy_tests.rs:210:5:
+the selected receiver must survive until future_new retains it
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    failures::async_destroy_tests::single_async_close_roots_the_receiver_before_its_future_exists
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 207 filtered out; finished in 0.01s
+
+   Compiling ring v0.17.14
+   Compiling zstd-sys v2.1.3+zstd.1.5.7
+   Compiling aws-lc-sys v0.46.0
+   Compiling libsqlite3-sys v0.39.1
+   Compiling rustls v0.23.46
+   Compiling rustls-webpki v0.103.16
+   Compiling rusqlite v0.41.1
+   Compiling zstd-safe v7.4.1
+   Compiling zstd v0.13.5
+   Compiling aws-lc-rs v1.18.2
+   Compiling okkama-native v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-native)
+   Compiling okkama-runtime-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-runtime-core)
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.35s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+error: test failed, to rerun pass `-p sparrow-core --lib`
+
+Mutation: okkama-shield
+
+running 1 test
+test single_async_destroy_lifecycle ... FAILED
+
+failures:
+
+---- single_async_destroy_lifecycle stdout ----
+
+thread 'single_async_destroy_lifecycle' (75956178) panicked at crates/okkama-cli/tests/tweed_ownership.rs:395:5:
+Cancelled: Operation was cancelled
+  --> /var/folders/2f/9197cp_n1hl0jf68wj5n0w0h0000gn/T/tweed-single-async-destroy-39154/main.ok:11:21
+   |
+11 |     async destroy { await gate.wait(); log.replace(log.value() + name); }
+   |                     ^^^^^^^^^^^^^^^^^
+Stack trace (most recent call first):
+  at Guard.destroy (/var/folders/2f/9197cp_n1hl0jf68wj5n0w0h0000gn/T/tweed-single-async-destroy-39154/main.ok:11:21)
+  at Work.use (/var/folders/2f/9197cp_n1hl0jf68wj5n0w0h0000gn/T/tweed-single-async-destroy-39154/main.ok:15:74)
+  at main (/var/folders/2f/9197cp_n1hl0jf68wj5n0w0h0000gn/T/tweed-single-async-destroy-39154/main.ok:43:13)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    single_async_destroy_lifecycle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 2.37s
+
+   Compiling libmimalloc-sys v0.1.49
+   Compiling okkama-compiler v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-compiler)
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+   Compiling mimalloc v0.1.52
+   Compiling blade v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/blade)
+   Compiling okkama-cli v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running tests/tweed_ownership.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/tweed_ownership-1ae1a2eef2bf41e0)
+error: test failed, to rerun pass `-p okkama-cli --test tweed_ownership`

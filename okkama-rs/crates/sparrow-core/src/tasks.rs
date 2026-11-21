@@ -165,6 +165,8 @@ impl Runtime {
 
     /// A cold Future of async `function` with its parameters.
     pub fn future_new(&mut self, function: usize, arguments: &[Word]) -> Word {
+        let _cost = okkama_devtrace::span!("cleanup-time", "future_new");
+        okkama_devtrace::count!("cleanup-count", "future_new");
         self.count(|r| format!("future {}", r.loaded.program.functions[function].symbol));
         let source = &self.loaded.program.functions[function];
         let registers = source.registers.len();
@@ -286,6 +288,8 @@ impl Runtime {
     /// Returns false while it is pending; a failure that escaped the body
     /// settles the Future. A fatal engine stop is left in the context.
     pub fn run_body(&mut self, ctx: *mut Ctx, frame: Word) -> bool {
+        let _cost = okkama_devtrace::span!("cleanup-time", "run_body");
+        okkama_devtrace::count!("cleanup-count", "run_body");
         let function = self.function_of(frame);
         if self.loaded.functions[function].driver {
             self.running.push(frame);
@@ -802,6 +806,8 @@ pub extern "C" fn rt_await_take(ctx_ptr: *mut Ctx, this: Word, future: Word) -> 
 /// in the region, and re-enters here when it settles.
 #[inline(never)]
 pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, keep: Word, failure: Word) -> u64 {
+    let _cost = okkama_devtrace::span!("cleanup-time", "rt_region_settle");
+    okkama_devtrace::count!("cleanup-count", "rt_region_settle");
     okkama_devtrace::count!("runtime", "rt_region_settle");
     let (_, runtime) = unsafe { parts(ctx_ptr) };
     let unwind = failure != UNBOUND;
@@ -829,15 +835,18 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
         }
         runtime.set_region_settling(region, None, primary);
     }
+    // Normal exits keep at most one value: borrow its stack slot instead of allocating a Vec (#329).
+    let payloads;
     let kept = if unwind {
-        runtime.failure_payloads(failure)
+        payloads = runtime.failure_payloads(failure);
+        payloads.as_slice()
     } else if keep == UNBOUND {
-        Vec::new()
+        &[]
     } else {
-        vec![keep]
+        std::slice::from_ref(&keep)
     };
     loop {
-        let (object, so_far) = match runtime.region_close_until(ctx_ptr, region, &kept, primary, true) {
+        let (object, so_far) = match runtime.region_close_until(ctx_ptr, region, kept, primary, true) {
             crate::failures::Closed::Done(done) => {
                 primary = done;
                 break;
@@ -848,6 +857,7 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
         let descriptor = heap::payload(runtime.heap.header_of(object)) as usize;
         let destroy = runtime.loaded.program.objects[descriptor].destroy.expect("an async destroy").0 as usize;
         let rooted = [Some(region), Some(this), primary, (keep != UNBOUND).then_some(keep), unwind.then_some(failure)];
+        okkama_devtrace::count!("cleanup-count", "destroy root pushes", rooted.iter().flatten().count() + 1);
         let depth = runtime.roots.len();
         runtime.roots.extend(rooted.iter().flatten().map(|&word| (word, Repr::Ref)));
         let future = runtime.future_new(destroy, &[object]);
@@ -860,9 +870,10 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
             return AWAIT_READY;
         }
         match get(future, STATE) {
-            DONE => {}
+            DONE => { okkama_devtrace::count!("cleanup-count", "destroy completed inline"); }
             FAILURE_STATE => primary = Some(link(runtime, primary, get(future, FAILURE))),
             _ => {
+                okkama_devtrace::count!("cleanup-count", "destroy suspended");
                 runtime.set_region_settling(region, Some(future), primary);
                 runtime.add_waiter(future, this);
                 return AWAIT_PENDING;

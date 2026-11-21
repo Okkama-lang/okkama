@@ -15,6 +15,15 @@ the session's memory; older rulings live in the commits and tickets named.
   BoundedPower beside BigInt serves both parsers and BigInt.power; exact rat
   handles rational normalization. [Audit, decisions and evidence](../std-int-511/README.md).
 
+- **2026-11-22. #329 runtime implementation and conditional gate.** Under the
+  owner's runtime-first task, optimize a single ordinary async-destroy entry
+  inside `region_close_until`; share `region_action` with the general close
+  for owner/keep/pin decisions, and retain the ordinary shielded Future and GC
+  roots in `rt_region_settle`. No ownership model, lowering or language change.
+  The final measured destroy is still 1.884× close, so the owner's explicit
+  stop after step 3 applies: no std guard conversions. Evidence and validation:
+  [#329 record](../async-destroy-329.md).
+
 
 - **2026-11-22. Documentation Phase C (#514).** The entire supplied ticket is
   authorized, without approval or language/API changes. Implementation choices

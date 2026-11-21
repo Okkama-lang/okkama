@@ -1,0 +1,52 @@
+{
+  "before": {
+    "binary_sha256": "3ab618217af43f376165b99a338c4a318d8faf55ba64a0cbec38d8b266b457cc",
+    "iterations": 2000000,
+    "metric": "whole-process wall seconds, including frontend and JIT; no devtrace/stats",
+    "runs": {
+      "destroy": [
+        0.3899985,
+        0.391630792,
+        0.3877935,
+        0.363817084,
+        0.386503584
+      ],
+      "close": [
+        0.191396292,
+        0.181312042,
+        0.19308725,
+        0.191489042,
+        0.193631
+      ]
+    },
+    "median_seconds": {
+      "destroy": 0.3877935,
+      "close": 0.191489042
+    }
+  },
+  "after": {
+    "binary_sha256": "e64828498eed8ed26af18a5ddafedc617c704d492044d0c489b74814e0cb37bc",
+    "iterations": 2000000,
+    "metric": "whole-process wall seconds, including frontend and JIT; no devtrace/stats",
+    "runs": {
+      "destroy": [
+        0.371611959,
+        0.37465075,
+        0.349345875,
+        0.357441792,
+        0.356179459
+      ],
+      "close": [
+        0.186307375,
+        0.184719291,
+        0.189727833,
+        0.20558025,
+        0.200988625
+      ]
+    },
+    "median_seconds": {
+      "destroy": 0.357441792,
+      "close": 0.189727833
+    }
+  }
+}

@@ -1,0 +1,81 @@
+
+running 7 tests
+test failures::async_destroy_tests::single_async_close_hands_a_pinned_object_to_its_holder ... ok
+test failures::async_destroy_tests::single_async_close_keeps_reverse_creation_order_and_destroys_once ... ok
+test failures::async_destroy_tests::single_async_close_region_insertion_is_idempotent_inline_and_overflow ... ok
+test failures::async_destroy_tests::single_async_close_roots_the_receiver_before_its_future_exists ... ok
+test failures::async_destroy_tests::single_async_close_preserves_a_kept_graph_and_a_foreign_owner ... ok
+test failures::async_destroy_tests::single_async_close_links_destroy_failure_and_keeps_unwind_primary ... ok
+test failures::async_destroy_tests::single_async_close_shields_a_suspended_destroy_and_roots_it_through_gc ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 201 filtered out; finished in 0.02s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+
+
+running 8 tests
+test failures::inline_identity_tests::an_object_with_a_destroy_keeps_its_identity_in_itself ... ok
+test failures::inline_identity_tests::a_successor_does_not_inherit_its_sources_rehomed_cache ... ok
+test failures::inline_identity_tests::a_future_keeps_its_identity_at_the_end_of_its_frame ... ok
+test failures::inline_identity_tests::a_spent_future_is_not_kept_by_a_region ... ok
+test failures::inline_identity_tests::a_region_sorts_its_entries_by_serial ... ok
+test failures::inline_identity_tests::an_adopted_big_array_is_summarized_and_a_small_one_is_not ... ok
+test failures::inline_identity_tests::a_future_with_leaf_inputs_is_added_without_a_walk ... ok
+test failures::inline_identity_tests::a_container_made_from_summarized_parts_is_summarized_at_birth ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 200 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_core-95fc0469ce389028)
+
+
+running 1 test
+test single_async_destroy_lifecycle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 2.68s
+
+   Compiling sparrow-core v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/sparrow-core)
+   Compiling okkama-cli v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.95s
+     Running tests/tweed_ownership.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/tweed_ownership-1ae1a2eef2bf41e0)
+
+
+running 1 test
+test input_cleanup_suspends_shielded_before_publication ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 2.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/tweed_ownership.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/tweed_ownership-1ae1a2eef2bf41e0)
+
+
+running 21 tests
+test future_outcome_borrowed_input_keeps_original_owner ... ok
+test future_outcome_cleanup_failure_does_not_repeat_or_skip ... ok
+test future_outcome_channel_close_keeps_unread_until_last_capability ... ok
+test future_outcome_discarded_temporary_and_same_scope_track ... ok
+test future_outcome_escaping_future_keeps_cache ... ok
+test future_outcome_async_destroy_order ... ok
+test future_outcome_channel_buffered_messages_deliver_in_order ... ok
+test future_outcome_channel_endpoint_outlives_channel_object ... ok
+test future_outcome_channel_rendezvous_hands_over_directly ... ok
+test future_outcome_escaping_collector_future_retains_fresh_receiver ... ok
+test future_outcome_completions_duplicates_preserve_identity ... ok
+test future_outcome_all_futures_duplicates_and_nested_consumers ... ok
+test future_outcome_global_creation_order ... ok
+test future_outcome_nested_awaiters_borrow ... ok
+test future_outcome_suspended_await_and_cached_failure ... ok
+test future_outcome_nested_input_resource_moves_to_outcome ... ok
+test future_outcome_returned_channel_take_escapes_helper ... ok
+test future_outcome_unique_bound_result_escapes_binding_scope ... ok
+test future_outcome_nested_future_owned_transitively ... ok
+test future_outcome_unawaited_spawn_released_at_owner_close ... ok
+test future_outcome_temporary_collector_owns_inputs ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+   Compiling okkama-cli v0.6.1 (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/okkama-rs/crates/okkama-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/sparrow_future_outcomes.rs (/Volumes/SamsungSSD/stuff/okkama-work/l-codex2/target-329/debug/deps/sparrow_future_outcomes-f1c04c0406993b08)
