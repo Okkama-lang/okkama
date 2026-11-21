@@ -1,0 +1,19 @@
+=== RUN   unchanged lines have no diff
+--- PASS: unchanged lines have no diff
+=== RUN   one comparison answers in unified and context form
+--- PASS: one comparison answers in unified and context form
+=== RUN   the ratio is twice the matched lines over all lines
+--- PASS: the ratio is twice the matched lines over all lines
+=== RUN   edits walk both sides in order with their indexes
+--- PASS: edits walk both sides in order with their indexes
+=== RUN   repeated lines keep the native LCS tie order
+--- PASS: repeated lines keep the native LCS tie order
+=== RUN   line count accepts 512 and rejects 513 on either side
+--- PASS: line count accepts 512 and rejects 513 on either side
+=== RUN   lines accept 4096 Unicode scalars and CR but reject LF
+--- PASS: lines accept 4096 Unicode scalars and CR but reject LF
+=== RUN   aggregate scalar limit is per input and inclusive
+--- PASS: aggregate scalar limit is per input and inclusive
+=== RUN   rendering refuses output beyond the scalar budget
+--- PASS: rendering refuses output beyond the scalar budget
+PASS

@@ -1,0 +1,3 @@
+=== RUN   reusable comparisons pass through the current test context
+--- PASS: reusable comparisons pass through the current test context
+PASS

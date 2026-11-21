@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Format native #13, diff (measured implementation decision).**
+  Under the owner's one-module instruction, keep the existing public API and
+  retain `runtime/diff::diff_script` (ID 141). A behavior-equivalent pure Okkama
+  Hunt–Szymanski port adds 20.88 ms/call at 512 repeated lines (30.43×); the
+  absolute cost exceeds the migration budget. Preserve the experiment outside
+  std, keep all native registrations/counts, and add mutation-confirmed tests.
+  This native is LCSidx, not Myers. [Numbers and evidence](../diff-13/README.md).
+
 - **2026-11-22. Std integers (#511).** The owner authorizes the whole supplied
   review for this release, replacing its planning/report workflow with an
   implementation summary and excluding CHANGELOG/Git changes. Ordinary std

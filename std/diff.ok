@@ -589,3 +589,49 @@ test "edits walk both sides in order with their indexes" {
     };
     test.is(shown, ["-a00", "=b10", "+c21"]);
 }
+
+
+test "repeated lines keep the native LCS tie order" {
+    let edits = Diff(left: ["a", "b", "a"], right: ["b", "a", "b"]).edits();
+    test.is(edits.map() -> edit { edit::Line::kind; }, [DiffEditKind.removed, DiffEditKind.equal, DiffEditKind.equal, DiffEditKind.added]);
+    test.is(edits.map() -> edit { edit::Line::text; }, ["a", "b", "a", "b"]);
+    test.is(edits.map() -> edit { edit::Line::left; }, [0, 1, 2, 3]);
+    test.is(edits.map() -> edit { edit::Line::right; }, [0, 0, 1, 2]);
+    test.is(Diff(left: ["", "ж\r", "🙂"], right: ["", "x", "🙂"]).unified(0),
+        "--- left\n+++ right\n@@ -2 +2 @@\n-ж\r\n+x\n");
+}
+
+test "line count accepts 512 and rejects 513 on either side" {
+    let nothing is @string = [];
+    let limit is @string = (0..512).map() -> i { ""; };
+    test.is(Diff(left: limit, right: nothing).edits().size(), 512);
+    test.is(Diff(left: nothing, right: limit).edits().size(), 512);
+    test.throws(InvalidDiff) { Diff(left: limit + [""], right: nothing).edits(); };
+    test.throws(InvalidDiff) { Diff(left: nothing, right: limit + [""]).edits(); };
+}
+
+test "lines accept 4096 Unicode scalars and CR but reject LF" {
+    let limit = "🙂".repeat(4096);
+    test.is(Diff(left: [limit, "\r"], right: [limit, "\r"]).ratio(), 1.0);
+    test.throws(InvalidDiff) { Diff(left: [limit + "x"], right: [""]).edits(); };
+    test.throws(InvalidDiff) { Diff(left: [""], right: [limit + "x"]).edits(); };
+    test.throws(InvalidDiff) { Diff(left: ["a\nb"], right: [""]).edits(); };
+    test.throws(InvalidDiff) { Diff(left: [""], right: ["\n"]).edits(); };
+}
+
+test "aggregate scalar limit is per input and inclusive" {
+    let line = "x".repeat(4096);
+    let limit is @string = (0..256).map() -> i { line; };
+    test.is(Diff(left: limit, right: limit).edits().size(), 256);
+    test.throws(InvalidDiff) { Diff(left: limit + ["x"], right: limit).edits(); };
+    test.throws(InvalidDiff) { Diff(left: limit, right: limit + ["x"]).edits(); };
+}
+
+test "rendering refuses output beyond the scalar budget" {
+    let left is @string = (0..256).map() -> i { "a".repeat(4096); };
+    let right is @string = (0..256).map() -> i { "b".repeat(4096); };
+    let changes = Diff(left: left, right: right);
+    test.is(changes.edits().size(), 512);
+    test.throws(DiffLimitExceeded) { changes.unified(); };
+    test.throws(DiffLimitExceeded) { changes.contextual(); };
+}
