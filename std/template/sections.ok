@@ -17,7 +17,8 @@ import "template/tree" take TemplateTree, TemplateTreeNode, TemplateTreeKind;
 import "template/compile" take InvalidTemplateLimits, TemplateOutputLimitExceeded;
 import "template/path" take TemplatePathFromString;
 import "template/json" take JsonTemplateStrings, TemplateJsonLimitExceeded;
-import "json" take Json, JsonKind;
+import "json" take Json, JsonKind, ParsedJson;
+import "template/engine" take Template;
 import "io/buffer" take ByteBuffer;
 import "encoding/utf" take Utf8Decoded, ByteOrder;
 import "encoding/binary" take IntegerBytes, Binary, Signedness;
@@ -553,4 +554,19 @@ test "output meter failure is atomic and int maximum does not overflow" {
     catch e is Error {
         true;
     });
+}
+
+test "the one engine renders what section templates render (#178)" {
+    let data = ParsedJson(
+        "{\"id\":17,\"items\":[{\"title\":\"Tea\",\"price\":\"4.50\"},{\"title\":\"Cake\",\"price\":3}],\"none\":[],\"user\":{\"name\":\"Ada\"},\"t\":true,\"z\":null,\"s\":\"\"}"
+    ).root();
+    for [
+        "Order {{id}}:\n{{#items}}  - {{title}} ({{price}})\n{{/items}}{{^items}}  (empty)\n{{/items}}",
+        "{{#none}}x{{/none}}{{^none}}none{{/none}}",
+        "{{#user}}{{name}}{{/user}}{{#t}}T{{/t}}{{^z}}Z{{/z}}{{^s}}S{{/s}}{{#missing}}M{{/missing}}",
+        "a\n  {{#items}}\n  * {{title}}\n  {{/items}}\nb {{! c }}d",
+        "{{#items}}{{#title}}[{{.}}]{{/title}}{{/items}}"
+    ] -> source {
+        test.is(Template(source).string(data), SectionTemplate(source).string(data));
+    }
 }

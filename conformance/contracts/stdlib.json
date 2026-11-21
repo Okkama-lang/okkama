@@ -6688,6 +6688,21 @@
       }
     },
     {
+      "id": "STD.TEMPLATE.ENGINE",
+      "title": "std template/engine public contract (Template, TemplateError, TemplateLimits)",
+      "family": "Standard library: template",
+      "spec_refs": [
+        "std/template/engine.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.TEMPLATE.HTML",
       "title": "std template/html public contract (HtmlTemplate, InvalidHtmlTemplate)",
       "family": "Standard library: template",

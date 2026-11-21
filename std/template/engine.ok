@@ -1,0 +1,668 @@
+module template/engine v1.0.0;
+
+// Templates over JSON: one small language, compiled once, rendered as text.
+//
+//     let greeting = Template("Hello, {{user.name}}! You have {{user.unread}} new messages.");
+//     greeting.string(ParsedJson(text).root());
+//     greeting.write(data: data, destination: Stdout());
+//
+//     let order = Template("Order {{id}}:\n{{#items}}  - {{title}}\n{{/items}}{{^items}}  (empty)\n{{/items}}");
+//
+// The language (Mustache's core, nothing more):
+// - `{{path}}` is a value: a dotted path of members (`user.name`) read from the
+//   current context, or `{{.}}`, the context itself;
+// - `{{#path}}…{{/path}}` is a section and `{{^path}}…{{/path}}` an inverted one;
+// - `{{! comment }}` is dropped; `{{{{` and `}}}}` write `{{` and `}}`;
+// - a tag alone on its line takes its indentation and line end with it.
+// There are no expressions, filters, functions or assignments.
+//
+// Values. A string is written as it is, a number in its canonical form
+// (`12.5`), a boolean as `true` or `false`, null as nothing. An object or an
+// array as a value is NonScalarTemplateValue; a member that is not there is
+// MissingTemplateValue. Names are read from the current context only, not from
+// the contexts around it.
+//
+// Sections. A section on an array renders once per item, the item as the
+// context; on an object, once with the object as the context; on true, a
+// number or a non-empty string, once with that value as the context; on false,
+// null, "", [] or a missing member, not at all. An inverted section renders
+// once, in the enclosing context, exactly when the section would not render;
+// for an object it never does.
+//
+// Compiling. The source is parsed and checked whole on the first render and
+// kept: rendering again reuses it, and rendering never changes it. A source
+// that is not a template is TemplateFailure, with its line and column, before
+// anything is written. write() sends the output piece by piece; what was
+// written before a failure (a missing value, a limit) stays written.
+//
+// Limits (TemplateLimits): the source's characters, its tokens, how deep
+// sections nest, how many section bodies render, the output's UTF-8 bytes and
+// the members of an object read on a path. Going past one is its own error.
+
+import "template/tree" take TemplateTree, TemplateTreeNode, TemplateTreeKind;
+import "template/compile" take TemplateFailure, InvalidTemplateLimits, TemplateOutputLimitExceeded;
+import "template/json" take JsonTemplateStrings, TemplateJsonLimitExceeded, NonScalarTemplateValue;
+import "template/model" take MissingTemplateValue;
+import "template/path" take TemplatePathFromString;
+import "json" take Json, JsonKind, JsonField, ParsedJson;
+import "io/stream" take WritingText;
+import "async/atomic" take Atomic;
+import "collections/list" take List, EmptyList;
+import "runtime/template" take template_output_size;
+
+// How large a template, its rendering and its data may be.
+object TemplateLimits {
+    has characters, tokens, depth, iterations, output, members is int;
+
+    // A source of 1 Mi characters and 20000 tokens, sections 64 deep, 10000
+    // section bodies, 1 MiB of output and 1024 members an object, unless told.
+    TemplateLimits(
+        characters is int = 1048576,
+        tokens is int = 20000,
+        depth is int = 64,
+        iterations is int = 10000,
+        output is int = 1048576,
+        members is int = 1024
+    ) {
+        confirm characters >= 0
+            && tokens >= 0
+            && depth >= 0
+            && iterations >= 0
+            && output >= 0
+            && members >= 0
+            else throw InvalidTemplateLimits.invalid;
+        self.characters = characters;
+        self.tokens = tokens;
+        self.depth = depth;
+        self.iterations = iterations;
+        self.output = output;
+        self.members = members;
+    }
+
+    // Source characters and tokens, section depth, rendered section bodies,
+    // output bytes and members an object.
+    cap Limits {
+        characters is int {
+            characters;
+        }
+
+        tokens is int {
+            tokens;
+        }
+
+        depth is int {
+            depth;
+        }
+
+        iterations is int {
+            iterations;
+        }
+
+        output is int {
+            output;
+        }
+
+        members is int {
+            members;
+        }
+    }
+}
+
+// A template, compiled on first use and kept.
+object Template {
+    has origin is string;
+    has limits is TemplateLimits;
+
+    // A template of source, within limits.
+    Template(source is string, limits is TemplateLimits = TemplateLimits()) {
+        origin = source;
+        self.limits = limits;
+    }
+
+    // Its source.
+    source() is string {
+        origin;
+    }
+
+    // The text for data; the source is checked whole first.
+    string(data is Json) is string {
+        let collected = TemplateCollected();
+        self.write(data, collected);
+        collected.string();
+    }
+
+    // Writes the text for data to destination, piece by piece; what was
+    // written before a failure stays written.
+    write(data is Json, destination is WritingText) is void {
+        TemplateRun(
+            sink: TemplateSink(destination: destination, maximum: limits::Limits::output),
+            iterations: TemplateCounter(limits::Limits::iterations),
+            limits: limits,
+            depth: 0
+        ).write(self.steps(), data);
+    }
+
+    hidden steps() is @TemplateStep {
+        once let compiled = TemplateSteps(
+            TemplateTree(
+                source: origin,
+                maximum_input: limits::Limits::characters,
+                maximum_tokens: limits::Limits::tokens,
+                maximum_depth: limits::Limits::depth
+            ).nodes()
+        ).steps();
+        compiled;
+    }
+}
+
+// What a template could not do with its data; each case names its limit or
+// its part.
+enum TemplateError is Error = (
+    iterations(limit is int),
+    depth(limit is int),
+    partial(name is string)
+);
+
+// One compiled step: a literal, a value, a section with its steps, or a
+// partial. Immutable; the data never reaches it.
+hidden object TemplateStep {
+    has kind is TemplateTreeKind;
+    has text is string;
+    has path is @string;
+    has steps is @TemplateStep;
+
+    TemplateStep(kind is TemplateTreeKind, text is string, steps is @TemplateStep) {
+        self.kind = kind;
+        self.text = text;
+        path = if (kind == TemplateTreeKind.section || kind == TemplateTreeKind.inverted)
+            && text != "." {
+                TemplatePathFromString(text).path().segments().map() -> part {
+                    part;
+                };
+            }
+            else {
+                let none_here is @string = [];
+                none_here;
+            };
+        self.steps = steps;
+    }
+
+    kind() is TemplateTreeKind {
+        kind;
+    }
+
+    text() is string {
+        text;
+    }
+
+    path() is @string {
+        path;
+    }
+
+    steps() is @TemplateStep {
+        steps;
+    }
+}
+
+// The steps of a parsed tree.
+hidden object TemplateSteps {
+    has nodes is @TemplateTreeNode;
+
+    TemplateSteps(nodes is @TemplateTreeNode) {
+        self.nodes = nodes;
+    }
+
+    steps() is @TemplateStep {
+        nodes.map() -> node {
+            TemplateStep(
+                kind: node.kind(),
+                text: node.text(),
+                steps: TemplateSteps(node.children()).steps()
+            );
+        };
+    }
+}
+
+// One rendering: its output, its iteration count and how deep it is. Nothing
+// here is shared between renderings.
+hidden object TemplateRun {
+    has sink is TemplateSink;
+    has iterations is TemplateCounter;
+    has limits is TemplateLimits;
+    has depth is int;
+
+    TemplateRun(:sink, :iterations, :limits, :depth);
+
+    write(steps is @TemplateStep, data is Json) is void {
+        for steps -> step {
+            match step.kind() {
+                case TemplateTreeKind.literal {
+                    sink.append(step.text());
+                }
+                case TemplateTreeKind.variable {
+                    sink.append(
+                        JsonTemplateStrings(
+                            origin: data,
+                            maximum_members: limits::Limits::members,
+                            maximum_output: sink.remaining()
+                        ).string(step.text())
+                    );
+                }
+                case TemplateTreeKind.partial {
+                    throw TemplateError.partial(step.text());
+                }
+                else {
+                    self.section(step, data);
+                }
+            }
+        }
+    }
+
+    hidden section(step is TemplateStep, data is Json) is void {
+        let found = TemplateLookup(
+            origin: data,
+            path: step.path(),
+            maximum_members: limits::Limits::members
+        ).json();
+        let inverted = step.kind() == TemplateTreeKind.inverted;
+        match found.kind() {
+            case JsonKind.array_value {
+                let items = found.items();
+                if inverted {
+                    if items.size() == 0 {
+                        self.body(step, data);
+                    }
+                }
+                else {
+                    confirm items.size() <= iterations.remaining()
+                        else throw TemplateError.iterations(limits::Limits::iterations);
+                    for items -> item {
+                        self.body(step, item);
+                    }
+                }
+            }
+            case JsonKind.object_value {
+                if !inverted {
+                    confirm found.size() <= limits::Limits::members
+                        else throw TemplateJsonLimitExceeded.exceeded;
+                    self.body(step, found);
+                }
+            }
+            else {
+                let truth = TemplateTruth(found).truth();
+                if inverted && !truth {
+                    self.body(step, data);
+                }
+                if !inverted && truth {
+                    self.body(step, found);
+                }
+            }
+        }
+    }
+
+    hidden body(step is TemplateStep, context is Json) is void {
+        iterations.claim(limits::Limits::iterations);
+        confirm depth < limits::Limits::depth else throw TemplateError.depth(limits::Limits::depth);
+        TemplateRun(sink: sink, iterations: iterations, limits: limits, depth: depth + 1).write(
+            step.steps(),
+            context
+        );
+    }
+}
+
+// Whether a scalar renders a section: false, null and "" do not.
+hidden object TemplateTruth {
+    has value is Json;
+
+    TemplateTruth(value is Json) {
+        self.value = value;
+    }
+
+    truth() is bool {
+        match value.kind() {
+            case JsonKind.null_value: false;
+            case JsonKind.boolean_value: value.boolean();
+            case JsonKind.string_value: value.text() != "";
+            case _: true;
+        }
+    }
+}
+
+// The member at path from origin; a missing member, or one below a
+// non-object, is null. Each object on the way has at most maximum_members.
+hidden object TemplateLookup {
+    has origin is Json;
+    has path is @string;
+    has maximum_members is int;
+
+    TemplateLookup(:origin, :path, :maximum_members);
+
+    json() is Json {
+        let found = Atomic(origin);
+        for path -> name {
+            let current = found.value();
+            if current.kind() != JsonKind.object_value {
+                return Json();
+            }
+            confirm current.size() <= maximum_members else throw TemplateJsonLimitExceeded.exceeded;
+            if !current.has(name) {
+                return Json();
+            }
+            found.replace(current.get(name));
+        }
+        found.value();
+    }
+}
+
+// The section bodies a rendering may still render.
+hidden object TemplateCounter {
+    has left is Atomic<int>;
+
+    TemplateCounter(maximum is int) {
+        left = Atomic(maximum);
+    }
+
+    remaining() is int {
+        left.value();
+    }
+
+    // Spends one; TemplateError.iterations(limit) when none is left.
+    claim(limit is int) is void {
+        confirm left.value() > 0 else throw TemplateError.iterations(limit);
+        left.replace(left.value() - 1);
+    }
+}
+
+// The output of a rendering, at most maximum UTF-8 bytes: each piece is
+// measured before it goes out, and goes out in writes of at most 1024
+// characters.
+hidden object TemplateSink {
+    has destination is WritingText;
+    has maximum is int;
+    has used is Atomic<int>;
+
+    TemplateSink(destination is WritingText, maximum is int) {
+        self.destination = destination;
+        self.maximum = maximum;
+        used = Atomic(0);
+    }
+
+    remaining() is int {
+        maximum - used.value();
+    }
+
+    append(value is string) is void {
+        let size = template_output_size(value, maximum - used.value());
+        confirm size >= 0 else throw TemplateOutputLimitExceeded.exceeded;
+        used.replace(used.value() + size);
+        let count = value.length();
+        if count <= 1024 {
+            if count > 0 {
+                destination.write(value);
+            }
+            return;
+        }
+        for (0..((count + 1023) >> 10)) -> chunk {
+            let start = chunk << 10;
+            let end = if count - start > 1024 {
+                start + 1024;
+            }
+            else {
+                count;
+            };
+            destination.write(value.slice(start, end));
+        }
+    }
+}
+
+// Text written to it, kept in order, for Template.string().
+hidden object TemplateCollected does WritingText {
+    has parts is Atomic<List<string>>;
+
+    TemplateCollected() {
+        let empty is List<string> = EmptyList();
+        parts = Atomic(empty);
+    }
+
+    write(values is ...string) is void {
+        let listed is @string = values...;
+        for listed -> value {
+            parts.replace(parts.value().prefix(value));
+        }
+    }
+
+    writeln(values is ...string) is void {
+        let listed is @string = values...;
+        self.write(listed.join("") + "\n");
+    }
+
+    string() is string {
+        let reversed is @string = parts.value().map() -> part {
+            part;
+        };
+        let count = reversed.size();
+        let ordered is @string = (0..count).map() -> index {
+            reversed[count - 1 - index];
+        };
+        ordered.join("");
+    }
+}
+
+// A destination that keeps each write apart, to see the pieces.
+hidden object TemplateTestWrites does WritingText {
+    has writes is Atomic<@string>;
+
+    TemplateTestWrites() {
+        let none_yet is @string = [];
+        writes = Atomic(none_yet);
+    }
+
+    write(values is ...string) is void {
+        let listed is @string = values...;
+        writes.replace(writes.value() + listed);
+    }
+
+    writeln(values is ...string) is void {
+        let listed is @string = values...;
+        writes.replace(writes.value() + listed + ["\n"]);
+    }
+
+    writes() is @string {
+        writes.value();
+    }
+}
+
+test "values: dotted paths, the current context, comments, escaped delimiters and standalone lines" {
+    let data = ParsedJson("{\"user\":{\"name\":\"Ada\",\"unread\":3},\"tags\":[\"a\",\"b\"]}").root();
+    test.is(
+        Template("Hello, {{ user.name }}! {{user.unread}} new{{! not shown }}.").string(data),
+        "Hello, Ada! 3 new."
+    );
+    test.is(Template("{{{{user.name}}}}").string(data), "{{user.name}}");
+    test.is(Template("{{#tags}}<{{.}}>{{/tags}}").string(data), "<a><b>");
+    test.is(
+        Template("a\n  {{! note }}\n  {{#tags}}\n- {{.}}\n  {{/tags}}\nb").string(data),
+        "a\n- a\n- b\nb"
+    );
+    test.is(Template("").string(data), "");
+    test.is(Template("{{.}}").string(Json("plain")), "plain");
+}
+
+test "every JSON kind as a value: text, canonical number, boolean, nothing for null; others refused" {
+    let data = ParsedJson(
+        "{\"s\":\"x & y\",\"n\":12.50,\"i\":-3,\"t\":true,\"f\":false,\"z\":null,\"o\":{},\"a\":[]}"
+    ).root();
+    test.is(
+        Template("{{s}}|{{n}}|{{i}}|{{t}}|{{f}}|{{z}}|").string(data),
+        "x & y|12.5|-3|true|false||"
+    );
+    test.is(
+        try {
+            Template("{{o}}").string(data);
+            "";
+        }
+        catch NonScalarTemplateValue.detailed(path, kind) {
+            path + " " + (kind == JsonKind.object_value).string();
+        },
+        "o true"
+    );
+    test.throws(NonScalarTemplateValue) {
+        Template("{{a}}").string(data);
+    };
+    test.is(
+        try {
+            Template("{{s.deeper}}").string(data);
+            "";
+        }
+        catch MissingTemplateValue.path(path) {
+            path;
+        },
+        "s.deeper"
+    );
+    test.throws(MissingTemplateValue) {
+        Template("{{missing}}").string(data);
+    };
+}
+
+test "sections: arrays per item, objects once, scalars by truth; inverted sections are the opposite" {
+    let data = ParsedJson(
+        "{\"items\":[{\"t\":\"Tea\"},{\"t\":\"Cake\"}],\"none\":[],\"user\":{\"name\":\"Ada\"},\"empty\":{},\"yes\":true,\"no\":false,\"zero\":0,\"blank\":\"\",\"word\":\"w\",\"nil\":null}"
+    ).root();
+    test.is(
+        Template("{{#items}}[{{t}}]{{/items}}{{^items}}none{{/items}}").string(data),
+        "[Tea][Cake]"
+    );
+    test.is(Template("{{#none}}x{{/none}}{{^none}}none{{/none}}").string(data), "none");
+    test.is(Template("{{#user}}{{name}}{{/user}}{{^user}}no{{/user}}").string(data), "Ada");
+    test.is(Template("{{#empty}}e{{/empty}}{{^empty}}no{{/empty}}").string(data), "e");
+    let shown = ["yes", "no", "zero", "blank", "word", "nil", "missing"].map() -> name {
+        Template("{{#" + name + "}}+{{/" + name + "}}{{^" + name + "}}-{{/" + name + "}}").string(
+            data
+        );
+    };
+    test.is(shown, ["+", "-", "+", "-", "+", "-", "-"]);
+    test.is(Template("{{#word}}{{.}}{{/word}} {{#zero}}{{.}}{{/zero}}").string(data), "w 0");
+    test.is(Template("{{#user.name}}{{.}}{{/user.name}}").string(data), "Ada");
+    test.is(Template("{{^yes}}{{word}}{{/yes}}{{^no}}{{word}}{{/no}}").string(data), "w");
+    let nested = ParsedJson("{\"rows\":[{\"cells\":[1,2]},{\"cells\":[3]}]}").root();
+    test.is(Template("{{#rows}}({{#cells}}{{.}}{{/cells}}){{/rows}}").string(nested), "(12)(3)");
+    test.is(Template("{{#.}}{{.}};{{/.}}").string(ParsedJson("[1,2]").root()), "1;2;");
+}
+
+test "a source is checked whole before anything is written, and kept for the next rendering" {
+    let writes = TemplateTestWrites();
+    test.is(
+        try {
+            Template("ok {{#a}} {{/b}}").write(Json(), writes);
+            [0, 0];
+        }
+        catch TemplateFailure.located(_, line, column, _) {
+            [line, column];
+        },
+        [1, 11]
+    );
+    test.is(writes.writes().size(), 0);
+    let template = Template("{{#xs}}{{.}}{{/xs}}");
+    let data = ParsedJson("{\"xs\":[1,2,3]}").root();
+    test.is(template.string(data), "123");
+    test.is(template.string(data), "123");
+    test.is(template.source(), "{{#xs}}{{.}}{{/xs}}");
+    for ["{{", "}}", "{{#a}}", "{{/a}}", "{{&a}}", "{{=<% %>=}}", "{{ }}", "{{a..b}}"] -> broken {
+        test.throws(TemplateFailure) {
+            Template(broken).string(Json());
+        };
+    }
+}
+
+test "write goes out piece by piece, and what came before a failure stays written" {
+    let writes = TemplateTestWrites();
+    let long = "x".repeat(2500);
+    Template("a{{s}}b").write(Json(JsonField("s", long)), writes);
+    test.is(writes.writes(), ["a", "x".repeat(1024), "x".repeat(1024), "x".repeat(452), "b"]);
+    let partial = TemplateTestWrites();
+    test.throws(MissingTemplateValue) {
+        Template("before {{missing}} after").write(Json(), partial);
+    };
+    test.is(partial.writes(), ["before "]);
+}
+
+test "every limit is its own failure" {
+    let data = ParsedJson(
+        "{\"xs\":[1,2,3],\"o\":{\"a\":1,\"b\":2},\"deep\":{\"deep\":{\"deep\":{}}}}"
+    ).root();
+    test.is(
+        try {
+            Template(source: "{{#xs}}{{.}}{{/xs}}", limits: TemplateLimits(iterations: 2)).string(
+                data
+            );
+            0;
+        }
+        catch TemplateError.iterations(limit) {
+            limit;
+        },
+        2
+    );
+    test.is(
+        Template(source: "{{#xs}}{{.}}{{/xs}}", limits: TemplateLimits(iterations: 3)).string(data),
+        "123"
+    );
+    // An array longer than what is left is refused before its first item; every
+    // body counts, nested ones too.
+    let refused = TemplateTestWrites();
+    test.throws(TemplateError) {
+        Template(source: "{{#xs}}{{.}}{{/xs}}", limits: TemplateLimits(iterations: 2)).write(
+            data,
+            refused
+        );
+    };
+    test.is(refused.writes().size(), 0);
+    let nested = ParsedJson("{\"xs\":[1,2,3],\"t\":true}").root();
+    test.throws(TemplateError) {
+        Template(source: "{{#xs}}{{#.}}x{{/.}}{{/xs}}", limits: TemplateLimits(iterations: 5)).string(
+            nested
+        );
+    };
+    test.is(
+        Template(source: "{{#xs}}{{#.}}x{{/.}}{{/xs}}", limits: TemplateLimits(iterations: 6)).string(
+            nested
+        ),
+        "xxx"
+    );
+    test.throws(TemplateOutputLimitExceeded) {
+        Template(source: "{{#xs}}é{{/xs}}", limits: TemplateLimits(output: 5)).string(data);
+    };
+    test.is(
+        Template(source: "{{#xs}}é{{/xs}}", limits: TemplateLimits(output: 6)).string(data),
+        "ééé"
+    );
+    test.throws(TemplateJsonLimitExceeded) {
+        Template(source: "{{o.a}}", limits: TemplateLimits(members: 1)).string(data);
+    };
+    test.throws(TemplateJsonLimitExceeded) {
+        Template(source: "{{#o}}x{{/o}}", limits: TemplateLimits(members: 1)).string(data);
+    };
+    test.throws(TemplateFailure) {
+        Template(source: "{{#a}}{{#b}}{{/b}}{{/a}}", limits: TemplateLimits(depth: 1)).string(data);
+    };
+    test.throws(TemplateFailure) {
+        Template(source: "abc", limits: TemplateLimits(characters: 2)).string(data);
+    };
+    test.throws(TemplateFailure) {
+        Template(source: "a{{b}}c", limits: TemplateLimits(tokens: 2)).string(
+            Json(JsonField("b", 1))
+        );
+    };
+    test.throws(InvalidTemplateLimits) {
+        TemplateLimits(output: -1);
+    };
+    test.is(
+        try {
+            Template("{{>item}}").string(data);
+            "";
+        }
+        catch TemplateError.partial(name) {
+            name;
+        },
+        "item"
+    );
+}
