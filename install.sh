@@ -5,6 +5,7 @@
 #     ./install.sh                     # сборка и установка в ~/.local
 #     ./install.sh --prefix /opt/okkama
 #     ./install.sh --no-build          # установить уже собранное
+#     ./install.sh --man-pages        # также установить справочник std в share/man/man3
 #     ./install.sh --uninstall         # удалить установку из префикса
 #
 # Раскладка установки (как у обычного языка):
@@ -27,12 +28,14 @@ ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
 BUILD=1
 UNINSTALL=0
+MAN_PAGES=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --prefix) PREFIX="$2"; shift 2 ;;
         --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
         --no-build) BUILD=0; shift ;;
+        --man-pages) MAN_PAGES=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
         -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "install.sh: unknown option $1" >&2; exit 2 ;;
@@ -102,6 +105,10 @@ for tool in okkama sparrow blade; do
     mv -f "$BIN/.$tool.tmp" "$BIN/$tool"
 done
 
+if [[ $MAN_PAGES -eq 1 ]]; then
+    bash "$ROOT/tools/install-man.sh" "$BIN/okkama" "$LIB/std" "$PREFIX"
+fi
+
 VERSION="$("$BIN/okkama" --version | awk '{print $2}')"
 printf '%s\n' "$VERSION" > "$LIB/VERSION"
 
@@ -110,6 +117,9 @@ cat > "$LIB/uninstall.sh" <<EOF
 # Удаляет Okkama $VERSION из $PREFIX (создан install.sh).
 set -euo pipefail
 rm -f "$BIN/okkama" "$BIN/sparrow" "$BIN/blade"
+if [[ -f "$LIB/man-pages.txt" ]]; then
+    while IFS= read -r page; do rm -f "$PREFIX/share/man/man3/\$page"; done < "$LIB/man-pages.txt"
+fi
 rm -rf "$LIB"
 echo "Okkama removed from $PREFIX"
 EOF

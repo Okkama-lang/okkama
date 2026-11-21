@@ -460,3 +460,159 @@ fn coverage_excludes_caps_of_hidden_owners_and_does_not_inherit_parent_comments(
     let public = doc("module demo;\n// Object docs cannot document the inline constructor.\nobject Public { Public(); }\n// Cap docs cannot document the inline field.\ncap Public::View { value is int { 1; } }\n");
     assert_eq!((public.coverage().documented, public.coverage().total), (2, 4));
 }
+
+#[test]
+fn publishing_formats_share_public_model_sections_links_and_overloads() {
+    use super::publish;
+    let source = crate::SourceFile::new("publish.ok", r#"module demo/api v1.2.3;
+// Use [Thing.send].
+//
+// ```okkama,ignore
+// .unsafe \\ example
+// ```
+//
+// # Errors
+// Documented failure only.
+// # Engine notes
+// Sparrow note.
+// # See also
+// [Thing]
+
+// A <script>alert(1)</script> thing.
+object Thing {
+    // Send an integer.
+    send(value is int) is void {}
+    // Send text.
+    send(value is string) is void {}
+    // Hidden marker.
+    hidden secret() is void {}
+}
+hidden object Secret {}
+"#).unwrap();
+    let doc = super::document(&source, &mut NoModules).unwrap();
+    let man = publish::module_man(&doc);
+    assert!(man.starts_with(".TH \"demo-api\" \"3ok\""), "{man}");
+    let mut previous = 0;
+    for heading in ["NAME", "VERSION", "SYNOPSIS", "DESCRIPTION", "PUBLIC API", "ERRORS", "ENGINE NOTES", "SEE ALSO"] {
+        let at = man.find(&format!(".SH \"{heading}\"")).unwrap_or_else(|| panic!("{heading}: {man}"));
+        assert!(at >= previous); previous = at;
+    }
+    assert!(man.contains("okkama-doc:/demo/api?version=v1.2.3#Thing.send"));
+    assert!(!man.lines().any(|line| line.starts_with(".unsafe")));
+    let html = publish::module_html(&doc);
+    assert!(html.starts_with("<!doctype html>"));
+    assert!(html.contains("id=\"Thing.send\""), "{html}");
+    assert_eq!(html.matches("id=\"Thing.send\"").count(), 1);
+    assert!(html.contains("href=\"demo-api.html#Thing.send\""));
+    assert!(html.contains("data-okkama-target=\"okkama-doc:/demo/api?version=v1.2.3#Thing.send\""));
+    assert!(!html.contains("<script>"));
+    assert!(html.contains("&lt;script&gt;"));
+    let json: serde_json::Value = serde_json::from_str(&publish::json(&[doc.clone()])).unwrap();
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["modules"][0]["version"], "v1.2.3");
+    assert_eq!(json["modules"][0]["items"][0]["members"].as_array().unwrap().len(), 2);
+    assert_eq!(json["modules"][0]["items"][0]["members"][0]["target"], "okkama-doc:/demo/api?version=v1.2.3#Thing.send");
+    for output in [&man, &html, &publish::json(&[doc])] {
+        assert!(!output.contains("Hidden marker") && !output.contains("Secret") && !output.contains("secret()"), "{output}");
+        assert!(output.contains("send(value is int)") && output.contains("send(value is string)"));
+    }
+}
+
+#[test]
+fn publishing_escapes_markup_omits_absent_version_and_keeps_source_data() {
+    use super::publish;
+    let doc = doc("module plain;\n// .request \\ path\n//\n// [bad](javascript:alert%281%29)\n//\n// | A | B |\n// | - | - |\n// | one | two |\n\n// Résumé.\nobject Thing {}\n");
+    let html = publish::module_html(&doc);
+    assert!(!html.contains("href=\"javascript:"), "{html}");
+    assert!(html.contains("<table>") && html.contains("Résumé"));
+    let man = publish::module_man(&doc);
+    assert!(!man.contains(".SH \"VERSION\"") && !man.contains("v0.0.0"));
+    assert!(!man.lines().any(|line| line.starts_with(".request")));
+    let value: serde_json::Value = serde_json::from_str(&publish::json(&[doc.clone()])).unwrap();
+    assert!(value["modules"][0]["version"].is_null());
+    assert_eq!(value["modules"][0]["file"], "demo.ok");
+    assert_eq!(value["modules"][0]["items"][0]["span"]["start"], doc.items[0].span.start);
+    let schema: serde_json::Value = serde_json::from_str(publish::JSON_SCHEMA).unwrap();
+    assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+}
+
+#[test]
+fn publishing_graph_resolves_each_imported_public_module_once() {
+    struct Loader;
+    impl crate::lowering::ModuleLoader for Loader {
+        fn resolve(&mut self, path: &str, _: &str) -> Result<Option<String>, String> { Ok(Some(format!("{path}.ok"))) }
+        fn load(&mut self, path: &str, _: &str) -> Result<Option<crate::lowering::LoadedModule>, String> {
+            let text = match path {
+                "a" => "module a;\nimport \"b\" take Second;\n// See [Second].\nobject First {}\n",
+                "b" => "module b;\n// Second.\nobject Second {}\nhidden object Secret {}\n",
+                _ => return Ok(None),
+            };
+            let source = crate::SourceFile::new(format!("{path}.ok"), text).unwrap();
+            let program = crate::syntax::parse(&source, &crate::syntax::ParseOptions::default()).unwrap();
+            Ok(Some(crate::lowering::LoadedModule { id: format!("{path}.ok"), source, program }))
+        }
+    }
+    let root = crate::SourceFile::new("index.ok", "module index; import \"a\" as a; import \"b\" as b;").unwrap();
+    let graph = super::document_graph(&root, &mut Loader).unwrap();
+    assert_eq!(graph.modules.len(), 3);
+    let a = graph.modules.iter().find(|module| module.path == "a").unwrap();
+    assert_eq!(a.items[0].doc.as_ref().unwrap().links[0].target.as_deref(), Some("okkama-doc:/b#Second"));
+    assert!(!super::publish::json(&graph.modules).contains("Secret"));
+}
+
+#[test]
+fn publishing_commonmark_headings_inside_code_never_become_page_sections() {
+    let doc = doc("module code;\n// Overview.\n//\n// ~~~okkama,ignore\n// # Errors\n// ~~~\n//\n// ## Details\n// Useful text.\n\nobject Thing {}\n");
+    let html = super::publish::module_html(&doc);
+    assert!(html.contains("<pre><code># Errors</code></pre>"), "{html}");
+    assert!(!html.contains("<h2>ERRORS</h2>"), "{html}");
+    assert!(html.contains("<h2>Details</h2>"), "{html}");
+    let man = super::publish::module_man(&doc);
+    assert!(!man.contains(".SH \"ERRORS\""), "{man}");
+}
+
+// Validate against the schema itself (not Rust export structs). This small
+// walker covers the JSON Schema keywords used by our offline schema artifact.
+fn validate_doc_schema(value: &serde_json::Value, schema: &serde_json::Value, root: &serde_json::Value) -> bool {
+    if let Some(reference) = schema.get("$ref").and_then(|v| v.as_str()) {
+        return validate_doc_schema(value, root.pointer(reference.strip_prefix('#').unwrap()).unwrap(), root);
+    }
+    if let Some(choices) = schema.get("anyOf").and_then(|v| v.as_array()) {
+        return choices.iter().any(|choice| validate_doc_schema(value, choice, root));
+    }
+    if let Some(constant) = schema.get("const") { if value != constant { return false; } }
+    if let Some(choices) = schema.get("enum").and_then(|v| v.as_array()) { if !choices.contains(value) { return false; } }
+    if let Some(types) = schema.get("type") {
+        let types = types.as_array().cloned().unwrap_or_else(|| vec![types.clone()]);
+        if !types.iter().any(|ty| match ty.as_str().unwrap() {
+            "object" => value.is_object(), "array" => value.is_array(), "string" => value.is_string(),
+            "integer" => value.as_u64().is_some(), "null" => value.is_null(), other => panic!("unhandled schema type {other}"),
+        }) { return false; }
+    }
+    if let Some(properties) = schema.get("properties").and_then(|v| v.as_object()) {
+        let Some(object) = value.as_object() else { return false; };
+        for key in schema["required"].as_array().unwrap() { if !object.contains_key(key.as_str().unwrap()) { return false; } }
+        for (key, child) in object {
+            let Some(property) = properties.get(key) else { return schema.get("additionalProperties") != Some(&serde_json::Value::Bool(false)); };
+            if !validate_doc_schema(child, property, root) { return false; }
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        if !value.as_array().unwrap().iter().all(|child| validate_doc_schema(child, items, root)) { return false; }
+    }
+    if let Some(minimum) = schema.get("minimum") { if value.as_u64() < minimum.as_u64() { return false; } }
+    true
+}
+
+#[test]
+fn publishing_json_conforms_to_v1_schema_and_rejects_incompatible_records() {
+    let doc = doc(CANONICAL);
+    let schema: serde_json::Value = serde_json::from_str(super::publish::JSON_SCHEMA).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&super::publish::json(&[doc])).unwrap();
+    assert!(validate_doc_schema(&value, &schema, &schema));
+    value["schema_version"] = serde_json::json!(2);
+    assert!(!validate_doc_schema(&value, &schema, &schema));
+    value["schema_version"] = serde_json::json!(1);
+    value["modules"][0]["items"][0]["members"][0]["span"]["start"] = serde_json::json!(-1);
+    assert!(!validate_doc_schema(&value, &schema, &schema));
+}

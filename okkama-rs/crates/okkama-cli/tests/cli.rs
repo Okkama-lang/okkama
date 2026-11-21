@@ -1802,12 +1802,13 @@ fn man_declaration_links_include_external_modules_and_warn_without_failing() {
     std::fs::write(dir.join("other.ok"), "module other;\n// The external role.\nrole Writing { write() is void; }\n").unwrap();
     let file = dir.join("app.ok");
     std::fs::write(&file, "module app;\n\n// See [Thing.write], [other.Writing], [Missing].\n\nobject Thing {\n    write(x is int) is void {}\n    write(x is string) is void {}\n}\n").unwrap();
-    for format in ["text", "markdown"] {
+    for format in ["text", "markdown", "man", "html", "json"] {
         let output = man(&["--format", format, file.to_str().unwrap()]);
         assert!(output.status.success(), "{}", stderr(&output));
         let page = stdout(&output);
         assert!(page.contains("okkama-doc:/app#Thing.write"), "{page}");
         assert!(page.contains("okkama-doc:/other#Writing"), "{page}");
+        if format == "html" { assert!(page.contains("href=\"other.html#Writing\""), "{page}"); }
         assert!(stderr(&output).contains("warning: unresolved documentation link [Missing]"), "{}", stderr(&output));
         assert!(stderr(&output).contains("app.ok:3:"));
     }
@@ -2549,4 +2550,130 @@ fn doctest_can_import_the_documented_module_as_a_caller() {
     assert!(output.status.success(), "{}\n{}", stdout(&output), stderr(&output));
     assert!(stdout(&output).contains("(compile)"));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn man_publishing_formats_select_public_declarations_without_running_examples() {
+    let file = TempFile::new("publish.ok", b"module publishing;\n// Reference [Thing.send].\n//\n// ```okkama,run\n// main() is int { panic \"must not execute\"; }\n// ```\n// ```output\n// ```\n\n// Public thing.\nobject Thing {\n// Send an int.\nsend(value is int) is void {}\n// Send a string.\nsend(value is string) is void {}\nhidden secret() is void {}\n}\nhidden object Secret {}\n");
+    for format in ["man", "html", "json"] {
+        let output = man(&[file.path(), "--format", format]);
+        assert!(output.status.success(), "{format}: {}", stderr(&output));
+        let page = stdout(&output);
+        assert!(page.contains("okkama-doc:/publishing#Thing.send"), "{page}");
+        assert!(!page.contains("secret()") && !page.contains("Secret"));
+        let selected = man(&[file.path(), "Thing.send", "--format", format]);
+        assert!(selected.status.success(), "{}", stderr(&selected));
+        assert!(stdout(&selected).contains("send(value is int)") && stdout(&selected).contains("send(value is string)"));
+        assert!(!stdout(&selected).contains("must not execute"));
+    }
+    for args in [&["--all"][..], &["--output"], &["--format", "html", "--output", "out"], &["--all", "--format", "html"], &["--all", "--format", "html", "--output", "out", file.path()], &["--all", "-k", "x"]] {
+        assert_eq!(man(args).status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn man_publishing_builds_all_std_html_man_and_versioned_json() {
+    let root = std::env::temp_dir().join(format!("okkama-publish-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let export = |format: &str, dest: &std::path::Path| okkama().args(["man", "--all", "--format", format, "--output", dest.to_str().unwrap()])
+        .env("OKKAMA_STDLIB_DIR", std_dir()).env_remove("OKKAMA_IMPORT_DIRS").output().unwrap();
+    let html_dir = root.join("html");
+    let output = export("html", &html_dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let index = std::fs::read_to_string(html_dir.join("index.html")).unwrap();
+    assert!(index.contains("href=\"io-stdout.html\""));
+    let page = std::fs::read_to_string(html_dir.join("io-stdout.html")).unwrap();
+    assert!(page.contains("id=\"Stdout.writeln\""));
+    let stream = std::fs::read_to_string(html_dir.join("io-stream.html")).unwrap();
+    assert!(stream.contains("id=\"Writing\""));
+    let module_count = std::fs::read_dir(&html_dir).unwrap().count() - 1;
+    assert!(module_count >= 499, "{module_count}");
+    let man_dir = root.join("man3");
+    let output = export("man", &man_dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(std::fs::read_to_string(man_dir.join("io-stdout.3ok")).unwrap().starts_with(".TH"));
+    assert_eq!(std::fs::read_dir(&man_dir).unwrap().count(), module_count);
+    let json_dir = root.join("json");
+    let output = export("json", &json_dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let bytes = std::fs::read(json_dir.join("reference.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["modules"].as_array().unwrap().len(), module_count);
+    assert!(json_dir.join("schema-v1.json").is_file());
+    let again = export("json", &json_dir);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(std::fs::read(json_dir.join("reference.json")).unwrap(), bytes);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn man_publishing_installs_only_generated_section_three_pages() {
+    let root = std::env::temp_dir().join(format!("okkama-man-install-{}", std::process::id()));
+    let library = root.join("std");
+    let prefix = root.join("prefix with spaces");
+    std::fs::create_dir_all(library.join("io")).unwrap();
+    std::fs::write(library.join("io/stdout.ok"), "module io/stdout;\n// Output reference.\n\n// Public sink.\nobject Sink {}\n").unwrap();
+    let script = std_dir().parent().unwrap().join("tools/install-man.sh");
+    let output = Command::new("bash").arg(&script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(prefix.join("share/man/man3/io-stdout.3ok").is_file());
+    assert_eq!(std::fs::read_to_string(prefix.join("lib/okkama/man-pages.txt")).unwrap(), "io-stdout.3ok\n");
+    // A failed generation must not replace an installed page or its manifest.
+    let original = std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap();
+    std::fs::write(library.join("io/stdout.ok"), "module broken; object {").unwrap();
+    let failed = Command::new("bash").arg(script).arg(env!("CARGO_BIN_EXE_okkama")).arg(&library).arg(&prefix).output().unwrap();
+    assert!(!failed.status.success());
+    assert_eq!(std::fs::read(prefix.join("share/man/man3/io-stdout.3ok")).unwrap(), original);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn man_publishing_package_archive_installs_and_uninstalls_its_own_pages() {
+    let root = std::env::temp_dir().join(format!("okkama-man-package-{}", std::process::id()));
+    let target = root.join("target");
+    std::fs::create_dir_all(target.join("release")).unwrap();
+    for tool in ["okkama", "sparrow", "blade"] {
+        std::fs::copy(env!("CARGO_BIN_EXE_okkama"), target.join("release").join(tool)).unwrap();
+    }
+    let repo = std_dir().parent().unwrap().to_path_buf();
+    let out = root.join("dist");
+    let package = Command::new("bash").arg(repo.join("tools/package.sh"))
+        .args(["--no-build", "--man-pages", "--version", "test-515", "--out"]).arg(&out)
+        .env("CARGO_TARGET_DIR", &target).output().unwrap();
+    assert!(package.status.success(), "{}", stderr(&package));
+    let archive = std::fs::read_dir(&out).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.to_string_lossy().ends_with(".tar.gz")).unwrap();
+    let unpack = root.join("unpack"); std::fs::create_dir_all(&unpack).unwrap();
+    assert!(Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&unpack).status().unwrap().success());
+    let payload = std::fs::read_dir(unpack).unwrap().next().unwrap().unwrap().path();
+    let prefix = root.join("prefix with spaces");
+    let installed = Command::new("bash").arg(payload.join("install.sh")).arg("--prefix").arg(&prefix).output().unwrap();
+    assert!(installed.status.success(), "{}", stderr(&installed));
+    assert!(prefix.join("share/man/man3/io-stdout.3ok").is_file());
+    let unrelated = prefix.join("share/man/man3/unrelated.3ok");
+    std::fs::write(&unrelated, "Unrelated package").unwrap();
+    let removed = Command::new("bash").arg(prefix.join("lib/okkama/uninstall.sh")).output().unwrap();
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert!(!prefix.join("share/man/man3/io-stdout.3ok").exists());
+    assert!(unrelated.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn man_publishing_keeps_doctest_validation_and_missing_docs_lint_separate() {
+    let file = TempFile::new("publish-invalid-example.ok", b"module sample;\n// ```okkama\n// let value is int = \"bad\";\n// ```\n\nobject Undocumented {}\n");
+    for format in ["man", "html", "json"] {
+        let output = man(&[file.path(), "--format", format]);
+        assert!(output.status.success(), "{format}: {}", stderr(&output));
+        assert!(stdout(&output).contains("let value is int"));
+        assert!(!stderr(&output).contains("missing-docs"));
+    }
+    let checked = run(&["run", "-t", file.path()]);
+    assert_eq!(checked.status.code(), Some(1));
+    assert!(stderr(&checked).contains("compilation failed"));
+    let lint = run(&["lint", file.path()]);
+    assert_eq!(lint.status.code(), Some(1));
+    assert!(stdout(&lint).contains("warning[missing-docs]"));
 }

@@ -54,3 +54,11 @@ atomic receive, queue registration and cleanup; `primitives.rs` updates parked
 selectors on close. Channel carrier analysis in `ir/mod.rs` and `failures.rs`
 includes endpoints used only through selection. Direct timeout composition
 publishes an already committed selection before attempting cancellation.
+
+Publishing (#515) remains on that read-only path. `doc::document_graph` exposes
+all public models in one ordinary import graph for batch export.
+`doc::publish` renders man(7)/3ok and standalone HTML with Phase B targets,
+and serializes explicit JSON schema v1 (`doc/schema-v1.json`). CLI `man --all`
+writes a sorted std catalogue. `tools/install-man.sh` stages generated man
+pages for optional installation/packages, with a filename ownership manifest;
+`make reference` builds the portable HTML catalogue for okkama-docs.

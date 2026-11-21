@@ -614,7 +614,7 @@ pub fn inspect(
 pub(crate) fn document(
     source: &SourceFile,
     loader: &mut dyn ModuleLoader,
-) -> std::result::Result<crate::doc::ModuleDoc, String> {
+) -> std::result::Result<crate::doc::Documentation, String> {
     let options = crate::syntax::ParseOptions {
         mode: crate::syntax::ParseMode::Production,
         ..crate::syntax::ParseOptions::default()
@@ -631,8 +631,7 @@ pub(crate) fn document(
     let files: Vec<_> = graph.loaded.iter().map(|loaded| loaded.source.clone())
         .chain(std::iter::once(source.clone())).collect();
     let registry = crate::analysis::registry::Registry::build(modules::source_modules(&graph, &roots));
-    crate::doc::Documentation::new(&registry, &files, loader).modules.pop()
-        .ok_or_else(|| "no module to document".to_string())
+    Ok(crate::doc::Documentation::new(&registry, &files, loader))
 }
 
 /// [`inspect`] of a file the caller has already parsed (#472): `parsed` must

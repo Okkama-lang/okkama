@@ -34,7 +34,7 @@ fn adopts(module: &ir::Module, symbol: &str, parameter: usize) -> usize {
 fn run(module: &mut ir::Module) -> Vec<usize> {
     let mut counts = Vec::new();
     let total = ir::param_adopts::elide_param_adopts(module, &mut counts);
-    assert_eq!(total, counts.iter().sum());
+    assert_eq!(total, counts.iter().sum::<usize>());
     ir::verify(module).unwrap_or_else(|error| panic!("{error}: {module}"));
     counts
 }
@@ -53,7 +53,7 @@ fn bound_argument_elides_and_reports_then_regions_disappear() {
         .any(|inst| matches!(inst.kind, InstKind::RegionEnter)));
     let mut report = ir::ownership::analyze(&module);
     report.record_param_adopts(&counts);
-    assert_eq!(report.totals.param_adopts_removed, counts.iter().sum());
+    assert_eq!(report.totals.param_adopts_removed, counts.iter().sum::<usize>());
     assert_eq!(report.functions[index].totals.param_adopts_removed, 1);
     assert!(report.to_json().contains("\"param_adopts_removed\":1"));
 }

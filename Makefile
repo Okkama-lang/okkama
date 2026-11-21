@@ -15,11 +15,16 @@
 
 PREFIX ?= $(HOME)/.local
 CARGO  ?= cargo
+MAN_PAGES ?= 0
+DOC_OUTPUT ?= $(CURDIR)/reference
+# Optional source-derived man pages: make install MAN_PAGES=1.
+MAN_OPTION := $(if $(filter 1,$(MAN_PAGES)),--man-pages,)
 
 RS      := okkama-rs
+DOC_BIN ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/$(RS)/target)/release/okkama
 VSIX    := vscode-okkama/okkama-vscode.vsix
 
-.PHONY: all build pgo install install-pgo uninstall test gate gate-local dist vscode editor clean
+.PHONY: all build pgo install install-pgo uninstall test gate gate-local dist reference vscode editor clean
 
 all: build
 
@@ -32,7 +37,7 @@ build:
 	cd $(RS) && RUSTFLAGS="$$RUSTFLAGS $(RELEASE_CFG)" $(CARGO) build --release -p okkama-cli -p sparrow-cli -p blade-cli
 
 install: build
-	./install.sh --prefix "$(PREFIX)" --no-build
+	./install.sh --prefix "$(PREFIX)" --no-build $(MAN_OPTION)
 	@$(MAKE) --no-print-directory editor
 
 # Оптимизация по профилю (tools/pgo/build.sh): на 6–18% быстрее обычной сборки.
@@ -40,7 +45,7 @@ pgo:
 	sh $(RS)/tools/pgo/build.sh
 
 install-pgo: pgo
-	./install.sh --prefix "$(PREFIX)" --no-build
+	./install.sh --prefix "$(PREFIX)" --no-build $(MAN_OPTION)
 	@$(MAKE) --no-print-directory editor
 
 uninstall:
@@ -56,7 +61,11 @@ gate-local:
 	./tools/gate/gate.sh
 
 dist:
-	./tools/package.sh --installer
+	./tools/package.sh --installer $(MAN_OPTION)
+
+# Static reference for okkama-docs (all links are relative inside this directory).
+reference: build
+	OKKAMA_STDLIB_DIR="$(CURDIR)/std" "$(DOC_BIN)" man --all --format html --output "$(DOC_OUTPUT)"
 
 $(VSIX): vscode-okkama/package.json vscode-okkama/extension.js vscode-okkama/syntaxes/okkama.tmLanguage.json vscode-okkama/language-configuration.json
 	cd vscode-okkama && npm install --omit=dev --no-audit --no-fund

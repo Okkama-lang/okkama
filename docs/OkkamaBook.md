@@ -4720,6 +4720,32 @@ fills that section. Otherwise the first code block is the synopsis. On a
 terminal the page is wrapped to its width, headings are bold unless `NO_COLOR`
 is set, and `$PAGER` shows it when set. Through a pipe it is plain text.
 
+Publishing uses the same public documentation model (#515):
+
+```sh
+okkama man io/stdout --format man | man -l -
+okkama man io/stdout --format html > stdout.html
+okkama man io/stdout --format json > stdout.json
+okkama man --all --format html --output reference
+okkama man --all --format man --output man3
+okkama man --all --format json --output reference-json
+```
+
+HTML exports contain `index.html` and one flat module page (`io-stdout.html`),
+with relative links and stable `okkama-doc:` identities in `data-okkama-target`.
+They work offline and can be served below any site path; `make reference
+DOC_OUTPUT=reference` builds this directory for okkama-docs. Raw HTML in comments
+is escaped. JSON contains `schema_version: 1`, public declarations, source byte
+spans and resolved links; a full export also writes `schema-v1.json` (JSON Schema
+2020-12). No module version means JSON `null`, never an invented version.
+
+System man pages are optional: `make install MAN_PAGES=1`, or `install.sh
+--man-pages`, installs `io-stdout.3ok` and its peers into
+`PREFIX/share/man/man3`. `make dist MAN_PAGES=1` / `tools/package.sh --man-pages`
+includes them in archives and system packages. A cross package can use a matching
+host compiler via `OKKAMA_DOC_GENERATOR`. Pages are generated from std at build
+or install time; no second reference text is maintained.
+
 ### 28.5 Documentation examples and coverage
 
 `okkama run -t FILE` checks examples in source doc comments before running
