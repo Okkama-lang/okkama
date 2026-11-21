@@ -244,8 +244,8 @@ object PlistXmlSource {
         if at + 4 <= origin.length() && origin.slice(at, at + 4) == "<!--" {
             let end = self.until(at + 4, "-->");
             let content = origin.slice(at + 4, end);
-            confirm content.split("--").size() == 1
-                && (content == "" || content.slice(content.length() - 1, content.length()) != "-")
+            confirm !content.contains("--")
+                && (content == "" || !content.ends_with("-"))
                 else throw self.failure(at, "invalid comment");
             return PlistXmlToken(kind: "skip", text: "", start: at, end: end + 3);
         }
@@ -263,7 +263,7 @@ object PlistXmlSource {
         let body = PlistXmlText(raw).stripped();
         confirm body != "" && raw.slice(0, 1) == body.slice(0, 1)
             else throw self.failure(at, "whitespace before tag name");
-        if body.length() >= 1 && body.slice(0, 1) == "?" {
+        if body.starts_with("?") {
             let compact = PlistXmlText(body).compact();
             confirm at == 0
                 && (compact == "?xml version=\"1.0\"?"
@@ -273,17 +273,17 @@ object PlistXmlSource {
                 else throw self.failure(at, "unsupported XML declaration");
             return PlistXmlToken(kind: "declaration", text: "", start: at, end: end + 1);
         }
-        if body.length() >= 1 && body.slice(0, 1) == "!" {
+        if body.starts_with("!") {
             let compact = PlistXmlText(body).compact();
             confirm compact == "!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
                 || compact == "!DOCTYPE plist SYSTEM \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\""
                 else throw self.failure(at, "unsupported DTD or declaration");
             return PlistXmlToken(kind: "doctype", text: "", start: at, end: end + 1);
         }
-        let closing = body.length() > 0 && body.slice(0, 1) == "/";
-        let empty = body.length() > 0 && body.slice(body.length() - 1, body.length()) == "/";
+        let closing = body.starts_with("/");
+        let empty = body.ends_with("/");
         confirm !(closing && empty) else throw self.failure(at, "invalid closing tag");
-        confirm !empty || raw.slice(raw.length() - 1, raw.length()) == "/"
+        confirm !empty || raw.ends_with("/")
             else throw self.failure(at, "invalid empty tag close");
         confirm !closing || (body.length() > 1 && !PlistXmlText(body).whitespace(1))
             else throw self.failure(at, "invalid closing tag name");
@@ -405,7 +405,7 @@ object PlistXmlSource {
                         "'";
                     }
                     else {
-                        confirm entity.length() > 1 && entity.slice(0, 1) == "#"
+                        confirm entity.length() > 1 && entity.starts_with("#")
                             else throw self.failure(at + index, "unknown entity");
                         let hex = entity.slice(1, 2) == "x";
                         let start = if hex {
@@ -688,9 +688,9 @@ hidden object PlistXmlEvents {
                 case "integer" {
                     confirm scalar.length() <= 4096
                         else throw self.failure(token, "numeric spelling limit exceeded");
-                    confirm scalar.length() < 2 || scalar.slice(0, 2) != "+-"
+                    confirm scalar.length() < 2 || !scalar.starts_with("+-")
                         else throw self.failure(token, "invalid integer sign");
-                    PlistInteger(BigInt(if scalar.length() > 0 && scalar.slice(0, 1) == "+" {
+                    PlistInteger(BigInt(if scalar.starts_with("+") {
                         scalar.slice(1, scalar.length());
                     }
                     else {
@@ -712,7 +712,7 @@ hidden object PlistXmlEvents {
                 }
                 case "date" {
                     confirm scalar.length() >= 20
-                        && scalar.slice(scalar.length() - 1, scalar.length()) == "Z"
+                        && scalar.ends_with("Z")
                         else throw self.failure(token, "UTC date required");
                     PlistDate(Rfc3339(scalar).instant());
                 }
@@ -817,9 +817,9 @@ hidden object PlistDecimalReal {
     float() is float {
         confirm origin.length() > 0 && origin.length() <= 4096
             else throw InvalidPlist.located(0, "real spelling limit exceeded");
-        confirm origin.length() < 2 || origin.slice(0, 2) != "+-"
+        confirm origin.length() < 2 || !origin.starts_with("+-")
             else throw InvalidPlist.located(0, "invalid real sign");
-        let raw = if origin.slice(0, 1) == "+" {
+        let raw = if origin.starts_with("+") {
             origin.slice(1, origin.length());
         }
         else {
@@ -831,7 +831,7 @@ hidden object PlistDecimalReal {
         if parts.size() == 2 {
             let written = parts[1];
             let start = if written.length() > 0
-                && (written.slice(0, 1) == "+" || written.slice(0, 1) == "-") {
+                && (written.starts_with("+") || written.starts_with("-")) {
                     1;
                 }
                 else {
@@ -854,7 +854,7 @@ hidden object PlistDecimalReal {
         confirm exponent >= -4096 && exponent <= 4096
             else throw InvalidPlist.located(0, "real exponent limit exceeded");
         let spelling = decimal.coefficient().string();
-        let negative = spelling.slice(0, 1) == "-";
+        let negative = spelling.starts_with("-");
         let digits = if negative {
             spelling.slice(1, spelling.length());
         }
@@ -879,7 +879,7 @@ hidden object PlistDecimalReal {
             coefficient * factor;
         };
         // Exact largest finite binary64, (2^53-1)*2^971, as decimal text.
-        let absolute = if raw.slice(0, 1) == "-" {
+        let absolute = if raw.starts_with("-") {
             raw.slice(1, raw.length());
         }
         else {

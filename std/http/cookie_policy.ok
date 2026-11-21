@@ -86,7 +86,7 @@ object CookieOrigin {
         else {
             parts.host_address().string();
         };
-        let canonical = if dns && raw.slice(raw.length() - 1, raw.length()) == "." {
+        let canonical = if dns && raw.ends_with(".") {
             raw.slice(0, raw.length() - 1);
         }
         else {
@@ -154,7 +154,7 @@ hidden object CookieDefaultPath {
     }
 
     string() is string {
-        if origin == "" || origin.slice(0, 1) != "/" {
+        if origin == "" || !origin.starts_with("/") {
             return "/";
         }
         let slash = (0..origin.length()).reduce(0) -> previous, index {
@@ -194,7 +194,7 @@ object CookiePathMatch {
             || request.slice(0, cookie.length()) != cookie {
                 return false;
             }
-        cookie.slice(cookie.length() - 1, cookie.length()) == "/"
+        cookie.ends_with("/")
             || request.slice(cookie.length(), cookie.length() + 1) == "/";
     }
 }
@@ -308,7 +308,7 @@ hidden object CookieAttributeReading {
             }
             case "path" {
                 if value.length() <= 1024 {
-                    ^path = if value != "" && value.slice(0, 1) == "/" {
+                    ^path = if value != "" && value.starts_with("/") {
                         value;
                     }
                     else {
@@ -457,7 +457,7 @@ hidden object CookieAgeSeconds {
     }
 
     values() is @int {
-        let negative = origin != "" && origin.slice(0, 1) == "-";
+        let negative = origin != "" && origin.starts_with("-");
         let digits = if negative {
             origin.slice(1, origin.length());
         }

@@ -554,7 +554,7 @@ object Http2FieldSection {
                     stream,
                     "empty or uppercase field name"
                 );
-            let pseudo = name.slice(0, 1) == ":";
+            let pseudo = name.starts_with(":");
             if pseudo {
                 let permitted is bool = allowed.reduce(false) -> found, key {
                     found || key == name;
@@ -594,7 +594,7 @@ object Http2FieldSection {
                 );
         }
         let filtered is @HpackField = origin.filter() -> field {
-            field.name().slice(0, 1) != ":";
+            !field.name().starts_with(":");
         };
         let entries is @Header = filtered.map() -> field {
             Header(name: HeaderName(field.name()), value: field.value());

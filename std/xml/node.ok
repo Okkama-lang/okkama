@@ -69,8 +69,8 @@ object XmlComment does XmlNode {
     XmlComment(value is string) {
         XmlCharacters(value);
         confirm value.length() <= 65536
-            && value.split("--").size() == 1
-            && (value == "" || value.slice(value.length() - 1, value.length()) != "-")
+            && !value.contains("--")
+            && (value == "" || !value.ends_with("-"))
             else throw InvalidXml.located(0, "invalid XML comment");
         origin = value;
     }
@@ -111,7 +111,7 @@ object XmlProcessingInstruction does XmlNode {
         XmlCharacters(data);
         confirm target.replace("X", "x").replace("M", "m").replace("L", "l") != "xml"
             && data.length() <= 65536
-            && data.split("?>").size() == 1
+            && !data.contains("?>")
             else throw InvalidXml.located(0, "invalid processing instruction");
         self.target = target;
         self.data = data;

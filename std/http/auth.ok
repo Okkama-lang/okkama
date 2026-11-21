@@ -213,7 +213,7 @@ object AuthenticationScope {
         // Avoid credential emission for encoded path separators with differing
         // application routing interpretations.
         let raw = url::Parts::path;
-        if raw.split("%2F").size() > 1 || raw.split("%5C").size() > 1 {
+        if raw.contains("%2F") || raw.contains("%5C") {
             return false;
         }
         let normalized = url.normalized();
@@ -230,7 +230,7 @@ object AuthenticationScope {
         if checked.length() <= path.length() || checked.slice(0, path.length()) != path {
             return false;
         }
-        path.slice(path.length() - 1, path.length()) == "/"
+        path.ends_with("/")
             || checked.slice(path.length(), path.length() + 1) == "/";
     }
 }

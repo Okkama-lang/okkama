@@ -786,7 +786,7 @@ hidden object ParsedCookieStore {
     snapshot() is CookieStoreSnapshot {
         confirm origin.length() <= 67108864
             && origin != ""
-            && origin.slice(origin.length() - 1, origin.length()) == "\n"
+            && origin.ends_with("\n")
             else throw InvalidCookieStore.because("file framing or byte limit");
         let lines = origin.split("\n");
         let header = lines[0].split("\t");
@@ -910,7 +910,7 @@ hidden object ParsedCookieStoreRow {
         let host_only = CookieStoreBoolean(fields[3]).bool();
         let partitioned = CookieStoreBoolean(fields[9]).bool();
         let domain = fields[2];
-        let literal = if domain.split(":").size() > 1 {
+        let literal = if domain.contains(":") {
             "[" + domain + "]";
         }
         else {
@@ -1018,7 +1018,7 @@ hidden object CookieStoreNumber {
     rat() is rat {
         confirm origin.length() >= 1 && origin.length() <= 32
             else throw InvalidCookieStore.because("decimal field width");
-        let negative = origin.slice(0, 1) == "-";
+        let negative = origin.starts_with("-");
         let digits = if negative {
             origin.slice(1, origin.length());
         }

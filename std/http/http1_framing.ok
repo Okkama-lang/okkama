@@ -258,7 +258,7 @@ object Http1FramingFields {
         }
         let original = values[0];
         confirm original.length() <= 1024 else throw Http1LimitExceeded.kind("length_digits");
-        confirm original.slice(0, 1) != "-"
+        confirm !original.starts_with("-")
             else throw InvalidHttpMessage.because("unsigned Content-Length required");
         let parsed = try {
             BigInt(original);

@@ -90,6 +90,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
   stays 7bit.
+### Changed
+
+- **std checks text with the builtins (#260, part 1).** Containment written as `text.split(part).size() > 1` (or
+  `== 1` for absence) is `contains`, prefixes and suffixes compared through `slice` are `starts_with` and
+  `ends_with`, across 54 modules (156 sites); the gettext `contains` helper is gone. Behaviour is unchanged, except
+  that a few unguarded checks of an empty text answer false instead of failing on the slice.
 
 ## [0.6.1] — 2026-11-22
 

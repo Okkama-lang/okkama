@@ -24,7 +24,7 @@ object MimeParameter {
 
     // The parameter as given.
     MimeParameter(name is string, value is string) {
-        confirm name.split("*").size() == 1
+        confirm !name.contains("*")
             else throw InvalidMediaType.located(0, "logical parameter name contains asterisk");
         key = MimeToken(name).string();
         let characters = value.characters();
@@ -622,7 +622,7 @@ hidden object MimeWireParameter {
             let digits = parts[1];
             confirm digits.length() > 0
                 && digits.length() <= maximum_sections.string().length()
-                && (digits.length() == 1 || digits.slice(0, 1) != "0")
+                && (digits.length() == 1 || !digits.starts_with("0"))
                 else throw InvalidMediaType.located(offset, "invalid continuation index");
             let valid = digits.characters().reduce(true) -> valid, character {
                 valid && character.code() >= 48 && character.code() <= 57;

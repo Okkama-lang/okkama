@@ -156,7 +156,7 @@ object DecodedWords {
                 position = position.following(index + 1);
             }
             let token = origin.slice(start, position.index());
-            let encoded = token.length() >= 2 && token.slice(0, 2) == "=?";
+            let encoded = token.starts_with("=?");
             if !previous.encoded() || !encoded {
                 writer.write(Utf8Encoded(origin.slice(space, start)).bytes());
             }

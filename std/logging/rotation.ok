@@ -311,9 +311,9 @@ object RotatingLogFile does Writing, Closing {
             && suffix.length() <= 128
             && suffix != "."
             && suffix != ".."
-            && suffix.split("/").size() == 1
-            && suffix.split("\\").size() == 1
-            && suffix.split(":").size() == 1
+            && !suffix.contains("/")
+            && !suffix.contains("\\")
+            && !suffix.contains(":")
             else throw InvalidLogRotation.because("invalid archive suffix");
         let target = Path(
             path.string() + ".archive." + generation.string() + "." + suffix,

@@ -179,8 +179,8 @@ hidden object StaticCoordinate {
             && name != "."
             && name != ".."
             && Utf8Encoded(name).bytes().size() <= 255
-            && name.split("/").size() == 1
-            && name.split("\\").size() == 1
+            && !name.contains("/")
+            && !name.contains("\\")
             else throw InvalidStaticPath.invalid;
         for Utf8Encoded(name).bytes() -> octet {
             confirm octet.int() >= 32 && octet.int() != 127 else throw InvalidStaticPath.invalid;
@@ -215,8 +215,8 @@ hidden object StaticPath {
         else {
             path;
         };
-        confirm raw.length() <= 8192 && raw.slice(0, 1) == "/" else throw InvalidStaticPath.invalid;
-        let trailing = raw.slice(raw.length() - 1, raw.length()) == "/";
+        confirm raw.length() <= 8192 && raw.starts_with("/") else throw InvalidStaticPath.invalid;
+        let trailing = raw.ends_with("/");
         slash = trailing;
         wire = raw;
         let q is Maybe<string> = if target.kind() == RequestTargetKind.origin {

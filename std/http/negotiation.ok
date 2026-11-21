@@ -451,7 +451,7 @@ hidden object CodingMember {
         else {
             let weight = Header(name: HeaderName("Accept-Encoding"), value: fields[1]).value();
             confirm weight.length() >= 2
-                && (weight.slice(0, 2) == "q=" || weight.slice(0, 2) == "Q=")
+                && (weight.starts_with("q=") || weight.starts_with("Q="))
                 else throw InvalidNegotiation.because("q parameter assignment required");
             try {
                 ParsedQuality(weight.slice(2, weight.length())).quality();

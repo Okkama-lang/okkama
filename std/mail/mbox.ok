@@ -37,7 +37,7 @@ object MboxSeparator {
             confirm bytes.size() == 1 && value >= 32 && value <= 126
                 else throw InvalidMbox.located(index, "separator must be printable ASCII");
         }
-        confirm origin.slice(0, 5) == "From " && origin.slice(5, 6) != " "
+        confirm origin.starts_with("From ") && origin.slice(5, 6) != " "
             else throw InvalidMbox.located(0, "separator requires From and a sender token");
         let spaces = (6..origin.length()).filter() -> index {
             origin.slice(index, index + 1) == " ";

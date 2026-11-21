@@ -1255,7 +1255,7 @@ hidden object XmlRpcDoubleText {
 
     string() is string {
         let raw = origin.coefficient().string();
-        let sign = if raw.slice(0, 1) == "-" {
+        let sign = if raw.starts_with("-") {
             "-";
         }
         else {
@@ -1405,7 +1405,7 @@ hidden object XmlRpcXmlCharacters {
                 next;
             }
             let character = Utf8Decoded([code.byte()]).string();
-            confirm origin.split(character).size() == 1
+            confirm !origin.contains(character)
                 else throw InvalidXmlRpc.because("XML control character");
         }
         for [[239.byte(), 191.byte(), 190.byte()], [239.byte(), 191.byte(), 191.byte()]] -> bytes {
@@ -1481,7 +1481,7 @@ hidden object XmlRpcParsing {
         catch e is Error {
             throw InvalidXmlRpc.because("UTF8 input");
         };
-        let text = if decoded != "" && decoded.slice(0, 1) == "﻿" {
+        let text = if decoded != "" && decoded.starts_with("﻿") {
             decoded.slice(1, decoded.length());
         }
         else {
@@ -1571,7 +1571,7 @@ hidden object XmlRpcParsing {
                 next;
             }
             if token.kind() == "text" {
-                confirm token.text().split("]]>").size() == 1
+                confirm !token.text().contains("]]>")
                     else throw InvalidXmlRpc.because("CDATA close in text");
             }
             let value = if token.kind() == "cdata" {
@@ -1812,7 +1812,7 @@ hidden object XmlRpcIntegerText {
     XmlRpcIntegerText(origin is string) {
         confirm origin.length() > 0 && origin.length() <= 16
             else throw InvalidXmlRpc.because("integer spelling budget");
-        let text = if origin.slice(0, 1) == "+" {
+        let text = if origin.starts_with("+") {
             origin.slice(1, origin.length());
         }
         else {
@@ -1838,13 +1838,13 @@ hidden object XmlRpcParsedDouble {
     XmlRpcParsedDouble(origin is string) {
         confirm origin != "" && origin.length() <= 4096
             else throw InvalidXmlRpc.because("double spelling budget");
-        let text = if origin.slice(0, 1) == "+" {
+        let text = if origin.starts_with("+") {
             origin.slice(1, origin.length());
         }
         else {
             origin;
         };
-        let offset = if text != "" && text.slice(0, 1) == "-" {
+        let offset = if text != "" && text.starts_with("-") {
             1;
         }
         else {
@@ -1859,13 +1859,13 @@ hidden object XmlRpcParsedDouble {
             confirm "0123456789".split(packed.slice(index, index + 1)).size() == 2
                 else throw InvalidXmlRpc.because("double digits");
         }
-        let normalized = if digits.slice(0, 1) == "." {
+        let normalized = if digits.starts_with(".") {
             text.slice(0, offset) + "0" + digits;
         }
         else {
             text;
         };
-        let complete = if normalized.slice(normalized.length() - 1, normalized.length()) == "." {
+        let complete = if normalized.ends_with(".") {
             normalized + "0";
         }
         else {
@@ -2156,9 +2156,9 @@ object XmlRpcHandling does Handling {
     // Answers POSTs to path with calling, within limits.
     XmlRpcHandling(path is string, calling is XmlRpcCalling, limits is XmlRpcLimits) {
         confirm path != ""
-            && path.slice(0, 1) == "/"
-            && path.split("?").size() == 1
-            && path.split("#").size() == 1
+            && path.starts_with("/")
+            && !path.contains("?")
+            && !path.contains("#")
             else throw InvalidXmlRpc.because("absolute request path required");
         self.path = path;
         self.calling = calling;

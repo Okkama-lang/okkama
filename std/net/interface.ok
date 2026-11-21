@@ -35,7 +35,7 @@ object NetworkInterface {
         loopback is bool
     ) {
         let nul = Utf8Decoded([byte(0)]).string();
-        confirm name != "" && name.split(nul).size() == 1
+        confirm name != "" && !name.contains(nul)
             else throw InvalidArgument.because(
                 "network interface name must be nonempty and contain no NUL"
             );

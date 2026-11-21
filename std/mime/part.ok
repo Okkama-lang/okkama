@@ -1534,7 +1534,7 @@ hidden object MimeBoundary {
     MimeBoundary(origin is string) {
         confirm origin.length() > 0
             && origin.length() <= 70
-            && origin.slice(origin.length() - 1, origin.length()) != " "
+            && !origin.ends_with(" ")
             else throw InvalidMime.located(0, "invalid multipart boundary length or trailing space");
         // RFC 2046 bchars, by code (#163): letters, digits and '()+_,-./:=? and space.
         let characters = origin.characters();
@@ -1663,7 +1663,7 @@ hidden object BoundarySelection {
         for (0..32) -> attempt {
             let candidate = BoundaryCandidate(random).string();
             let present = snapshots.reduce(false) -> found, text {
-                found || text.split(candidate).size() > 1;
+                found || text.contains(candidate);
             };
             if !present {
                 return candidate;

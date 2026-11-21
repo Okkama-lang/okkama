@@ -198,7 +198,7 @@ hidden object Http1HeadLines {
             let line = values[index];
             confirm line.length() <= limits::Limits::line_bytes
                 else throw Http1LimitExceeded.kind("line_bytes");
-            confirm clean || (line.split("\r").size() == 1 && line.split("\n").size() == 1)
+            confirm clean || (!line.contains("\r") && !line.contains("\n"))
                 else throw InvalidHttpMessage.because("bare CR/LF in head");
         }
         lines = values;

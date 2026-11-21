@@ -14,12 +14,12 @@ object IanaLanguages {
  }
  // Whether tag is a grandfathered tag.
  grandfathered(tag is string) is bool{
-  if tag.split("-").size()==1{return false;}
+  if !tag.contains("-"){return false;}
   let values is %string:string=["art-lojban":"jbo","cel-gaulish":"","en-gb-oed":"en-GB-oxendict","i-ami":"ami","i-bnn":"bnn","i-default":"","i-enochian":"","i-hak":"hak","i-klingon":"tlh","i-lux":"lb","i-mingo":"","i-navajo":"nv","i-pwn":"pwn","i-tao":"tao","i-tay":"tay","i-tsu":"tsu","no-bok":"nb","no-nyn":"nn","sgn-be-fr":"sfb","sgn-be-nl":"vgt","sgn-ch-de":"sgg","zh-guoyu":"cmn","zh-hakka":"hak","zh-min":"","zh-min-nan":"nan","zh-xiang":"hsn"];values.has(tag);
  }
  // The preferred value of a whole tag, or "".
  preferred_tag(tag is string) is string{
-  if tag.split("-").size()==1{return "";}
+  if !tag.contains("-"){return "";}
   let values is %string:string=["art-lojban":"jbo","cel-gaulish":"","en-gb-oed":"en-GB-oxendict","i-ami":"ami","i-bnn":"bnn","i-default":"","i-enochian":"","i-hak":"hak","i-klingon":"tlh","i-lux":"lb","i-mingo":"","i-navajo":"nv","i-pwn":"pwn","i-tao":"tao","i-tay":"tay","i-tsu":"tsu","no-bok":"nb","no-nyn":"nn","sgn-be-fr":"sfb","sgn-be-nl":"vgt","sgn-br":"bzs","sgn-ch-de":"sgg","sgn-co":"csn","sgn-de":"gsg","sgn-dk":"dsl","sgn-es":"ssp","sgn-fr":"fsl","sgn-gb":"bfi","sgn-gr":"gss","sgn-ie":"isg","sgn-it":"ise","sgn-jp":"jsl","sgn-mx":"mfs","sgn-ni":"ncs","sgn-nl":"dse","sgn-no":"nsl","sgn-pt":"psr","sgn-se":"swl","sgn-us":"ase","sgn-za":"sfs","zh-cmn":"cmn","zh-cmn-hans":"cmn-Hans","zh-cmn-hant":"cmn-Hant","zh-gan":"gan","zh-guoyu":"cmn","zh-hakka":"hak","zh-min":"","zh-min-nan":"nan","zh-wuu":"wuu","zh-xiang":"hsn","zh-yue":"yue"];
   if values.has(tag){values[tag];}else{"";}
  }

@@ -297,7 +297,7 @@ hidden object CaseRules {
     // The first character of start..end that is not a mark, or end.
     hidden first_base(start is int, end is int) is int {
         for (start..end) -> index {
-            if category_code(characters[index]).slice(0, 1) != "M" {
+            if !category_code(characters[index]).starts_with("M") {
                 return index;
             }
         }

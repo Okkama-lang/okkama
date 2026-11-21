@@ -356,7 +356,7 @@ object TlsClientHandshake {
         };
         let identity = server.string();
         let unrooted = if identity.length() > 0
-            && identity.slice(identity.length() - 1, identity.length()) == "." {
+            && identity.ends_with(".") {
                 identity.slice(0, identity.length() - 1);
             }
             else {

@@ -124,7 +124,7 @@ object DetectedTerminalCapabilities {
                 }
                 else {
                     if native_depth == TerminalColorDepth.indexed
-                        || term.split("256color").size() > 1 {
+                        || term.contains("256color") {
                             TerminalColorDepth.indexed;
                         }
                         else {

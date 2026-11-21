@@ -240,8 +240,8 @@ hidden object PopStatusLine {
     has summary is string;
 
     PopStatusLine(origin is string, offset is int) {
-        let positive = origin.length() >= 3 && origin.slice(0, 3) == "+OK";
-        let negative = origin.length() >= 4 && origin.slice(0, 4) == "-ERR";
+        let positive = origin.starts_with("+OK");
+        let negative = origin.starts_with("-ERR");
         confirm positive || negative
             else throw InvalidPopReply.located(offset, "expected +OK or -ERR");
         let end = if positive {
@@ -327,7 +327,7 @@ hidden object PopReplyProgress {
             });
         let value = octet.int();
         let cr = pending.length() > 0
-            && pending.slice(pending.length() - 1, pending.length()) == "\r";
+            && pending.ends_with("\r");
         if cr {
             confirm value == 10
                 else throw InvalidPopReply.located(used, "CR must be followed by LF");
@@ -349,7 +349,7 @@ hidden object PopReplyProgress {
                 else {
                     confirm count < limits::Limits::lines
                         else throw PopReplyLimitExceeded.kind("lines");
-                    let start = if line.length() > 0 && line.slice(0, 1) == "." {
+                    let start = if line.starts_with(".") {
                         1;
                     }
                     else {

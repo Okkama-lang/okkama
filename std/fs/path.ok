@@ -168,9 +168,9 @@ object Path does Comparing<Path> {
     // is docs/guide.html, "" removes the extension, and a name without one gains
     // it. A leading dot ("html" or ".html") is optional.
     extension_replaced(extension is string) is Path {
-        confirm extension.split("/").size() == 1 && extension.split("\\").size() == 1
+        confirm !extension.contains("/") && !extension.contains("\\")
             else throw InvalidPath.because("an extension cannot hold a separator");
-        let bare = if extension.length() > 0 && extension.slice(0, 1) == "." {
+        let bare = if extension.starts_with(".") {
             extension.slice(1, extension.length());
         }
         else {
