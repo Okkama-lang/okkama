@@ -238,9 +238,6 @@ object SqliteOpening {
             case SqliteJournal.memory {
                 "memory";
             }
-            else {
-                throw InvalidSqliteOptions.invalid;
-            }
         };
         let state = try {
             sqlite.sqlite_create(
@@ -872,9 +869,6 @@ object SqliteSession does Closing {
             case SqliteTransactionMode.exclusive {
                 "EXCLUSIVE";
             }
-            else {
-                throw InvalidSqliteOptions.invalid;
-            }
         };
         await self.control("BEGIN " + name, DbOperation.executing);
         let id = serial.value() + 1;
@@ -1280,9 +1274,6 @@ hidden object SqliteBoundValue {
             case DbValueKind.bytes {
                 6;
             }
-            else {
-                throw InvalidSqliteOptions.invalid;
-            }
         };
         bytes = match value.kind() {
             case DbValueKind.null_value {
@@ -1310,9 +1301,6 @@ hidden object SqliteBoundValue {
             }
             case DbValueKind.bytes {
                 value.bytes();
-            }
-            else {
-                throw InvalidSqliteOptions.invalid;
             }
         };
     }

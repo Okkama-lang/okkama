@@ -52,9 +52,6 @@ object Duration does Comparing<Duration>, Adding<Duration, Duration>, Subtractin
             case DurationUnit.day {
                 86400.rat();
             }
-            else {
-                1.rat();
-            }
         };
         let seconds is rat = value * multiplier;
         confirm (seconds * 1000000000.rat()).denominator() == 1

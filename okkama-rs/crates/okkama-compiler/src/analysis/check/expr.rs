@@ -984,6 +984,8 @@ impl Checker<'_, '_> {
         }
         let mut cases = Vec::new();
         let mut arms: Vec<Expr> = Vec::new();
+        // #286: a repeated enum case or literal value can never be chosen.
+        let mut seen_patterns: Vec<String> = Vec::new();
         for case in &body.cases {
             let mut patterns = Vec::new();
             for pattern in &case.patterns {
@@ -1016,13 +1018,32 @@ impl Checker<'_, '_> {
                     Self::typed(ExprKind::Unreachable, subject_ty.clone(), body.subject.span);
                 let _ =
                     self.binary_values(ast::BinaryOp::Equal, probe, value.clone(), pattern.span);
+                let key = match &value.kind {
+                    ExprKind::EnumCase { case, .. } => Some((format!("case {case}"), "Duplicate variant pattern")),
+                    ExprKind::Constant(constant) if !matches!(constant, Constant::Float(_)) => {
+                        Some((format!("{constant:?}"), "Duplicate case pattern"))
+                    }
+                    _ => None,
+                };
+                if let Some((key, message)) = key {
+                    if seen_patterns.contains(&key) {
+                        self.error(pattern.span, message);
+                    } else {
+                        seen_patterns.push(key);
+                    }
+                }
                 patterns.push(value);
             }
             let out = self.block(&case.body, want, expected);
             arms.push(out.clone());
             cases.push((patterns, self.block_of(out)));
         }
-        let exhaustive = body.else_block.is_none() && self.covers(&subject_ty, &body.cases);
+        let covered = self.covers(&subject_ty, &body.cases);
+        let exhaustive = body.else_block.is_none() && covered;
+        // #286: an `else` after cases that cover every value can never run.
+        if covered && let Some(block) = &body.else_block {
+            self.error(block.span, "Unreachable else: the cases already cover every value");
+        }
         let else_value = body
             .else_block
             .as_ref()

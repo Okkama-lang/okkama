@@ -387,9 +387,6 @@ object RequestTargetSnapshot {
             case RequestTargetKind.asterisk {
                 AsteriskTarget();
             }
-            else {
-                throw InvalidRequestTarget.because("unknown target form");
-            }
         };
         confirm checked.string() == wire
             else throw InvalidRequestTarget.because("target wire disagrees with coordinates");

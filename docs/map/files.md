@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 35 files, 21381 lines
+## front — 35 files, 21403 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -14,11 +14,11 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/analysis/check/call.rs` 1963 — Вызовы: конструкторы, actions объектов и ролей, natives, action-значения,
 - `okkama-compiler/src/analysis/check/collections.rs` 662 — Обходы: `for` и функциональные операции `map`/`filter`/`reduce` (§6.8, §9.9).
 - `okkama-compiler/src/analysis/check/consts.rs` 317 — `const NAME = value;` модуля (#153): значение вычисляет компилятор.
-- `okkama-compiler/src/analysis/check/expr.rs` 2000 — Выражения: литералы, имена, операторы, условные и составные формы.
+- `okkama-compiler/src/analysis/check/expr.rs` 2019 — Выражения: литералы, имена, операторы, условные и составные формы.
 - `okkama-compiler/src/analysis/check/generics.rs` 387 — Вывод аргументов generic-объекта на месте конструирования (§6.5).
 - `okkama-compiler/src/analysis/check/mod.rs` 831 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 667 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
-- `okkama-compiler/src/analysis/check/variants.rs` 581 — Nominal variant construction, pattern bindings, and optional fallback.
+- `okkama-compiler/src/analysis/check/variants.rs` 584 — Nominal variant construction, pattern bindings, and optional fallback.
 - `okkama-compiler/src/syntax/format.rs` 1402 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
 - `okkama-compiler/src/syntax/limits.rs` 298 — Бюджет синтаксического дерева (H-03): глубина и число узлов.
 - `okkama-compiler/src/syntax/mod.rs` 64 — The syntactic front end: tokens, lexer, AST, parser, pruning, printers.

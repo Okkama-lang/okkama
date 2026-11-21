@@ -71,9 +71,6 @@ hidden object DbOperationText {
             case DbOperation.script {
                 "script";
             }
-            else {
-                "unknown";
-            }
         }
     }
 }

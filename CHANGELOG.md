@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A `match` case that can never run is an error (#286).** A repeated enum case (`Duplicate variant pattern`), a
+  repeated literal (`Duplicate case pattern`) and an `else` after cases that cover every value of an enum or `bool`
+  (`Unreachable else: the cases already cover every value`). Thirteen dead `else` branches in std were removed.
+
 - **A channel message never outlives the resource it carries (#915).** Book 20.2's pins: an accepted message pins
   the resources another owner keeps until delivery and the end of the receiving scope. An owner that ends first
   (an async helper's input, a sender's local, any outer scope) hands the resource to the channel, the receiving

@@ -1221,6 +1221,11 @@ match status {
   Branches of a value-producing `match` must produce the same type.
 - A `match` over a payload-free enum keeps the older rule: a statement match
   may omit cases; `okkama lint` reports it as `non-exhaustive-match`.
+- A case that can never be chosen is an error: an enum case listed twice
+  (`Duplicate variant pattern`), a literal value listed twice
+  (`Duplicate case pattern`), and an `else` after cases that already cover every
+  value of an enum or `bool` (`Unreachable else: the cases already cover every
+  value`).
 
 ### 12.5 `for`
 

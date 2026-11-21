@@ -1277,6 +1277,11 @@ match status {
 - `match` по enum без данных сохраняет прежнее правило: match-инструкция может
   пропустить варианты; `okkama lint` сообщает об этом как
   `non-exhaustive-match`.
+- Ветка, которую нельзя выбрать, — ошибка: вариант enum, указанный дважды
+  (`Duplicate variant pattern`), литерал, указанный дважды
+  (`Duplicate case pattern`), и `else` после вариантов, уже покрывших все
+  значения enum или `bool` (`Unreachable else: the cases already cover every
+  value`).
 
 ### 12.5 `for`
 

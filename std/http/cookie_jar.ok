@@ -958,9 +958,6 @@ hidden object ParsedCookieStoreRow {
                 case CookieFlag.partitioned {
                     partitioned;
                 }
-                else {
-                    false;
-                }
             }
         };
         let selected is Set<CookieFlag> = OrderedSet(flags);
