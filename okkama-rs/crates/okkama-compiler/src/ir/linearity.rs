@@ -43,7 +43,7 @@ fn tracked(function: &Function) -> Vec<ValueId> {
     values
 }
 
-fn can_fail(kind: &InstKind) -> bool {
+pub(crate) fn can_fail(kind: &InstKind) -> bool {
     !matches!(
         kind,
         InstKind::RegionEnter

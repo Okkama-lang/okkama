@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **More resources are destroyed directly, without a region (#909).** The `statics` pass no longer follows the
+  unwind edge of a block that cannot fail (a deferred action's `fail.secondary`), which kept every resource of a
+  scope with a `defer` inside a `try` dynamic: static resources over the corpora 129 → 198. Its reach is now judged
+  from the code after the creation, not the creating block, whose own failure path never has the value.
+  `OKKAMA_DEV=lower` names each rejection reason in detail.
+
 - **A channel message never outlives the resource it carries (#915).** Book 20.2's pins: an accepted message pins
   the resources another owner keeps until delivery and the end of the receiving scope. An owner that ends first
   (an async helper's input, a sender's local, any outer scope) hands the resource to the channel, the receiving

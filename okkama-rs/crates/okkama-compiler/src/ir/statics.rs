@@ -11,7 +11,9 @@
 //!   too, unless its region settles (an async destroy elsewhere in the program);
 //! - its region operations are `region.track`/`region.adopt` into one region R, and R holds nothing else: no
 //!   other member, no transfer, no keep that could reach a resource, R not passed around;
-//! - every block reachable from its creation before R's exits is dominated by the creation (no drop flags yet).
+//! - every block reachable from its creation before R's exits is dominated by the code right after the creation
+//!   (no drop flags yet). An unwind edge counts only from a block that can fail: a block of `fail.secondary`
+//!   and constants never takes it.
 //!
 //! The rewrite: the creating block is split after the constructor call; `track`/`adopt` become `resource.pin`;
 //! every `region.leave R` the value reaches gets a `resource.leave` before it; every edge from the value's code
@@ -49,10 +51,13 @@ pub fn make_static(module: &mut Module) -> usize {
                 }
             };
             split_after_definition(&mut module.functions[found.function], value);
-            let Some(plan) = plan(&module.functions[found.function], value, &others) else {
-                okkama_devtrace::count!("lower", "statics: not static (control flow)");
-                // The split alone changes nothing: the value stays dynamic.
-                continue;
+            let plan = match plan(&module.functions[found.function], value, &others) {
+                Ok(plan) => plan,
+                Err(reason) => {
+                    okkama_devtrace::count!("lower", format!("statics: not static (control flow: {reason})"));
+                    // The split alone changes nothing: the value stays dynamic.
+                    continue;
+                }
             };
             apply(&mut module.functions[found.function], value, plan);
             count += 1;
@@ -110,7 +115,11 @@ fn eligible(module: &Module, plain: &Plain, function: &Function, value: ValueId)
     if !declaration.fields.iter().all(|field| plain.ty(&field.ty)) {
         return Err("a field may hold a resource");
     }
-    let Some(region) = region_of(function, value) else { return Err("no single region") };
+    let Some(region) = region_of(function, value) else {
+        let adopted = function.blocks.iter().flat_map(|block| &block.insts)
+            .any(|inst| matches!(&inst.kind, InstKind::RegionAdopt { value: v, .. } if *v == value));
+        return Err(if adopted { "no single region: several regions or a transfer" } else { "no single region: only tracked (a temporary)" });
+    };
     // R closes without keeping a resource and is used by nothing but its own operations. Its other members, if
     // any, must be newer than the value (checked with the control flow).
     let mut others = Vec::new();
@@ -182,6 +191,13 @@ struct Plan {
     branches: Vec<usize>,
 }
 
+/// Whether anything in `block` can fail into its unwind edge: an instruction, or a terminator that leaves through
+/// it. A block of only infallible instructions (`fail.secondary`, constants) never takes its unwind edge.
+fn can_fail(block: &Block) -> bool {
+    block.insts.iter().any(|inst| super::linearity::can_fail(&inst.kind))
+        || !matches!(block.term.kind, TermKind::Br(_) | TermKind::Cond { .. } | TermKind::Ret(_))
+}
+
 fn has(block: &Block, region: ValueId, leave: bool) -> bool {
     block.insts.iter().any(|inst| match &inst.kind {
         InstKind::RegionLeave { region: r, .. } => leave && *r == region,
@@ -191,9 +207,9 @@ fn has(block: &Block, region: ValueId, leave: bool) -> bool {
 }
 
 /// The control-flow conditions, after the split: the blocks to rewrite, or `None`.
-fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Option<Plan> {
-    let region = region_of(function, value)?;
-    let (start, _) = definition(function, value)?;
+fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Result<Plan, &'static str> {
+    let region = region_of(function, value).ok_or("no region")?;
+    let (start, _) = definition(function, value).ok_or("no definition")?;
     let edges: Vec<Vec<usize>> = (0..function.blocks.len())
         .map(|block| cfg::all_successors(function, BlockId(block)).into_iter().map(|target| target.0).collect())
         .collect();
@@ -212,14 +228,14 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Option<Plan>
     let closes_first = |block: usize| matches!(function.blocks[block].insts.first().map(|inst| &inst.kind),
         Some(InstKind::RegionUnwind { region: r, .. }) if *r == region);
     // The creating block's own successor is the split-off rest; the walk starts there.
-    let TermKind::Br(first) = &function.blocks[start].term.kind else { return None };
+    let TermKind::Br(first) = &function.blocks[start].term.kind else { return Err("split") };
     let shared = !others.is_empty();
     // Every other member is made after the value (so it dies first): defined by an instruction the value's
     // creation dominates.
     for &other in others {
-        let (block, _) = definition(function, other)?;
+        let (block, _) = definition(function, other).ok_or("member without definition")?;
         if block == start || !dominates(start, block) {
-            return None;
+            return Err("an older member");
         }
     }
     // With other members, a handler is copied with the value's close after R's: only the simple shape.
@@ -238,13 +254,19 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Option<Plan>
     let closes_first = |block: usize| closes_first(block) && (!shared || simple(block));
     let mut plan = Plan { region, shared, leaves: Vec::new(), unwinds: Vec::new(), branches: Vec::new() };
     let mut seen = HashSet::new();
-    let mut stack = vec![first.block.0];
+    // The value exists only after its creation: a block is in its reach when the split-off rest dominates it. The
+    // creating block itself dominates its own handlers too, but along its unwind edge the value was never made.
+    let after = first.block.0;
+    let mut stack = vec![after];
     while let Some(block) = stack.pop() {
         if !seen.insert(block) {
             continue;
         }
-        if !dominates(start, block) || handler(block) {
-            return None;
+        if !dominates(after, block) {
+            return Err("a block not dominated by the creation (drop flag)");
+        }
+        if handler(block) {
+            return Err("reaches a handler of the region");
         }
         let body = &function.blocks[block];
         if has(body, region, true) {
@@ -252,22 +274,22 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Option<Plan>
             let first_leave = body.insts.iter().position(|inst| matches!(&inst.kind,
                 InstKind::RegionLeave { region: r, .. } if *r == region)).expect("leave");
             if first_leave > 0 && (shared || !body.unwind.as_ref().is_some_and(|unwind| handler(unwind.block.0))) {
-                return None;
+                return Err("work before the leave");
             }
             // The value is dead after `resource.leave`: what fails later in the block is not its concern.
             if first_leave > 0 {
                 if !closes_first(body.unwind.as_ref().expect("checked").block.0) {
-                    return None;
+                    return Err("handler shape");
                 }
                 plan.unwinds.push(block);
             }
             plan.leaves.push(block);
             continue;
         }
-        if let Some(unwind) = &body.unwind {
+        if let Some(unwind) = body.unwind.as_ref().filter(|_| can_fail(body)) {
             if handler(unwind.block.0) {
                 if !closes_first(unwind.block.0) {
-                    return None;
+                    return Err("handler shape");
                 }
                 plan.unwinds.push(block);
             } else {
@@ -277,13 +299,13 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Option<Plan>
         let targets = body.term.kind.targets();
         if targets.iter().any(|target| handler(target.block.0)) {
             if targets.iter().any(|target| handler(target.block.0) && !closes_first(target.block.0)) {
-                return None;
+                return Err("handler shape");
             }
             plan.branches.push(block);
         }
         stack.extend(targets.iter().filter(|target| !handler(target.block.0)).map(|target| target.block.0));
     }
-    Some(plan)
+    Ok(plan)
 }
 
 fn apply(function: &mut Function, value: ValueId, plan: Plan) {

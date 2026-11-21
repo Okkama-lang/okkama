@@ -51,6 +51,28 @@ fn a_resource_a_branch_hands_out_itself_outlives_the_branch() {
     assert!(!text.contains("resource.leave"), "the branch keeps the resource it hands out: {text}");
 }
 
+/// #909: a deferred action inside a try links its own failure with `fail.secondary`, which cannot fail; that block's
+/// unwind edge into the catch is never taken, so it does not keep the scope's resource dynamic.
+#[test]
+fn an_infallible_block_does_not_keep_a_resource_dynamic() {
+    let text = function_text(&format!("{RES} enum Stop is Error = (now); object Log {{ Log(); note() is void {{}} }} \
+        main() is int {{ try {{ if true {{ let r = Res(n: 1); defer Log().note(); r.read(); }} 0; }} \
+        catch e is Stop {{ 1; }} }}"), "main");
+    assert!(text.contains("fail.secondary"), "the shape under test: {text}");
+    assert!(text.contains("resource.pin"), "{text}");
+    assert!(text.contains("resource.leave"), "{text}");
+}
+
+/// #909: a deferred action's handler is shared by the creation's own failure (the value was never made) and by
+/// failures after it; the value's close must not be placed on that path (the IR stays valid either way).
+#[test]
+fn a_handler_shared_with_the_creation_stays_valid() {
+    let text = function_text(&format!("{RES} object Log {{ Log(); note(text is string) is void {{}} }} \
+        main() is int {{ {{ defer Log().note(\"1\"); let a = Res(n: 1); defer Log().note(\"a\"); \
+        let b = Res(n: 2); defer Log().note(\"2\"); a.read() + b.read(); }} }}"), "main");
+    assert!(text.contains("fail.secondary"), "the shape under test: {text}");
+}
+
 /// #910: the linearity check accepts what the lowering makes and refuses a region left open or closed twice.
 #[test]
 fn the_linearity_check_refuses_a_missing_or_doubled_close() {
