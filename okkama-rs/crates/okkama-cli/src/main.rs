@@ -31,6 +31,7 @@ mod man;
 mod ocs;
 mod repl;
 mod trace;
+mod workers;
 
 use blade::manifest;
 use okkama_compiler::codegen::{self, Backend, Options as CodegenOptions};
@@ -75,7 +76,7 @@ USAGE:
     okkama ir <FILE|-> [--format text]
     okkama build <FILE|-> -o <FILE.spb>
     okkama exec [BUDGETS] <FILE.spb>
-    okkama run [-t [--filter TEXT]... [--report FORMAT] [--seed N]] <FILE> [FILE.ok...] [ARGS...]
+    okkama run [-t [--filter TEXT]... [--report FORMAT] [--seed N] [--workers N [--test-timeout SECS]]] <FILE> [FILE.ok...] [ARGS...]
     okkama <FILE.ok> [FILE.ok...]
     okkama help [COMMAND]
     okkama --version
@@ -140,6 +141,14 @@ RUN OPTIONS:
                           seed N (0..9007199254740991) shuffles them to;
                           without it, in declaration order. The report
                           names the seed. Properties keep their own seeds
+    --workers N           With -t: run each test in a process of its own,
+                          at most N (1..256) at a time; each test's stdout
+                          and stderr are captured (64 KiB each, more is cut
+                          and marked) and reported with it. Without it the
+                          tests run in this process
+    --test-timeout SECS   With --workers: stop a test's process after SECS
+                          seconds (monotonic, above 0, at most 86400) and
+                          report it as timed out
     --max-steps N         Stop after N steps: function entries and loop
                           iterations (off by default)
     --max-memory SIZE     Stop when the run holds more than SIZE bytes
@@ -1487,6 +1496,10 @@ fn run_command(args: &[String]) -> Outcome {
     let mut filters: Vec<String> = Vec::new();
     let mut format: Option<test_report::ReportFormat> = None;
     let mut seed: Option<u64> = None;
+    let mut workers: Option<usize> = None;
+    let mut test_timeout: Option<std::time::Duration> = None;
+    let mut worker_test: Option<String> = None;
+    let mut worker_result: Option<PathBuf> = None;
     let mut limits = sparrow_core::budget::Limits::default();
     while let Some(first) = rest.first() {
         match first.as_str() {
@@ -1526,6 +1539,38 @@ fn run_command(args: &[String]) -> Outcome {
                 }
                 rest = &rest[1..];
             }
+            "--workers" => {
+                let Some(value) = rest.get(1) else {
+                    return Outcome::usage("--workers needs a whole number");
+                };
+                match workers::worker_count(value) {
+                    Ok(count) => workers = Some(count),
+                    Err(message) => return Outcome::usage(&message),
+                }
+                rest = &rest[1..];
+            }
+            "--test-timeout" => {
+                let Some(value) = rest.get(1) else {
+                    return Outcome::usage("--test-timeout needs seconds");
+                };
+                match workers::test_timeout(value) {
+                    Ok(limit) => test_timeout = Some(limit),
+                    Err(message) => return Outcome::usage(&message),
+                }
+                rest = &rest[1..];
+            }
+            // Служебные ключи процесса-воркера тестов (#938).
+            "--worker-test" | "--worker-result" => {
+                let Some(value) = rest.get(1) else {
+                    return Outcome::usage(&format!("{first} needs a value"));
+                };
+                if first == "--worker-test" {
+                    worker_test = Some(value.clone());
+                } else {
+                    worker_result = Some(PathBuf::from(value));
+                }
+                rest = &rest[1..];
+            }
             "-h" | "--help" => return Outcome::success(HELP.to_string()),
             "--" => {
                 rest = &rest[1..];
@@ -1558,6 +1603,16 @@ fn run_command(args: &[String]) -> Outcome {
     if seed.is_some() && !tests {
         return Outcome::usage("--seed orders tests: use it with -t");
     }
+    if workers.is_some() && !tests {
+        return Outcome::usage("--workers runs tests: use it with -t");
+    }
+    if test_timeout.is_some() && workers.is_none() {
+        // A deadline needs a process to stop (#938): no silent isolation.
+        return Outcome::usage("--test-timeout needs --workers: a test past its deadline is stopped with its process");
+    }
+    if (worker_test.is_some() != worker_result.is_some()) || (worker_test.is_some() && !tests) {
+        return Outcome::usage("--worker-test and --worker-result are for okkama's own test workers");
+    }
     let Some((input, mut program_args)) = rest.split_first() else {
         return Outcome::usage("missing input file");
     };
@@ -1586,7 +1641,12 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return unrun(outcome),
     };
-    let docs = if tests { doctest::check(&sources, &filters) } else { Outcome::success(String::new()) };
+    // A test worker runs one test; its parent checked the doctests (#938).
+    let docs = if tests && worker_test.is_none() {
+        doctest::check(&sources, &filters)
+    } else {
+        Outcome::success(String::new())
+    };
     if docs.code != 0 { return docs; }
     if tests && !docs.stdout.is_empty() {
         let parsed = match parse_raw(&sources) { Ok(parsed) => parsed, Err(outcome) => return outcome };
@@ -1628,6 +1688,39 @@ fn run_command(args: &[String]) -> Outcome {
             return Outcome::failure(format!("okkama: no test name contains {}\n", texts.join(" or ")), EXIT_DIAGNOSTICS);
         }
     }
+    if let (Some(name), Some(tests)) = (&worker_test, module.tests.as_mut()) {
+        tests.retain(|(test, _)| test == name);
+    }
+    if let (Some(count), Some(selected)) = (workers, module.tests.as_ref()) {
+        let names: Vec<String> = selected.iter().map(|(name, _)| name.clone()).collect();
+        if names.is_empty() {
+            return unrun(Outcome::failure("okkama: Test run requires at least one test\n".to_owned(), EXIT_DIAGNOSTICS));
+        }
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(error) => return Outcome::failure(format!("okkama: cannot find this executable: {error}\n"), EXIT_IO),
+        };
+        let mut inputs = vec![input.clone()];
+        inputs.extend(line.more_inputs.iter().cloned());
+        let pool = workers::Pool { exe, filters: filters.clone(), inputs, workers: count, deadline: test_timeout };
+        let report = workers::run(&pool, &names, seed);
+        let format = format.unwrap_or(test_report::ReportFormat::Human);
+        let mut outcome = Outcome {
+            stdout: match format {
+                test_report::ReportFormat::Human => sparrow_core::human_report(&report),
+                test_report::ReportFormat::Json => test_report::json(&report, input),
+                test_report::ReportFormat::Junit => test_report::junit(&report, input),
+            },
+            stderr: String::new(),
+            code: u8::from(!report.passed()),
+        };
+        if format == test_report::ReportFormat::Human {
+            outcome.stdout.push_str(&docs.stdout);
+        } else {
+            outcome.stderr.push_str(&docs.stdout);
+        }
+        return outcome;
+    }
     if std::env::var_os("OKKAMA_ICU_LIBDIR").is_none()
         && let Some(icu) = pinned_icu()
     {
@@ -1641,6 +1734,17 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(bytes) => bytes,
         Err(error) => return unrun(Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS)),
     };
+    if let (true, Some(result)) = (tests, &worker_result) {
+        // The worker side (#938): the test's output stays on this process's
+        // stdout and stderr, the report goes to the parent's file.
+        return match sparrow_core::run_test_report(bytes, plan, Some(Box::new(io::sink()))) {
+            Ok(report) => match std::fs::write(result, test_report::json(&report, input)) {
+                Ok(()) => Outcome::success(String::new()),
+                Err(error) => Outcome::failure(format!("okkama: worker report: {error}\n"), EXIT_IO),
+            },
+            Err(error) => Outcome::failure(format!("okkama: {}\n", error.0), EXIT_TEST_RUN),
+        };
+    }
     if tests {
         let format = format.unwrap_or(test_report::ReportFormat::Human);
         let mut outcome = core_tests(bytes, plan, format, input);

@@ -3163,9 +3163,20 @@ report starts with `=== SEED  N`, and the JSON and JUnit reports name the seed
 and, in JSON, when each test ran. Without `--seed` the tests run in declaration
 order. The seed orders tests only: a property's generator keeps its own seed.
 The tests run in this process. The exit status is 0 when no test failed, 1 when
-one did, 2 for a wrong command line, and 4 when the run reached no verdict: a
-source error, no test to run (also a filter that selects none), or an engine
-error. TAP is not a report format yet.
+one did (and, as before, when a filter selects none), 2 for a wrong command
+line, and 4 when the run reached no verdict: a source error, no test to run, or
+an engine error. TAP is not a report format yet.
+
+`--workers N` runs each selected test in a process of its own instead, at most
+N at a time. What a test prints is captured, each stream up to 64 KiB (more is
+cut and marked), and reported with the test: under a failed test in the human
+report, as `stdout`, `stderr` and `truncated` in JSON, as `system-out` and
+`system-err` in JUnit. `--test-timeout SECS` (with `--workers` only) stops a
+test's process after that many seconds of monotonic time and reports it as
+timed out; a worker that dies without a result is reported as crashed. Both
+fail the run. The report keeps declaration order whichever worker finishes
+first. Workers share the terminal's process group, so Ctrl-C stops them too;
+processes a test starts itself are not stopped with a timed-out worker.
 
 The runner retains test/fake AST across imports but executes only tests owned
 by the root file. It does not run or require `main`. Object/role test names are
