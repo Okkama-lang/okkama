@@ -243,6 +243,10 @@ impl Checker<'_, '_> {
             self.pop_scope();
         }
         let exhaustive = seen.iter().all(|b| *b);
+        // #286: an `else` after cases that cover every variant can never run.
+        if exhaustive && let Some(block) = &body.else_block {
+            self.error(block.span, "Unreachable else: the cases already cover every value");
+        }
         if !exhaustive && body.else_block.is_none() {
             let missing: Vec<_> = decl
                 .cases

@@ -1348,3 +1348,29 @@ fn an_ambiguous_call_names_the_argument_types_and_the_tied_candidates() {
         ["Ambiguous construction of \"Box\" with (int, int): Box(int, any) and Box(any, int) fit equally well"]
     );
 }
+
+/// #286: a repeated enum case or literal value, and an `else` after cases that cover every value, can never run.
+#[test]
+fn unreachable_match_cases_are_errors() {
+    let status = "enum Status = (ready, failed, done); enum Reading = (value(n is int), empty);";
+    for (body, expected) in [
+        ("let s = Status.ready; match s { case Status.ready, Status.done { 1; } case Status.failed { 2; } case Status.ready { 3; } }", "Duplicate variant pattern"),
+        ("let s = Status.ready; match s { case Status.ready, Status.ready { 1; } else { 2; } }", "Duplicate variant pattern"),
+        ("let n = 3; match n { case 1 { 1; } case 1 { 2; } else { 0; } }", "Duplicate case pattern"),
+        ("let t = \"a\"; match t { case \"a\" { 1; } case \"b\", \"a\" { 2; } else { 0; } }", "Duplicate case pattern"),
+        ("let b = true; match b { case true { 1; } case false { 2; } else { 3; } }", "Unreachable else: the cases already cover every value"),
+        ("let s = Status.ready; match s { case Status.ready, Status.failed, Status.done { 1; } else { 2; } }", "Unreachable else: the cases already cover every value"),
+        ("let r = Reading.empty; match r { case Reading.value(n) { n; } case Reading.empty { 0; } else { 1; } }", "Unreachable else: the cases already cover every value"),
+    ] {
+        assert_eq!(messages(&format!("{status} main() is int {{ {body} }}")), [expected.to_string()], "{body}");
+    }
+    for body in [
+        "let s = Status.ready; match s { case Status.ready { 1; } case Status.failed { 2; } else { 3; } }",
+        "let s = Status.ready; match s { case Status.ready { 1; } case Status.failed { 2; } case Status.done { 3; } }",
+        "let n = 3; match n { case 1 { 1; } case 2 { 2; } else { 0; } }",
+        "let x = 0.5; match x { case 0.5 { 1; } else { 0; } }",
+    ] {
+        assert!(messages(&format!("{status} main() is int {{ {body} }}")).is_empty(), "{body}");
+    }
+}
+

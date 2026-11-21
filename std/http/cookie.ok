@@ -155,9 +155,6 @@ object CookieAttributes {
                 case CookieFlag.partitioned {
                     partitioned;
                 }
-                else {
-                    false;
-                }
             }
         };
         OrderedSet(selected);
@@ -432,9 +429,6 @@ hidden object CookieFlagValues {
             case CookieFlag.partitioned {
                 confirm !partitioned else throw InvalidCookie.because("duplicate cookie flag");
                 ^partitioned = true;
-            }
-            else {
-                throw InvalidCookie.because("unknown cookie flag");
             }
         }
     }

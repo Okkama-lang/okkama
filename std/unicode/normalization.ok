@@ -51,9 +51,6 @@ object Normalized {
             case NormalizationForm.nfkd {
                 "NFKD";
             }
-            else {
-                "NFC";
-            }
         }
     }
 }

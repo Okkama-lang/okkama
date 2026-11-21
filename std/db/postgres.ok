@@ -2305,9 +2305,6 @@ hidden object PgParameter {
             case DbValueKind.bytes {
                 value.bytes();
             }
-            else {
-                throw InvalidPostgresOptions.because("unknown value kind");
-            }
         };
     }
 

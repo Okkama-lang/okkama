@@ -8,6 +8,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A `match` case that can never run is an error (#286).** A repeated enum case (`Duplicate variant pattern`), a
+  repeated literal (`Duplicate case pattern`) and an `else` after cases that cover every value of an enum or `bool`
+  (`Unreachable else: the cases already cover every value`). Thirteen dead `else` branches in std were removed.
 - **More resources are destroyed directly, without a region (#909).** The `statics` pass no longer follows the
   unwind edge of a block that cannot fail (a deferred action's `fail.secondary`), which kept every resource of a
   scope with a `defer` inside a `try` dynamic: static resources over the corpora 129 → 198. Its reach is now judged

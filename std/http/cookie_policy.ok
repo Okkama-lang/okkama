@@ -379,9 +379,6 @@ hidden object CookieAttributeReading {
                 case CookieFlag.partitioned {
                     partitioned;
                 }
-                else {
-                    false;
-                }
             }
         };
         let flags is Set<CookieFlag> = OrderedSet(selected);
