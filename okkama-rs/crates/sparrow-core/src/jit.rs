@@ -1867,6 +1867,15 @@ impl Emitter<'_, '_> {
                     .expect("result");
                     self.check(pc);
                     result
+                } else if let Some((param, field)) = accessor(callee).filter(|_| !self.plain) {
+                    // #541: a field accessor is its load. Its entry stays a
+                    // step, and it cannot fail, allocate or reach a safepoint,
+                    // so no failure, trace or root differs from the call.
+                    if self.polled {
+                        self.poll();
+                    }
+                    let pointer = self.get(&args[param]);
+                    self.builder.ins().load(types::I64, MEMORY, pointer, ((field + 1) * 8) as i32)
                 } else {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
@@ -2904,6 +2913,22 @@ fn failure_or_region(instruction: &I) -> bool {
     )
 }
 
+/// The parameter and field of a function whose whole body is `obj.get` of a
+/// parameter and `ret` of it (#541): a synchronous Okkama function without
+/// handlers, so inlining it changes nothing a program can observe.
+fn accessor(function: &okkama_sparrow::Function) -> Option<(usize, u32)> {
+    use okkama_sparrow::Instruction as I;
+    if function.is_async || function.native.is_some() || function.intrinsic.is_some() || !function.handlers.is_empty() {
+        return None;
+    }
+    match function.code.as_slice() {
+        [I::ObjGet { dst, object, field }, I::Return { value: Some(returned) }] if dst.0 == *returned => {
+            function.params.iter().position(|param| param == object).map(|param| (param, *field))
+        }
+        _ => None,
+    }
+}
+
 /// Instructions executed by `ops::rt_exec`.
 /// Atomic operations compiled inline (see `Emitter::atomic`).
 fn atomic_access(callee: &okkama_sparrow::Function) -> Option<Intrinsic> {
@@ -3075,4 +3100,6 @@ mod profile_tests {
 
 #[cfg(test)]
 mod ready_callees_tests;
+#[cfg(test)]
+mod accessor_inline_tests;
 

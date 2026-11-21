@@ -51,6 +51,9 @@ the session's memory; older rulings live in the commits and tickets named.
   (#826). Performance is measured only once Champ is production-ready.
 - **The parity reference is Tomato built from the same tree** (#794), never an installed or released binary.
 - **The JVM backend was removed** (#585), and the IR engine before it (#584).
+- **2026-11-21. Inlining lives in the JIT, not in OIR** (#541, `docs/inliner-541.md`). Only field accessors are
+  inlined; an inlined entry still polls the budget. Inlining a callee that can fail waits for an inline-frame
+  table, so that traces keep the callee's frame.
 
 ## Ownership model rulings (OIR-2): historical — OIR-2 and Champ were removed on 2026-11-20 (#911)
 

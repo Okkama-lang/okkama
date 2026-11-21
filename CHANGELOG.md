@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The JIT compiles a call of a field accessor as the load itself (#541).** A method whose whole body returns a
+  field (`x() is int { x; }`) costs no call; its entry still counts as a step, so step budgets see the same
+  program. Two accessor calls per loop round: 96 → 50 instructions, ~9.9 → ~6.0 ns. A general inliner (methods
+  that compute and can fail) is deferred until failures can name inlined frames; see `docs/inliner-541.md`.
 - **Worker values are serialized with one frame per open container (#452).** A map is read through its
   iterator instead of a copied entry list, and an array's elements are not pushed onto a work list; the
   traversal's scratch is bounded by depth. The wire format is unchanged.
