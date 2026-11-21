@@ -56,3 +56,5 @@ updated as modules land.
 | Module | Change | Native | Okkama | Decision |
 |---|---|---|---|---|
 | template | 9 dead natives removed | — | — | removed |
+| json | 9 dead natives removed (`json_member_name`, `json_quote`, `json_number_text`, `json_output*`) | — | — | removed |
+| bigint | 11 dead arithmetic natives removed | — | — | removed |

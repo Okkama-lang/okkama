@@ -5,7 +5,7 @@
 //! (`core.bigint`).
 
 use super::Error;
-use crate::{IntValue, Value, abi::Native, abi::NativeFailure};
+use crate::{IntValue, Value, abi::Native};
 use crate::bignum::Big;
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -13,15 +13,6 @@ use std::rc::Rc;
 
 fn failed(native: Native) -> Error {
     Error::Trap(format!("Native invocation \"{}\" failed", native.symbol()))
-}
-
-fn failure(native: Native, code: &str, message: &str) -> Error {
-    Error::Failure(NativeFailure {
-        domain: "core.bigint".into(),
-        code: code.into(),
-        operation: native.symbol().into(),
-        message: message.into(),
-    })
 }
 
 fn number(native: Native, value: &Value) -> Result<Big, Error> {
@@ -34,10 +25,6 @@ fn text(value: impl Into<String>) -> Value {
 
 fn int(value: i64) -> Value {
     Value::Int(IntValue::from_i64(value))
-}
-
-fn big_int(value: &IntValue) -> Big {
-    value.to_big()
 }
 
 /// Разбор `_components` decimal: значащие цифры без нулей по краям и порядок.
@@ -146,18 +133,7 @@ pub fn handles(native: Native) -> bool {
     matches!(
         native,
         BigintValid
-            | BigintCanonical
-            | BigintSign
             | BigintBits
-            | BigintDifference
-            | BigintOrder
-            | BigintSum
-            | BigintProduct
-            | BigintQuotient
-            | BigintRemainder
-            | BigintGcd
-            | BigintLcm
-            | BigintPower
             | DecimalValid
             | DecimalCanonical
             | DecimalCoefficient
@@ -171,114 +147,7 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
     let order = |ordering: Ordering| int(ordering as i64);
     Ok(match native {
         BigintValid => Value::Bool(Big::parse(args[0].as_string()?).is_some()),
-        BigintCanonical => text(number(native, &args[0])?.to_string()),
-        BigintSign => int(number(native, &args[0])?.sign()),
         BigintBits => int(number(native, &args[0])?.bits() as i64),
-        BigintDifference => text(
-            number(native, &args[0])?
-                .subtract(&number(native, &args[1])?)
-                .to_string(),
-        ),
-        BigintOrder => order(number(native, &args[0])?.compare(&number(native, &args[1])?)),
-        BigintSum => text(
-            number(native, &args[0])?
-                .add(&number(native, &args[1])?)
-                .to_string(),
-        ),
-        BigintProduct => text(
-            number(native, &args[0])?
-                .multiply(&number(native, &args[1])?)
-                .to_string(),
-        ),
-        BigintQuotient | BigintRemainder => {
-            let (left, right) = (number(native, &args[0])?, number(native, &args[1])?);
-            if right.is_zero() {
-                return Err(failure(native, "invalid_input", "BigInt division by zero"));
-            }
-            let (quotient, remainder) = left.divide(&right);
-            text(
-                if native == BigintQuotient {
-                    quotient
-                } else {
-                    remainder
-                }
-                .to_string(),
-            )
-        }
-        BigintGcd => text(
-            number(native, &args[0])?
-                .gcd(&number(native, &args[1])?)
-                .to_string(),
-        ),
-        BigintLcm => {
-            let (left, right) = (
-                number(native, &args[0])?.abs(),
-                number(native, &args[1])?.abs(),
-            );
-            if left.is_zero() || right.is_zero() {
-                text("0")
-            } else {
-                text(
-                    left.divide(&left.gcd(&right))
-                        .0
-                        .multiply(&right)
-                        .to_string(),
-                )
-            }
-        }
-        BigintPower => {
-            let exponent = big_int(args[1].as_int()?);
-            let maximum = big_int(args[2].as_int()?);
-            if exponent.sign() < 0 {
-                return Err(failure(
-                    native,
-                    "invalid_input",
-                    "BigInt exponent must be non-negative",
-                ));
-            }
-            if maximum.sign() <= 0 {
-                return Err(failure(
-                    native,
-                    "invalid_input",
-                    "BigInt power bit limit must be positive",
-                ));
-            }
-            let base = number(native, &args[0])?;
-            if exponent.is_zero() {
-                return Ok(text("1"));
-            }
-            if base.is_zero() {
-                return Ok(text("0"));
-            }
-            let absolute = base.abs();
-            if absolute == Big::from_u64(1) {
-                let odd = {
-                    let (_, remainder) = exponent.divide(&Big::from_u64(2));
-                    !remainder.is_zero()
-                };
-                return Ok(text(if base.sign() < 0 && odd { "-1" } else { "1" }));
-            }
-            let exceeded = || {
-                failure(
-                    native,
-                    "resource_exhausted",
-                    "BigInt power exceeds bit limit",
-                )
-            };
-            // У k-битного |base| >= 2 в результате не меньше (k-1)*exponent+1 бит.
-            let lower = exponent
-                .multiply(&Big::from_u64(absolute.bits() - 1))
-                .add(&Big::from_u64(1));
-            if lower.compare(&maximum) == Ordering::Greater || exponent.bits() > 31 {
-                return Err(exceeded());
-            }
-            let exponent = exponent.to_i64().expect("31-bit exponent") as u32;
-            let result = base.power(exponent);
-            if Big::from_u64(result.bits()).compare(&maximum) == Ordering::Greater {
-                return Err(exceeded());
-            }
-            text(result.to_string())
-        }
         DecimalValid => Value::Bool(components(args[0].as_string()?).is_some()),
         DecimalCanonical => text(canonical(&decimal(native, &args[0])?)),
         DecimalCoefficient => text(decimal(native, &args[0])?.coefficient),

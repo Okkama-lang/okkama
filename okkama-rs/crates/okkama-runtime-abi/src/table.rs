@@ -41,18 +41,7 @@ natives! {
     Latin1Encode = 38, "runtime/single_byte@1::latin1_encode/1", "(string) -> @byte";
     Latin1Decode = 39, "runtime/single_byte@1::latin1_decode/1", "(@byte) -> string";
     BigintValid = 40, "runtime/bigint@1::bigint_valid/1", "(string) -> bool";
-    BigintCanonical = 41, "runtime/bigint@1::bigint_canonical/1", "(string) -> string";
-    BigintSign = 42, "runtime/bigint@1::bigint_sign/1", "(string) -> int";
     BigintBits = 43, "runtime/bigint@1::bigint_bits/1", "(string) -> int";
-    BigintDifference = 44, "runtime/bigint@1::bigint_difference/2", "(string, string) -> string";
-    BigintOrder = 45, "runtime/bigint@1::bigint_order/2", "(string, string) -> int";
-    BigintSum = 46, "runtime/bigint@1::bigint_sum/2", "(string, string) -> string";
-    BigintProduct = 47, "runtime/bigint@1::bigint_product/2", "(string, string) -> string";
-    BigintQuotient = 48, "runtime/bigint@1::bigint_quotient/2", "(string, string) -> string";
-    BigintRemainder = 49, "runtime/bigint@1::bigint_remainder/2", "(string, string) -> string";
-    BigintGcd = 50, "runtime/bigint@1::bigint_gcd/2", "(string, string) -> string";
-    BigintLcm = 51, "runtime/bigint@1::bigint_lcm/2", "(string, string) -> string";
-    BigintPower = 52, "runtime/bigint@1::bigint_power/3", "(string, int, int) -> string";
     DecimalValid = 53, "runtime/decimal@1::decimal_valid/1", "(string) -> bool";
     DecimalCanonical = 54, "runtime/decimal@1::decimal_canonical/1", "(string) -> string";
     DecimalCoefficient = 55, "runtime/decimal@1::decimal_coefficient/1", "(string) -> string";
@@ -272,7 +261,6 @@ natives! {
     JsonJsonNodeText = 286, "runtime/json@1::json_node_text/1", "(JsonNodeState) -> string";
     JsonJsonNodeSize = 287, "runtime/json@1::json_node_size/1", "(JsonNodeState) -> int";
     JsonJsonNodeItem = 288, "runtime/json@1::json_node_item/2", "(JsonNodeState, int) -> JsonNodeState";
-    JsonJsonMemberName = 289, "runtime/json@1::json_member_name/2", "(JsonNodeState, int) -> string";
     JsonJsonMemberValue = 290, "runtime/json@1::json_member_value/2", "(JsonNodeState, int) -> JsonNodeState";
     LayoutIndent = 291, "runtime/layout@1::indent/2", "(string, string) -> string";
     LayoutDedent = 292, "runtime/layout@1::dedent/1", "(string) -> string";
@@ -513,14 +501,6 @@ natives! {
     NumberTextIntParseValid = 536, "runtime/number_text@1::int_parse_valid/2", "(string, int) -> bool";
     NumberTextIntParse = 537, "runtime/number_text@1::int_parse/2", "(string, int) -> int";
     JsonJsonMemberPosition = 538, "runtime/json@1::json_member_position/2", "(JsonNodeState, string) -> int";
-    JsonJsonQuote = 539, "runtime/json@1::json_quote/1", "(string) -> string";
-    JsonJsonNumberText = 540, "runtime/json@1::json_number_text/1", "(string) -> string";
-    JsonJsonOutput = 541, "runtime/json@1::json_output/0", "() -> JsonOutputState";
-    JsonJsonOutputRaw = 542, "runtime/json@1::json_output_raw/2", "(JsonOutputState, string) -> int";
-    JsonJsonOutputText = 543, "runtime/json@1::json_output_text/2", "(JsonOutputState, string) -> int";
-    JsonJsonOutputNumber = 544, "runtime/json@1::json_output_number/2", "(JsonOutputState, string) -> int";
-    JsonJsonOutputMember = 545, "runtime/json@1::json_output_member/3", "(JsonOutputState, string, bool) -> int";
-    JsonJsonOutputString = 546, "runtime/json@1::json_output_string/1", "(JsonOutputState) -> string";
     JsonJsonRepeatedName = 547, "runtime/json@1::json_repeated_name/1", "(@string) -> int";
     JsonJsonMemberText = 548, "runtime/json@1::json_member_text/2", "(JsonNodeState, string) -> string";
     JsonJsonMemberSpelling = 549, "runtime/json@1::json_member_spelling/2", "(JsonNodeState, string) -> string";
@@ -654,4 +634,4 @@ natives! {
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
-// retired: 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 441, 442, 443, 444, 445, 446, 447, 448, 449
+// retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 441, 442, 443, 444, 445, 446, 447, 448, 449, 539, 540, 541, 542, 543, 544, 545, 546

@@ -104,14 +104,12 @@ pub(crate) struct ParseState {
 pub(crate) enum JsonHandle {
     Node(u64),
     Parse(Rc<ParseState>),
-    Output(Rc<RefCell<String>>),
 }
 impl JsonHandle {
     pub(crate) fn roots(&self, roots: &mut Vec<Slot>) {
         let root = match self {
             Self::Node(id) => Some(*id),
             Self::Parse(state) => state.outcome.borrow().as_ref().and_then(|p| p.root),
-            Self::Output(_) => None,
         };
         if let Some(bits) = root {
             roots.push(Slot {
@@ -489,24 +487,10 @@ fn push_line(out: &mut String, indentation: Option<usize>, level: usize) -> Resu
     Ok(())
 }
 
-/// A JSON string literal: `"` and `\` escaped, `\n`, `\r`, `\t` by name, the
-/// other controls U+0000..U+001F as lowercase `\u00xx`, everything else as is.
-fn quote(origin: &str) -> String {
-    let mut quoted = String::with_capacity(origin.len() + 2);
-    push_quoted(&mut quoted, origin);
-    quoted
-}
-
 /// The JSON spelling of an exact decimal (as `json.Json` writes it):
 /// positional while that stays short — integers up to 21 digits, fractions
 /// down to 1e-6, the thresholds of JavaScript's `Number#toString` — and the
 /// canonical scientific form beyond them, so the value is never expanded.
-fn number_text(parts: &crate::host::native_numbers::Decimal) -> String {
-    let mut text = String::new();
-    push_number(&mut text, parts);
-    text
-}
-
 fn push_number(out: &mut String, parts: &crate::host::native_numbers::Decimal) {
     let digits = parts.digits.as_str();
     let length = digits.len() as i128;
@@ -636,8 +620,8 @@ impl Heap {
                 let child = values[at];
                 self.json_node_value(child)?
             }
-            JsonJsonMemberName | JsonJsonMemberValue => {
-                let Node::Object(names, values) = self.json_node(args[0])? else {
+            JsonJsonMemberValue => {
+                let Node::Object(_, values) = self.json_node(args[0])? else {
                     return Err(invalid("JSON node is not an object"));
                 };
                 let at = index(
@@ -646,13 +630,8 @@ impl Heap {
                     values.len(),
                     "JSON member index is outside the node",
                 )?;
-                if native == JsonJsonMemberName {
-                    let name = names[at].clone();
-                    self.json_text(name)?
-                } else {
-                    let child = values[at];
-                    self.json_node_value(child)?
-                }
+                let child = values[at];
+                self.json_node_value(child)?
             }
             JsonJsonMemberPosition => {
                 let Node::Object(names, _) = self.json_node(args[0])? else {
@@ -660,41 +639,6 @@ impl Heap {
                 };
                 let sought = self.text(args[1])?;
                 Slot::small(names.position(sought).map_or(-1, |i| i as i64))
-            }
-            JsonJsonQuote => self.allocate_text(quote(self.text(args[0])?))?,
-            JsonJsonNumberText => {
-                let parts = crate::host::native_numbers::components(self.text(args[0])?)
-                    .ok_or_else(|| invalid("not a decimal number"))?;
-                self.allocate_text(number_text(&parts))?
-            }
-            JsonJsonOutput => {
-                self.json_handle_new(JsonHandle::Output(Rc::new(RefCell::new(String::new()))))?
-            }
-            JsonJsonOutputRaw | JsonJsonOutputText | JsonJsonOutputNumber
-            | JsonJsonOutputMember | JsonJsonOutputString => {
-                let JsonHandle::Output(output) = self.json_handle(args[0])? else {
-                    return Err(Error("expected JSON output handle".into()).into());
-                };
-                let mut out = output.borrow_mut();
-                match native {
-                    JsonJsonOutputRaw => out.push_str(self.text(args[1])?),
-                    JsonJsonOutputText => push_quoted(&mut out, self.text(args[1])?),
-                    JsonJsonOutputNumber => {
-                        let parts = crate::host::native_numbers::components(self.text(args[1])?)
-                            .ok_or_else(|| invalid("not a decimal number"))?;
-                        push_number(&mut out, &parts);
-                    }
-                    JsonJsonOutputMember => {
-                        if args[2].bits == 0 {
-                            out.push(',');
-                        }
-                        push_quoted(&mut out, self.text(args[1])?);
-                        out.push(':');
-                    }
-                    JsonJsonOutputString => return Ok(self.allocate_text(out.clone())?),
-                    _ => unreachable!(),
-                }
-                Slot::small(out.len() as i64)
             }
             JsonJsonMemberText
             | JsonJsonMemberSpelling

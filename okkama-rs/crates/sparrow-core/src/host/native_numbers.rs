@@ -1,9 +1,8 @@
 //! Exact BigInt native operations use the same Rust arithmetic as VM integers.
 use crate::host::*;
-use num_bigint::{BigInt, Sign};
-use num_integer::Integer as _;
-use num_traits::{Signed, ToPrimitive, Zero};
-use okkama_runtime_abi::{Native, NativeFailure};
+use num_bigint::BigInt;
+use num_traits::{ToPrimitive, Zero};
+use okkama_runtime_abi::Native;
 pub(crate) fn handles(native: Native) -> bool {
     use Native::*;
     matches!(
@@ -14,18 +13,7 @@ pub(crate) fn handles(native: Native) -> bool {
             | DecimalExponent
             | DecimalOrder
             | BigintValid
-            | BigintCanonical
-            | BigintSign
             | BigintBits
-            | BigintDifference
-            | BigintOrder
-            | BigintSum
-            | BigintProduct
-            | BigintQuotient
-            | BigintRemainder
-            | BigintGcd
-            | BigintLcm
-            | BigintPower
     )
 }
 fn parse(source: &str) -> Option<BigInt> {
@@ -36,21 +24,6 @@ fn parse(source: &str) -> Option<BigInt> {
     BigInt::parse_bytes(source.as_bytes(), 10)
 }
 impl Heap {
-    fn bigint_failure(
-        &mut self,
-        native: Native,
-        code: &str,
-        message: &str,
-    ) -> Result<Outcome, Error> {
-        let payload = self.native_failure_new(NativeFailure {
-            domain: "core.bigint".into(),
-            code: code.into(),
-            operation: native.symbol().into(),
-            message: message.into(),
-        })?;
-        self.failure_new(crate::host::FailureKind::Native(payload))
-            .map(Outcome::Failure)
-    }
     pub(crate) fn native_numbers(
         &mut self,
         native: Native,
@@ -105,104 +78,10 @@ impl Heap {
                 parse(self.text(args[0])?).is_some(),
             )));
         }
+        // BigInt arithmetic is the builtin's (#511); the bit length is all
+        // that is left here (#13).
         let left = number(args[0])?;
-        match native {
-            BigintSign => {
-                return Ok(Outcome::Value(Slot::small(match left.sign() {
-                    Sign::Minus => -1,
-                    Sign::NoSign => 0,
-                    Sign::Plus => 1,
-                })));
-            }
-            BigintBits => return self.allocate(BigInt::from(left.bits())).map(Outcome::Value),
-            BigintCanonical => return self.allocate_text(left.to_string()).map(Outcome::Value),
-            BigintPower => {
-                let big = |slot| self.bigint(slot).map(std::borrow::Cow::into_owned);
-                let exponent = big(args[1])?;
-                let maximum = big(args[2])?;
-                if exponent.is_negative() {
-                    return self.bigint_failure(
-                        native,
-                        "invalid_input",
-                        "BigInt exponent must be non-negative",
-                    );
-                }
-                if maximum <= BigInt::zero() {
-                    return self.bigint_failure(
-                        native,
-                        "invalid_input",
-                        "BigInt power bit limit must be positive",
-                    );
-                }
-                let result = if exponent.is_zero() {
-                    BigInt::from(1)
-                } else if left.is_zero() {
-                    BigInt::zero()
-                } else if left.abs() == BigInt::from(1) {
-                    if left.is_negative() && exponent.is_odd() {
-                        BigInt::from(-1)
-                    } else {
-                        BigInt::from(1)
-                    }
-                } else {
-                    let lower = &exponent * BigInt::from(left.bits() - 1) + 1;
-                    if lower > maximum || exponent.bits() > 31 {
-                        return self.bigint_failure(
-                            native,
-                            "resource_exhausted",
-                            "BigInt power exceeds bit limit",
-                        );
-                    }
-                    // At least `lower` bits: past the memory budget it is not
-                    // computed, and the run stops at its next poll (#72).
-                    // SAFETY: `rt` is set for the duration of a native call.
-                    let runtime = unsafe { &mut *self.rt };
-                    let bytes: BigInt = &lower >> 3usize;
-                    if runtime.would_exceed(bytes.to_u64().unwrap_or(u64::MAX)) {
-                        runtime.refuse_memory();
-                        return self.bigint_failure(native, "resource_exhausted", "BigInt power exceeds the memory budget");
-                    }
-                    let result = left.pow(exponent.to_u32().expect("31-bit exponent"));
-                    if BigInt::from(result.bits()) > maximum {
-                        return self.bigint_failure(
-                            native,
-                            "resource_exhausted",
-                            "BigInt power exceeds bit limit",
-                        );
-                    }
-                    result
-                };
-                return self.allocate_text(result.to_string()).map(Outcome::Value);
-            }
-            _ => {}
-        }
-        let right = number(args[1])?;
-        let result = match native {
-            BigintOrder => {
-                return Ok(Outcome::Value(Slot::small(match left.cmp(&right) {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
-                })));
-            }
-            BigintSum => left + right,
-            BigintDifference => left - right,
-            BigintProduct => left * right,
-            BigintGcd => left.gcd(&right),
-            BigintLcm => left.lcm(&right),
-            BigintQuotient | BigintRemainder => {
-                if right.is_zero() {
-                    return self.bigint_failure(native, "invalid_input", "BigInt division by zero");
-                }
-                if native == BigintQuotient {
-                    left / right
-                } else {
-                    left % right
-                }
-            }
-            _ => return Err(Error("invalid BigInt provider".into())),
-        };
-        self.allocate_text(result.to_string()).map(Outcome::Value)
+        self.allocate(BigInt::from(left.bits())).map(Outcome::Value)
     }
 }
 

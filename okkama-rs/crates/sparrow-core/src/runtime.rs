@@ -653,13 +653,6 @@ impl Runtime {
         0
     }
 
-    /// Mark the memory budget exhausted from code without a context (a
-    /// native): the run stops at its next poll.
-    pub(crate) fn refuse_memory(&mut self) {
-        self.budget.exhausted.get_or_insert(Exhausted::Memory);
-        self.budget.fuel.set(0);
-    }
-
     /// What the memory budget measures now (#269): the process allocator's
     /// bytes beyond the start of the run, or this runtime's heap.
     pub(crate) fn memory_used(&self) -> Option<isize> {

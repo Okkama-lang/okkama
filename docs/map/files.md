@@ -115,7 +115,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2254 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 722 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 32524 lines
+## sparrow — 64 files, 32348 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -132,7 +132,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
 - `sparrow-core/src/primitives.rs` 394 — State of the async primitives (Atomic, Event and Cancellation, Lock and
 - `sparrow-core/src/program.rs` 214 — Static facts about a loaded SPB program: the machine representation of every
-- `sparrow-core/src/runtime.rs` 1054 — Runtime state shared with machine code, runtime helpers called from it, and
+- `sparrow-core/src/runtime.rs` 1050 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/test_report.rs` 605 — The result of a test run, apart from how it is shown (#339): every test in
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB
@@ -162,7 +162,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_multicast.rs` 175 — Memberships use socket2's safe platform wrappers. The UDP owner retains
 - `sparrow-core/src/host/native_net.rs` 126 — Numeric addresses only: no resolver, network I/O or ambient DNS access.
 - `sparrow-core/src/host/native_network.rs` 732 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
-- `sparrow-core/src/host/native_numbers.rs` 291 — Exact BigInt native operations use the same Rust arithmetic as VM integers.
+- `sparrow-core/src/host/native_numbers.rs` 171 — Exact BigInt native operations use the same Rust arithmetic as VM integers.
 - `sparrow-core/src/host/native_origin.rs` 188 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the
 - `sparrow-core/src/host/native_process.rs` 635 — Process ABI is a thin typed owner around Tokio children and OS pipes.
@@ -179,7 +179,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/path_regex.rs` 97 — Pure fixed-pattern compatibility helpers for portable lexical paths.
 - `sparrow-core/src/host/path_syntax.rs` 291 — Portable POSIX/Windows path syntax; no filesystem access or VM values.
 - `sparrow-core/src/host/process_host.rs` 387 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
-- `sparrow-core/src/host/native_json/mod.rs` 877 — JSON trees use a flat generational arena. Native handles retain node IDs;
+- `sparrow-core/src/host/native_json/mod.rs` 825 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 340 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 
 ## devtrace — 1 files, 312 lines
@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 238 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36666 lines
+## other — 87 files, 36471 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 654
+- `okkama-runtime-abi/src/table.rs` 634
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
@@ -262,14 +262,14 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/input.rs` 99 — `runtime/input_state` (буфер UTF-8 ввода) и `runtime/process::process_arguments`
 - `okkama-runtime-core/src/native/inspect.rs` 185 — `runtime/debug`: описание одного значения для `debug/dumper` — вид, тип,
 - `okkama-runtime-core/src/native/jre.rs` 232 — Совместимая с Java семантика, которую используют natives Sparrow: регулярные
-- `okkama-runtime-core/src/native/json.rs` 845 — `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
+- `okkama-runtime-core/src/native/json.rs` 798 — `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
 - `okkama-runtime-core/src/native/json_split.rs` 256 — JSON items cut from a stream (#136): the elements of one top-level array,
 - `okkama-runtime-core/src/native/markup.rs` 1378 — `runtime/toml` (TOML 1.0 в дерево узлов) и `runtime/html` (поток событий
 - `okkama-runtime-core/src/native/math.rs` 786 — Числовые natives: `runtime/format::sprintf_values`
 - `okkama-runtime-core/src/native/misc.rs` 509 — Небольшие natives std: `runtime/crypto`,
 - `okkama-runtime-core/src/native/net.rs` 193 — `runtime/net` (числовые IP-адреса): текст
 - `okkama-runtime-core/src/native/network.rs` 1677 — `runtime/network`: TCP-слушатели и потоки, UDP, multicast, Unix-сокеты и
-- `okkama-runtime-core/src/native/numbers.rs` 344 — `runtime/bigint` и `runtime/decimal` — перенос `BigIntNatives` и части
+- `okkama-runtime-core/src/native/numbers.rs` 216 — `runtime/bigint` и `runtime/decimal` — перенос `BigIntNatives` и части
 - `okkama-runtime-core/src/native/postgres.rs` 129 — `runtime/postgres`: the DataRow messages of one result portion become one
 - `okkama-runtime-core/src/native/process.rs` 868 — `runtime/process`: потомки
 - `okkama-runtime-core/src/native/regex.rs` 1542 — `runtime/regex`: собственный движок регулярных выражений Okkama — перенос

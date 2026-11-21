@@ -54,18 +54,13 @@ fn base64_alphabets_and_padding_follow_rfc_4648() {
 
 #[test]
 fn bigint_and_decimal_are_exact() {
+    // BigInt arithmetic is the builtin's (#511); its natives went in #13.
     both(
         "runtime/bigint",
-        "native bigint_product(left is string, right is string) is string;
-         native bigint_quotient(left is string, right is string) is string;
-         native bigint_remainder(left is string, right is string) is string;
-         native bigint_power(base is string, exponent is int, maximum_bits is int) is string;
-         native bigint_bits(origin is string) is int;
+        "native bigint_bits(origin is string) is int;
          native bigint_valid(origin is string) is bool;",
-        r#"if bigint_product("99999999999999999999", "99999999999999999999") == "9999999999999999999800000000000000000001"
-              && bigint_quotient("-7", "2") == "-3" && bigint_remainder("-7", "2") == "-1"
-              && bigint_power("2", 100, 1000) == "1267650600228229401496703205376"
-              && bigint_bits("-256") == 9 && bigint_valid("-0012") && !bigint_valid("1e3") { 42; } else { 0; }"#,
+        r#"if bigint_bits("-256") == 9 && bigint_bits("99999999999999999999") == 67
+              && bigint_valid("-0012") && !bigint_valid("1e3") { 42; } else { 0; }"#,
         "42",
     );
     both(
@@ -76,13 +71,6 @@ fn bigint_and_decimal_are_exact() {
               && decimal_order("1.10", "1.1") == 0 && decimal_order("-2", "1e-9") == -1 { 42; } else { 0; }"#,
         "42",
     );
-    let module = lower(
-        "runtime/bigint",
-        "native bigint_quotient(left is string, right is string) is string;",
-        r#"bigint_quotient("1", "0").length();"#,
-    );
-    let report = support::report(&module);
-    assert!(report.contains("core.bigint") && report.contains("invalid_input"), "{report}");
 }
 
 #[test]
