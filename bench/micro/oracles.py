@@ -100,6 +100,12 @@ def contribution(name, i):
         return 3
     if name=='date-format':return ord((datetime.date(2026,8,11)+datetime.timedelta(days=i%400)).strftime('%d/%m/%Y')[0])%7
     if name=='locale-decimal':return len(f'{i:,}'.replace(',','.')+',50')%7
+    if name=='heap-top':return min(i%9,5,3)%7
+    if name=='decimal-plus':
+        digits=str(i*100+75)
+        exponent=len(digits)-3
+        text=digits[0]+('.'+digits[1:] if len(digits)>1 else '')+('e'+str(exponent) if exponent else '')
+        return len(text)%7
     raise ValueError('No independent oracle: '+name)
 
 

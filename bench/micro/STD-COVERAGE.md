@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-33 of 435 non-runtime module files have an explicitly declared measured action.
+35 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -35,7 +35,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `collections/deque` | — |
 | `collections/enumeration` | — |
 | `collections/frequencies` | — |
-| `collections/heap` | — |
+| `collections/heap` | heap-top |
 | `collections/iteration` | — |
 | `collections/list` | — |
 | `collections/ordering` | sorted |
@@ -320,7 +320,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `mail/smtp_session` | — |
 | `math/aggregate` | — |
 | `math/constants` | — |
-| `math/decimal` | — |
+| `math/decimal` | decimal-plus |
 | `math/rounding` | — |
 | `message/header` | — |
 | `mime/disposition` | — |

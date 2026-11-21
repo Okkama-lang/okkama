@@ -37,8 +37,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   TOML, statistics, text indentation, HTML escaping and unescaping, query parsing, regex replacement and UTF-16, each
   with an independent Python oracle.
 - **Thirty more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
+- **Thirty-two more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32, SHA-512,
   SHA3-256, HMAC-SHA256, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing, hexadecimal
-  numbers, date shifting and formatting, Turkish case, Russian plurals, German decimals, NFC normalization, JSON and
+  numbers, date shifting and formatting, Turkish case, Russian plurals, German decimals, decimal arithmetic, heaps, NFC normalization, JSON and
   template rendering, XML attributes, TOML, statistics, text indentation, HTML escaping and unescaping, query
   parsing, regex replacement and UTF-16, each with an independent Python oracle.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
