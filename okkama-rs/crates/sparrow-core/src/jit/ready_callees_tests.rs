@@ -27,6 +27,8 @@ fn runtime(text: &str, old: bool) -> Box<Runtime> {
     let program = okkama_sparrow::assemble(text).unwrap();
     let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
     runtime.jit.old_dispatch = Chosen { all: old, ..Chosen::default() };
+    // These tests are about the dispatch of calls that stay calls (#926: inlining off).
+    runtime.jit.no_inline = Chosen { all: true, ..Chosen::default() };
     runtime
 }
 
@@ -103,6 +105,8 @@ fn mutual_recursion_keeps_the_unresolved_edge_and_can_embed_the_ready_edge() {
     program.verify().unwrap();
     let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
     runtime.jit.old_dispatch = Chosen::default();
+    // These tests are about the dispatch of calls that stay calls (#926: inlining off).
+    runtime.jit.no_inline = Chosen { all: true, ..Chosen::default() };
     let first = compile(&mut runtime, 0).unwrap();
     assert_eq!(runtime.invocations[1].code, 0);
     assert_eq!(compiles(&runtime, 0), 1);
@@ -241,6 +245,8 @@ fn ready_async_body_calls_use_the_same_explicit_roots_at_the_final_call() {
             program.verify().unwrap();
             let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
             runtime.jit.old_dispatch = Chosen { all: old, ..Chosen::default() };
+            // These tests are about the dispatch of calls that stay calls (#926: inlining off).
+            runtime.jit.no_inline = Chosen { all: true, ..Chosen::default() };
             runtime.jit.frontend_maps = Chosen { all: frontend, ..Chosen::default() };
             runtime.heap.set_stress(true);
             compile(&mut runtime, 0).unwrap();
@@ -332,6 +338,8 @@ function f1 "caller" {
             program.verify().unwrap();
             let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
             runtime.jit.old_dispatch = Chosen { all: old, ..Chosen::default() };
+            // These tests are about the dispatch of calls that stay calls (#926: inlining off).
+            runtime.jit.no_inline = Chosen { all: true, ..Chosen::default() };
             runtime.limits.steps = Some(100);
             compile(&mut runtime, 0).unwrap();
             for n in [0, 7, 7] {

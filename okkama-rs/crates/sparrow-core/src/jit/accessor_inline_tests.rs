@@ -42,6 +42,8 @@ fn runtime(plain: bool) -> Box<Runtime> {
     let program = okkama_sparrow::assemble(PROGRAM).unwrap();
     let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
     runtime.jit.plain = Chosen { all: plain, ..Chosen::default() };
+    // A non-accessor keeps its call here: general inlining (#926) is off, so only the accessor rule applies.
+    runtime.jit.no_inline = Chosen { all: true, ..Chosen::default() };
     runtime
 }
 

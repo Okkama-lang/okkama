@@ -46,24 +46,50 @@ a call sequence).
   (same output, and the same fewest `--max-steps` the program completes in, inlined and plain; dropping the poll
   makes it 66 instead of 166).
 
-## Deferred: a general inliner
+## Slice 2 (adopted, 0.6.1): small static callees (#926, #927)
 
-The calls worth removing next are small methods that compute: `energy() { vx * vx + vy * vy; }`. They can fail
-(overflow), so inlining them needs:
+The JIT compiles a small static callee into its caller (`Emitter::inline_call`, `jit.rs`).
 
-- **Trace frames for inlined code.** A failure at an inlined instruction must report the callee's frame and span
-  as if it had been called. The JIT has no inline-frame table today; the failure path would need one (pc → inlined
-  callee, source span) consulted when a trace is built.
-- **Handler scoping.** The callee's handlers (if any) and the caller's unwind target must nest as before; the
-  first version would keep the rule "no handlers in the callee".
-- **Allocation.** A callee that allocates reaches a safepoint; the caller's live registers at the inlined site
-  must be roots (the JIT's stack maps already cover any instruction that can collect, so this is plumbing, not a
-  new rule), and a memory-budget refusal must name the callee's frame (same table as above).
-- **Budgets.** Per-callee and per-caller size limits, no recursion (SCC check), polls at each inlined entry.
+**Eligibility.**
+- Callee: a synchronous Okkama function (not native, not intrinsic, not async) without handlers or `catch`,
+  of at most `INLINE_CALLEE` (24) instructions.
+- Budget: at most `INLINE_TOTAL` (160) inlined instructions per caller.
+- Caller: synchronous and keeping Cranelift's stack maps (not an async body with explicit roots, #354).
+- Depth: one level. A callee's own calls stay calls, so a recursive function inlines itself once, as HotSpot's
+  recursive inlining limit does.
 
-Constructors (`obj.new` + `ret`) fall under "allocation". Dynamic dispatch (`call.role`, `call.fn`) and async
-callees stay out until the static case is proven.
+**What a call means is kept:**
+1. **A step.** The inlined entry polls the budget as the callee's entry would.
+2. **The stack check.** It is not kept: it is not a contract (see above).
+3. **The frame.** The callee's failure and stop paths (`exit_fail`) jump to the caller's check after the call,
+   exactly what a returning callee leads to.
+   - The callee's check records its own frame with `rt_trace(callee, pc, fp - depth)`. Frame pointers are
+     16-aligned, so the inlined activation keeps its own entry even in recursion.
+   - The caller's check then records the call site and finds the caller's handler.
+   - So a trace needs no pc table: it is built while the failure propagates.
+4. **Safepoints and roots.** The callee's registers are variables of the caller's CLIF function, traced ones
+   with stack maps, so every safepoint inside the inlined body reports them.
 
-Decision for 0.6.0: no general inliner. Slice 1 removes the common accessor call at no observable cost; the
-general case waits for the inline-frame table, which is a separate low-layer piece of work (new ticket when
-taken up) and should be judged on workloads where small computing methods dominate.
+**Pass off.** `SPARROW_CORE_NO_INLINE=<caller symbols>|*`, and also implied by `SPARROW_CORE_PLAIN` and the
+late-bound modes. The dispatch tests run with it, because they are about calls that stay calls.
+
+**Tests.**
+- `jit/inline_tests.rs`: no call left for a small callee; recursion one level (4 calls instead of 2); a callee
+  with a handler keeps its call.
+- `okkama-cli/tests/jit_inline.rs`: the same output, failure, trace, handler and fewest `--max-steps` with
+  inlining on and off. Dropping the entry poll gives 998 steps instead of 2015.
+
+**Evidence.** aarch64-apple-darwin, release build, best of 5 of 30 repetitions.
+- Every program of the ladder prints the same with inlining on and off.
+- Steady state: 02-calls 15.8 → 11.7 ms (−26%), 01-arith 20.4 → 19.1 (−7%), 10-app 55.6 → 52.7 (−5%); the
+  rest is unchanged.
+- Cost:
+  - compile time +1–2 ms (02-calls 3.6 → 4.5 ms, 10-app 15.5 → 17.2 ms);
+  - machine code +4–8% (08-roles: smaller).
+
+**Not yet.**
+- Hotness-driven tier 2 (#925): inlining happens at the first compile, within the budgets above.
+- Deeper nesting.
+- Callees with handlers.
+- Async callers.
+- Guarded devirtualization of `call.role`/`call.fn` (#928).

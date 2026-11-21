@@ -24,6 +24,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Small methods are compiled into their callers (#926, #927).** The JIT inlines a small static callee (a
+  synchronous Okkama function of up to 24 instructions, without handlers) into a synchronous caller, one level
+  deep, so a recursive function inlines itself once. The program cannot tell: an inlined entry is still a step,
+  and a failure in it has the callee's frame in its trace and reaches the caller's handler, as a call would.
+  `SPARROW_CORE_NO_INLINE=*` turns it off. Steady state: 02-calls −26%, 01-arith −7%, 10-app −5%; compile time
+  +1–2 ms, machine code +4–8%.
 - **Async ownership costs less (#932).** None of the ownership rules change.
   - A Future whose retained inputs reach no free identity joins a region without the resource walk.
   - A failure without cause or secondary skips the payload walk.

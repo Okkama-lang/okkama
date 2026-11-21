@@ -181,6 +181,8 @@ pub struct Jit {
     plain: Chosen,
     /// Keep lazy dispatch for selected callers (`SPARROW_CORE_OLD_DISPATCH`).
     old_dispatch: Chosen,
+    /// Callers compiled without inlining (`SPARROW_CORE_NO_INLINE`, #927), for differential runs.
+    no_inline: Chosen,
     #[cfg(test)]
     emitted: BTreeMap<usize, cranelift_codegen::ir::Function>,
     /// Async bodies whose stack maps Cranelift's frontend keeps, as before
@@ -306,6 +308,7 @@ impl Jit {
             unoptimized_isa,
             plain: Chosen::from_env("SPARROW_CORE_PLAIN"),
             old_dispatch: Chosen::from_env("SPARROW_CORE_OLD_DISPATCH"),
+            no_inline: Chosen::from_env("SPARROW_CORE_NO_INLINE"),
             #[cfg(test)]
             emitted: BTreeMap::new(),
             frontend_maps: Chosen::from_env("SPARROW_CORE_FRONTEND_MAPS"),
@@ -514,6 +517,7 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
     mark!();
     let plain = jit.plain.has(symbol);
     let late_bound = plain || jit.old_dispatch.has(symbol) || jit.unoptimized.has(symbol);
+    let no_inline = late_bound || jit.no_inline.has(symbol);
     // Explicit roots for async bodies (#354), unless the analysis is too
     // large: there Cranelift's reloads after every call made more than half
     // of the code. A synchronous function keeps Cranelift's stack maps, which
@@ -563,6 +567,9 @@ pub fn compile(runtime: &mut Runtime, function: usize) -> Result<u64, Error> {
             resident,
             roots: None,
             call_sites: [0; 3],
+            inline: None,
+            inlined: 0,
+            no_inline,
         };
         emit.body()?;
         call_sites = emit.call_sites;
@@ -761,7 +768,26 @@ struct Emitter<'a, 'b> {
     /// #552: every register lives in the heap frame (a big async body).
     resident: bool,
     roots: Option<Roots>,
+    /// The callee being inlined, if any (#926).
+    inline: Option<Inline>,
+    /// Instructions inlined into this function so far (#927).
+    inlined: usize,
+    /// No inlining into this function (`SPARROW_CORE_NO_INLINE`, plain and late-bound callers).
+    no_inline: bool,
 }
+
+/// An inlined callee's exits (#926): its `ret` jumps to `ok` with the result; a failure or a stop jumps to
+/// `fail`, where the caller's own check after the call takes over, as after a real call.
+#[derive(Clone, Copy)]
+struct Inline {
+    ok: Block,
+    fail: Block,
+    depth: u32,
+}
+
+/// Largest callee inlined, in instructions, and the most instructions inlined into one function (#927).
+const INLINE_CALLEE: usize = 24;
+const INLINE_TOTAL: usize = 160;
 
 /// GC roots kept by the core instead of Cranelift's frontend (#354). The
 /// heap does not move, so a pointer never has to be reloaded after a
@@ -955,12 +981,17 @@ impl Emitter<'_, '_> {
         let fatal = self.builder.create_block();
         self.builder.ins().brif(is_failure, recorded, &[], fatal, &[]);
         self.builder.switch_to_block(fatal);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
         self.builder.switch_to_block(recorded);
         let function = self.iconst(self.function as i64);
         let at = self.iconst(pc as i64);
-        let frame = self.builder.ins().get_frame_pointer(types::I64);
+        let mut frame = self.builder.ins().get_frame_pointer(types::I64);
+        if let Some(inline) = &self.inline {
+            // An inlined activation shares its caller's frame: frame pointers are 16-aligned, so `fp - depth` keys
+            // it apart for the trace's once-per-activation rule (#926).
+            let depth = inline.depth;
+            frame = self.builder.ins().iadd_imm_s(frame, -i64::from(depth));
+        }
         self.helper(|h| h.trace, &[ctx, function, at, frame]);
         let handler = self.loaded.program.functions[self.function]
             .handlers
@@ -981,8 +1012,7 @@ impl Emitter<'_, '_> {
                 self.jump_then(&handler.target, handler.failure, failure);
             }
             None => {
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                self.exit_fail();
             }
         }
         self.builder.switch_to_block(next);
@@ -1014,8 +1044,7 @@ impl Emitter<'_, '_> {
         self.builder.set_cold_block(stop);
         self.builder.ins().brif(status, stop, &[], next, &[]);
         self.builder.switch_to_block(stop);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
         self.builder.switch_to_block(next);
     }
 
@@ -1029,9 +1058,112 @@ impl Emitter<'_, '_> {
         self.builder.set_cold_block(stop);
         self.builder.ins().brif(cell, next, &[], stop, &[]);
         self.builder.switch_to_block(stop);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
         self.builder.switch_to_block(next);
+    }
+
+    /// Leave this activation with `value`: return it, or, inlined, continue the caller with it (#926).
+    fn exit_ok(&mut self, value: Value) {
+        match self.inline {
+            Some(inline) => {
+                self.builder.ins().jump(inline.ok, &[value.into()]);
+            }
+            None => {
+                self.builder.ins().return_(&[value]);
+            }
+        }
+    }
+
+    /// Leave this activation on a failure or a stop (the status says which): return 0, or, inlined, go to the
+    /// caller's check after the call (#926).
+    fn exit_fail(&mut self) {
+        match self.inline {
+            Some(inline) => {
+                self.builder.ins().jump(inline.fail, &[]);
+            }
+            None => {
+                let zero = self.iconst(0);
+                self.builder.ins().return_(&[zero]);
+            }
+        }
+    }
+
+    /// Can the static call of `callee` with `args` arguments be inlined here (#927)? A small synchronous Okkama
+    /// function without handlers, into a synchronous caller that keeps Cranelift's stack maps, one level deep.
+    fn inlinable(&self, callee: usize, args: usize) -> bool {
+        if self.no_inline || self.inline.is_some() || self.frame.is_some() || self.roots.is_some() {
+            return false;
+        }
+        let source = &self.loaded.program.functions[callee];
+        !source.is_async
+            && source.native.is_none()
+            && source.intrinsic.is_none()
+            && source.handlers.is_empty()
+            && source.params.len() == args
+            && source.code.len() <= INLINE_CALLEE
+            && self.inlined + source.code.len() <= INLINE_TOTAL
+            && !source.code.iter().any(|instruction| matches!(instruction, I::Catch { .. }) || suspends(instruction))
+    }
+
+    /// The body of `callee` in place of its call at `pc` (#926, #927). Its entry is a step; its registers are
+    /// variables of this function (with stack maps where traced); a failure inside it records the callee's frame
+    /// and then the caller's at `pc`, as the call would.
+    fn inline_call(&mut self, pc: usize, callee: usize, args: &[okkama_sparrow::Register]) -> Result<Value, Error> {
+        okkama_devtrace::count!("jit", "calls inlined");
+        let values: Vec<Value> = args.iter().map(|arg| self.word(arg)).collect();
+        let ok = self.builder.create_block();
+        self.builder.append_block_param(ok, types::I64);
+        let fail = self.builder.create_block();
+        self.builder.set_cold_block(fail);
+        let loaded = self.loaded;
+        let source = &loaded.program.functions[callee];
+        let info = &loaded.functions[callee];
+        let saved_function = std::mem::replace(&mut self.function, callee);
+        let saved_kinds = std::mem::replace(&mut self.kinds, &info.kinds);
+        let saved_vars = std::mem::take(&mut self.vars);
+        let saved_blocks = std::mem::take(&mut self.blocks);
+        let saved_live = self.live.take();
+        self.inline = Some(Inline { ok, fail, depth: 1 });
+        self.inlined += source.code.len();
+        for (register, kind) in info.kinds.iter().enumerate() {
+            let var = self.builder.declare_var(if *kind == Kind::Float { types::F64 } else { types::I64 });
+            if kind.traced() && !info.pointer_free[register] {
+                self.builder.declare_var_needs_stack_map(var);
+            }
+            let initial = if *kind == Kind::Float {
+                self.builder.ins().f64const(f64::from_bits(word::UNBOUND_RAW))
+            } else {
+                self.iconst(0)
+            };
+            self.builder.def_var(var, initial);
+            self.vars.push(var);
+        }
+        for (register, value) in source.params.iter().zip(values) {
+            self.set_word(register, value);
+        }
+        // A function entry is a step.
+        if self.polled {
+            self.poll();
+        }
+        self.blocks = leaders(source).into_iter().map(|leader| leader.then(|| self.builder.create_block())).collect();
+        let first = self.block(0);
+        self.builder.ins().jump(first, &[]);
+        let emitted = self.emit_code();
+        self.function = saved_function;
+        self.kinds = saved_kinds;
+        self.vars = saved_vars;
+        self.blocks = saved_blocks;
+        self.live = saved_live;
+        self.inline = None;
+        self.pc = pc;
+        emitted?;
+        // A failure or a stop in the callee: the caller's check, as after the call; it always leaves.
+        self.builder.switch_to_block(fail);
+        self.check(pc);
+        let zero = self.iconst(0);
+        self.builder.ins().jump(ok, &[zero.into()]);
+        self.builder.switch_to_block(ok);
+        Ok(self.builder.block_params(ok)[0])
     }
 
     /// The block of a leader instruction.
@@ -1384,8 +1516,13 @@ impl Emitter<'_, '_> {
         }
         self.builder.switch_to_block(overflow);
         self.helper(|h| h.stack_overflow, &[ctx]);
-        let zero = self.iconst(0);
-        self.builder.ins().return_(&[zero]);
+        self.exit_fail();
+        self.emit_code()
+    }
+
+    /// Emit the instructions of the current function (the compiled one, or an inlined callee).
+    fn emit_code(&mut self) -> Result<(), Error> {
+        let source = &self.loaded.program.functions[self.function];
         // Open: the previous instruction falls through into this one.
         let mut open = false;
         for pc in 0..source.code.len() {
@@ -1936,6 +2073,8 @@ impl Emitter<'_, '_> {
                     }
                     let pointer = self.get(&args[param]);
                     self.builder.ins().load(types::I64, MEMORY, pointer, ((field + 1) * 8) as i32)
+                } else if self.inlinable(function.0 as usize, args.len()) {
+                    self.inline_call(pc, function.0 as usize, args)?
                 } else {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
@@ -1972,16 +2111,14 @@ impl Emitter<'_, '_> {
                 let value = self.get(value);
                 self.helper(|h| h.throw, &[ctx, value]);
                 self.check(pc);
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                self.exit_fail();
                 return Ok(true);
             }
             I::Trap { message, .. } => {
                 let message = self.constant_text(message);
                 self.helper(|h| h.trap, &[ctx, message]);
                 self.check(pc);
-                let zero = self.iconst(0);
-                self.builder.ins().return_(&[zero]);
+                self.exit_fail();
                 return Ok(true);
             }
             I::Jump { target } => {
@@ -2009,7 +2146,7 @@ impl Emitter<'_, '_> {
                     let done = self.iconst(0);
                     self.builder.ins().return_(&[done]);
                 } else {
-                    self.builder.ins().return_(&[value]);
+                    self.exit_ok(value);
                 }
                 return Ok(true);
             }
@@ -2279,8 +2416,7 @@ impl Emitter<'_, '_> {
                 let result = self.helper(|h| h.failure_op, &[ctx, function, at, address]).expect("result");
                 self.check(pc);
                 if matches!(other, I::Raise { .. } | I::Panic { .. }) {
-                    let zero = self.iconst(0);
-                    self.builder.ins().return_(&[zero]);
+                    self.exit_fail();
                     return Ok(true);
                 }
                 if let Some(def) = def {
@@ -3162,6 +3298,8 @@ mod profile_tests {
 mod ready_callees_tests;
 #[cfg(test)]
 mod accessor_inline_tests;
+#[cfg(test)]
+mod inline_tests;
 #[cfg(test)]
 mod closure_call_tests;
 
