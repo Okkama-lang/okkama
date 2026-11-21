@@ -57,6 +57,25 @@ function f4 "calls guarded" {
  0: call r1, f3, [r0]
  1: ret r1
 }
+function f5 "counts down" {
+ registers [t0, t0, t1]
+ params [r0]
+ result t0
+ 0: const r1, int 0
+ 1: int.cmp le, r2, r0, r1
+ 2: br r2, @6, @3
+ 3: const r1, int 1
+ 4: int.sub r0, r0, r1
+ 5: jmp @0
+ 6: ret r0
+}
+function f6 "calls the loop" {
+ registers [t0, t0]
+ params [r0]
+ result t0
+ 0: call r1, f5, [r0]
+ 1: ret r1
+}
 "#;
 
 fn runtime(no_inline: bool) -> Box<Runtime> {
@@ -89,4 +108,11 @@ fn recursion_is_inlined_one_level_deep() {
 #[test]
 fn a_callee_with_a_handler_keeps_its_call() {
     assert_eq!(calls(&mut runtime(false), 4), 1);
+}
+
+/// A callee with a loop is not inlined: the loop amortizes the call, and moved into the caller it would compete
+/// for the caller's registers.
+#[test]
+fn a_callee_with_a_loop_keeps_its_call() {
+    assert_eq!(calls(&mut runtime(false), 6), 1);
 }

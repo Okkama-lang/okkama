@@ -836,6 +836,23 @@ struct Inline {
     depth: u32,
 }
 
+/// Does `source` jump backwards (a loop)? Such a callee is not inlined: its loop amortizes the call, and moved into
+/// a bigger caller it competes for the caller's registers (0.6.1 micro `float`: 9.4 -> 15.5 ns on Linux when
+/// `Bench.run`'s loop was inlined into `main`).
+fn has_loop(source: &okkama_sparrow::Function) -> bool {
+    let mut backwards = false;
+    for (pc, instruction) in source.code.iter().enumerate() {
+        instruction.visit(&mut |access| {
+            if let okkama_sparrow::Access::Target(target) = access
+                && target.pc as usize <= pc
+            {
+                backwards = true;
+            }
+        });
+    }
+    backwards
+}
+
 /// Largest callee inlined, in instructions, and the most instructions inlined into one function (#927).
 const INLINE_CALLEE: usize = 24;
 const INLINE_TOTAL: usize = 160;
@@ -1154,6 +1171,7 @@ impl Emitter<'_, '_> {
             && source.code.len() <= INLINE_CALLEE
             && self.inlined + source.code.len() <= INLINE_TOTAL
             && !source.code.iter().any(|instruction| matches!(instruction, I::Catch { .. }) || suspends(instruction))
+            && !has_loop(source)
     }
 
     /// The body of `callee` in place of its call at `pc` (#926, #927). Its entry is a step; its registers are
