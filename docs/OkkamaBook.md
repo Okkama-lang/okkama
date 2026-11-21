@@ -4043,6 +4043,9 @@ requests in flight 10 seconds and returns; a second signal ends the
 process at once. In tests
 `await WebTestClient(routes).get("/notes/7")` sends a request through the
 routes without a network and answers the `ClientResponse` a real client gets.
+Every method takes `headers:`, and `WebTestClient(routes: routes, cookies:
+MemoryCookieJar())` keeps the cookies replies set and sends them back, so a
+login and the requests after it are tested end to end.
 
 `Caching(origin: client, cache: MemoryHttpCache(clock:, maximum:), clock:)`
 answers fresh responses from memory, and `Proxied(proxy: ProxyPolicy(…), …)`

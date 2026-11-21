@@ -6,6 +6,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Added
+
+- **`WebTestClient` sends headers on every method and can keep cookies (#650).** `get`, `head`, `options` and
+  `delete` take `headers:` like `post`, `put` and `patch`. `WebTestClient(routes:, cookies: MemoryCookieJar())`
+  keeps the cookies replies set (site http://127.0.0.1) and sends them with later requests; a caller's own
+  `Cookie` field goes instead. A guarded `DELETE` with `Authorization`, a session login-to-logout flow and
+  `Accept` on `GET` are testable through the convenience methods.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.
