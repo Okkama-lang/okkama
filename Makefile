@@ -25,7 +25,8 @@ all: build
 
 # A release build compiles the development instrumentation (okkama-devtrace, OKKAMA_DEV) out;
 # `make build RELEASE_CFG=` keeps it.
-RELEASE_CFG ?= --cfg okkama_release
+# RUSTFLAGS replaces okkama-rs/.cargo/config.toml, so a release build repeats its frame pointers (#930).
+RELEASE_CFG ?= --cfg okkama_release -C force-frame-pointers=yes
 
 build:
 	cd $(RS) && RUSTFLAGS="$$RUSTFLAGS $(RELEASE_CFG)" $(CARGO) build --release -p okkama-cli -p sparrow-cli -p blade-cli

@@ -62,7 +62,7 @@ fi
 
 if [[ $BUILD -eq 1 ]]; then
     # Release builds compile the development instrumentation out (okkama-devtrace).
-    (cd "$ROOT/okkama-rs" && RUSTFLAGS="${RUSTFLAGS:-} --cfg okkama_release" cargo build --release --locked \
+    (cd "$ROOT/okkama-rs" && RUSTFLAGS="${RUSTFLAGS:-} --cfg okkama_release -C force-frame-pointers=yes" cargo build --release --locked \
         "${CARGO_TARGET[@]}" -p okkama-cli -p sparrow-cli -p blade-cli)
 fi
 

@@ -1,7 +1,8 @@
 # sparrow-core finds the roots of its collector by walking frame records from a
 # runtime helper through machine code to the VM entry, so every Rust frame on
 # that path must keep one. Apple targets always do; others omit frame pointers
-# by default (a collection then follows a broken chain). tools/pgo/build.sh sets
-# RUSTFLAGS, which replaces these flags, and passes the same one itself.
+# by default (a collection then follows a broken chain). RUSTFLAGS replaces these
+# flags, so every place that sets it passes the same one itself: the Makefile's
+# RELEASE_CFG, tools/package.sh and .github/workflows/packages.yml (#930).
 [target.'cfg(not(target_vendor = "apple"))']
 rustflags = ["-C", "force-frame-pointers=yes"]

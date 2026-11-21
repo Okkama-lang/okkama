@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Linux release builds keep their frame pointers (#930).** The collector finds its roots by walking frame
+  records, so `okkama-rs/.cargo/config.toml` forces frame pointers on every non-Apple target; the release
+  builds' `RUSTFLAGS="--cfg okkama_release"` (packages, `tools/package.sh`, `make build`) replaced that
+  setting since the development instrumentation came in. Each of them now passes
+  `-C force-frame-pointers=yes` too.
 - **The collector's sweep is back to its 0.5.8 speed (#922).** The cell loop of #538 phase A (per-cell counters
   and an extra kind test per cell) cost ~5% of all instructions on allocation-heavy programs; the ladder's
   04-bigint and 07-objects ran 7% and 6% slower than 0.5.8. The loop has its old shape again, and the sweep
