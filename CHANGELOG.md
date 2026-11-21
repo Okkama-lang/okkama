@@ -49,6 +49,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   and completion now come from the same model as `okkama man`, with the selected overload and unsaved buffers.
   `okkama man -k QUERY` searches module paths, declaration names and summaries.
 
+### Changed
+
+- **std checks text with the builtins (#260, part 1).** Containment written as `text.split(part).size() > 1` (or
+  `== 1` for absence) is `contains`, prefixes and suffixes compared through `slice` are `starts_with` and
+  `ends_with`, across 54 modules (156 sites); the gettext `contains` helper is gone. Behaviour is unchanged, except
+  that a few unguarded checks of an empty text answer false instead of failing on the slice.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.

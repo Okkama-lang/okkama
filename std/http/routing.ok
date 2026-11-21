@@ -56,7 +56,7 @@ hidden object RoutedPath {
     RoutedPath(origin is string) {
         confirm origin != ""
             && origin.length() <= 8192
-            && origin.slice(0, 1) == "/"
+            && origin.starts_with("/")
             && !origin.contains("?")
             && !origin.contains("#")
             else throw InvalidRoute.because("absolute path without query/fragment required");
@@ -171,7 +171,7 @@ object RoutePattern {
     RoutePattern(origin is string) {
         confirm origin != ""
             && Utf8Encoded(origin).bytes().size() <= 8192
-            && origin.slice(0, 1) == "/"
+            && origin.starts_with("/")
             && !origin.contains("?")
             && !origin.contains("#")
             else throw InvalidRoute.because("pattern path budget or grammar");

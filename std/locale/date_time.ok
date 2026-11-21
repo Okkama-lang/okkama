@@ -632,7 +632,7 @@ object LocalizedGmtOffset {
                 "mm",
                 data.number(minute, 2)
             ).replace("ss", data.number(second, 2)) + (if second != 0
-                && pattern.split("s").size() == 1 {
+                && !pattern.contains("s") {
                     (if separator == "" {
                         ":";
                     }

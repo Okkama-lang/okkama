@@ -183,7 +183,7 @@ hidden object ImapCapabilityToken {
                 else throw InvalidImapCapabilities.because("invalid capability atom");
         }
         let upper = ImapCapabilityUpper(origin).string();
-        if upper.length() >= 5 && upper.slice(0, 5) == "AUTH=" {
+        if upper.starts_with("AUTH=") {
             // Explicit SASL-name profile: the prefix is ASCII-insensitive;
             // mechanism spelling itself uses the uppercase SASL grammar.
             let mechanism = origin.slice(5, origin.length());
@@ -257,7 +257,7 @@ hidden object ImapCapabilitySnapshot {
             if recognized.size() > 0 {
                 known = known.following(recognized[0]);
             }
-            if name.length() >= 5 && name.slice(0, 5) == "AUTH=" {
+            if name.starts_with("AUTH=") {
                 let mechanism = name.slice(5, name.length());
                 let present = auth.entries().reduce(false) -> found, previous {
                     found || previous == mechanism;

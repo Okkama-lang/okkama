@@ -170,7 +170,7 @@ object ImapUnsigned {
         confirm origin.length() > 0 && origin.length() <= 10
             else throw InvalidImapData.because("unsigned number length outside 1..10");
         if nonzero {
-            confirm origin.slice(0, 1) != "0"
+            confirm !origin.starts_with("0")
                 else throw InvalidImapData.because("nonzero number starts with zero");
         }
         let count = MimePosition(0);
@@ -259,7 +259,7 @@ object ImapFlagsValue {
                     SystemFlag(SystemMailFlag.recent);
                 }
                 else {
-                    confirm raw.length() > 0 && raw.slice(0, 1) != "\\"
+                    confirm !raw.starts_with("\\")
                         else throw InvalidImapData.because("unsupported system flag");
                     KeywordFlag(raw);
                 }

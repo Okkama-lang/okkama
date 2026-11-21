@@ -973,8 +973,8 @@ object NumberPrinting {
             && (sign == NumberSign.always || (sign == NumberSign.except_zero && nonzero));
         // Accounting negatives may have parentheses and no minus placeholder.
         // An explicit positive sign uses the positive frame in that case.
-        let signed_frame = pattern.prefix(true).split("{minus}").size() > 1
-            || pattern.suffix(true).split("{minus}").size() > 1;
+        let signed_frame = pattern.prefix(true).contains("{minus}")
+            || pattern.suffix(true).contains("{minus}");
         let negative_frame = minus || (plus && signed_frame);
         let text = (if plus && !signed_frame {
             data.symbol(2);

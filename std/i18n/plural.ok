@@ -34,7 +34,7 @@ object PluralNumber does PluralOperands {
     PluralNumber(origin is string) {
         confirm origin.length() > 0 && origin.length() <= 1024
             else throw InvalidPluralNumber.because("number length");
-        let absolute = if origin.slice(0, 1) == "-" {
+        let absolute = if origin.starts_with("-") {
             origin.slice(1, origin.length());
         }
         else {
@@ -156,7 +156,7 @@ hidden object CanonicalPluralNumber {
 
     number() is PluralNumber {
         let coefficient = origin.coefficient().string();
-        let negative = coefficient.slice(0, 1) == "-";
+        let negative = coefficient.starts_with("-");
         let digits = if negative {
             coefficient.slice(1, coefficient.length());
         }

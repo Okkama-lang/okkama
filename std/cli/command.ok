@@ -663,7 +663,7 @@ object CliCommand {
     ) {
         confirm name != "" && name.length() <= 128
             else throw InvalidCommandSyntax.because("invalid command name");
-        confirm name.slice(0, 1) != "-"
+        confirm !name.starts_with("-")
             else throw InvalidCommandSyntax.because("command name starts with a dash");
         for Utf8Encoded(name).bytes() -> octet {
             confirm octet.int() > 32 && octet.int() != 127
@@ -1029,7 +1029,7 @@ hidden object CliParsing {
                 position.replace(at + 1);
                 next;
             }
-            if !literal.value() && token.length() > 1 && token.slice(0, 1) == "-" {
+            if !literal.value() && token.length() > 1 && token.starts_with("-") {
                 self.option(token, at);
             }
             else {
@@ -1055,7 +1055,7 @@ hidden object CliParsing {
     }
 
     hidden option(token is string, at is int) is void {
-        if token.slice(0, 2) == "--" {
+        if token.starts_with("--") {
             let name = token.split("=").first();
             let option = self.option_index(name);
             let flag = self.flag_index(name);
@@ -1398,11 +1398,11 @@ hidden object ShellCompletion {
         let words = CompletionWords(origin).items();
         if shell == CompletionShell.fish {
             let lines is @string = words.map() -> word {
-                let declaration = if word.length() > 2 && word.slice(0, 2) == "--" {
+                let declaration = if word.length() > 2 && word.starts_with("--") {
                     " -l " + FishCompletionLiteral(word.slice(2, word.length())).string();
                 }
                 else {
-                    if word.length() == 2 && word.slice(0, 1) == "-" {
+                    if word.length() == 2 && word.starts_with("-") {
                         " -s " + FishCompletionLiteral(word.slice(1, 2)).string();
                     }
                     else {

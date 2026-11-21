@@ -349,7 +349,7 @@ hidden object FutureUrlHost does UrlHost {
     FutureUrlHost(origin is string) {
         confirm origin.length() >= 4 && origin.length() <= 1024
             else throw InvalidUrl.located(0, "invalid IPvFuture width");
-        confirm origin.slice(0, 1) == "v" || origin.slice(0, 1) == "V"
+        confirm origin.starts_with("v") || origin.starts_with("V")
             else throw InvalidUrl.located(0, "IPvFuture prefix required");
         let parts = origin.split(".");
         confirm parts.size() >= 2
@@ -556,13 +556,13 @@ hidden object ParsedUrlAuthority {
         if host_port == "" {
             return UrlAuthority(host: EmptyUrlHost(), userinfo: userinfo, port: UrlPort());
         }
-        if host_port.slice(0, 1) == "[" {
+        if host_port.starts_with("[") {
             let brackets = host_port.split("]");
             confirm brackets.size() == 2
                 else throw InvalidUrl.located(0, "IP literal closing bracket required");
             let raw = brackets[0].slice(1, brackets[0].length());
             let tail = brackets[1];
-            confirm tail == "" || tail.slice(0, 1) == ":"
+            confirm tail == "" || tail.starts_with(":")
                 else throw InvalidUrl.located(brackets[0].length() + 1, "invalid IP literal suffix");
             let port = if tail == "" {
                 UrlPort();
@@ -571,7 +571,7 @@ hidden object ParsedUrlAuthority {
                 UrlPort(tail.slice(1, tail.length()));
             };
             let host is UrlHost = if raw.length() > 0
-                && (raw.slice(0, 1) == "v" || raw.slice(0, 1) == "V") {
+                && (raw.starts_with("v") || raw.starts_with("V")) {
                     FutureUrlHost(raw);
                 }
                 else {
@@ -697,14 +697,14 @@ hidden object UrlPieces {
         confirm canonical.split("/").size() <= 1024
             else throw InvalidUrl.located(0, "path segment limit exceeded");
         if authority.present() {
-            confirm canonical == "" || canonical.slice(0, 1) == "/"
+            confirm canonical == "" || canonical.starts_with("/")
                 else throw InvalidUrl.located(0, "authority requires an empty or absolute path");
         }
         else {
-            confirm canonical.length() < 2 || canonical.slice(0, 2) != "//"
+            confirm canonical.length() < 2 || !canonical.starts_with("//")
                 else throw InvalidUrl.located(0, "path cannot introduce an undeclared authority");
-            if protocol == "" && canonical != "" && canonical.slice(0, 1) != "/" {
-                confirm canonical.split("/")[0].split(":").size() == 1
+            if protocol == "" && canonical != "" && !canonical.starts_with("/") {
+                confirm !canonical.split("/")[0].contains(":")
                     else throw InvalidUrl.located(0, "relative first segment cannot contain colon");
             }
         }
@@ -824,7 +824,7 @@ hidden object UrlReading {
         };
         let hierarchical = queries[0];
         let colons = hierarchical.split(":");
-        let has_scheme = colons.size() > 1 && colons[0].split("/").size() == 1;
+        let has_scheme = colons.size() > 1 && !colons[0].contains("/");
         let scheme = if has_scheme {
             confirm colons[0] != "" else throw InvalidUrl.located(0, "empty scheme");
             UrlSchemeText(colons[0]).string();
@@ -844,7 +844,7 @@ hidden object UrlReading {
         else {
             0;
         };
-        if path_authority.length() >= 2 && path_authority.slice(0, 2) == "//" {
+        if path_authority.starts_with("//") {
             let after = path_authority.slice(2, path_authority.length());
             let segments = after.split("/");
             let authority = try {
@@ -985,7 +985,7 @@ hidden object UrlResolution {
                 fragment: relative.fragment()
             );
         }
-        let merged = if relative.path().slice(0, 1) == "/" {
+        let merged = if relative.path().starts_with("/") {
             relative.path();
         }
         else {
@@ -1223,7 +1223,7 @@ object UrlParts {
             };
         }
         else {
-            if path_text.slice(path_text.length() - 1, path_text.length()) == "/" {
+            if path_text.ends_with("/") {
                 path_text;
             }
             else {

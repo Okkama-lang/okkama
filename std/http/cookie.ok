@@ -102,7 +102,7 @@ object CookieAttributes {
             "";
         }
         else {
-            let name = if domain.slice(0, 1) == "." {
+            let name = if domain.starts_with(".") {
                 domain.slice(1, domain.length());
             }
             else {
@@ -114,11 +114,11 @@ object CookieAttributes {
             catch failure is InvalidHostName {
                 throw InvalidCookie.because("invalid cookie domain");
             };
-            confirm host.slice(host.length() - 1, host.length()) != "."
+            confirm !host.ends_with(".")
                 else throw InvalidCookie.because("cookie domain cannot end with a dot");
             host;
         };
-        confirm path == "" || path.slice(0, 1) == "/"
+        confirm path == "" || path.starts_with("/")
             else throw InvalidCookie.because("cookie path must be absolute or omitted");
         confirm CookieAttributeOctets(path).valid()
             else throw InvalidCookie.because("invalid cookie path octets");
@@ -260,11 +260,11 @@ object Cookie {
             name;
         }).string();
         let flags = attributes.flags();
-        if candidate.length() >= 9 && candidate.slice(0, 9) == "__secure-" {
+        if candidate.starts_with("__secure-") {
             confirm flags.membership(CookieFlag.secure)
                 else throw InvalidCookie.because("secure cookie prefix requires Secure");
         }
-        if candidate.length() >= 7 && candidate.slice(0, 7) == "__host-" {
+        if candidate.starts_with("__host-") {
             confirm flags.membership(CookieFlag.secure)
                 && attributes::Attributes::domain == ""
                 && attributes::Attributes::path == "/"
@@ -342,8 +342,8 @@ hidden object CookieValueWire {
 
     valid() is bool {
         if origin.length() >= 2
-            && origin.slice(0, 1) == "\""
-            && origin.slice(origin.length() - 1, origin.length()) == "\"" {
+            && origin.starts_with("\"")
+            && origin.ends_with("\"") {
                 return CookieValueOctets(origin.slice(1, origin.length() - 1)).valid();
             }
         CookieValueOctets(origin).valid();

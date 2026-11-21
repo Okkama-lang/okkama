@@ -184,7 +184,7 @@ hidden object FormBoundary {
         confirm bytes.size() > 0
             && bytes.size() <= 70
             && bytes.size() == origin.length()
-            && origin.slice(origin.length() - 1, origin.length()) != " "
+            && !origin.ends_with(" ")
             else throw InvalidMultipartForm.because("boundary budget or ASCII grammar");
         for bytes -> octet {
             let code = octet.int();
@@ -192,7 +192,7 @@ hidden object FormBoundary {
                 || (code >= 97 && code <= 122)
                 || (code >= 48 && code <= 57);
             let scalar = AsciiDecoded([octet]).string();
-            confirm letter || " '()+_,-./:=?".split(scalar).size() > 1
+            confirm letter || " '()+_,-./:=?".contains(scalar)
                 else throw InvalidMultipartForm.because("invalid boundary character");
         }
         self.origin = origin;
@@ -257,7 +257,7 @@ hidden object FormBoundarySearch {
                 text.length();
             };
             let suffix = text.slice(after, end);
-            let closing = suffix.length() >= 2 && suffix.slice(0, 2) == "--";
+            let closing = suffix.starts_with("--");
             let position = Atomic(if closing {
                 2;
             }
@@ -757,8 +757,8 @@ hidden object FormHeaders {
         let entries is @Header = lines.map() -> line {
             confirm line != ""
                 && line.length() <= 8192
-                && line.slice(0, 1) != " "
-                && line.slice(0, 1) != "\t"
+                && !line.starts_with(" ")
+                && !line.starts_with("\t")
                 else throw InvalidMultipartForm.because("part header line or folding");
             let pieces = line.split(":");
             confirm pieces.size() > 1 else throw InvalidMultipartForm.because("part header colon");
@@ -806,7 +806,7 @@ hidden object FormDispositionRules {
             }
             if !quoted.value() && code == 61 {
                 let name = Header(name: HeaderName("x"), value: origin.slice(start.value(), index)).value();
-                confirm name.split("*").size() == 1
+                confirm !name.contains("*")
                     else throw InvalidMultipartForm.because(
                         "extended disposition parameters are forbidden"
                     );

@@ -247,8 +247,8 @@ hidden object HtmlTemplateState {
             || attribute == "role"
             || attribute == "lang"
             || attribute == "dir"
-            || (attribute.length() > 5 && attribute.slice(0, 5) == "aria-")
-            || (attribute.length() > 5 && attribute.slice(0, 5) == "data-");
+            || (attribute.length() > 5 && attribute.starts_with("aria-"))
+            || (attribute.length() > 5 && attribute.starts_with("data-"));
         confirm allowed
             else throw InvalidHtmlTemplate.because(
                 "interpolation in restricted attribute: " + attribute
@@ -758,11 +758,11 @@ hidden object HtmlTemplateCharacter {
     }
 
     letter() is bool {
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split(origin).size() > 1;
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(origin);
     }
 
     name() is bool {
-        self.letter() || "0123456789-".split(origin).size() > 1;
+        self.letter() || "0123456789-".contains(origin);
     }
 
     space() is bool {

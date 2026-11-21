@@ -125,18 +125,6 @@ hidden object GettextControl {
     }
 }
 
-hidden object GettextContains {
-    has origin, part is string;
-
-    GettextContains(origin is string, part is string) {
-        self.origin = origin;
-        self.part = part;
-    }
-
-    found() is bool {
-        origin.split(part).size() > 1;
-    }
-}
 
 // The charset a catalog declares.
 object GettextCharset {
@@ -812,9 +800,9 @@ object PoComment {
     // A comment of kind with text.
     PoComment(kind is PoCommentKind, text is string) {
         confirm text.length() <= 4096
-            && !GettextContains(origin: text, part: "\n").found()
-            && !GettextContains(origin: text, part: "\r").found()
-            && !GettextContains(origin: text, part: GettextControl(0).string()).found()
+            && !text.contains("\n")
+            && !text.contains("\r")
+            && !text.contains(GettextControl(0).string())
             else throw InvalidCatalog.located(0, "invalid PO comment");
         self.kind = kind;
         origin = text;
@@ -973,8 +961,8 @@ object PoEntry {
         let nul = GettextControl(0).string();
         let separator = GettextControl(4).string();
         for [context, identity, plural] -> text {
-            confirm !GettextContains(origin: text, part: nul).found()
-                && !GettextContains(origin: text, part: separator).found()
+            confirm !text.contains(nul)
+                && !text.contains(separator)
                 else throw InvalidCatalog.located(0, "reserved separator in PO identity");
         }
         let size = translations.size();
@@ -984,7 +972,7 @@ object PoEntry {
             else throw InvalidCatalog.located(0, "empty msgid is reserved for metadata");
         let texts is @string = (0..size).map() -> index {
             let text = translations.item(index);
-            confirm text.length() <= 65536 && !GettextContains(origin: text, part: nul).found()
+            confirm text.length() <= 65536 && !text.contains(nul)
                 else throw InvalidCatalog.located(0, "translation length or NUL");
             text;
         };
@@ -1240,8 +1228,8 @@ hidden object PoQuoted {
 
     PoQuoted(origin is string, offset is int, charset is GettextCharset) {
         confirm origin.length() >= 2
-            && origin.slice(0, 1) == "\""
-            && origin.slice(origin.length() - 1, origin.length()) == "\""
+            && origin.starts_with("\"")
+            && origin.ends_with("\"")
             else throw InvalidCatalog.located(offset, "expected quoted PO string");
         let text = origin.slice(1, origin.length() - 1);
         let empty is List<string> = EmptyList();
@@ -1260,7 +1248,7 @@ hidden object PoQuoted {
                     "invalid PO escape or literal"
                 );
             let spelling = token.text();
-            let bytes = if spelling.slice(0, 1) != "\\" {
+            let bytes = if !spelling.starts_with("\\") {
                 charset.encoded(spelling, offset + 1 + at);
             }
             else {
@@ -1297,7 +1285,7 @@ hidden object PoQuoted {
                         39;
                     }
                     else {
-                        if escape.slice(0, 1) == "x" {
+                        if escape.starts_with("x") {
                             PoNumericEscape(
                                 origin: escape.slice(1, escape.length()),
                                 base: 16,
@@ -1829,7 +1817,7 @@ hidden object PoParsing {
             start.replace(index + 1);
         }
         let end = raw.length() - (if raw.length() > 0
-            && raw.slice(raw.length() - 1, raw.length()) == "\r" {
+            && raw.ends_with("\r") {
                 1;
             }
             else {
@@ -1840,7 +1828,7 @@ hidden object PoParsing {
         }
         let text = raw.slice(start.value(), end);
         let at = offset + start.value();
-        if text.slice(0, 1) == "#" {
+        if text.starts_with("#") {
             confirm text.length() < 2 || text.slice(1, 2) != "~"
                 else throw InvalidCatalog.located(
                     at,
@@ -1898,7 +1886,7 @@ hidden object PoParsing {
             }
             return;
         }
-        if text.slice(0, 1) == "\"" {
+        if text.starts_with("\"") {
             confirm fields.value().size() > 0
                 else throw InvalidCatalog.located(at, "orphan PO continuation");
             let current = fields.value();

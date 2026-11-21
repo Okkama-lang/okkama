@@ -371,7 +371,7 @@ object ImapResponseProgress {
             else throw ImapResponseLimitExceeded.kind("line_bytes");
         let code = octet.int();
         let cr = pending.length() > 0
-            && pending.slice(pending.length() - 1, pending.length()) == "\r";
+            && pending.ends_with("\r");
         if cr {
             confirm code == 10
                 else throw InvalidImapResponse.located(used, "CR must be followed by LF");
@@ -580,7 +580,7 @@ hidden object ImapResponseText {
     }
 
     validate() is void {
-        if origin == "" || origin.slice(0, 1) != "[" {
+        if origin == "" || !origin.starts_with("[") {
             return;
         }
         // Response-code semantics are separate. Require a closed code on this
@@ -735,7 +735,7 @@ hidden object ImapLiteralMarker {
     }
 
     ImapLiteralMarker(origin is string, offset is int, maximum is int) {
-        let binary = origin.length() > 0 && origin.slice(0, 1) == "~";
+        let binary = origin.starts_with("~");
         let start = if binary {
             2;
         }
@@ -743,7 +743,7 @@ hidden object ImapLiteralMarker {
             1;
         };
         confirm origin.length() > start + 1
-            && origin.slice(origin.length() - 1, origin.length()) == "}"
+            && origin.ends_with("}")
             else throw InvalidImapResponse.located(offset, "invalid literal marker");
         let digits = origin.slice(start, origin.length() - 1);
         let count = MimePosition(0);

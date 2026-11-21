@@ -206,7 +206,7 @@ hidden object ImapDataParsing {
                 if index > 0
                     && parts.item(index - 1).kind() != ImapResponsePartKind.text
                     && text.length() > 2 {
-                        confirm text.slice(0, 1) == " " || text.slice(0, 1) == ")"
+                        confirm text.starts_with(" ") || text.starts_with(")")
                             else throw InvalidImapData.because(
                                 "literal requires a following separator"
                             );

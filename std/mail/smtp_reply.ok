@@ -380,7 +380,7 @@ hidden object SmtpReplyProgress {
             else throw SmtpLimitExceeded.kind("line_bytes");
         let value = octet.int();
         let cr = pending.length() > 0
-            && pending.slice(pending.length() - 1, pending.length()) == "\r";
+            && pending.ends_with("\r");
         if cr {
             confirm value == 10
                 else throw InvalidSmtpReply.located(used, "CR must be followed by LF");

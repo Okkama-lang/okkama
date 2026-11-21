@@ -437,14 +437,14 @@ object ServerEvents {
                 }
                 next;
             }
-            if line.slice(0, 1) == ":" {
+            if line.starts_with(":") {
                 next;
             }
             let parts = line.split(":");
             let name = parts[0];
             let value = if parts.size() > 1 {
                 let text = line.slice(name.length() + 1, line.length());
-                if text != "" && text.slice(0, 1) == " " {
+                if text != "" && text.starts_with(" ") {
                     text.slice(1, text.length());
                 }
                 else {
@@ -497,7 +497,7 @@ object ServerEvents {
             let text = tail.value();
             if skip_lf.value() && text != "" {
                 skip_lf.replace(false);
-                if text.slice(0, 1) == "\n" {
+                if text.starts_with("\n") {
                     tail.replace(text.slice(1, text.length()));
                     next;
                 }
@@ -518,7 +518,7 @@ object ServerEvents {
                 let decoded = EventUtf8(Latin1Encoded(raw).bytes()).string();
                 if !started.ready() {
                     started.set();
-                    if decoded != "" && decoded.slice(0, 1) == "﻿" {
+                    if decoded != "" && decoded.starts_with("﻿") {
                         return decoded.slice(1, decoded.length());
                     }
                 }

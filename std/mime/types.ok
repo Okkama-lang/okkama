@@ -499,13 +499,13 @@ hidden object MediaDatabaseEntries {
             let raw = lines[index];
             let line = if index + 1 < lines.size()
                 && raw.length() > 0
-                && raw.slice(raw.length() - 1, raw.length()) == "\r" {
+                && raw.ends_with("\r") {
                     raw.slice(0, raw.length() - 1);
                 }
                 else {
                     raw;
                 };
-            confirm line.split("\r").size() == 1
+            confirm !line.contains("\r")
                 else throw InvalidMediaTypeDatabase.located(index + 1, "bare CR");
             let content = line.split("#")[0];
             let fields is @string = content.replace("\t", " ").split(" ").filter() -> field {

@@ -1172,11 +1172,11 @@ hidden object TarPaxPayload {
             let key = parts[0];
             let text = record.slice(key.length() + 1, record.length());
             let nul = Utf8Decoded([byte(0)]).string();
-            confirm key.split(nul).size() == 1
-                && key.split("\n").size() == 1
-                && text.split(nul).size() == 1
+            confirm !key.contains(nul)
+                && !key.contains("\n")
+                && !text.contains(nul)
                 else throw InvalidTar.because("NUL or newline in PAX key/value");
-            confirm !(key.length() >= 10 && key.slice(0, 10) == "GNU.sparse")
+            confirm !(key.starts_with("GNU.sparse"))
                 && key != "SCHILY.realsize"
                 && key != "SCHILY.filetype"
                 else throw InvalidTar.because(
@@ -1288,7 +1288,7 @@ hidden object TarInputMember {
         };
         let normalized = if kind == "5"
             && name.length() > 0
-            && name.slice(name.length() - 1, name.length()) == "/" {
+            && name.ends_with("/") {
                 name.slice(0, name.length() - 1);
             }
             else {
@@ -1460,7 +1460,7 @@ hidden object TarPaxTime {
 
     seconds() is rat {
         confirm origin.length() > 0 else throw InvalidTar.because("empty timestamp");
-        let negative = origin.slice(0, 1) == "-";
+        let negative = origin.starts_with("-");
         let magnitude = if negative {
             origin.slice(1, origin.length());
         }

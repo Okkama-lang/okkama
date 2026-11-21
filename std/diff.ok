@@ -59,7 +59,7 @@ hidden object DiffLines {
             else throw InvalidDiff.because("line count must be 0..512");
         let values is @string = (0..size).map() -> index {
             let text = origin.item(index);
-            confirm text.length() <= 4096 && text.split("\n").size() == 1
+            confirm text.length() <= 4096 && !text.contains("\n")
                 else throw InvalidDiff.because("line length or embedded LF");
             text;
         };
