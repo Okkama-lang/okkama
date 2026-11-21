@@ -61,13 +61,9 @@ object HttpTrailerRules {
     // Throws InvalidHttpMessage when entry may not be a trailer.
     check(entry is Header) is void {
         let name = entry.name().lowercase();
-        let banned is bool = forbidden.reduce(false) -> found, value {
-            found || value == name;
-        };
+        let banned is bool = forbidden.contains(name);
         confirm !banned else throw InvalidHttpMessage.because("forbidden trailer field");
-        let connection is bool = nominated.reduce(false) -> found, value {
-            found || value == name;
-        };
+        let connection is bool = nominated.contains(name);
         confirm !connection
             else throw InvalidHttpMessage.because("Connection nominated trailer field");
     }

@@ -681,9 +681,7 @@ hidden object LanguageTagSuffix {
             };
             return LanguageTagSuffixValue(extensions: [], private_use: values);
         }
-        let duplicate = seen.reduce(false) -> found, item {
-            found || item == key;
-        };
+        let duplicate = seen.contains(key);
         confirm !duplicate
             else throw InvalidLocale.located(source.offset(start), "duplicate extension singleton");
         let stop = (start + 1..parts.size()).reduce(parts.size()) -> first, index {

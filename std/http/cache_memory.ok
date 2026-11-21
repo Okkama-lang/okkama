@@ -656,9 +656,7 @@ hidden object CacheAdmissionControl {
         for headers.values(HeaderName("Connection")) -> field {
             for field.split(",") -> raw {
                 let name = HeaderName(Header(name: HeaderName("Connection"), value: raw).value()).lowercase();
-                let nominated = metadata.reduce(false) -> found, item {
-                    found || item == name;
-                };
+                let nominated = metadata.contains(name);
                 if nominated {
                     return false;
                 }

@@ -73,9 +73,7 @@ object ImapFetch {
                 else throw InvalidImapData.because("FETCH attribute name is not an atom");
             let name = ImapDataUpper(key.string()).string();
             let value = fields.item(index * 2 + 1);
-            let duplicate = names.entries().reduce(false) -> found, previous {
-                found || previous == name;
-            };
+            let duplicate = names.entries().contains(name);
             confirm !duplicate else throw InvalidImapData.because("duplicate FETCH attribute");
             names = names.following(name);
             if name == "UID" {

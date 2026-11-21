@@ -277,9 +277,7 @@ hidden object ImapFetchData {
                     "BODY.PEEK[]";
                 }
             };
-            let present = names.entries().reduce(false) -> found, previous {
-                found || previous == name;
-            };
+            let present = names.entries().contains(name);
             if !present {
                 names = names.following(name);
             }

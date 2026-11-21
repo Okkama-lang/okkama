@@ -324,12 +324,8 @@ object Http1FramingFields {
             };
             HttpAsciiLowercase(token).string();
         };
-        let closing = canonical.reduce(false) -> found, value {
-            found || value == "close";
-        };
-        let keeping = canonical.reduce(false) -> found, value {
-            found || value == "keep-alive";
-        };
+        let closing = canonical.contains("close");
+        let keeping = canonical.contains("keep-alive");
         !closing && (version == HttpVersion.http_1_1 || keeping);
     }
 }
