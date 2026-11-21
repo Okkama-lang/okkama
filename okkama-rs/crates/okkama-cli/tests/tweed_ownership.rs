@@ -820,3 +820,62 @@ async main() is int {
 "#);
     assert_eq!(output, "held yes\nscope exit releases yes\nearly return releases yes\nunwind releases yes\ntemporary held yes\ntemporary releases yes\ncached held yes\nborrowed await keeps yes\nfuture owner releases yes\nreturned guard held yes\nclose releases yes\ndestroy after close no-op yes\ncancelled wait\nafter cancelled wait free yes\npermits 0\npermits 1\npermits 2\n");
 }
+
+/// #329: the single async-destroy path preserves Book 20.3, returned values,
+/// exceptional exits and a cancellation requested while cleanup is suspended.
+#[test]
+fn single_async_destroy_lifecycle() {
+    let output = stdout_of("single-async-destroy", r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/atomic" take Atomic;
+import "async/event" take Event;
+enum Stop is Error = (now);
+object Guard {
+    has name is string;
+    has log is Atomic<string>;
+    has gate is Event;
+    Guard(:name, :log, :gate);
+    async destroy { await gate.wait(); log.replace(log.value() + name); }
+}
+object Work {
+    Work();
+    async use(log is Atomic<string>, gate is Event, fail is bool) is int {
+        let guard = Guard(name: "g", log: log, gate: gate);
+        defer log.replace(log.value() + "d");
+        if fail { throw Stop.now; }
+        1;
+    }
+    async make(log is Atomic<string>) is Guard {
+        Guard(name: "k", log: log, gate: Event(ready: true));
+    }
+    async two(log is Atomic<string>) is void {
+        let older = Guard(name: "a", log: log, gate: Event(ready: true));
+        let newer = Guard(name: "b", log: log, gate: Event(ready: true));
+        defer log.replace(log.value() + "d");
+    }
+}
+async main() is int {
+    let log = Atomic("");
+    let work = Work();
+    confirm await work.use(log, Event(ready: true), false) == 1;
+    confirm log.value() == "dg";
+    { let kept = await work.make(log); confirm log.value() == "dg"; }
+    confirm log.value() == "dgk";
+    let gate = Event();
+    let task = spawn Work().use(log, gate, false);
+    confirm log.value() == "dgkd";
+    task.cancel();
+    confirm log.value() == "dgkd";
+    gate.set();
+    confirm await task == 1;
+    confirm log.value() == "dgkdg";
+    try { await work.use(log, Event(ready: true), true); }
+    catch e is Stop { log.replace(log.value() + "c"); }
+    confirm log.value() == "dgkdgdgc";
+    await work.two(log);
+    Stdout().writeln(log.value());
+    0;
+}
+"#);
+    assert_eq!(output, "dgkdgdgcdba\n");
+}

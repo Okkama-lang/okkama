@@ -1,0 +1,71 @@
+[
+  {
+    "mutation": "order",
+    "filter": "single_async_close_keeps_reverse",
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "keep",
+    "filter": "single_async_close_preserves",
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "pin",
+    "filter": "single_async_close_hands",
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "failure",
+    "filter": "single_async_close_links",
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "shield",
+    "filter": "single_async_close_shields",
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "membership",
+    "filter": "single_async_close_region_insertion",
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "root",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "sparrow-core",
+      "--offline",
+      "-j",
+      "4",
+      "--lib",
+      "single_async_close_roots"
+    ],
+    "exit": 101,
+    "caught": true
+  },
+  {
+    "mutation": "okkama-shield",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "okkama-cli",
+      "--offline",
+      "-j",
+      "4",
+      "--test",
+      "tweed_ownership",
+      "single_async_destroy_lifecycle"
+    ],
+    "exit": 101,
+    "caught": true
+  }
+]

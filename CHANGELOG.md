@@ -171,6 +171,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
     stays the flat loop over the shared scanner.
   - **Speed.** Rendering is 3–9× faster than before (one-off release measurement).
 
+### Changed
+
+- **An async destroy costs less (#329, partial).** A region holding a single async-destroy object closes on a fast
+  path, the region insert checks once, and a normal exit keeps its value without allocating: −7.8% on a guard
+  benchmark. An async destroy still costs 1.9× a deferred close, so the std guards stay as they are for now.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.

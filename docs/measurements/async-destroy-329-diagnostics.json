@@ -1,0 +1,150 @@
+{
+  "before": {
+    "cleanup-count": {
+      "destroy": {
+        "counters": {
+          "cleanup-count.destroy_one": 2000000,
+          "cleanup-count.future_new": 4000001,
+          "cleanup-count.owner_of": 12000000,
+          "cleanup-count.region_add": 4000000,
+          "cleanup-count.region_close_until": 4000000,
+          "cleanup-count.region_contains": 6000000,
+          "cleanup-count.region_push": 4000000,
+          "cleanup-count.rt_region_settle": 2000000,
+          "cleanup-count.run_body": 4000001,
+          "cleanup-count.set_owner": 4000000
+        },
+        "timers_ms": {}
+      },
+      "close": {
+        "counters": {
+          "cleanup-count.future_new": 4000001,
+          "cleanup-count.run_body": 4000001
+        },
+        "timers_ms": {}
+      }
+    },
+    "cleanup-time": {
+      "destroy": {
+        "counters": {},
+        "timers_ms": {
+          "cleanup-time.future_new": {
+            "count": 4000001,
+            "total": 109.574,
+            "max": 0.381
+          },
+          "cleanup-time.region_add": {
+            "count": 4000000,
+            "total": 102.388,
+            "max": 8.57
+          },
+          "cleanup-time.region_close_until": {
+            "count": 4000000,
+            "total": 122.33,
+            "max": 4.78
+          },
+          "cleanup-time.rt_region_settle": {
+            "count": 2000000,
+            "total": 721.848,
+            "max": 16.011
+          },
+          "cleanup-time.run_body": {
+            "count": 4000001,
+            "total": 2898.95,
+            "max": 1608.233
+          }
+        }
+      },
+      "close": {
+        "counters": {},
+        "timers_ms": {
+          "cleanup-time.future_new": {
+            "count": 4000001,
+            "total": 95.076,
+            "max": 0.047
+          },
+          "cleanup-time.run_body": {
+            "count": 4000001,
+            "total": 895.123,
+            "max": 545.904
+          }
+        }
+      }
+    }
+  },
+  "after": {
+    "cleanup-count": {
+      "destroy": {
+        "counters": {
+          "cleanup-count.destroy completed inline": 2000000,
+          "cleanup-count.destroy root pushes": 6000000,
+          "cleanup-count.destroy_one": 2000000,
+          "cleanup-count.future_new": 4000001,
+          "cleanup-count.owner_of": 12000000,
+          "cleanup-count.region_add": 4000000,
+          "cleanup-count.region_close_until": 4000000,
+          "cleanup-count.region_push": 4000000,
+          "cleanup-count.rt_region_settle": 2000000,
+          "cleanup-count.run_body": 4000001,
+          "cleanup-count.set_owner": 4000000,
+          "cleanup-count.single async close": 4000000
+        },
+        "timers_ms": {}
+      },
+      "close": {
+        "counters": {
+          "cleanup-count.future_new": 4000001,
+          "cleanup-count.run_body": 4000001
+        },
+        "timers_ms": {}
+      }
+    },
+    "cleanup-time": {
+      "destroy": {
+        "counters": {},
+        "timers_ms": {
+          "cleanup-time.future_new": {
+            "count": 4000001,
+            "total": 98.266,
+            "max": 0.046
+          },
+          "cleanup-time.region_add": {
+            "count": 4000000,
+            "total": 85.134,
+            "max": 0.881
+          },
+          "cleanup-time.region_close_until": {
+            "count": 4000000,
+            "total": 92.59,
+            "max": 0.019
+          },
+          "cleanup-time.rt_region_settle": {
+            "count": 2000000,
+            "total": 574.079,
+            "max": 0.221
+          },
+          "cleanup-time.run_body": {
+            "count": 4000001,
+            "total": 2359.286,
+            "max": 1312.01
+          }
+        }
+      },
+      "close": {
+        "counters": {},
+        "timers_ms": {
+          "cleanup-time.future_new": {
+            "count": 4000001,
+            "total": 97.603,
+            "max": 0.013
+          },
+          "cleanup-time.run_body": {
+            "count": 4000001,
+            "total": 924.598,
+            "max": 560.839
+          }
+        }
+      }
+    }
+  }
+}

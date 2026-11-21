@@ -427,6 +427,7 @@ impl Runtime {
 
     /// The owner of `object`'s identity, if it has one.
     fn owner_of(&self, object: Word) -> Option<Owner> {
+        okkama_devtrace::count!("cleanup-count", "owner_of");
         if let Some(slot) = self.inline_slot(object) {
             // SAFETY: the identity words of a live object.
             return Some(decode_owner(unsafe { *((slot + 8) as *const u64) }));
@@ -435,6 +436,7 @@ impl Runtime {
     }
 
     fn set_owner(&mut self, object: Word, owner: Owner) {
+        okkama_devtrace::count!("cleanup-count", "set_owner");
         if let Some(slot) = self.inline_slot(object) {
             // SAFETY: as in `owner_of`.
             unsafe { *((slot + 8) as *mut u64) = encode_owner(owner) };
@@ -1356,28 +1358,35 @@ impl Runtime {
         while *index > 0 {
             *index -= 1;
             let object = self.region_get(region, *index);
-            let Some(owner) = self.owner_of(object) else { continue };
-            if kept.contains(&object) {
-                if owner == Owner::Region(region) {
-                    self.set_owner(object, Owner::Free);
-                    return Some(CloseAction::Freed(self.serial_of(object)));
-                }
-                continue;
+            if let Some(action) = self.region_action(region, object, kept.contains(&object)) {
+                return Some(action);
             }
-            if owner != Owner::Free && owner != Owner::Region(region) {
-                continue;
-            }
-            // #915: a pinned identity outlives this owner with its pin's holder.
-            if self.hand_to_pin_holder(object).is_some() {
-                continue;
-            }
-            self.set_owner(object, Owner::Dead);
-            return Some(CloseAction::Destroy(object, self.serial_of(object)));
         }
         None
     }
 
+    /// Select one entry using the same ownership, keep and pin rules for every close path.
+    fn region_action(&mut self, region: Word, object: Word, kept: bool) -> Option<CloseAction> {
+        let owner = self.owner_of(object)?;
+        if kept {
+            if owner == Owner::Region(region) {
+                self.set_owner(object, Owner::Free);
+                return Some(CloseAction::Freed(self.serial_of(object)));
+            }
+            return None;
+        }
+        if owner != Owner::Free && owner != Owner::Region(region) {
+            return None;
+        }
+        if self.hand_to_pin_holder(object).is_some() {
+            return None;
+        }
+        self.set_owner(object, Owner::Dead);
+        Some(CloseAction::Destroy(object, self.serial_of(object)))
+    }
+
     fn region_contains(&self, region: Word, object: Word) -> bool {
+        okkama_devtrace::count!("cleanup-count", "region_contains");
         for slot in 1..=REGION_SLOTS {
             match self.heap.field(region, slot) {
                 UNBOUND => return false,
@@ -1392,13 +1401,17 @@ impl Runtime {
     }
 
     fn region_push(&mut self, region: Word, object: Word) {
-        if self.region_contains(region, object) {
-            return;
-        }
-        let length = self.region_len(region);
-        if length < REGION_SLOTS {
-            self.heap.set_field(region, length + 1, object);
-            return;
+        okkama_devtrace::count!("cleanup-count", "region_push");
+        // Check membership and find the free inline slot in one scan (#329).
+        for slot in 1..=REGION_SLOTS {
+            let entry = self.heap.field(region, slot);
+            if entry == object {
+                return;
+            }
+            if entry == UNBOUND {
+                self.heap.set_field(region, slot, object);
+                return;
+            }
         }
         if self.heap.field(region, 0) == UNBOUND {
             let overflow = self.heap.allocate_payload(Box::new(RegionValue::default()));
@@ -1407,8 +1420,10 @@ impl Runtime {
         let serial = self.serial_of(object);
         let overflow = self.heap.field(region, 0);
         let overflow = self.heap.payload_mut::<RegionValue>(overflow).expect("region");
+        if !overflow.members.insert(object) {
+            return;
+        }
         overflow.entries.push(object);
-        overflow.members.insert(object);
         overflow.oldest = Some(overflow.oldest.map_or(serial, |oldest| oldest.min(serial)));
     }
 
@@ -1463,6 +1478,8 @@ impl Runtime {
     }
 
     pub(crate) fn region_add(&mut self, region: Word, value: Word, own: bool) {
+        okkama_devtrace::count!("cleanup-count", "region_add");
+        let _cost = okkama_devtrace::span!("cleanup-time", "region_add");
         if self.resources.pending_pins.is_some() {
             self.claim_pins(region, value);
         }
@@ -1479,8 +1496,6 @@ impl Runtime {
             if own || self.rehomed(object) {
                 self.set_owner(object, Owner::Region(region));
                 self.dev_owned(object, region);
-            } else if self.region_contains(region, object) {
-                return;
             }
             self.region_push(region, object);
             return;
@@ -1611,6 +1626,7 @@ impl Runtime {
     /// a destroy's failure becomes primary or is linked to it as secondary. One rule for region closes and static
     /// resources (#909 2b).
     fn destroy_one(&mut self, ctx: *mut Ctx, object: Word, serial: u64, mut primary: Option<Word>, awaits: bool) -> DestroyStep {
+        okkama_devtrace::count!("cleanup-count", "destroy_one");
         let descriptor = heap::payload(self.heap.header_of(object)) as usize;
         let Some(destroy) = self.loaded.program.objects[descriptor].destroy else { return DestroyStep::Next(primary) };
         if let Some(trace) = &mut self.resources.trace {
@@ -1778,6 +1794,8 @@ impl Runtime {
         mut primary: Option<Word>,
         awaits: bool,
     ) -> Closed {
+        okkama_devtrace::count!("cleanup-count", "region_close_until");
+        let _cost = okkama_devtrace::span!("cleanup-time", "region_close_until");
         // #915: a closing region drops its pins, except those a kept value carries on.
         if !self.resources.pinned_by.is_empty() {
             self.release_pins_keeping(region, keep);
@@ -1799,6 +1817,31 @@ impl Runtime {
             }
             self.region_clear(region);
             return Closed::Done(primary);
+        }
+        // #329: one ordinary async-destroy object, no possible kept graph and no private
+        // runtime state. No group/Future draining, graph walk or sorting can do work here.
+        // Keep the entry until the next close: it roots the receiver across a suspended destroy.
+        if awaits && length == 1 && keep.iter().all(|&value| value == UNBOUND || value & 1 != 0) {
+            let object = self.region_get(region, 0);
+            let header = self.heap.header_of(object);
+            if heap::kind(header) == heap::OBJECT
+                && !self.states.contains_key(&object)
+                && self.loaded.program.objects[heap::payload(header) as usize].destroy
+                    .is_some_and(|destroy| self.loaded.program.functions[destroy.0 as usize].is_async)
+            {
+                okkama_devtrace::count!("cleanup-count", "single async close");
+                if let Some(CloseAction::Destroy(object, serial)) = self.region_action(region, object, false) {
+                    self.dev_destroyed(object, region);
+                    // An async destroy only selects the body here; rt_region_settle runs it,
+                    // roots it, shields cancellation and links failures exactly as on the general path.
+                    return match self.destroy_one(ctx, object, serial, primary, true) {
+                        DestroyStep::Async(primary) => Closed::Async(object, primary),
+                        _ => unreachable!("the selected destroy is async"),
+                    };
+                }
+                self.region_clear(region);
+                return Closed::Done(primary);
+            }
         }
         let mut kept: HashSet<Word> =
             if keep.is_empty() { HashSet::default() } else {
@@ -2699,3 +2742,7 @@ mod inline_identity_tests {
         assert_ne!(runtime.heap.header_of(big) & heap::SUMMARY, 0);
     }
 }
+
+#[cfg(test)]
+#[path = "async_destroy_tests.rs"]
+mod async_destroy_tests;

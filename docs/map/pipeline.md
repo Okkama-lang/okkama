@@ -13,7 +13,7 @@ are relative to `okkama-rs/crates/`. `OKKAMA_DEV=lower` covers the compiler stag
 | 5 | Sparrow codegen | `codegen::sparrow::generate` (okkama-compiler/src/codegen/sparrow) | SPB 16: registers, instructions, handlers | register allocation check (debug, gate) | — (#912) |
 | 6 | SPB load | `okkama_sparrow::decode`, `Program::verify`, `sparrow-core` contracts | a verified program | types, budgets, intrinsic contracts | — |
 | 7 | JIT | `sparrow-core/src/jit.rs` (Cranelift, whole function on first call) | machine code, stack maps, helper calls | Cranelift verifier in debug | jit |
-| 8 | run time | `sparrow-core`: `failures.rs` (identities, regions, resource walks, destroy), `tasks.rs` (async frames, `rt_region_settle`), `heap.rs` (GC), `drivers.rs`, `intrinsics.rs` | when each resource is destroyed (reverse serial order), cancellation and settling | at-most-once destroy, `already_closed`, budgets | runtime, gc |
+| 8 | run time | `sparrow-core`: `failures.rs` (identities, regions, resource walks, destroy), `tasks.rs` (async frames, `rt_region_settle`), `heap.rs` (GC), `drivers.rs`, `intrinsics.rs` | when each resource is destroyed (reverse serial order), cancellation and settling | at-most-once destroy, `already_closed`, budgets | runtime, gc; cleanup-count / cleanup-time (#329) |
 
 A failure names its stage: `syntax error`, `semantic error`, a lowering error, `internal compiler error: lowering
 produced invalid IR` (`OKKAMA_DUMP_INVALID_IR=FILE` writes it), an SPB verify error, or a run-time failure with its

@@ -30,6 +30,8 @@ use std::time::{Duration, Instant};
 pub const CATEGORIES: &[(&str, &str)] = &[
     ("lower", "lowering and IR passes: sizes, region operations by kind, per-function IR dumps"),
     ("runtime", "runtime events: identities, region helpers, resource walks, structure indexes, allocation"),
+    ("cleanup-count", "cleanup helper calls (separate from timing)"),
+    ("cleanup-time", "cleanup helper inclusive timings (diagnostic runs only)"),
     ("jit", "JIT compilation"),
     ("gc", "collections"),
 ];

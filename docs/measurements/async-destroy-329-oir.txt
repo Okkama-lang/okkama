@@ -1,0 +1,18 @@
+func @Work.destroyed(%0: Work) -> int [method Work, async] {
+^b0:
+    %1: region = region.enter
+    br ^b1
+^b1 unwind ^b3:
+    %2: async.atomic::Atomic<int> = obj.get %0, count
+    %3: DestroyGuard = call @DestroyGuard.new#0(%2)
+    region.track %1, %3
+    region.adopt %1, %3
+    %4: int = const 1
+    br ^b2
+^b2:
+    region.settle %1
+    ret %4
+^b3(%5: failure):
+    %6: failure = region.settle_unwind %1, %5
+    raise %6
+}
