@@ -35,7 +35,9 @@ jobs:
       fail-fast: false
       matrix:
         # Tweed (owner, 2026-11-20): Champ, OIR-2 and its verifier differential are retired (#911).
-        part: [compiler, sparrow, cli, clippy]
+        # Every crate and every test target, as the release CI's workspace run: a
+        # --lib-only wave let integration-test failures through (#466 follow-up).
+        part: [compiler, sparrow, cli, rest, clippy]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -59,11 +61,12 @@ jobs:
           cargo fetch --locked
           gate="--profile gate --locked"
           case "${{ matrix.part }}" in
-            compiler) cargo test $gate -p okkama-compiler --lib ;;
-            sparrow)
-              cargo test $gate -p okkama-sparrow
-              cargo test $gate -p sparrow-core --lib ;;
+            compiler) cargo test $gate -p okkama-compiler ;;
+            sparrow) cargo test $gate -p okkama-sparrow -p sparrow-core ;;
             cli) cargo test $gate -p okkama-cli ;;
+            rest)
+              cargo test $gate --workspace --exclude okkama-compiler --exclude okkama-sparrow \
+                --exclude sparrow-core --exclude okkama-cli ;;
             clippy)
               cargo clippy $gate --workspace --all-targets -- -D warnings ;;
           esac
@@ -98,9 +101,16 @@ jobs:
         working-directory: conformance
         run: |
           adapter=adapters/rust/adapter.json
-          # Failing cases are data here; a missing results.jsonl is the failure.
+          # A failing case fails the job (as in the release CI), after the
+          # artifact and the corpora below; a missing results.jsonl fails here.
+          set +e
           CARGO_NET_OFFLINE=true ./ocs run --adapter "$adapter" --profile full-release -j 4 --quiet \
-            --out "$GITHUB_WORKSPACE/out/${{ matrix.engine }}" || true
+            --out "$GITHUB_WORKSPACE/out/${{ matrix.engine }}" | tee ocs.log
+          status=${PIPESTATUS[0]}
+          set -e
+          grep -E '^\[ *[0-9]+/ *[0-9]+\] +[A-Z_]+ ' ocs.log | grep -v '\] PASS ' | head -50 |
+            while IFS= read -r line; do echo "::error title=OCS ${{ matrix.engine }}::$line"; done
+          echo "ocs_status=$status" >> "$GITHUB_ENV"
           test -f "$GITHUB_WORKSPACE/out/${{ matrix.engine }}/results.jsonl"
       - uses: actions/upload-artifact@v5
         with:
@@ -136,6 +146,9 @@ jobs:
         with:
           name: corpora-${{ matrix.engine }}
           path: out/corpora/
+      - name: Conformance verdict
+        if: always()
+        run: test "${ocs_status:-1}" = 0 || { echo "::error::conformance cases failed (see the annotations)"; exit 1; }
 
   maps:
     name: Code maps current

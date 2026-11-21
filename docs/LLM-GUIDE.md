@@ -104,10 +104,12 @@ summary.
   build fails on space, run `docker system df`.
 - **Heavy runs on GitHub's runners.** The repository is public, so Actions
   minutes are free. Push a branch named `wave/<name>` at the commit to test.
-  The `Wave` workflow (`.github/workflows/wave.yml`) runs the crate suites,
-  conformance and the corpora (t/, micro programs, examples, the Bible's
-  examples) on Tomato's pipeline, and checks the code maps. Delete the
-  `wave/*` branch afterwards. Timing runs stay local: the runners are
+  The `Wave` workflow (`.github/workflows/wave.yml`) runs every test target
+  of every crate, conformance (a failing case fails the job) and the corpora
+  (t/, micro programs, examples, the Bible's examples) on Tomato's pipeline,
+  and checks the code maps. After a fast-forward, also check the release
+  branch's own `CI` run: it is the release gate, and a red one is fixed
+  before the next ticket. Delete the `wave/*` branch afterwards. Timing runs stay local: the runners are
   bimodal.
 - **Cloud Claude sessions** (routines, `RemoteTrigger`): 4 CPUs and 15 GB
   each, Rust 1.97 and crates.io available, push through the Claude GitHub
