@@ -3754,6 +3754,21 @@
       }
     },
     {
+      "id": "STD.LOCALE.CASE",
+      "title": "std locale/case public contract (LocalizedCase)",
+      "family": "Standard library: locale",
+      "spec_refs": [
+        "std/locale/case.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.LOCALE.COLLATION",
       "title": "std locale/collation public contract (CollatedString, CollationCaseFirst, CollationDataVersion, CollationOptions, CollationStrength, IncompatibleCollation, InvalidCollation, UnavailableCollation)",
       "family": "Standard library: locale",

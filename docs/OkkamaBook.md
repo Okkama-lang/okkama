@@ -690,6 +690,10 @@ Portable builtin behaviors are available on every string (Chapter 10):
 "Straße".upper();                    // "STRASSE": full Unicode case, no locale
 ```
 
+Case that depends on the language, such as the Turkish dotted and dotless i,
+is `LocalizedCase(text:, locale:)` from `locale/case`, with `lower()`,
+`upper()` and `title()`.
+
 A `char` is one code point. `"Жук".characters()` is the `@char` of a string,
 `letter.code()` its code point, `letter.string()` (or `string(letter)`) its
 text, and `char(1046)` the character back — a value outside the Unicode scalar
@@ -3975,7 +3979,8 @@ with `TransactionOptions::Mode`, blobs, scripts and an online backup
   locale.
 - `LocalizedDecimal`, `LocalizedCurrency`, `LocalizedDate` and
   `LocalizedList` write numbers, money, dates and lists, and
-  `LocalizedDecimalFromString` reads a number back.
+  `LocalizedDecimalFromString` reads a number back. `LocalizedCase` changes
+  case by the language's rules (Turkish, Azeri, Lithuanian).
 - `PluralCategoryOf` picks the plural category. `MessageCatalog` answers
   messages by `MessageKey(context:, identity:)`, with plural forms, and
   `ParsedPo` reads gettext files.
