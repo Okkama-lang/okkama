@@ -1,35 +1,48 @@
 module examples/template/pages v1.0.0;
 
-import "template/compile" take TextTemplate;
-import "template/sections" take SectionTemplate;
-import "template/library" take TemplateLibrary;
-import "template/html" take HtmlTemplate, InvalidHtmlTemplate;
+import "template/engine" take Template, TemplateEscaping, TemplatePartials, TemplateError;
 import "json" take ParsedJson, Json;
 import "io/stdout" take Stdout;
 
-// Text templates fill {{names}} from bindings. Section templates walk JSON:
-// {{#list}}…{{/list}} repeats, {{^list}}…{{/list}} shows when it is empty,
-// {{>name}} includes a template from a library. HTML templates escape every
-// value for the place it lands, and refuse places where escaping is not
-// enough, such as event attributes.
+// One template engine over JSON. {{name}} is a value, {{#list}}…{{/list}}
+// repeats over an array, {{^list}}…{{/list}} shows when it is empty, and
+// {{>name}} includes a partial. With TemplateEscaping.html every value is
+// escaped for the place it lands, and a place where escaping is not enough,
+// such as an event attribute, is refused before anything is written.
 
 main() is int {
     let out = Stdout();
 
-    let greeting = TextTemplate("Hello, {{user.name}}! You have {{user.unread}} new messages.");
-    out.writeln(greeting.string(["user.name": "Ada", "user.unread": "3"]));
+    let greeting = Template("Hello, {{user.name}}! You have {{user.unread}} new messages.");
+    out.writeln(greeting.string(ParsedJson("{\"user\":{\"name\":\"Ada\",\"unread\":3}}").root()));
 
-    let partials = TemplateLibrary(["item": TextTemplate("  - {{title}} ({{price}})\n")]);
-    let order = SectionTemplate(source: "Order {{id}}:\n{{#items}}{{>item}}{{/items}}{{^items}}  (empty)\n{{/items}}", partials: partials);
-    out.write(order.string(ParsedJson("{\"id\":17,\"items\":[{\"title\":\"Tea\",\"price\":\"4.50\"},{\"title\":\"Cake\",\"price\":\"3.00\"}]}").root()));
+    let partials = TemplatePartials(["item": "  - {{title}} ({{price}})\n"]);
+    let order = Template(
+        source: "Order {{id}}:\n{{#items}}{{>item}}{{/items}}{{^items}}  (empty)\n{{/items}}",
+        partials: partials
+    );
+    out.write(
+        order.string(
+            ParsedJson(
+                "{\"id\":17,\"items\":[{\"title\":\"Tea\",\"price\":\"4.50\"},{\"title\":\"Cake\",\"price\":\"3.00\"}]}"
+            ).root()
+        )
+    );
     out.write(order.string(ParsedJson("{\"id\":18,\"items\":[]}").root()));
 
-    let card = HtmlTemplate("<p title=\"{{.}}\">Hello, {{.}}</p>\n");
-    out.write(card.string(Json("Ada & \"friends\" <3")));
+    let page = Template(
+        source: "<ul title=\"{{owner}}\">\n{{#users}}  <li>{{name}}</li>\n{{/users}}</ul>\n",
+        escaping: TemplateEscaping.html
+    );
+    out.write(page.string(ParsedJson(
+        "{\"owner\":\"Ada \\\"admin\\\"\",\"users\":[{\"name\":\"Grace & co\"},{\"name\":\"<script>alert(1)</script>\"}]}"
+    ).root()));
     try {
-        HtmlTemplate("<p onclick=\"{{.}}\">x</p>").string(Json("alert(1)"));
+        Template(source: "<p onclick=\"{{.}}\">x</p>", escaping: TemplateEscaping.html).string(
+            Json("alert(1)")
+        );
     }
-    catch error is InvalidHtmlTemplate {
+    catch error is TemplateError {
         out.writeln("refused: " + error.text());
     }
     0;

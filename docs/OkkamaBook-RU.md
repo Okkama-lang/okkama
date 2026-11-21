@@ -3943,6 +3943,19 @@ null. Объекты обходятся по именам, `for doc.names() -> n
 идёт не так, — один `JsonError`; случаи чтения несут RFC 6901 pointer значения:
 `catch JsonError.missing(pointer)`. Гайд — `docs/std/json.md` в okkama-docs.
 
+`template/engine` — единственный движок шаблонов, над `Json`:
+`Template(source:, escaping:, partials:, limits:)` компилируется один раз и
+отвечает `string(data)` или `write(data, destination)`. Язык маленький:
+`{{path}}`, `{{.}}`, секции `{{#list}}…{{/list}}` и инвертированные,
+`{{>partial}}` из `TemplatePartials(["name": source])`, комментарии; выражений
+нет. `TemplateEscaping.html` экранирует каждое значение под место, куда оно
+попадает, — текст HTML или кавычечный обычный атрибут — и отвергает любое
+другое место до того, как что-то записано, в том числе через секции и
+partials, которые обязаны оставить HTML-контекст таким, каким его нашли.
+`TemplateLimits` ограничивает исходник, вложенность, итерации, partials и
+вывод. `TextTemplate`, `SectionTemplate` и `HtmlTemplate` остаются адаптерами;
+`examples/template/` рисует список с экранированием.
+
 `fs/file` делает файл ресурсом, который читают через два симметричных
 представления; режим выбирает первое использованное. `File(path:
 Path("notes.txt"))` открывает на чтение; `for file.text() -> line` проходит

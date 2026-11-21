@@ -10,6 +10,12 @@ module template/compile v1.0.0;
 // template/html for HTML). The whole source is checked before any value is
 // looked up; a missing value is MissingTemplateValue. Sections and partials are
 // template/sections.
+//
+// New code uses template/engine's Template (#178), the one engine over Json,
+// with sections, partials and HTML escaping. This module holds the scanner
+// that engine parses with; TextTemplate stays here, under the engine, as the
+// flat loop over that scanner's literals and values for TemplateStrings data
+// (TemplateBindings now keeps its values in one Json document).
 
 import "template/model" take TemplateStrings, TemplateBindings;
 import "template/path" take TemplatePathFromString;

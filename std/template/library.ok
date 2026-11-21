@@ -5,7 +5,9 @@ module template/library v1.0.0;
 //     let partials = TemplateLibrary(["item": TextTemplate("  - {{title}}\n")]);
 //     SectionTemplate(source: "{{#items}}{{>item}}{{/items}}", partials: partials);
 //
-// Names are exact: no trimming or case folding.
+// Names are exact: no trimming or case folding. template/engine's
+// TemplatePartials is the one library of the engine (#178); SectionTemplate
+// turns a TemplateLibrary into it.
 
 import "collections/sequence" take Sequencing;
 import "template/compile" take TextTemplate;
@@ -41,7 +43,7 @@ object NamedTemplate {
 // Queries never revisit the source. Missing names throw MissingTemplate, while
 // membership returns false, including for "". Returned values/names outlive us.
 // Retains TextTemplate owners; no resource acquisition, compilation or destroy.
-// O(n) references, O(n²) duplicate checks, O(n) lookups within the count bound.
+// O(n) references; duplicates and lookups go through a map of names (#178).
 // The count does not limit source bytes; TextTemplate owns compile/output limits.
 // Example: TemplateLibrary(NamedTemplate("greeting",TextTemplate("Hello")));
 // Partial expansion is a separate contract: this module only names templates.
@@ -82,22 +84,22 @@ object TemplateLibrary {
 
     // Whether a template has the name.
     membership(name is string) is bool {
-        for origin -> item {
-            if item.name() == name {
-                return true;
-            }
-        }
-        false;
+        self.positions().has(name);
     }
 
     // The template of the name; MissingTemplate when none.
     template(name is string) is TextTemplate {
-        for origin -> item {
-            if item.name() == name {
-                return item.template();
-            }
-        }
-        throw MissingTemplate.name(name);
+        let position = self.positions()[name] else -1;
+        confirm position >= 0 else throw MissingTemplate.name(name);
+        origin[position].template();
+    }
+
+    // Where each name is, for lookups by name (#178).
+    hidden positions() is %string:int {
+        once let positions = TemplateLibraryIndex(origin.map() -> item {
+            item.name();
+        }).positions();
+        positions;
     }
 
     // Every name, in order.
@@ -122,17 +124,32 @@ hidden object TemplateLibrarySnapshot {
         let snapshot is @NamedTemplate = (0..size).map() -> index {
             source.item(index);
         };
-        for (0..size) -> index {
-            for (0..index) -> previous {
-                confirm snapshot[index].name() != snapshot[previous].name()
-                    else throw DuplicateTemplate.name(snapshot[index].name());
-            }
-        }
+        let seen is %string:bool = [:];
+        snapshot.reduce(seen) -> names, item {
+            confirm !names.has(item.name()) else throw DuplicateTemplate.name(item.name());
+            names + [item.name(): true];
+        };
         origin = snapshot;
     }
 
     items() is @NamedTemplate {
         origin;
+    }
+}
+
+// Where each name is in a library.
+hidden object TemplateLibraryIndex {
+    has names is @string;
+
+    TemplateLibraryIndex(names is @string) {
+        self.names = names;
+    }
+
+    positions() is %string:int {
+        let none_here is %string:int = [:];
+        (0..names.size()).reduce(none_here) -> index, position {
+            index + [names[position]: position];
+        };
     }
 }
 
@@ -190,4 +207,26 @@ test "a library reads a map of templates by name" {
     test.ok(library.membership("item"));
     test.is(library.template("head").source(), "Order");
     test.ok(!library.membership("tail"));
+}
+
+test "a repeated name is refused, and names are found by a map (#178)" {
+    test.is(
+        try {
+            TemplateLibrary(
+                NamedTemplate(name: "a", value: TextTemplate("1")),
+                NamedTemplate(name: "a", value: TextTemplate("2"))
+            );
+            "";
+        }
+        catch DuplicateTemplate.name(name) {
+            name;
+        },
+        "a"
+    );
+    let many is @NamedTemplate = (0..500).map() -> index {
+        NamedTemplate(name: "t" + index.string(), value: TextTemplate(index.string()));
+    };
+    let library = TemplateLibrary(many);
+    test.is(library.template("t499").source(), "499");
+    test.ok(library.membership("t0") && !library.membership("t500"));
 }
