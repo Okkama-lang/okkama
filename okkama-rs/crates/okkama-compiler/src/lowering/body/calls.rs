@@ -316,8 +316,19 @@ impl<'r> BodyLowerer<'_, 'r, '_> {
                     .iter()
                     .map(|value| self.b.value_type(*value).clone())
                     .collect();
+                // `test.case` answers whether its block runs (#809);
+                // `test.case#end` is `okkama.test.case_end`.
+                if name == "case" {
+                    let func = self.ctx.runtime_intrinsic(
+                        "okkama.test.case",
+                        types,
+                        ir::ResultType::Value(Type::Bool),
+                    );
+                    return self.finish_call(InstKind::Call { func, args: values }, expr, span);
+                }
+                let symbol = if name == "case#end" { "case_end" } else { name.as_str() };
                 let func = self.ctx.runtime_intrinsic(
-                    &format!("okkama.test.{name}"),
+                    &format!("okkama.test.{symbol}"),
                     types,
                     ir::ResultType::Void,
                 );

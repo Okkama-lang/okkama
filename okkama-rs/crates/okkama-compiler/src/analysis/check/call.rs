@@ -1642,7 +1642,10 @@ impl Checker<'_, '_> {
             "close" => vec![Some(Ty::Float), Some(Ty::Float), Some(Ty::Float)],
             "text" => vec![Some(Ty::Str), Some(Ty::Str)],
             "bytes" => vec![Some(Ty::array(Ty::Byte)), Some(Ty::array(Ty::Byte))],
-            "fail" | "skip" => vec![Some(Ty::Str)],
+            "fail" | "skip" | "case" => vec![Some(Ty::Str)],
+            // Closes the sub-case `test.case { … }` opened (#809); only the
+            // parser's reading of that form writes it.
+            "case#end" => Vec::new(),
             other => {
                 self.error(
                     name.span,
@@ -1676,13 +1679,18 @@ impl Checker<'_, '_> {
             };
             values.push(value);
         }
-        Self::unit(
-            ExprKind::Call {
-                callee: Callee::Test(name.text.clone()),
-                args: values,
-            },
-            span,
-        )
+        let call = ExprKind::Call {
+            callee: Callee::Test(name.text.clone()),
+            args: values,
+        };
+        // `test.case` answers whether its block runs (#809).
+        if name.text == "case" {
+            return Self::call_result(Callee::Test(name.text.clone()), match call {
+                ExprKind::Call { args, .. } => args,
+                _ => unreachable!(),
+            }, Some(Ty::Bool), false, span, false);
+        }
+        Self::unit(call, span)
     }
 
     // ----- доступ к членам -----

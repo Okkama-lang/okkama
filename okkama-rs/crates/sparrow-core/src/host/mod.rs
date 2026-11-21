@@ -194,6 +194,9 @@ pub(crate) struct Heap {
     pub(crate) test_failures: Option<Vec<String>>,
     /// The reason of the running test's `test.skip`.
     pub(crate) test_skipped: Option<String>,
+    /// The sub-cases of the running test (#809): what has run, and which
+    /// may run.
+    pub(crate) test_cases: crate::test_report::SubCaseState,
     /// Core object of each live handle, and back.
     objects: crate::word::FastMap<u64, Word>,
     ids: crate::word::FastMap<Word, u64>,
@@ -219,6 +222,7 @@ impl Heap {
             futures: Arena::default(),
             test_failures: None,
             test_skipped: None,
+            test_cases: Default::default(),
             stdin: None,
             arguments: Vec::new(),
             objects: Default::default(),

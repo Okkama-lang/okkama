@@ -596,6 +596,21 @@ fn test_throws_is_a_try_with_one_catch() {
     assert!(!body_sexpr("checker.throws(Refused);").contains("TryExpr"));
 }
 
+/// `test.case(name) { … }` (#809) is the `if` it means: `test.case` decides,
+/// and the block runs in a `try` whose catch of `Error` fails the sub-case;
+/// both close it with `test.case#end`.
+#[test]
+fn test_case_is_an_if_around_a_try_that_closes_the_sub_case() {
+    let tree = body_sexpr("test.case(row.name()) { test.is(row.got(), 1); };");
+    assert!(tree.contains("(if (call (. test case) (call (. row name)))"), "{tree}");
+    assert!(tree.contains("test.case#error"), "{tree}");
+    assert_eq!(tree.matches("(call (. test case#end))").count(), 2, "{tree}");
+    assert!(tree.contains("catches=[(CatchClause name=test.case#error type=Error body={(call (. test fail) (call (. test.case#error text)))"), "{tree}");
+    assert_rejects("module app v1.0.0; main() is int { test.case(\"x\"); 0; }", "Expect a block after test.case(name)");
+    // `case` after anything but `test` is not this form.
+    assert_rejects("module app v1.0.0; main() is int { other.case(\"x\") { }; 0; }", "");
+}
+
 #[test]
 fn map_values_may_start_with_a_parenthesis() {
     // #263: `key: (` is a map entry, not the removed `Type:(args)` projection.

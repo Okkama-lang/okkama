@@ -72,6 +72,10 @@ pub enum Intrinsic {
     TestIsnt,
     TestFail,
     TestSkip,
+    /// `test.case(name)` opens a sub-case and says whether it runs (#809).
+    TestCase,
+    /// The end of the block `test.case` opened.
+    TestCaseEnd,
     TestClose,
     TestText,
     TestBytes,
@@ -153,6 +157,8 @@ impl Intrinsic {
             "okkama.test.isnt" => TestIsnt,
             "okkama.test.fail" => TestFail,
             "okkama.test.skip" => TestSkip,
+            "okkama.test.case" => TestCase,
+            "okkama.test.case_end" => TestCaseEnd,
             "okkama.test.close" => TestClose,
             "okkama.test.text" => TestText,
             "okkama.test.bytes" => TestBytes,
@@ -662,6 +668,37 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             };
             if let Some(failures) = runtime.host.as_mut().and_then(|h| h.test_failures.as_mut()) {
                 failures.extend(message);
+            }
+            VOID
+        }
+        TestCase => {
+            if runtime.host.as_ref().is_none_or(|h| h.test_failures.is_none()) {
+                return program_failure("The test capability is available only inside a running test");
+            }
+            let name = runtime.heap.text(args[0]).to_owned();
+            let host = runtime.host.as_mut().expect("a running test");
+            match host.test_cases.open(&name) {
+                crate::test_report::SubCaseStart::Run => {
+                    let parent = host.test_failures.replace(Vec::new()).unwrap_or_default();
+                    host.test_cases.started(name, parent);
+                    Value(1, Repr::Raw)
+                }
+                crate::test_report::SubCaseStart::Leave => Value(0, Repr::Raw),
+                crate::test_report::SubCaseStart::Duplicate => {
+                    if let Some(failures) = host.test_failures.as_mut() {
+                        failures.push(format!("duplicate sub-case \"{name}\": a name runs once"));
+                    }
+                    Value(0, Repr::Raw)
+                }
+                crate::test_report::SubCaseStart::Nested(outer) => {
+                    program_failure(&format!("test.case \"{name}\" inside test.case \"{outer}\": sub-cases do not nest"))
+                }
+            }
+        }
+        TestCaseEnd => {
+            if let Some(host) = runtime.host.as_mut() {
+                let failures = host.test_failures.take().unwrap_or_default();
+                host.test_failures = Some(host.test_cases.finished(failures, None));
             }
             VOID
         }

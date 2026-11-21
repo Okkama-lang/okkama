@@ -25,7 +25,129 @@ pub struct TestCase {
     pub position: usize,
     /// When it ran among them, from 0: `position` unless a seed ordered the run.
     pub execution: usize,
+    /// How the test itself ended, outside its sub-cases.
     pub outcome: TestOutcome,
+    /// Its named sub-cases (`test.case`, #809) in the order they ran; empty
+    /// for a test without them.
+    pub cases: Vec<SubCase>,
+}
+
+/// A named sub-case of a test (#809): `Test/sub-case` is its identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubCase {
+    pub name: String,
+    pub outcome: TestOutcome,
+}
+
+impl TestCase {
+    /// The verdict of the test with its sub-cases: failed when it or one of
+    /// them failed, skipped when it skipped itself, passed otherwise.
+    pub fn verdict(&self) -> TestOutcome {
+        let failed = |outcome: &TestOutcome| matches!(outcome, TestOutcome::Failed(_));
+        match &self.outcome {
+            TestOutcome::Failed(failures) => TestOutcome::Failed(failures.clone()),
+            _ if self.cases.iter().any(|case| failed(&case.outcome)) => TestOutcome::Failed(Vec::new()),
+            other => other.clone(),
+        }
+    }
+
+    /// The outcomes the totals count: the test's own when it has no
+    /// sub-cases; otherwise each sub-case's, and the test's own only when it
+    /// failed or skipped outside them, so a container is never counted twice.
+    pub fn leaves(&self) -> Vec<&TestOutcome> {
+        if self.cases.is_empty() {
+            return vec![&self.outcome];
+        }
+        let mut leaves: Vec<&TestOutcome> = self.cases.iter().map(|case| &case.outcome).collect();
+        if !matches!(self.outcome, TestOutcome::Passed) {
+            leaves.push(&self.outcome);
+        }
+        leaves
+    }
+}
+
+/// What `test.case(name)` does with a sub-case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubCaseStart {
+    /// Run its block.
+    Run,
+    /// A filter leaves it out: its block does not run and it has no result.
+    Leave,
+    /// A sub-case of this name ran already in this test.
+    Duplicate,
+    /// Another sub-case, named here, is open: sub-cases do not nest.
+    Nested(String),
+}
+
+/// The sub-cases of the running test, kept by the host while it runs.
+#[derive(Debug, Default)]
+pub struct SubCaseState {
+    /// Only the sub-cases whose names contain one of these run; none: all.
+    pub only: Option<Vec<String>>,
+    /// The open sub-case and the test's own failures until it closes.
+    open: Option<(String, Vec<String>)>,
+    /// The closed sub-cases in order, with their failures and skip reason.
+    done: Vec<(String, Vec<String>, Option<String>)>,
+}
+
+impl SubCaseState {
+    /// A fresh state for a test; `only` as the filter selects its sub-cases.
+    pub fn new(only: Option<Vec<String>>) -> Self {
+        Self { only, open: None, done: Vec::new() }
+    }
+
+    /// What to do with the sub-case `name`.
+    pub fn open(&self, name: &str) -> SubCaseStart {
+        if let Some((outer, _)) = &self.open {
+            return SubCaseStart::Nested(outer.clone());
+        }
+        if self.done.iter().any(|(done, _, _)| done == name) {
+            return SubCaseStart::Duplicate;
+        }
+        match &self.only {
+            Some(only) if !only.iter().any(|part| name.contains(part.as_str())) => SubCaseStart::Leave,
+            _ => SubCaseStart::Run,
+        }
+    }
+
+    /// The sub-case `name` runs now; `parent` keeps the test's own failures.
+    pub fn started(&mut self, name: String, parent: Vec<String>) {
+        self.open = Some((name, parent));
+    }
+
+    /// Whether a sub-case is open.
+    pub fn running(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Closes the open sub-case with its failures (and skip reason) and gives
+    /// back the test's own failures; with none open, gives `failures` back.
+    pub fn finished(&mut self, failures: Vec<String>, skipped: Option<String>) -> Vec<String> {
+        match self.open.take() {
+            Some((name, parent)) => {
+                self.done.push((name, failures, skipped));
+                parent
+            }
+            None => failures,
+        }
+    }
+
+    /// The closed sub-cases as results.
+    pub fn cases(&mut self) -> Vec<SubCase> {
+        std::mem::take(&mut self.done)
+            .into_iter()
+            .map(|(name, failures, skipped)| SubCase {
+                name,
+                outcome: if !failures.is_empty() {
+                    TestOutcome::Failed(failures)
+                } else if let Some(reason) = skipped {
+                    TestOutcome::Skipped(reason)
+                } else {
+                    TestOutcome::Passed
+                },
+            })
+            .collect()
+    }
 }
 
 /// The whole run: the selected tests in declaration order.
@@ -34,6 +156,15 @@ pub struct TestReport {
     /// The seed that ordered the run; none for declaration order.
     pub seed: Option<u64>,
     pub cases: Vec<TestCase>,
+}
+
+/// What a run is asked to do: the seed that orders it (#339), and for each
+/// test the filter selects only some sub-cases of, the texts one of which a
+/// sub-case's name must contain (#809).
+#[derive(Debug, Clone, Default)]
+pub struct TestPlan {
+    pub seed: Option<u64>,
+    pub only: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// How many tests ended each way.
@@ -51,11 +182,13 @@ impl TestReport {
         self.totals().failed == 0
     }
 
-    /// The counts, from the cases themselves.
+    /// The counts of the executable cases (TestCase::leaves), from the cases
+    /// themselves.
     pub fn totals(&self) -> TestTotals {
-        let count = |wanted: fn(&TestOutcome) -> bool| self.cases.iter().filter(|case| wanted(&case.outcome)).count();
+        let leaves: Vec<&TestOutcome> = self.cases.iter().flat_map(TestCase::leaves).collect();
+        let count = |wanted: fn(&TestOutcome) -> bool| leaves.iter().filter(|outcome| wanted(outcome)).count();
         TestTotals {
-            tests: self.cases.len(),
+            tests: leaves.len(),
             passed: count(|outcome| matches!(outcome, TestOutcome::Passed)),
             failed: count(|outcome| matches!(outcome, TestOutcome::Failed(_))),
             skipped: count(|outcome| matches!(outcome, TestOutcome::Skipped(_))),
@@ -89,48 +222,112 @@ impl ReportFormat {
 /// Keys are sorted, two spaces indent.
 pub fn json(report: &TestReport, suite: &str) -> String {
     let totals = report.totals();
-    let mut out = String::from("{\n");
-    out.push_str(&format!("  \"passed\": {},\n", report.passed()));
-    out.push_str("  \"report\": \"okkama-tests\",\n");
-    out.push_str(&format!(
-        "  \"seed\": {},\n",
-        report.seed.map_or_else(|| "null".to_owned(), |seed| seed.to_string())
-    ));
-    out.push_str(&format!("  \"suite\": {},\n", json_text(suite)));
-    out.push_str("  \"tests\": [");
-    for (index, case) in report.cases.iter().enumerate() {
-        out.push_str(if index == 0 { "\n" } else { ",\n" });
-        out.push_str(&format!("    {{\n      \"execution\": {},\n", case.execution));
-        if let TestOutcome::Failed(failures) = &case.outcome {
-            out.push_str("      \"failures\": [");
-            for (at, failure) in failures.iter().enumerate() {
-                out.push_str(if at == 0 { "\n" } else { ",\n" });
-                out.push_str(&format!("        {}", json_text(failure)));
-            }
-            out.push_str(if failures.is_empty() { "],\n" } else { "\n      ],\n" });
+    let number = |value: usize| Json::Raw(value.to_string());
+    let tests = report.cases.iter().map(|case| {
+        let mut fields = Vec::new();
+        if !case.cases.is_empty() {
+            let cases = case
+                .cases
+                .iter()
+                .map(|sub| {
+                    let mut entry = Vec::new();
+                    let (failures, outcome, reason) = json_outcome(&sub.outcome);
+                    entry.extend(failures.map(|value| ("failures", value)));
+                    entry.push(("id", Json::text(&format!("{}/{}", case.name, sub.name))));
+                    entry.push(("name", Json::text(&sub.name)));
+                    entry.push(("outcome", outcome));
+                    entry.extend(reason.map(|value| ("reason", value)));
+                    Json::Object(entry)
+                })
+                .collect();
+            fields.push(("cases", Json::Array(cases)));
         }
-        let outcome = match &case.outcome {
-            TestOutcome::Passed => "passed",
-            TestOutcome::Failed(_) => "failed",
-            TestOutcome::Skipped(_) => "skipped",
-        };
-        out.push_str(&format!("      \"name\": {},\n", json_text(&case.name)));
-        out.push_str(&format!("      \"outcome\": \"{outcome}\",\n"));
-        match &case.outcome {
-            TestOutcome::Skipped(reason) => {
-                out.push_str(&format!("      \"position\": {},\n", case.position));
-                out.push_str(&format!("      \"reason\": {}\n    }}", json_text(reason)));
+        let (failures, outcome, reason) = json_outcome(&case.verdict());
+        fields.push(("execution", number(case.execution)));
+        fields.extend(failures.map(|value| ("failures", value)));
+        fields.push(("name", Json::text(&case.name)));
+        fields.push(("outcome", outcome));
+        fields.push(("position", number(case.position)));
+        fields.extend(reason.map(|value| ("reason", value)));
+        Json::Object(fields)
+    });
+    let document = Json::Object(vec![
+        ("passed", Json::Raw(report.passed().to_string())),
+        ("report", Json::text("okkama-tests")),
+        ("seed", Json::Raw(report.seed.map_or_else(|| "null".to_owned(), |seed| seed.to_string()))),
+        ("suite", Json::text(suite)),
+        ("tests", Json::Array(tests.collect())),
+        (
+            "totals",
+            Json::Object(vec![
+                ("failed", number(totals.failed)),
+                ("passed", number(totals.passed)),
+                ("skipped", number(totals.skipped)),
+                ("tests", number(totals.tests)),
+            ]),
+        ),
+        ("version", Json::Raw("1".into())),
+    ]);
+    let mut out = String::new();
+    document.write(&mut out, 0);
+    out.push('\n');
+    out
+}
+
+/// The failures, outcome and reason fields of an outcome.
+fn json_outcome(outcome: &TestOutcome) -> (Option<Json>, Json, Option<Json>) {
+    match outcome {
+        TestOutcome::Passed => (None, Json::text("passed"), None),
+        TestOutcome::Failed(failures) => (
+            Some(Json::Array(failures.iter().map(|failure| Json::text(failure)).collect())),
+            Json::text("failed"),
+            None,
+        ),
+        TestOutcome::Skipped(reason) => (None, Json::text("skipped"), Some(Json::text(reason))),
+    }
+}
+
+/// A JSON value written with two spaces of indent, keys in the order given.
+enum Json {
+    Raw(String),
+    Array(Vec<Json>),
+    Object(Vec<(&'static str, Json)>),
+}
+
+impl Json {
+    fn text(value: &str) -> Self {
+        Self::Raw(json_text(value))
+    }
+
+    fn write(&self, out: &mut String, depth: usize) {
+        let pad = |depth: usize| "  ".repeat(depth);
+        match self {
+            Self::Raw(text) => out.push_str(text),
+            Self::Array(items) if items.is_empty() => out.push_str("[]"),
+            Self::Array(items) => {
+                out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    out.push_str(if index == 0 { "\n" } else { ",\n" });
+                    out.push_str(&pad(depth + 1));
+                    item.write(out, depth + 1);
+                }
+                out.push('\n');
+                out.push_str(&pad(depth));
+                out.push(']');
             }
-            _ => out.push_str(&format!("      \"position\": {}\n    }}", case.position)),
+            Self::Object(fields) => {
+                out.push('{');
+                for (index, (key, value)) in fields.iter().enumerate() {
+                    out.push_str(if index == 0 { "\n" } else { ",\n" });
+                    out.push_str(&format!("{}\"{key}\": ", pad(depth + 1)));
+                    value.write(out, depth + 1);
+                }
+                out.push('\n');
+                out.push_str(&pad(depth));
+                out.push('}');
+            }
         }
     }
-    out.push_str(if report.cases.is_empty() { "],\n" } else { "\n  ],\n" });
-    out.push_str(&format!(
-        "  \"totals\": {{\n    \"failed\": {},\n    \"passed\": {},\n    \"skipped\": {},\n    \"tests\": {}\n  }},\n",
-        totals.failed, totals.passed, totals.skipped, totals.tests
-    ));
-    out.push_str("  \"version\": 1\n}\n");
-    out
 }
 
 /// A JSON string (RFC 8259): quotes, backslashes and control characters escaped.
@@ -171,28 +368,41 @@ pub fn junit(report: &TestReport, suite: &str) -> String {
         out.push_str(&format!("    <properties>\n      <property name=\"seed\" value=\"{seed}\"/>\n    </properties>\n"));
     }
     for case in &report.cases {
-        let name = xml(&case.name);
-        match &case.outcome {
-            TestOutcome::Passed => out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\"/>\n")),
-            TestOutcome::Failed(failures) => {
-                let first = failures.first().and_then(|text| text.lines().next()).unwrap_or("");
-                out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
-                out.push_str(&format!(
-                    "      <failure message=\"{}\">{}</failure>\n",
-                    xml(first),
-                    xml(&failures.join("\n"))
-                ));
-                out.push_str("    </testcase>\n");
-            }
-            TestOutcome::Skipped(reason) => {
-                out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
-                out.push_str(&format!("      <skipped message=\"{}\"/>\n", xml(reason)));
-                out.push_str("    </testcase>\n");
-            }
+        // Each executable case is one testcase: a sub-case as `Test/sub-case`,
+        // the test itself when it has no sub-cases or failed or skipped
+        // outside them (#809).
+        for sub in &case.cases {
+            junit_case(&mut out, &format!("{}/{}", case.name, sub.name), &sub.outcome, &suite);
+        }
+        if case.cases.is_empty() || !matches!(case.outcome, TestOutcome::Passed) {
+            junit_case(&mut out, &case.name, &case.outcome, &suite);
         }
     }
     out.push_str("  </testsuite>\n</testsuites>\n");
     out
+}
+
+/// One `testcase` of a JUnit report.
+fn junit_case(out: &mut String, name: &str, outcome: &TestOutcome, suite: &str) {
+    let name = xml(name);
+    match outcome {
+        TestOutcome::Passed => out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\"/>\n")),
+        TestOutcome::Failed(failures) => {
+            let first = failures.first().and_then(|text| text.lines().next()).unwrap_or("");
+            out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
+            out.push_str(&format!(
+                "      <failure message=\"{}\">{}</failure>\n",
+                xml(first),
+                xml(&failures.join("\n"))
+            ));
+            out.push_str("    </testcase>\n");
+        }
+        TestOutcome::Skipped(reason) => {
+            out.push_str(&format!("    <testcase name=\"{name}\" classname=\"{suite}\">\n"));
+            out.push_str(&format!("      <skipped message=\"{}\"/>\n", xml(reason)));
+            out.push_str("    </testcase>\n");
+        }
+    }
 }
 
 /// Text as XML 1.0 character data or an attribute value: the five markup
@@ -263,7 +473,7 @@ mod tests {
 
     #[test]
     fn totals_come_from_the_cases() {
-        let case = |name: &str, outcome| TestCase { name: name.into(), position: 0, execution: 0, outcome };
+        let case = |name: &str, outcome| TestCase { name: name.into(), position: 0, execution: 0, outcome, cases: vec![] };
         let report = TestReport {
             seed: None,
             cases: vec![
@@ -282,18 +492,20 @@ mod tests {
         TestReport {
             seed,
             cases: vec![
-                TestCase { name: "Account :: opens".into(), position: 0, execution: 2, outcome: TestOutcome::Passed },
+                TestCase { name: "Account :: opens".into(), position: 0, execution: 2, outcome: TestOutcome::Passed, cases: vec![] },
                 TestCase {
                     name: "a <tag> & \"quote\"".into(),
                     position: 1,
                     execution: 0,
                     outcome: TestOutcome::Failed(vec!["expected 2, got 1".into(), "two\nlines\u{1} é".into()]),
+                    cases: vec![],
                 },
                 TestCase {
                     name: "later".into(),
                     position: 2,
                     execution: 1,
                     outcome: TestOutcome::Skipped("not 'today'".into()),
+                    cases: vec![],
                 },
             ],
         }
@@ -376,5 +588,86 @@ mod tests {
     fn formats_are_named_and_tap_is_not_one_yet() {
         assert_eq!(ReportFormat::named("junit"), Ok(ReportFormat::Junit));
         assert!(ReportFormat::named("tap").unwrap_err().contains("use human, json or junit"));
+    }
+
+    fn table() -> TestReport {
+        let sub = |name: &str, outcome| SubCase { name: name.into(), outcome };
+        TestReport {
+            seed: None,
+            cases: vec![
+                TestCase {
+                    name: "postage".into(),
+                    position: 0,
+                    execution: 0,
+                    outcome: TestOutcome::Passed,
+                    cases: vec![
+                        sub("20 g", TestOutcome::Passed),
+                        sub("50 g", TestOutcome::Failed(vec!["expected 120, got 99".into()])),
+                        sub("later", TestOutcome::Skipped("not yet".into())),
+                    ],
+                },
+                TestCase {
+                    name: "setup".into(),
+                    position: 1,
+                    execution: 1,
+                    outcome: TestOutcome::Failed(vec!["no tariff".into()]),
+                    cases: vec![sub("a", TestOutcome::Passed)],
+                },
+            ],
+        }
+    }
+
+    /// #809: a sub-case runs once, never inside another, and only when the
+    /// filter's texts allow it; it keeps its own failures, apart from the test's.
+    #[test]
+    fn sub_cases_run_once_without_nesting_and_as_the_filter_selects() {
+        let mut state = SubCaseState::new(None);
+        assert_eq!(state.open("20 g"), SubCaseStart::Run);
+        state.started("20 g".into(), vec!["parent".into()]);
+        assert!(state.running());
+        assert_eq!(state.open("inner"), SubCaseStart::Nested("20 g".into()));
+        assert_eq!(state.finished(vec!["sub".into()], None), vec!["parent".to_owned()]);
+        assert!(!state.running());
+        assert_eq!(state.open("20 g"), SubCaseStart::Duplicate);
+        state.started("50 g".into(), Vec::new());
+        state.finished(Vec::new(), Some("later".into()));
+        assert_eq!(
+            state.cases(),
+            vec![
+                SubCase { name: "20 g".into(), outcome: TestOutcome::Failed(vec!["sub".into()]) },
+                SubCase { name: "50 g".into(), outcome: TestOutcome::Skipped("later".into()) },
+            ]
+        );
+        let filtered = SubCaseState::new(Some(vec!["50".into()]));
+        assert_eq!(filtered.open("20 g"), SubCaseStart::Leave);
+        assert_eq!(filtered.open("250 g"), SubCaseStart::Run);
+        assert_eq!(state.finished(vec!["kept".into()], None), vec!["kept".to_owned()]);
+    }
+
+    /// #809: a test with sub-cases fails when one fails, and the totals count
+    /// sub-cases, the test itself only when it failed or skipped outside them.
+    #[test]
+    fn verdicts_and_totals_count_sub_cases_not_their_containers() {
+        let report = table();
+        assert_eq!(report.cases[0].verdict(), TestOutcome::Failed(Vec::new()));
+        assert_eq!(report.cases[1].verdict(), TestOutcome::Failed(vec!["no tariff".into()]));
+        assert_eq!(report.totals(), TestTotals { tests: 5, passed: 2, failed: 2, skipped: 1 });
+        assert!(!report.passed());
+    }
+
+    #[test]
+    fn json_and_junit_keep_sub_cases_under_their_tests() {
+        let text = json(&table(), "t.ok");
+        assert!(text.contains(
+            "      \"cases\": [\n        {\n          \"id\": \"postage/20 g\",\n          \"name\": \"20 g\",\n          \"outcome\": \"passed\"\n        },\n"
+        ), "{text}");
+        assert!(text.contains("\"failures\": [\n            \"expected 120, got 99\"\n          ],\n          \"id\": \"postage/50 g\""), "{text}");
+        assert!(text.contains("\"execution\": 0,\n      \"failures\": [],\n      \"name\": \"postage\",\n      \"outcome\": \"failed\""), "{text}");
+        assert!(text.contains("\"totals\": {\n    \"failed\": 2,\n    \"passed\": 2,\n    \"skipped\": 1,\n    \"tests\": 5\n  }"), "{text}");
+        let xml = junit(&table(), "t.ok");
+        assert!(xml.contains("<testsuites tests=\"5\" failures=\"2\" errors=\"0\" skipped=\"1\">"), "{xml}");
+        assert!(xml.contains("<testcase name=\"postage/20 g\" classname=\"t.ok\"/>"), "{xml}");
+        assert!(!xml.contains("<testcase name=\"postage\""), "{xml}");
+        assert!(xml.contains("<testcase name=\"setup/a\" classname=\"t.ok\"/>\n    <testcase name=\"setup\" classname=\"t.ok\">"), "{xml}");
     }
 }

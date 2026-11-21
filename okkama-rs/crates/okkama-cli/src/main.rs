@@ -127,7 +127,10 @@ RUN OPTIONS:
                           Indented and other-language examples illustrate.
     --filter TEXT         With -t: run only the tests whose name contains
                           TEXT (literally, case-sensitive); repeated, the
-                          tests that contain any of the texts
+                          tests that contain any of the texts. TEST/CASE
+                          runs a test whose name contains TEST, and of its
+                          test.case sub-cases only those whose names
+                          contain CASE
     --report FORMAT       With -t: human (the default: each test as it
                           runs, then PASS or FAIL), json (one JSON document)
                           or junit (JUnit XML); json and junit own stdout,
@@ -314,15 +317,15 @@ fn sparrow_exec_command(args: &[String]) -> Outcome {
 }
 
 /// A test-profile program on the core: the report goes to stdout.
-/// The tests of `bytes`, ordered by `seed`, reported as `format` (#339): 0 when
+/// The tests of `bytes`, run as `plan` says, reported as `format` (#339): 0 when
 /// none failed, 1 when one did, 4 when the run reached no verdict.
-fn core_tests(bytes: Vec<u8>, seed: Option<u64>, format: test_report::ReportFormat, suite: &str) -> Outcome {
+fn core_tests(bytes: Vec<u8>, plan: test_report::TestPlan, format: test_report::ReportFormat, suite: &str) -> Outcome {
     use test_report::ReportFormat;
     let progress: Option<Box<dyn Write + Send>> = match format {
         ReportFormat::Human => Some(Box::new(okkama_runtime_core::stdout::Buffered)),
         ReportFormat::Json | ReportFormat::Junit => None,
     };
-    match sparrow_core::run_test_report(bytes, seed, progress) {
+    match sparrow_core::run_test_report(bytes, plan, progress) {
         Ok(report) => Outcome {
             stdout: match format {
                 ReportFormat::Human => String::new(),
@@ -1594,11 +1597,29 @@ fn run_command(args: &[String]) -> Outcome {
         Err(outcome) => return unrun(outcome),
     };
     let _ = io::stderr().lock().write_all(warnings.as_bytes());
+    let mut plan = test_report::TestPlan { seed, ..Default::default() };
     if let Some(tests) = module.tests.as_mut()
         && !filters.is_empty()
     {
-        // `--filter` (#277): the tests whose names contain one of the texts.
-        tests.retain(|(name, _)| filters.iter().any(|text| name.contains(text.as_str())));
+        // `--filter` (#277): the tests whose names contain one of the texts,
+        // whole. A text `T/S` (#809) also runs a test whose name contains T,
+        // and of its sub-cases only those whose names contain S.
+        tests.retain(|(name, _)| {
+            if filters.iter().any(|text| name.contains(text.as_str())) {
+                return true;
+            }
+            let parts: Vec<String> = filters
+                .iter()
+                .filter_map(|text| text.split_once('/'))
+                .filter(|(test, _)| name.contains(test))
+                .map(|(_, case)| case.to_owned())
+                .collect();
+            if parts.is_empty() {
+                return false;
+            }
+            plan.only.insert(name.clone(), parts);
+            true
+        });
         if tests.is_empty() {
             if !docs.stdout.is_empty() { return docs; }
             let texts: Vec<String> = filters.iter().map(|text| format!("{text:?}")).collect();
@@ -1622,7 +1643,7 @@ fn run_command(args: &[String]) -> Outcome {
     };
     if tests {
         let format = format.unwrap_or(test_report::ReportFormat::Human);
-        let mut outcome = core_tests(bytes, seed, format, input);
+        let mut outcome = core_tests(bytes, plan, format, input);
         // Doctest results (#514) follow the human stream; a json or junit
         // stdout stays the report alone (#339), so they go to stderr.
         if format == test_report::ReportFormat::Human {

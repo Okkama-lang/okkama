@@ -14,6 +14,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   signal ends the process at once. Without an Interruption a signal ends the process by the system's default action
   and no `defer` or `destroy` runs (now tested on real signals). `ManualSignals` (`testing/signal`) raises signals
   in tests. `web/app` stops through an Interruption instead of the internal `runtime/signal`.
+- **Named sub-cases in tests (#809).** `test.case(name) { … }` inside a test runs one row of a table as its own
+  case, like `test.throws`: a failed check or a thrown error fails that sub-case and the next ones still run; a
+  repeated name, a nested sub-case and `test.skip` inside one are defined. `--filter "TEST/CASE"` runs only the
+  matching sub-cases (a test selected with none matching is skipped). Reports show them: indented in the human
+  stream, `cases` in JSON, one JUnit testcase each.
 - **Test reports and a seed for `okkama run -t` (#339, stage A).** `--report json` and `--report junit` write one
   report of the run on stdout (tests in declaration order, totals, failures and skip reasons), the tests' own
   output going to stderr; `--report human` is the familiar stream. `--seed N` runs the tests in a reproducible

@@ -3226,6 +3226,34 @@ test.is(refused, Refused.because("non-positive"));
 It means exactly `try { …; panic "test.throws: the block did not throw Refused"; }
 catch e is Refused { e; }`; another error still propagates and fails the test.
 
+`test.case(name) { … }` gives one row of a table of cases its own name in the
+report (#809):
+
+```okkama
+test "postage at every boundary" {
+    for cases -> row {
+        test.case(row.name()) {
+            test.is(row.got(tariff), row.wanted());
+        };
+    }
+}
+```
+
+Each sub-case is reported under its test as `Test/name`, with its own outcome:
+a failed check or an error the block throws fails that sub-case, the sub-cases
+after it still run, and the test fails when one of them failed. A name runs
+once per test (a repeated one fails the test and its block does not run), and
+sub-cases do not nest: `test.case` inside another ends the test with a failure
+of the outer one. `test.skip` inside a sub-case skips it and, as always, ends
+the test; sub-cases not reached have no result. A failure outside every
+sub-case is the test's own. `--filter Test/name` runs the tests whose names
+contain `Test`, and of their sub-cases only those whose names contain `name`;
+the test's code around them runs, the other blocks do not. A test the filter
+reaches but none of whose sub-cases match is skipped with that reason. The
+totals count sub-cases, and a test with sub-cases only when it failed or
+skipped outside them; JSON lists the sub-cases under their test with an `id`,
+and JUnit has one test case per sub-case. The test stays the unit that runs.
+
 Reusable assertions come from the bundled module:
 
 ```okkama

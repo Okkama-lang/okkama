@@ -427,6 +427,86 @@ fn test_reports_list_every_test_and_a_seed_orders_the_run() {
     assert_eq!(run_with_std(&["run", "-t", "--report", "junit", passing.path()]).status.code(), Some(0));
 }
 
+const SUB_CASES: &str = "module app v1.0.0;\n\
+    import \"io/stdout\" take Stdout;\n\
+    enum NoTariff is Error = (weight(grams is int));\n\
+    test \"postage\" {\n\
+        for [20, 50, 100, 250] -> grams {\n\
+            test.case(grams.string() + \" g\") {\n\
+                Stdout().writeln(\"ran \" + grams.string());\n\
+                test.is(grams % 50 == 0 || grams == 20, true);\n\
+                if grams == 50 { test.is(grams, 51); }\n\
+                if grams == 250 { throw NoTariff.weight(grams); }\n\
+            };\n\
+        }\n\
+    }\n\
+    test \"setup fails\" { throw NoTariff.weight(0); test.case(\"never\") { test.ok(true); }; }\n\
+    test \"duplicates\" { test.case(\"a\") { test.ok(true); }; test.case(\"a\") { test.ok(false); }; test.case(\"c\") { test.ok(true); }; }\n\
+    test \"skip\" { test.case(\"b\") { test.skip(\"later\"); }; test.case(\"never\") { test.ok(false); }; }\n\
+    test \"nested\" { test.case(\"outer\") { test.case(\"inner\") { test.ok(true); }; }; test.case(\"never\") { test.ok(false); }; }\n\
+    async test \"async cases\" { test.case(\"awaited\") { test.is(await Value().seven(), 7); }; }\n\
+    object Value { Value(); async seven() is int { 7; } }\n\
+    test \"plain\" { test.ok(true); }\n";
+
+/// #809: `test.case(name) { … }` gives a test named sub-cases that the report
+/// lists under it and `--filter TEST/CASE` selects; a failed or throwing
+/// sub-case fails its test and the next ones still run.
+#[test]
+fn sub_cases_are_reported_under_their_test_and_selected_by_name() {
+    let source = TempFile::new("subcases.ok", SUB_CASES.as_bytes());
+    let output = run_with_std(&["run", "-t", source.path()]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "=== RUN   postage\nran 20\nran 50\nran 100\nran 250\n\
+         \x20   --- PASS: postage/20 g\n\
+         \x20   --- FAIL: postage/50 g\n        expected 51, got 50\n\
+         \x20   --- PASS: postage/100 g\n\
+         \x20   --- FAIL: postage/250 g\n        NoTariff.weight(250)\n\
+         --- FAIL: postage\n\
+         === RUN   setup fails\n--- FAIL: setup fails\n    NoTariff: NoTariff.weight(0)\n\
+         === RUN   duplicates\n\
+         \x20   --- PASS: duplicates/a\n\
+         \x20   --- PASS: duplicates/c\n\
+         --- FAIL: duplicates\n    duplicate sub-case \"a\": a name runs once\n\
+         === RUN   skip\n\
+         \x20   --- SKIP: skip/b\n        later\n\
+         --- PASS: skip\n\
+         === RUN   nested\n\
+         \x20   --- FAIL: nested/outer\n        RuntimeError: test.case \"inner\" inside test.case \"outer\": sub-cases do not nest\n\
+         --- FAIL: nested\n\
+         === RUN   async cases\n    --- PASS: async cases/awaited\n--- PASS: async cases\n\
+         === RUN   plain\n--- PASS: plain\nFAIL\n"
+    );
+
+    // Only the sub-cases whose names contain the text after the slash run;
+    // the others' blocks do not.
+    let selected = run_with_std(&["run", "-t", "--filter", "postage/100", source.path()]);
+    assert_eq!(selected.status.code(), Some(0), "{}", stderr(&selected));
+    assert_eq!(stdout(&selected), "=== RUN   postage\nran 100\n    --- PASS: postage/100 g\n--- PASS: postage\nPASS\n");
+    let whole = run_with_std(&["run", "-t", "--filter", "postage", source.path()]);
+    assert!(stdout(&whole).contains("ran 20\nran 50\nran 100\nran 250\n"));
+    let none = run_with_std(&["run", "-t", "--filter", "postage/7", source.path()]);
+    assert_eq!(none.status.code(), Some(0));
+    assert_eq!(stdout(&none), "=== RUN   postage\n--- SKIP: postage\n    no sub-case matches the filter\nPASS\n");
+    let nothing = run_with_std(&["run", "-t", "--filter", "nobody/x", source.path()]);
+    assert_eq!(nothing.status.code(), Some(1));
+
+    let json = run_with_std(&["run", "-t", "--report", "json", "--filter", "postage", source.path()]);
+    let document: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
+    let test = &document["tests"][0];
+    assert_eq!(test["outcome"], "failed");
+    let ids: Vec<&str> = test["cases"].as_array().unwrap().iter().map(|case| case["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["postage/20 g", "postage/50 g", "postage/100 g", "postage/250 g"]);
+    assert_eq!(test["cases"][1]["failures"], serde_json::json!(["expected 51, got 50"]));
+    assert_eq!(document["totals"], serde_json::json!({"tests": 4, "passed": 2, "failed": 2, "skipped": 0}));
+    let junit = stdout(&run_with_std(&["run", "-t", "--report", "junit", "--filter", "duplicates", "--filter", "skip", source.path()]));
+    assert!(junit.contains("<testsuites tests=\"4\" failures=\"1\" errors=\"0\" skipped=\"1\">"), "{junit}");
+    assert!(junit.contains("<testcase name=\"skip/b\" classname="), "{junit}");
+    assert!(junit.contains("<testcase name=\"duplicates\" classname="), "{junit}");
+    assert!(!junit.contains("<testcase name=\"skip\" classname="), "{junit}");
+}
+
 /// Unequal objects, variants and nested values in a failing check show their values, not heap
 /// identities (#756); Champ's test mode shows the same text (`champ_cases_tests.rs`).
 const SHOWN_VALUES: &str = "module app v1.0.0;\n\

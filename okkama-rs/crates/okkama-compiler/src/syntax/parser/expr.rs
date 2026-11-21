@@ -27,7 +27,7 @@ use super::{PResult, Parser};
 use crate::source::Span;
 use crate::syntax::ast::{
     ActionResult, Argument, BinaryOp, Block, CatchClause, Expr, ExprKind, FunctionalOp, Literal, MapEntry,
-    Name, ResultSpec, Stmt, StmtKind, TryBody, UnaryOp,
+    Name, ResultSpec, Stmt, StmtKind, TryBody, TypeExpr, TypeKind, UnaryOp,
 };
 use crate::syntax::token::{StrLiteral, StringForm, TokenKind, TokenValue, is_lower_word, is_type_word};
 
@@ -431,6 +431,14 @@ impl Parser<'_> {
                 ));
             }
             if self.eat(TokenKind::Dot) {
+                if self.check(TokenKind::Case)
+                    && matches!(&expr.kind, ExprKind::Name(test) if test.text == "test")
+                    && self.check_next(TokenKind::LeftParen)
+                {
+                    self.advance();
+                    expr = self.test_case(expr.span)?;
+                    continue;
+                }
                 let name = self.consume_member_name("Expect property name after \".\".")?;
                 if name.text == "throws"
                     && matches!(&expr.kind, ExprKind::Name(test) if test.text == "test")
@@ -527,6 +535,79 @@ impl Parser<'_> {
             span,
         };
         Ok(Expr { kind: ExprKind::Try(Box::new(TryBody { body, catches: vec![clause], span })), span })
+    }
+
+    /// `test.case(name) { … }` (#809): a named sub-case of the running test,
+    /// in the test API, as `test.throws` is. It reads as
+    ///
+    /// ```text
+    /// if test.case(name) {
+    ///     try { …; test.case#end(); }
+    ///     catch test.case#error is Error { test.fail(test.case#error.text()); test.case#end(); }
+    /// } else {}
+    /// ```
+    ///
+    /// `test.case` opens the sub-case and says whether to run it (a filter may
+    /// leave it out); an error the block throws fails the sub-case, and the
+    /// sub-cases after it still run.
+    fn test_case(&mut self, start: Span) -> PResult<Expr> {
+        self.consume(TokenKind::LeftParen, "Expect \"(\" after test.case.")?;
+        let label = self.expression()?;
+        self.consume(TokenKind::RightParen, "Expect \")\" after the name of test.case.")?;
+        if !self.check(TokenKind::LeftBrace) {
+            return Err(self.error_here("Expect a block after test.case(name): test.case(name) { … }"));
+        }
+        let mut body = self.block()?;
+        let span = start.to(body.span);
+        let test = || Expr { kind: ExprKind::Name(Name { text: "test".into(), span: start }), span: start };
+        let action = |name: &str, args: Vec<Expr>| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Get { object: Box::new(test()), name: Name { text: name.into(), span: start } },
+                    span: start,
+                }),
+                args: args.into_iter().map(|value| Argument { name: None, span: value.span, value }).collect(),
+            },
+            span,
+        };
+        let statement = |expr: Expr| Stmt { kind: StmtKind::Expr { expr, condition: None }, span };
+        body.stmts.push(statement(action("case#end", Vec::new())));
+        let caught = Name { text: "test.case#error".into(), span: start };
+        let text = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Get {
+                        object: Box::new(Expr { kind: ExprKind::Name(caught.clone()), span }),
+                        name: Name { text: "text".into(), span: start },
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+        let clause = CatchClause {
+            name: Some(caught),
+            types: vec![TypeExpr {
+                kind: TypeKind::Named { path: vec![Name { text: "Error".into(), span: start }], args: Vec::new() },
+                span: start,
+            }],
+            patterns: Vec::new(),
+            body: Block {
+                stmts: vec![statement(action("fail", vec![text])), statement(action("case#end", Vec::new()))],
+                span,
+            },
+            span,
+        };
+        let guarded = Stmt { kind: StmtKind::Try(TryBody { body, catches: vec![clause], span }), span };
+        Ok(Expr {
+            kind: ExprKind::If {
+                condition: Box::new(action("case", vec![label])),
+                then_block: Block { stmts: vec![guarded], span },
+                else_block: Block { stmts: Vec::new(), span },
+            },
+            span,
+        })
     }
 
     /// Arguments after `(` up to and including `)`.
