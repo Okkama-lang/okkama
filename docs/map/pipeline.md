@@ -53,7 +53,8 @@ selected-result layouts and payload type agreement. `drivers.rs` performs one
 atomic receive, queue registration and cleanup; `primitives.rs` updates parked
 selectors on close. Channel carrier analysis in `ir/mod.rs` and `failures.rs`
 includes endpoints used only through selection. Direct timeout composition
-publishes an already committed selection before attempting cancellation.
+publishes an already committed selection before attempting cancellation and
+preserves its winner while awaiting the cancelled timer's cleanup (#940).
 
 Publishing (#515) remains on that read-only path. `doc::document_graph` exposes
 all public models in one ordinary import graph for batch export.
