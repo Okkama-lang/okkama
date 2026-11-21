@@ -1,5 +1,8 @@
 """Independent mathematical/content oracles; never learn expected output from a VM."""
 import base64
+import hmac
+import ipaddress
+import gzip
 import datetime
 import zlib
 import hashlib
@@ -72,6 +75,13 @@ def contribution(name, i):
     if name=='normalize-nfc':return len('é'+str(i))%7
     if name=='json-render':return len(json.dumps({'id':i,'ok':True},separators=(',',':')))%7
     if name=='template-render':return len('Hello, Ada #'+str(i)+'!')%7
+    if name=='base32-encode':return base64.b32encode(data8)[0]%7
+    if name=='ip-parse':return len(str(ipaddress.ip_address('192.168.1.'+str(i%256))))%7
+    if name=='hex-number-parse':return i%7
+    if name=='hmac-sha256':return hmac.new(b'key',data8,hashlib.sha256).digest()[0]%7
+    if name=='sha3-256':return hashlib.sha3_256(data8).digest()[0]%7
+    if name=='gzip-round-trip':return (i%256)%7
+    if name=='uuid-parse':return (4+36)%7
     raise ValueError('No independent oracle: '+name)
 
 

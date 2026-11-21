@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-17 of 435 non-runtime module files have an explicitly declared measured action.
+23 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -46,7 +46,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `compare` | — |
 | `compression/brotli` | — |
 | `compression/deflate` | — |
-| `compression/gzip` | — |
+| `compression/gzip` | gzip-round-trip |
 | `compression/internal/codec` | — |
 | `compression/read` | — |
 | `compression/state` | — |
@@ -65,7 +65,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `crypto/ecdsa` | — |
 | `crypto/ed25519` | — |
 | `crypto/error` | — |
-| `crypto/hmac` | — |
+| `crypto/hmac` | hmac-sha256 |
 | `crypto/jwt` | — |
 | `crypto/kdf` | — |
 | `crypto/key` | — |
@@ -108,10 +108,10 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `digest/legacy` | — |
 | `digest/read` | — |
 | `digest/sha2` | sha256, sha512 |
-| `digest/sha3` | — |
+| `digest/sha3` | sha3-256 |
 | `digest/shake` | — |
 | `digest/state` | — |
-| `encoding/base32` | — |
+| `encoding/base32` | base32-encode |
 | `encoding/base64` | base64-encode |
 | `encoding/base85` | — |
 | `encoding/binary` | — |
@@ -333,7 +333,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `net/endpoint` | — |
 | `net/failure` | — |
 | `net/interface` | — |
-| `net/ip` | — |
+| `net/ip` | ip-parse |
 | `net/ip_registry` | — |
 | `net/multicast` | — |
 | `net/public_suffix` | — |
@@ -376,7 +376,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `strings/buffer` | — |
 | `strings/format` | — |
 | `strings/join` | — |
-| `strings/parse` | int-parse |
+| `strings/parse` | int-parse, hex-number-parse |
 | `template/compile` | — |
 | `template/engine` | template-render |
 | `template/html` | — |
@@ -427,7 +427,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `url/query` | — |
 | `url/value` | — |
 | `uuid/generation` | — |
-| `uuid/value` | — |
+| `uuid/value` | uuid-parse |
 | `web/app` | — |
 | `web/around` | — |
 | `web/exception` | — |
