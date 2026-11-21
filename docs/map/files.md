@@ -186,7 +186,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 
 - `okkama-devtrace/src/lib.rs` 314 — Development instrumentation (owner, 2026-11-20): events, counters, timers and dumps at every step of the
 
-## cli — 10 files, 4959 lines
+## cli — 10 files, 5065 lines
 
 - `okkama-cli/src/core.rs` 64 — The Sparrow core (`sparrow-core`) behind `okkama exec`, `okkama run`
 - `okkama-cli/src/doctest.rs` 335 — Compile-first documentation tests (#514), using the compiler doc model.
@@ -197,9 +197,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/ocs.rs` 623 — Native endpoint протокола `ocs-adapter/2` (`conformance/adapters/PROTOCOL.md`).
 - `okkama-cli/src/repl.rs` 409 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
-- `okkama-cli/src/workers.rs` 238 — `okkama run -t --workers N` (#938): every selected test in a process of its
+- `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 36359 lines
+## other — 87 files, 36418 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -273,7 +273,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/postgres.rs` 129 — `runtime/postgres`: the DataRow messages of one result portion become one
 - `okkama-runtime-core/src/native/process.rs` 868 — `runtime/process`: потомки
 - `okkama-runtime-core/src/native/regex.rs` 1542 — `runtime/regex`: собственный движок регулярных выражений Okkama — перенос
-- `okkama-runtime-core/src/native/signal.rs` 329 — `runtime/signal`: ожидание сигналов процесса (TERM, INT, HUP), #80.
+- `okkama-runtime-core/src/native/signal.rs` 388 — `runtime/signal`: ожидание сигналов процесса (TERM, INT, HUP), #80.
 - `okkama-runtime-core/src/native/sqlite.rs` 1815 — `runtime/database` (provider `optional.sqlite`) — перенос `SqliteNatives`
 - `okkama-runtime-core/src/native/stdio.rs` 350 — Raw byte streams. Text encoding and line normalization belong to std.
 - `okkama-runtime-core/src/native/support.rs` 116 — Общие преобразования значений для providers: аргументы, результаты,

@@ -16,7 +16,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::thread::{JoinHandle, sleep, spawn};
+use std::thread::{sleep, spawn};
 use std::time::{Duration, Instant};
 
 use sparrow_core::test_report::{CapturedOutput, SubCase, TestCase, TestOutcome, TestReport, execution_order};
@@ -43,8 +43,13 @@ pub struct Pool {
     pub deadline: Option<Duration>,
 }
 
-/// One stream being read: the bytes kept and whether more came.
-type Capture = JoinHandle<(Vec<u8>, bool)>;
+/// One stream being read: the bytes kept, whether more came, and whether
+/// the reader reached the end.
+type Capture = std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool, bool)>>;
+
+/// How long the parent keeps reading a finished worker's streams: a process
+/// the test started may hold them open after the worker is gone (#940).
+const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 struct Running {
     index: usize,
@@ -160,13 +165,43 @@ fn start(pool: &Pool, scratch: &Path, name: &str, index: usize, execution: usize
         command.args(["--filter", filter]);
     }
     command.args(&pool.inputs).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn()?;
-    let stdout = child.stdout.take().map(|pipe| spawn(move || drain(pipe)));
-    let stderr = child.stderr.take().map(|pipe| spawn(move || drain(pipe)));
-    Ok(Running { index, execution, child, started: Instant::now(), result, stdout, stderr })
+    let child = command.spawn()?;
+    Ok(running(child, index, execution, result))
+}
+
+/// A started worker whose streams are read in the background.
+fn running(mut child: Child, index: usize, execution: usize, result: PathBuf) -> Running {
+    let reader = |pipe: Box<dyn Read + Send>| {
+        let capture: Capture = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), false, false)));
+        let shared = capture.clone();
+        spawn(move || drain_into(pipe, &shared));
+        capture
+    };
+    let stdout = child.stdout.take().map(|pipe| reader(Box::new(pipe)));
+    let stderr = child.stderr.take().map(|pipe| reader(Box::new(pipe)));
+    Running { index, execution, child, started: Instant::now(), result, stdout, stderr }
+}
+
+/// [`drain`] into a shared capture, marking it ended at the end of the pipe.
+fn drain_into(mut pipe: impl Read, capture: &Capture) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        let mut state = capture.lock().expect("capture");
+        let room = CAPTURE_LIMIT - state.0.len();
+        state.0.extend_from_slice(&chunk[..read.min(room)]);
+        state.1 |= read > room;
+    }
+    capture.lock().expect("capture").2 = true;
 }
 
 /// Reads `pipe` to its end, keeping at most [`CAPTURE_LIMIT`] bytes.
+#[cfg(test)]
 fn drain(mut pipe: impl Read) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let mut truncated = false;
@@ -186,11 +221,23 @@ fn drain(mut pipe: impl Read) -> (Vec<u8>, bool) {
     (kept, truncated)
 }
 
+/// What the worker's streams held. A reader that has not reached the end
+/// within [`DRAIN_GRACE`] (a process the test started still holds the pipe)
+/// is left to finish on its own, and that stream is marked cut (#940).
 fn captured(worker: &mut Running) -> CapturedOutput {
+    let deadline = Instant::now() + DRAIN_GRACE;
     let take = |capture: Option<Capture>| {
-        capture.and_then(|thread| thread.join().ok()).map_or((String::new(), false), |(bytes, cut)| {
-            (String::from_utf8_lossy(&bytes).into_owned(), cut)
-        })
+        let Some(capture) = capture else {
+            return (String::new(), false);
+        };
+        loop {
+            let state = capture.lock().expect("capture");
+            if state.2 || Instant::now() >= deadline {
+                return (String::from_utf8_lossy(&state.0).into_owned(), state.1 || !state.2);
+            }
+            drop(state);
+            sleep(Duration::from_millis(5));
+        }
     };
     let (stdout, stdout_truncated) = take(worker.stdout.take());
     let (stderr, stderr_truncated) = take(worker.stderr.take());
@@ -201,8 +248,37 @@ fn ended(name: &str, index: usize, execution: usize, outcome: TestOutcome, outpu
     TestCase { name: name.to_owned(), position: index, execution, outcome, cases: Vec::new(), output }
 }
 
-/// The test as its worker reported it, or a crash when the worker wrote no
-/// report.
+/// What a worker writes for its one test (#938, #940): the test's own outcome
+/// apart from its sub-cases', so a parent's own skip or failure survives next
+/// to failing sub-cases.
+pub fn record(report: &TestReport) -> String {
+    let outcome = |outcome: &TestOutcome| match outcome {
+        TestOutcome::Passed => serde_json::json!({"outcome": "passed"}),
+        TestOutcome::Failed(failures) => serde_json::json!({"outcome": "failed", "failures": failures}),
+        TestOutcome::Skipped(reason) => serde_json::json!({"outcome": "skipped", "reason": reason}),
+        TestOutcome::TimedOut(limit) => serde_json::json!({"outcome": "timed_out", "limit": limit}),
+        TestOutcome::Crashed(how) => serde_json::json!({"outcome": "crashed", "reason": how}),
+    };
+    let tests: Vec<serde_json::Value> = report
+        .cases
+        .iter()
+        .map(|case| {
+            serde_json::json!({
+                "name": case.name,
+                "own": outcome(&case.outcome),
+                "cases": case.cases.iter().map(|sub| {
+                    let mut entry = outcome(&sub.outcome);
+                    entry["name"] = serde_json::Value::String(sub.name.clone());
+                    entry
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::json!({"worker": 1, "tests": tests}).to_string()
+}
+
+/// The test as its worker recorded it, or a crash when the worker wrote no
+/// record.
 fn reported(
     result: &Path,
     name: &str,
@@ -226,19 +302,10 @@ fn reported(
                 .collect()
         })
         .unwrap_or_default();
-    // The report gives the test's verdict; its own outcome is that verdict,
-    // except a failure that only its sub-cases had.
-    let verdict = outcome(test);
-    let own = match &verdict {
-        TestOutcome::Failed(failures) if failures.is_empty() && cases.iter().any(|case| case.outcome.fails()) => {
-            TestOutcome::Passed
-        }
-        _ => verdict,
-    };
-    TestCase { name: name.to_owned(), position: index, execution, outcome: own, cases, output: Some(output) }
+    TestCase { name: name.to_owned(), position: index, execution, outcome: outcome(&test["own"]), cases, output: Some(output) }
 }
 
-/// An outcome as a JSON report writes it.
+/// An outcome as a worker record writes it.
 fn outcome(entry: &serde_json::Value) -> TestOutcome {
     let texts = |key: &str| -> Vec<String> {
         entry[key].as_array().map_or_else(Vec::new, |items| {
@@ -249,6 +316,8 @@ fn outcome(entry: &serde_json::Value) -> TestOutcome {
         Some("passed") => TestOutcome::Passed,
         Some("skipped") => TestOutcome::Skipped(entry["reason"].as_str().unwrap_or("").to_owned()),
         Some("failed") => TestOutcome::Failed(texts("failures")),
+        Some("timed_out") => TestOutcome::TimedOut(entry["limit"].as_u64().unwrap_or(0)),
+        Some("crashed") => TestOutcome::Crashed(entry["reason"].as_str().unwrap_or("").to_owned()),
         other => TestOutcome::Crashed(format!("the worker reported an unknown outcome {other:?}")),
     }
 }
@@ -280,6 +349,64 @@ mod tests {
         assert_eq!(test_timeout("86400"), Ok(Duration::from_secs(86_400)));
         for wrong in ["0", "-2", "86401", "inf", "NaN", "x"] {
             assert!(test_timeout(wrong).is_err(), "{wrong}");
+        }
+    }
+
+    /// #940: a process the test started holds the worker's stdout open after
+    /// the worker ends; the parent stops waiting after the grace and marks the
+    /// stream cut, while a stream that ended is kept whole.
+    #[test]
+    fn a_stream_held_by_a_lingering_process_is_cut_after_the_grace() {
+        let child = Command::new("sh")
+            .args(["-c", "echo early; echo note >&2; exec 2>&-; sleep 5 &"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sh");
+        let mut worker = running(child, 0, 0, PathBuf::new());
+        assert!(worker.child.wait().expect("wait").success());
+        let started = Instant::now();
+        let output = captured(&mut worker);
+        let waited = started.elapsed();
+        assert!(waited >= DRAIN_GRACE && waited < DRAIN_GRACE * 4, "waited {waited:?}");
+        assert_eq!(output.stdout, "early\n");
+        assert!(output.stdout_truncated);
+        assert_eq!(output.stderr, "note\n");
+        assert!(!output.stderr_truncated);
+    }
+
+    /// #940: a parent's own skip next to a failing sub-case survives the
+    /// worker record.
+    #[test]
+    fn a_record_keeps_the_parent_outcome_apart_from_its_sub_cases() {
+        let case = TestCase {
+            name: "table".into(),
+            position: 0,
+            execution: 0,
+            outcome: TestOutcome::Skipped("no more cases".into()),
+            cases: vec![SubCase { name: "first".into(), outcome: TestOutcome::Failed(vec!["expected 1, got 2".into()]) }],
+            output: None,
+        };
+        let text = record(&TestReport { seed: None, cases: vec![case.clone()] });
+        let dir = std::env::temp_dir().join(format!("okkama-worker-record-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("0.json");
+        std::fs::write(&path, text).unwrap();
+        let back = reported(&path, "table", 0, 0, success_status(), CapturedOutput::default());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(back.outcome, case.outcome);
+        assert_eq!(back.cases, case.cases);
+        let report = TestReport { seed: None, cases: vec![back] };
+        let totals = report.totals();
+        assert_eq!((totals.tests, totals.failed, totals.skipped), (2, 1, 1));
+    }
+
+    fn success_status() -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
         }
     }
 

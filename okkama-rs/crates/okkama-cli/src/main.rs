@@ -1738,7 +1738,7 @@ fn run_command(args: &[String]) -> Outcome {
         // The worker side (#938): the test's output stays on this process's
         // stdout and stderr, the report goes to the parent's file.
         return match sparrow_core::run_test_report(bytes, plan, Some(Box::new(io::sink()))) {
-            Ok(report) => match std::fs::write(result, test_report::json(&report, input)) {
+            Ok(report) => match std::fs::write(result, workers::record(&report)) {
                 Ok(()) => Outcome::success(String::new()),
                 Err(error) => Outcome::failure(format!("okkama: worker report: {error}\n"), EXIT_IO),
             },

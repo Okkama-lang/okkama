@@ -39,6 +39,9 @@ struct Registry {
     /// Наблюдения (#638): номер, места сигналов и сработавший сигнал. Пока не
     /// сработало, наблюдение — ещё и ожидание в `waiters`.
     watches: Vec<(u64, Vec<usize>, Option<usize>)>,
+    /// Идущие `signal_arrival` (#940): номер ожидания. Отмена убирает номер, и
+    /// поток ожидания выходит, не дожидаясь сигнала.
+    arrivals: Vec<u64>,
     next: u64,
     started: bool,
 }
@@ -56,6 +59,7 @@ fn hub() -> &'static Hub {
             prior: [None; 3],
             waiters: Vec::new(),
             watches: Vec::new(),
+            arrivals: Vec::new(),
             next: 0,
             started: false,
         }),
@@ -177,6 +181,13 @@ fn fire(registry: &mut Registry, place: usize) {
 /// Записать ожидание сигналов `wanted`, поставив обработчики тем, у кого их
 /// ещё нет. Возвращает номер ожидания и счётчики приходов на этот момент.
 fn enter(wanted: &[usize]) -> Option<(u64, [u64; 3])> {
+    enter_as(wanted, false)
+}
+
+/// [`enter`]; with `watch`, the watch is recorded in the same critical
+/// section, so a signal the dispatcher handles right after the handlers go in
+/// already finds it (#940).
+fn enter_as(wanted: &[usize], watch: bool) -> Option<(u64, [u64; 3])> {
     let mut registry = registry();
     if !start(&mut registry) {
         return None;
@@ -204,6 +215,9 @@ fn enter(wanted: &[usize]) -> Option<(u64, [u64; 3])> {
     let id = registry.next;
     registry.next += 1;
     registry.waiters.push((id, wanted.to_vec()));
+    if watch {
+        registry.watches.push((id, wanted.to_vec(), None));
+    }
     Some((id, registry.arrived))
 }
 
@@ -282,8 +296,7 @@ fn watch_id(value: &Value) -> Result<u64, Error> {
 
 /// Наблюдение за сигналами `wanted` (#638): номер.
 fn watch(wanted: &[usize]) -> Option<u64> {
-    let (id, _) = enter(wanted)?;
-    registry().watches.push((id, wanted.to_vec(), None));
+    let (id, _) = enter_as(wanted, true)?;
     Some(id)
 }
 
@@ -309,9 +322,21 @@ fn unwatch(id: u64) {
 
 /// Рабочий поток `signal_arrival`: ждать, пока наблюдение `id` сработает;
 /// `None` — его сняли.
+#[cfg(test)]
 fn await_watch(id: u64) -> Option<usize> {
+    await_watch_for(id, None)
+}
+
+/// [`await_watch`] for the arrival `token`: `None` too once the arrival is
+/// cancelled (its token removed).
+fn await_watch_for(id: u64, token: Option<u64>) -> Option<usize> {
     let mut registry = registry();
     loop {
+        if let Some(token) = token
+            && !registry.arrivals.contains(&token)
+        {
+            return None;
+        }
         match registry.watches.iter().find(|(watch, _, _)| *watch == id) {
             None => return None,
             Some((_, _, Some(place))) => return Some(*place),
@@ -343,19 +368,30 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             if let Some(place) = registry().watches.iter().find(|(watch, _, _)| *watch == id).and_then(|w| w.2) {
                 return Ok(Value::Future(sched::resolved(Ok(text(SIGNALS[place].0)))));
             }
+            let token = {
+                let mut registry = registry();
+                let token = registry.next;
+                registry.next += 1;
+                registry.arrivals.push(token);
+                token
+            };
             let promise = sched::promise();
             let target = promise.clone();
             let op = sched::offload(
-                move || await_watch(id),
+                move || await_watch_for(id, Some(token)),
                 move |received: Option<usize>| {
                     if let Some(place) = received {
                         sched::settle(&target, Ok(text(SIGNALS[place].0)));
                     }
                 },
             );
-            // Отмена ожидания наблюдения не снимает: его снимает unwatch. Поток
-            // будят, чтобы он увидел отмену при следующем изменении.
-            promise.listen(move || op.detach());
+            // Исход или отмена (#940): ожидание снимается (наблюдение остаётся,
+            // его снимает unwatch), и поток будят, чтобы он вышел сразу.
+            promise.listen(move || {
+                op.detach();
+                registry().arrivals.retain(|&waiting| waiting != token);
+                hub().changed.notify_all();
+            });
             return Ok(Value::Future(promise));
         }
         Native::SignalSignalWait => {}
@@ -412,5 +448,43 @@ mod tests {
         unwatch(id);
         assert_eq!(arrived(id), "");
         assert_eq!(await_watch(id), None);
+    }
+
+    /// #940: the watch is in the registry by the time the handlers are, so a
+    /// signal the dispatcher handles at once fires it.
+    #[test]
+    fn a_watch_is_recorded_with_its_handlers() {
+        let term = 0;
+        let id = watch(&[term]).expect("a watch");
+        {
+            let mut registry = registry();
+            assert!(registry.watches.iter().any(|(watch, _, _)| *watch == id));
+            registry.arrived[term] += 1;
+            fire(&mut registry, term);
+        }
+        assert_eq!(arrived(id), "TERM");
+        unwatch(id);
+    }
+
+    /// #940: a cancelled arrival (its token gone) stops waiting although the
+    /// watch has not fired; the watch stays.
+    #[test]
+    fn a_cancelled_arrival_stops_waiting() {
+        let int = 1;
+        let id = watch(&[int]).expect("a watch");
+        let token = {
+            let mut registry = registry();
+            let token = registry.next;
+            registry.next += 1;
+            registry.arrivals.push(token);
+            token
+        };
+        let waiting = std::thread::spawn(move || await_watch_for(id, Some(token)));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        registry().arrivals.retain(|&waiting| waiting != token);
+        hub().changed.notify_all();
+        assert_eq!(waiting.join().expect("the waiting thread"), None);
+        assert!(registry().watches.iter().any(|(watch, _, _)| *watch == id));
+        unwatch(id);
     }
 }
