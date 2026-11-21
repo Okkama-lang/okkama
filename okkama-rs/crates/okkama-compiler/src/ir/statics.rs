@@ -310,25 +310,20 @@ fn plan(function: &Function, value: ValueId, others: &[ValueId]) -> Result<Plan,
 
 fn apply(function: &mut Function, value: ValueId, plan: Plan) {
     let region = plan.region;
-    // `track`/`adopt` into R become one pin where the first of them was.
-    let mut pinned = false;
+    // `track`/`adopt` into R go; one pin opens the value right after its creation, at the start of the split-off
+    // rest. (Not "the first of them" by block index: after splits, a later `adopt` — an alias binding — can sit in
+    // a lower-numbered block, and a pin there would follow code that can fail into the value's handlers.)
+    let span = definition(function, value).map(|(block, index)| function.blocks[block].insts[index].span);
     for block in &mut function.blocks {
-        let mut kept = Vec::with_capacity(block.insts.len());
-        for inst in block.insts.drain(..) {
-            match &inst.kind {
-                InstKind::RegionTrack { region: r, value: v } | InstKind::RegionAdopt { region: r, value: v }
-                    if *r == region && *v == value =>
-                {
-                    if !pinned {
-                        pinned = true;
-                        kept.push(Inst { result: None, kind: InstKind::ResourcePin { value }, span: inst.span });
-                    }
-                }
-                _ => kept.push(inst),
-            }
-        }
-        block.insts = kept;
+        block.insts.retain(|inst| !matches!(&inst.kind,
+            InstKind::RegionTrack { region: r, value: v } | InstKind::RegionAdopt { region: r, value: v }
+                if *r == region && *v == value));
     }
+    let (start, _) = definition(function, value).expect("a static value has a definition");
+    let TermKind::Br(rest) = &function.blocks[start].term.kind else { unreachable!("the creating block was split") };
+    let rest = rest.block.0;
+    let span = span.expect("definition");
+    function.blocks[rest].insts.insert(0, Inst { result: None, kind: InstKind::ResourcePin { value }, span });
     for &block in &plan.leaves {
         if plan.shared {
             leave_after(function, block, region, value);

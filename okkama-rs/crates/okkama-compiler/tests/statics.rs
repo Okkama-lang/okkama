@@ -73,6 +73,17 @@ fn a_handler_shared_with_the_creation_stays_valid() {
     assert!(text.contains("fail.secondary"), "the shape under test: {text}");
 }
 
+/// #909: two static resources of one scope, the older one also bound to an alias (a second `adopt` that, after
+/// the splits, sits in a lower-numbered block). The older pin comes right after its creation, before the newer
+/// creation can fail into a handler that closes it (Bible 11-resources).
+#[test]
+fn an_alias_does_not_move_a_pin_after_a_newer_creation() {
+    let text = function_text(&format!("{RES} object Log {{ Log(); note(text is string) is void {{}} }} \
+        main() is int {{ {{ let a = Res(n: 1); let b = Res(n: 2); defer Log().note(\"x\"); let alias = a; \
+        alias.read() + b.read(); }} }}"), "main");
+    assert_eq!(text.matches("resource.pin").count(), 2, "{text}");
+}
+
 /// #910: the linearity check accepts what the lowering makes and refuses a region left open or closed twice.
 #[test]
 fn the_linearity_check_refuses_a_missing_or_doubled_close() {
