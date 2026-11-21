@@ -18,7 +18,8 @@ import "template/compile" take InvalidTemplateLimits, TemplateOutputLimitExceede
 import "template/path" take TemplatePathFromString;
 import "template/json" take JsonTemplateStrings, TemplateJsonLimitExceeded;
 import "json" take Json, JsonKind, ParsedJson;
-import "template/engine" take Template;
+import "template/engine" take Template, TemplatePartials;
+import "template/compile" as legacy take TextTemplate;
 import "io/buffer" take ByteBuffer;
 import "encoding/utf" take Utf8Decoded, ByteOrder;
 import "encoding/binary" take IntegerBytes, Binary, Signedness;
@@ -569,4 +570,18 @@ test "the one engine renders what section templates render (#178)" {
     ] -> source {
         test.is(Template(source).string(data), SectionTemplate(source).string(data));
     }
+}
+
+test "the one engine renders partials as section templates do (#178)" {
+    let data = ParsedJson("{\"id\":17,\"items\":[{\"title\":\"Tea\"},{\"title\":\"Cake\"}]}").root();
+    let source = "Order {{id}}:\n{{#items}}{{>item}}{{/items}}{{^items}}  (empty)\n{{/items}}";
+    test.is(
+        Template(source: source, partials: TemplatePartials(["item": "  - {{title}}\n"])).string(
+            data
+        ),
+        SectionTemplate(
+            source: source,
+            partials: TemplateLibrary(["item": legacy.TextTemplate("  - {{title}}\n")])
+        ).string(data)
+    );
 }

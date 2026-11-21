@@ -49,20 +49,23 @@ import "io/stream" take WritingText;
 import "async/atomic" take Atomic;
 import "collections/list" take List, EmptyList;
 import "runtime/template" take template_output_size;
+import "error" take InvalidArgument;
 
 // How large a template, its rendering and its data may be.
 object TemplateLimits {
-    has characters, tokens, depth, iterations, output, members is int;
+    has characters, tokens, depth, iterations, output, members, partials is int;
 
     // A source of 1 Mi characters and 20000 tokens, sections 64 deep, 10000
-    // section bodies, 1 MiB of output and 1024 members an object, unless told.
+    // section bodies and partials, 1 MiB of output, 1024 members an object and
+    // partials 32 deep, unless told.
     TemplateLimits(
         characters is int = 1048576,
         tokens is int = 20000,
         depth is int = 64,
         iterations is int = 10000,
         output is int = 1048576,
-        members is int = 1024
+        members is int = 1024,
+        partials is int = 32
     ) {
         confirm characters >= 0
             && tokens >= 0
@@ -70,7 +73,9 @@ object TemplateLimits {
             && iterations >= 0
             && output >= 0
             && members >= 0
+            && partials >= 0
             else throw InvalidTemplateLimits.invalid;
+        self.partials = partials;
         self.characters = characters;
         self.tokens = tokens;
         self.depth = depth;
@@ -79,9 +84,14 @@ object TemplateLimits {
         self.members = members;
     }
 
-    // Source characters and tokens, section depth, rendered section bodies,
-    // output bytes and members an object.
+    // Source characters and tokens (each partial's too), section depth,
+    // rendered section bodies and partials, output bytes, members an object
+    // and partial depth.
     cap Limits {
+        partials is int {
+            partials;
+        }
+
         characters is int {
             characters;
         }
@@ -111,11 +121,17 @@ object TemplateLimits {
 // A template, compiled on first use and kept.
 object Template {
     has origin is string;
+    has partials is TemplatePartials;
     has limits is TemplateLimits;
 
-    // A template of source, within limits.
-    Template(source is string, limits is TemplateLimits = TemplateLimits()) {
+    // A template of source that may include partials, within limits.
+    Template(
+        source is string,
+        partials is TemplatePartials = TemplatePartials(),
+        limits is TemplateLimits = TemplateLimits()
+    ) {
         origin = source;
+        self.partials = partials;
         self.limits = limits;
     }
 
@@ -134,24 +150,59 @@ object Template {
     // Writes the text for data to destination, piece by piece; what was
     // written before a failure stays written.
     write(data is Json, destination is WritingText) is void {
+        let plan = self.plan();
         TemplateRun(
+            plan: plan,
             sink: TemplateSink(destination: destination, maximum: limits::Limits::output),
             iterations: TemplateCounter(limits::Limits::iterations),
             limits: limits,
-            depth: 0
-        ).write(self.steps(), data);
+            depth: 0,
+            nesting: 0
+        ).write(plan.root(), data);
     }
 
-    hidden steps() is @TemplateStep {
-        once let compiled = TemplateSteps(
-            TemplateTree(
-                source: origin,
-                maximum_input: limits::Limits::characters,
-                maximum_tokens: limits::Limits::tokens,
-                maximum_depth: limits::Limits::depth
-            ).nodes()
-        ).steps();
+    hidden plan() is TemplatePlan {
+        once let compiled = TemplateCompilation(source: origin, partials: partials, limits: limits).plan();
         compiled;
+    }
+}
+
+// Named sources a template includes with `{{>name}}`, in the template's own
+// mode and with its data and limits.
+//
+//     Template(source: "{{#items}}{{>item}}{{/items}}", partials: TemplatePartials(["item": "- {{title}}\n"]));
+//
+// Names are exact, without trimming or case folding, and a map has each name
+// once. Only the partials a template reaches are compiled, each once, before
+// anything is written; one it reaches and the library lacks is
+// TemplateError.partial(name). A partial may include itself: TemplateLimits
+// bounds how deep partials nest and how many render.
+object TemplatePartials {
+    has sources is %string:string;
+
+    // None.
+    TemplatePartials() {
+        let none_here is %string:string = [:];
+        sources = none_here;
+    }
+
+    // The sources by name; InvalidArgument for an empty name.
+    TemplatePartials(sources is %string:string) {
+        for sources.keys() -> name {
+            confirm name != "" else throw InvalidArgument.because("a partial needs a name");
+        }
+        self.sources = sources;
+    }
+
+    // Whether a partial has the name.
+    membership(name is string) is bool {
+        sources.has(name);
+    }
+
+    // The source of the partial named name; TemplateError.partial(name) when none.
+    source(name is string) is string {
+        confirm self.membership(name) else throw TemplateError.partial(name);
+        sources[name];
     }
 }
 
@@ -160,8 +211,117 @@ object Template {
 enum TemplateError is Error = (
     iterations(limit is int),
     depth(limit is int),
-    partial(name is string)
+    partial(name is string),
+    partial_depth(limit is int)
 );
+
+// A template's steps and those of the partials it reaches, each compiled once.
+hidden object TemplatePlan {
+    has root is @TemplateStep;
+    has partials is %string:@TemplateStep;
+
+    TemplatePlan(:root, :partials);
+
+    root() is @TemplateStep {
+        root;
+    }
+
+    partial(name is string) is @TemplateStep {
+        partials[name];
+    }
+}
+
+// Compiles a template, then each partial it reaches, once, following their
+// references; a reference the library lacks fails before anything renders.
+hidden object TemplateCompilation {
+    has source is string;
+    has partials is TemplatePartials;
+    has limits is TemplateLimits;
+
+    TemplateCompilation(:source, :partials, :limits);
+
+    plan() is TemplatePlan {
+        let root = self.compiled(source);
+        let none_yet is %string:@TemplateStep = [:];
+        let reached = TemplateReached(
+            compilation: self,
+            done: none_yet,
+            pending: TemplateReferences(root).names()
+        );
+        loop {
+            last if reached.finished();
+            reached = reached.following();
+        }
+        TemplatePlan(root: root, partials: reached.done());
+    }
+
+    // The steps of the partial named name.
+    partial(name is string) is @TemplateStep {
+        self.compiled(partials.source(name));
+    }
+
+    hidden compiled(text is string) is @TemplateStep {
+        TemplateSteps(
+            TemplateTree(
+                source: text,
+                maximum_input: limits::Limits::characters,
+                maximum_tokens: limits::Limits::tokens,
+                maximum_depth: limits::Limits::depth
+            ).nodes()
+        ).steps();
+    }
+}
+
+// The partials compiled so far and those still to compile; each successor
+// compiles one, once.
+hidden object TemplateReached {
+    has compilation is TemplateCompilation;
+    has done is %string:@TemplateStep;
+    has pending is @string;
+
+    TemplateReached(:compilation, :done, :pending);
+
+    finished() is bool {
+        pending.size() == 0;
+    }
+
+    done() is %string:@TemplateStep {
+        done;
+    }
+
+    following() is ^TemplateReached {
+        let name = pending[0];
+        let rest = pending.slice(1, pending.size());
+        if done.has(name) {
+            ^pending = rest;
+            return;
+        }
+        let steps = compilation.partial(name);
+        ^done = done + [name: steps];
+        ^pending = rest + TemplateReferences(steps).names();
+    }
+}
+
+// The partials steps name, in order, sections included.
+hidden object TemplateReferences {
+    has steps is @TemplateStep;
+
+    TemplateReferences(steps is @TemplateStep) {
+        self.steps = steps;
+    }
+
+    names() is @string {
+        let found is @string = [];
+        steps.reduce(found) -> names, step {
+            if step.kind() == TemplateTreeKind.partial {
+                names + [step.text()];
+            }
+            else {
+                names + TemplateReferences(step.steps()).names();
+            }
+        };
+    }
+}
 
 // One compiled step: a literal, a value, a section with its steps, or a
 // partial. Immutable; the data never reaches it.
@@ -226,12 +386,13 @@ hidden object TemplateSteps {
 // One rendering: its output, its iteration count and how deep it is. Nothing
 // here is shared between renderings.
 hidden object TemplateRun {
+    has plan is TemplatePlan;
     has sink is TemplateSink;
     has iterations is TemplateCounter;
     has limits is TemplateLimits;
-    has depth is int;
+    has depth, nesting is int;
 
-    TemplateRun(:sink, :iterations, :limits, :depth);
+    TemplateRun(:plan, :sink, :iterations, :limits, :depth, :nesting);
 
     write(steps is @TemplateStep, data is Json) is void {
         for steps -> step {
@@ -249,7 +410,7 @@ hidden object TemplateRun {
                     );
                 }
                 case TemplateTreeKind.partial {
-                    throw TemplateError.partial(step.text());
+                    self.partial(step.text(), data);
                 }
                 else {
                     self.section(step, data);
@@ -303,10 +464,30 @@ hidden object TemplateRun {
     hidden body(step is TemplateStep, context is Json) is void {
         iterations.claim(limits::Limits::iterations);
         confirm depth < limits::Limits::depth else throw TemplateError.depth(limits::Limits::depth);
-        TemplateRun(sink: sink, iterations: iterations, limits: limits, depth: depth + 1).write(
-            step.steps(),
-            context
-        );
+        TemplateRun(
+            plan: plan,
+            sink: sink,
+            iterations: iterations,
+            limits: limits,
+            depth: depth + 1,
+            nesting: nesting
+        ).write(step.steps(), context);
+    }
+
+    // A partial renders with the current context; it counts as an iteration,
+    // and its nesting is bounded.
+    hidden partial(name is string, context is Json) is void {
+        confirm nesting < limits::Limits::partials
+            else throw TemplateError.partial_depth(limits::Limits::partials);
+        iterations.claim(limits::Limits::iterations);
+        TemplateRun(
+            plan: plan,
+            sink: sink,
+            iterations: iterations,
+            limits: limits,
+            depth: depth,
+            nesting: nesting + 1
+        ).write(plan.partial(name), context);
     }
 }
 
@@ -664,5 +845,104 @@ test "every limit is its own failure" {
             name;
         },
         "item"
+    );
+}
+
+test "partials render in the current context, inside sections and inside each other" {
+    let partials = TemplatePartials(
+        [
+            "item": "- {{title}}{{#tags}} #{{.}}{{/tags}}\n",
+            "list": "{{#items}}{{>item}}{{/items}}{{^items}}(empty)\n{{/items}}",
+            "header": "Order {{id}}\n",
+        ]
+    );
+    let order = Template(source: "{{>header}}{{>list}}", partials: partials);
+    let data = ParsedJson(
+        "{\"id\":17,\"items\":[{\"title\":\"Tea\",\"tags\":[\"hot\"]},{\"title\":\"Cake\",\"tags\":[]}]}"
+    ).root();
+    test.is(order.string(data), "Order 17\n- Tea #hot\n- Cake\n");
+    test.is(order.string(ParsedJson("{\"id\":18,\"items\":[]}").root()), "Order 18\n(empty)\n");
+    let writes = TemplateTestWrites();
+    order.write(data, writes);
+    test.is(writes.writes().join(""), order.string(data));
+    test.ok(partials.membership("item") && !partials.membership("Item") && !partials.membership(""));
+    test.is(partials.source("header"), "Order {{id}}\n");
+    test.throws(InvalidArgument) {
+        TemplatePartials(["": "x"]);
+    };
+}
+
+test "a partial the library lacks, or one that is not a template, fails before anything is written" {
+    let partials = TemplatePartials(
+        ["outer": "{{#never}}{{>inner}}{{/never}}", "broken": "{{#x}}", "unused": "{{"]
+    );
+    for ["text {{>missing}}", "text {{#no}}{{>missing}}{{/no}}", "text {{>outer}}"] -> source {
+        let writes = TemplateTestWrites();
+        let name = try {
+            Template(source: source, partials: partials).write(Json(), writes);
+            "";
+        }
+        catch TemplateError.partial(name) {
+            name;
+        };
+        test.ok(name == "missing" || name == "inner");
+        test.is(writes.writes().size(), 0);
+    }
+    let writes = TemplateTestWrites();
+    test.throws(TemplateFailure) {
+        Template(source: "text {{>broken}}", partials: partials).write(Json(), writes);
+    };
+    test.is(writes.writes().size(), 0);
+    test.is(Template(source: "fine", partials: partials).string(Json()), "fine");
+}
+
+test "a partial may include itself; how deep and how many is bounded" {
+    let tree = TemplatePartials(["node": "({{name}}{{#children}}{{>node}}{{/children}})"]);
+    let data = ParsedJson(
+        "{\"name\":\"a\",\"children\":[{\"name\":\"b\",\"children\":[{\"name\":\"c\",\"children\":[]}]},{\"name\":\"d\",\"children\":[]}]}"
+    ).root();
+    test.is(Template(source: "{{>node}}", partials: tree).string(data), "(a(b(c))(d))");
+    let forever = TemplatePartials(["loop": "x{{>loop}}"]);
+    test.is(
+        try {
+            Template(source: "{{>loop}}", partials: forever, limits: TemplateLimits(partials: 5)).string(
+                Json()
+            );
+            0;
+        }
+        catch TemplateError.partial_depth(limit) {
+            limit;
+        },
+        5
+    );
+    test.is(
+        try {
+            Template(source: "{{>loop}}", partials: forever, limits: TemplateLimits(iterations: 3)).string(
+                Json()
+            );
+            0;
+        }
+        catch TemplateError.iterations(limit) {
+            limit;
+        },
+        3
+    );
+    test.throws(TemplateOutputLimitExceeded) {
+        Template(source: "{{>loop}}", partials: forever, limits: TemplateLimits(output: 4)).string(
+            Json()
+        );
+    };
+    let deep = TemplatePartials(["in": "{{#.}}{{>in}}{{/.}}"]);
+    test.is(
+        try {
+            Template(source: "{{>in}}", partials: deep, limits: TemplateLimits(depth: 3)).string(
+                Json(true)
+            );
+            0;
+        }
+        catch TemplateError.depth(limit) {
+            limit;
+        },
+        3
     );
 }

@@ -6689,7 +6689,7 @@
     },
     {
       "id": "STD.TEMPLATE.ENGINE",
-      "title": "std template/engine public contract (Template, TemplateError, TemplateLimits)",
+      "title": "std template/engine public contract (Template, TemplateError, TemplateLimits, TemplatePartials)",
       "family": "Standard library: template",
       "spec_refs": [
         "std/template/engine.ok"
