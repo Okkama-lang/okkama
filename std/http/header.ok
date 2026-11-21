@@ -353,9 +353,7 @@ object HeadersWithout {
         let empty is @Header = [];
         let kept is @Header = (0..source.size()).reduce(empty) -> fields, index {
             let entry = source.item(index);
-            let excluded = selected.reduce(false) -> found, name {
-                found || name == entry.name().lowercase();
-            };
+            let excluded = selected.contains(entry.name().lowercase());
             if excluded {
                 fields;
             }

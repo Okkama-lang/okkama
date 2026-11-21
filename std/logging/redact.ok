@@ -45,9 +45,7 @@ object RedactedLogs does LogWriting {
     write(record is LogRecord) is void {
         let values = record.context().fields().values();
         let fields = Json(values.names().map() -> name {
-            let matches = names.reduce(false) -> old, candidate {
-                old || candidate == name;
-            };
+            let matches = names.contains(name);
             if matches {
                 JsonField(name, replacement);
             }

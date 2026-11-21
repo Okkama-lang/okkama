@@ -690,9 +690,7 @@ hidden object HtmlTemplateState {
             "source",
             "track",
             "wbr"
-        ].reduce(false) -> found, name {
-            found || name == tag;
-        };
+        ].contains(tag);
         confirm !slash || empty
             else throw InvalidHtmlTemplate.because("self-closing non-void element");
         if empty {
@@ -717,9 +715,7 @@ hidden object HtmlTemplateState {
             "noembed",
             "noframes",
             "noscript"
-        ].reduce(false) -> found, name {
-            found || name == tag;
-        };
+        ].contains(tag);
         return HtmlTemplateState(
             mode: if raw {
                 "raw";

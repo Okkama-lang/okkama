@@ -1484,9 +1484,7 @@ hidden object CompletionNames {
     }
 
     added(name is string) is ^CompletionNames {
-        let found = origin.reduce(false) -> old, value {
-            old || value == name;
-        };
+        let found = origin.contains(name);
         if !found {
             let revised is @string = origin + [name];
             ^origin = revised;

@@ -207,9 +207,7 @@ hidden object WebSocketServerProtocol {
 
     protocol() is string {
         for supported -> protocol {
-            if offered.reduce(false) -> found, value {
-                found || protocol == value;
-            } {
+            if offered.contains(protocol) {
                 return protocol;
             }
         }

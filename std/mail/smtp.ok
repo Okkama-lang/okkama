@@ -134,9 +134,7 @@ object SmtpCapabilities {
                             else throw InvalidSmtpCapabilities.because("AUTH requires mechanisms");
                         for (0..parameters.size()) -> position {
                             let mechanism = SmtpMechanismName(parameters.item(position)).string();
-                            let present = names.entries().reduce(false) -> found, name {
-                                found || name == mechanism;
-                            };
+                            let present = names.entries().contains(mechanism);
                             if !present {
                                 names = names.following(mechanism);
                             }

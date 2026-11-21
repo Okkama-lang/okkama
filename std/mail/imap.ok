@@ -259,9 +259,7 @@ hidden object ImapCapabilitySnapshot {
             }
             if name.starts_with("AUTH=") {
                 let mechanism = name.slice(5, name.length());
-                let present = auth.entries().reduce(false) -> found, previous {
-                    found || previous == mechanism;
-                };
+                let present = auth.entries().contains(mechanism);
                 if !present {
                     auth = auth.following(mechanism);
                 }

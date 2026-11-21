@@ -556,9 +556,7 @@ object Http2FieldSection {
                 );
             let pseudo = name.starts_with(":");
             if pseudo {
-                let permitted is bool = allowed.reduce(false) -> found, key {
-                    found || key == name;
-                };
+                let permitted is bool = allowed.contains(name);
                 confirm permitted && !ordinary.value() && !known.contains(name)
                     else throw Http2Fault.detailed(
                         Http2FaultScope.stream,
