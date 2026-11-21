@@ -2,6 +2,12 @@ module collections/sequence v1.0.0;
 
 // A role for collections with a size and items by index.
 //
+// ```okkama
+// let names is Sequencing<string> = ["Ada", "Lin"];
+// let first = names.first();
+// let count = names.size();
+// ```
+//
 //     let names is Sequencing<string> = Sorted(origin: raw);
 //     names.size();
 //     names.item(0);
@@ -34,4 +40,6 @@ role Sequencing<T> {
 }
 
 // first() or last() of an empty sequence.
+//
+// - `empty`: first() or last() was requested from a sequence with no items.
 enum EmptySequence is Error = (empty);

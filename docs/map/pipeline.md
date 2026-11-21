@@ -29,3 +29,19 @@ search results and IDE documentation. `ide::build` selects declarations using
 analysis spans; std path completion uses the same public inventory and editor
 overlays, resolving selected entries through LSP `completionItem/resolve`.
 This path neither lowers bodies nor generates or executes code.
+
+
+Documentation checks (#514) consume that same public model. `doc::examples`
+classifies CommonMark blocks with source-byte maps; CLI `doctest.rs` compiles
+selected examples using the ordinary resolver/lowering/SPB path before
+`run -t` runs inline tests. Only explicit runnable metadata permits the
+private child: verified bytecode, denied host capabilities, a cleared
+environment, disposable directory, bounded capture and wall/RSS/allocation
+limits. Unavailable isolation is an explicit compile-only result. Parent-side
+instruction maps recover original comment locations for runtime failures.
+
+`doc::coverage` counts public declarations, enum cases and computed cap fields
+and owns the completed-wave list and resolver-based file identity policy.
+IDE indexing reports `missing-docs` warnings (errors for completed std files);
+CLI root check/IR/build/run gates apply the same coverage and identity rule.
+Extraction, man and IDE documentation still never generate or execute code.

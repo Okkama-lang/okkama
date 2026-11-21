@@ -24,6 +24,15 @@ import "fs/directory" take Directory;
 // through one of two symmetric views, and the first view used picks the mode;
 // the other view then throws FileError.invalid_operation.
 //
+// ```okkama
+// let file = File(path: Path("notes.txt"));
+// defer file.close();
+// let content = file.text().content();
+// ```
+//
+// This compile-only example reads an existing UTF-8 notes.txt when used in a
+// program. File I/O is not allowed in runnable documentation examples.
+//
 //     let file = File(path: Path("notes.txt"));            // reading, UTF-8 text
 //     defer file.close();
 //     for file.text() -> line { … }                  // line by line, in batches
@@ -116,6 +125,12 @@ import "fs/directory" take Directory;
 
 // How File opens its file: reading (the default), writing (emptied first),
 // appending, or reading and writing or appending together.
+//
+// - `reading`: Opens an existing file for reading; writes are refused.
+// - `writing`: Opens for writing, creating the file or truncating its contents.
+// - `appending`: Opens for writing at the end, creating the file if absent.
+// - `reading_and_writing`: Opens an existing file for reads and writes without truncation.
+// - `reading_and_appending`: Reads and appends to the file, creating it if absent.
 enum FileMode = (reading, writing, appending, reading_and_writing, reading_and_appending);
 
 // A file on disk, opened on first use and closed once; read and written through
@@ -431,6 +446,10 @@ object FileBytes does Reading, Writing, ByteSource, Batching<byte> {
 }
 
 // Where a seek counts from.
+//
+// - `start`: Counts the byte offset from the beginning of the file.
+// - `current`: Counts the byte offset from the current position.
+// - `end`: Counts the byte offset from the end of the file.
 enum SeekOrigin = (start, current, end);
 
 hidden object FileOpening {

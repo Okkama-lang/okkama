@@ -23,6 +23,7 @@ use okkama_allocation_counter as allocation_stats;
 static ALLOCATOR: allocation_stats::Counting = allocation_stats::Counting;
 
 mod core;
+mod doctest;
 mod import_paths;
 mod lsp;
 mod man;
@@ -115,6 +116,11 @@ BUILD OPTIONS:
     -o, --output FILE      Output artifact path (required)
 
 RUN OPTIONS:
+    -t, --tests        Run inline tests and documentation examples. Fenced
+                          `okkama` examples compile by default; `okkama,ignore`
+                          illustrates; `okkama,run` opts into isolated execution
+                          and requires an adjacent `output` fence (exact stdout).
+                          Indented and other-language examples illustrate.
     --filter TEXT         With -t: run only the tests whose name contains
                           TEXT (literally, case-sensitive); repeated, the
                           tests that contain any of the texts
@@ -449,6 +455,7 @@ fn run(args: &[String]) -> Outcome {
             Ok(()) => Outcome { stdout: String::new(), stderr: String::new(), code: 0 },
             Err(message) => Outcome::failure(format!("okkama worker: {message}\n"), 1),
         },
+        "--doctest-exec" => doctest::child(rest),
         "run" => run_command(rest),
         // Как у Perl-CLI: `okkama [-t] program.ok args…`.
         "-t" => run_command(args),
@@ -798,7 +805,9 @@ USAGE:
 
 Checks each FILE like `okkama check` (imports included; files with tests in
 test mode) and adds the lint rules: unused-import, unused-let,
-unused-hidden, unreachable, snake-case. Prints
+unused-hidden, unreachable, snake-case, missing-docs and unresolved-doc-link.
+Missing public docs warn for user modules. Completed std documentation waves
+require full public declaration coverage; other std areas still warn. Prints
 `file:line:column: severity[rule]: message`; exit status 1 if anything was
 reported. A `let` whose name starts with `_` is never reported as unused.
 ";
@@ -1019,6 +1028,7 @@ fn check_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
+    if let Err(outcome) = doctest::gate(&sources) { return outcome; }
     let parsed = match parse_raw(&sources) {
         Ok(parsed) => parsed,
         Err(outcome) => return outcome,
@@ -1116,6 +1126,7 @@ fn check_profile(sources: &[SourceFile], programs: Vec<ast::Program>, tests: boo
 /// IR describes the production program: test and fake declarations are removed
 /// by the explicit pruning pass before lowering, never skipped by it.
 fn lower_source(sources: &[SourceFile], tests: bool) -> Result<(ir::Module, String), Outcome> {
+    doctest::gate(sources)?;
     let programs = parse_all(sources, tests)?;
     let source = &sources[0];
     let mut loader = loader(tests);
@@ -1494,6 +1505,12 @@ fn run_command(args: &[String]) -> Outcome {
         Ok(sources) => sources,
         Err(outcome) => return outcome,
     };
+    let docs = if tests { doctest::check(&sources, &filters) } else { Outcome::success(String::new()) };
+    if docs.code != 0 { return docs; }
+    if tests && !docs.stdout.is_empty() {
+        let parsed = match parse_raw(&sources) { Ok(parsed) => parsed, Err(outcome) => return outcome };
+        if !parsed.iter().any(okkama_compiler::ide::program_has_tests) { return docs; }
+    }
     let (mut module, warnings) = match lower_source(&sources, line.tests) {
         Ok(lowered) => lowered,
         Err(outcome) => return outcome,
@@ -1505,6 +1522,7 @@ fn run_command(args: &[String]) -> Outcome {
         // `--filter` (#277): the tests whose names contain one of the texts.
         tests.retain(|(name, _)| filters.iter().any(|text| name.contains(text.as_str())));
         if tests.is_empty() {
+            if !docs.stdout.is_empty() { return docs; }
             let texts: Vec<String> = filters.iter().map(|text| format!("{text:?}")).collect();
             return Outcome::failure(
                 format!("okkama: no test name contains {}\n", texts.join(" or ")),
@@ -1526,7 +1544,9 @@ fn run_command(args: &[String]) -> Outcome {
         Err(error) => return Outcome::failure(format!("okkama: {error}\n"), EXIT_DIAGNOSTICS),
     };
     if tests {
-        return core_tests(bytes);
+        let mut outcome = core_tests(bytes);
+        outcome.stdout.push_str(&docs.stdout);
+        return outcome;
     }
     let (command, _file) = match core::workers_for(&program, &bytes) {
         Ok(workers) => workers,

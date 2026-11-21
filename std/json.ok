@@ -22,6 +22,15 @@ import "runtime/json" take JsonParseState, JsonNodeState, json_parse_state, json
 // JSON values: one immutable Json, parsed or built in code, read without
 // casts and written by the runtime in one call.
 //
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// let order = ParsedJson("{\"id\":4711}").root();
+// Stdout().writeln(order.int("id").string());
+// ```
+// ```output
+// 4711
+// ```
+//
 //     let order = ParsedJson(text).root();
 //     order.int("id");                                // 4711
 //     order.get("customer").text("name");             // "Ada"
@@ -49,6 +58,13 @@ import "runtime/json" take JsonParseState, JsonNodeState, json_parse_state, json
 // (integers up to 21 digits, fractions down to 1e-6) and exactly otherwise.
 
 // Which of the six JSON kinds a value is.
+//
+// - `null_value`: JSON null.
+// - `boolean_value`: A JSON boolean.
+// - `number_value`: An exact JSON number.
+// - `string_value`: A Unicode JSON string.
+// - `array_value`: An ordered JSON array.
+// - `object_value`: A JSON object with unique member names.
 enum JsonKind = (null_value, boolean_value, number_value, string_value, array_value, object_value);
 
 // One JSON value, parsed or built: read it without casts, write it in one call.
@@ -58,6 +74,7 @@ object Json {
 
     // The runtime node of any Json, for building arrays and objects of them.
     cap Node {
+        // The immutable runtime node; it remains owned by this Json value.
         state is JsonNodeState {
             node;
         }
@@ -504,10 +521,12 @@ object JsonField {
 
     // Read only by Json(fields), which writes the member.
     cap Member {
+        // The unescaped JSON member name.
         name is string {
             member;
         }
 
+        // The member's immutable JSON value.
         value is Json {
             content;
         }
@@ -981,6 +1000,14 @@ object JsonLocation {
 }
 
 // What goes wrong with JSON; reads name the RFC 6901 pointer of the value.
+//
+// - `wrong_kind`: The value at pointer has actual kind instead of expected.
+// - `missing`: No value exists at the RFC 6901 pointer.
+// - `invalid_number`: The number at pointer cannot represent the requested type; spelling and reason explain the refusal.
+// - `invalid`: Invalid JSON text, with zero-based byte offset and one-based line and column, plus a message.
+// - `duplicate_member`: Building an object supplied the same member name more than once.
+// - `duplicate_member_at`: Parsing found a repeated name, with its byte offset and one-based line and column.
+// - `invalid_indentation`: Pretty-print indentation must be nonnegative; amount was refused.
 enum JsonError is Error = (wrong_kind(pointer is string, expected is JsonKind, actual is JsonKind), missing(
     pointer is string
 ), invalid_number(pointer is string, spelling is string, reason is string), invalid(

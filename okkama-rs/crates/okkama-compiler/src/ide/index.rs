@@ -29,7 +29,7 @@ pub struct Index {
 /// Индекс модуля `root` (индекс в `registry.modules` и `files`).
 pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], root: usize, loader: &mut dyn crate::lowering::ModuleLoader) -> Index {
     let docs = crate::doc::Documentation::new(registry, files, loader);
-    let diagnostics = docs.modules[root].link_warnings.iter().map(|warning| super::Diagnostic {
+    let mut diagnostics: Vec<_> = docs.modules[root].link_warnings.iter().map(|warning| super::Diagnostic {
         path: files[root].name().to_string(),
         range: LineIndex::new(files[root].text()).range(warning.span),
         severity: super::Severity::Warning,
@@ -37,6 +37,7 @@ pub fn build(registry: &Registry<'_>, bodies: &[Body], files: &[SourceFile], roo
         code: Some("unresolved-doc-link".to_string()),
         unnecessary: false,
     }).collect();
+    diagnostics.extend(super::lint::missing_docs(&files[root], &docs.modules[root], loader));
     let mut builder = Builder {
         registry,
         files,

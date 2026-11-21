@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Documentation Phase C (#514).** The entire supplied ticket is
+  authorized, without approval or language/API changes. Implementation choices
+  under #512 §§12, 14, 16, 18: compile tagged Okkama examples by default; run
+  only explicit opt-ins with expected output in a bounded, capability-restricted
+  child, otherwise compile only; count actual public declarations and enforce
+  only recorded completed std waves. Details and limits are implementation
+  choices in the [Phase C record](../std-docs-phase-c-514.md).
+
 - **2026-11-22. Documentation Phase B (#513).** The owner made the entire ticket
   the scope, without a new approval round or language changes. Open choices
   use the simplest behavior consistent with #512 §§11, 13, 16, 18; implementation

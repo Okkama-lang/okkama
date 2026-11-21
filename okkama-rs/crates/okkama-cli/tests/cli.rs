@@ -2131,3 +2131,242 @@ fn a_big_async_body_keeps_its_values_in_its_frame() {
         assert_eq!(stdout(&output), "11243\n", "stress {stress}");
     }
 }
+
+fn doctest_run(name: &str, source: &str) -> Output {
+    let file = TempFile::new(name, source.as_bytes());
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    okkama().args(["run", "-t", file.path()]).env("OKKAMA_STDLIB_DIR", std).output().unwrap()
+}
+
+#[test]
+fn doctest_compile_default_context_and_main_never_runs_without_opt_in() {
+    let out = doctest_run("doctest-context.ok", r#"module sample;
+import "io/stdout" as out;
+// Examples use this file's imports and declarations.
+//
+// ```okkama
+// main() is int { out.Stdout().writeln(Value().answer().string()); panic "must not run"; }
+// ```
+//
+// ```okkama,ignore
+// incomplete …
+// ```
+
+object Value { Value(); answer() is int { 42; } }
+main() is int { panic "original main must not run"; }
+"#);
+    assert!(out.status.success(), "{}\n{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("doctest") && stdout(&out).contains("compile"), "{}", stdout(&out));
+    // Paths include a process id, which may itself contain "42".
+    assert!(!stdout(&out).lines().any(|line| line == "42"), "{}", stdout(&out));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_runnable_expected_output_and_invalid_output() {
+    let source = r#"module sample;
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// main() is int { Stdout().writeln("ready"); 0; }
+// ```
+// ```output
+// ready
+// ```
+
+object Marker { Marker(); }
+"#;
+    let good = doctest_run("doctest-output-good.ok", source);
+    assert!(good.status.success(), "{}\n{}", stdout(&good), stderr(&good));
+    assert!(stdout(&good).contains("run"), "{}", stdout(&good));
+    let bad = doctest_run("doctest-output-bad.ok", &source.replace("// ready\n", "// wrong\n"));
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(stderr(&bad).contains("expected stdout") && stderr(&bad).contains("wrong"), "{}", stderr(&bad));
+}
+
+#[test]
+fn doctest_compile_failure_maps_to_original_comment_and_propagates_exit() {
+    let bad = doctest_run("doctest-location.ok", "module sample;\r\n// Résumé.\r\n//\r\n// ```okkama\r\n// main() is int {\r\n//     let value is int = \"bad\";\r\n//     value;\r\n// }\r\n// ```\r\n\r\nobject Marker { Marker(); }\r\n");
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(stderr(&bad).contains("doctest-location.ok:6:"), "{}", stderr(&bad));
+    let metadata = doctest_run("doctest-metadata.ok", "module sample;\n// ```okkama,run\n// 0;\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(metadata.status.code(), Some(1));
+    assert!(stderr(&metadata).contains("expected output"), "{}", stderr(&metadata));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_timeout_output_limits_and_temporary_cleanup() {
+    let root = std::env::temp_dir().join(format!("okkama-doctest-cleanup-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = TempFile::new("doctest-timeout.ok", b"module sample;\n// ```okkama,run\n// main() is int { loop {} }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    let before = std::time::Instant::now();
+    let out = okkama().args(["run", "-t", file.path()]).env("TMPDIR", &root).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("timeout (3 seconds)"), "{}", stderr(&out));
+    assert!(before.elapsed().as_secs() < 15);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "temporary directory leaked");
+    std::fs::write(&file.0, "module sample;\n// ```okkama,run\n// main() is int { 0; }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n").unwrap();
+    let success = okkama().args(["run", "-t", file.path()]).env("TMPDIR", &root).output().unwrap();
+    assert!(success.status.success(), "{}", stderr(&success));
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "success leaked temporary files");
+    std::fs::remove_dir(&root).unwrap();
+    let output = doctest_run("doctest-limit.ok", "module sample;\n// ```okkama,run\n// import \"runtime/stdio\" take stdout_write;\n// main() is int { loop { stdout_write(@byte(65, 66, 67, 10)); } }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("output"), "{}", stderr(&output));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_sandbox_denies_host_effects_and_repository_writes() {
+    for (name, import, call, permission) in [
+        ("net", "runtime/net\" take ip_parse", "ip_parse(1, \"127.0.0.1\", 1)", "Net"),
+        ("env", "runtime/environment\" take environment_snapshot", "environment_snapshot()", "Env"),
+        ("fs", "runtime/fs\" take path_encode", "path_encode(\"must-not-create\")", "Fs"),
+    ] {
+        let source = format!("module sample;\n// ```okkama,run\n// import \"{import};\n// main() is int {{ let _denied = {call}; 0; }}\n// ```\n// ```output\n// ```\n\nobject Marker {{ Marker(); }}\n");
+        let out = doctest_run(&format!("doctest-sandbox-{name}.ok"), &source);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(stderr(&out).contains(&format!("{permission} permission")), "{}", stderr(&out));
+    }
+    assert!(!PathBuf::from("must-not-create").exists());
+}
+
+#[test]
+fn missing_docs_user_warning_and_std_wave_enforcement_use_file_identity() {
+    let user = TempFile::new("missing-docs-user.ok", b"module io/stdout;\nobject Undocumented { Undocumented(); }\n");
+    let out = run(&["lint", user.path()]);
+    assert!(stdout(&out).contains("warning[missing-docs]"), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("error[missing-docs]"));
+    let root = std::env::temp_dir().join(format!("okkama-doc-wave-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("io")).unwrap();
+    let module = root.join("io/stdout.ok");
+    std::fs::write(&module, "module io/stdout;\nobject Undocumented { Undocumented(); }\n").unwrap();
+    let out = okkama().args(["lint", module.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert!(stdout(&out).contains("error[missing-docs]"), "{}\n{}", stdout(&out), stderr(&out));
+    let gate = okkama().args(["run", "-t", module.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert_eq!(gate.status.code(), Some(1));
+    assert!(stderr(&gate).contains("missing-docs"), "{}", stderr(&gate));
+    std::fs::write(&module, "module renamed;\nobject Undocumented { Undocumented(); }\n").unwrap();
+    let renamed = okkama().args(["lint", module.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert!(stdout(&renamed).contains("error[missing-docs]"), "{}", stdout(&renamed));
+    let outside = root.join("other.ok");
+    std::fs::write(&outside, "module other;\nobject Undocumented { Undocumented(); }\n").unwrap();
+    let out = okkama().args(["lint", outside.to_str().unwrap()]).env("OKKAMA_STDLIB_DIR", &root).output().unwrap();
+    assert!(stdout(&out).contains("warning[missing-docs]"), "{}", stdout(&out));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_memory_limit_and_compile_only_when_isolation_cannot_start() {
+    let source = r#"module sample;
+// ```okkama,run
+// object Grow {
+//     Grow();
+//     double(text is string) is int { if text == "" { return 0; } self.double(text + text); }
+// }
+// main() is int { Grow().double("x"); }
+// ```
+// ```output
+// ```
+
+object Marker { Marker(); }
+"#;
+    let output = doctest_run("doctest-memory.ok", source);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("memory"), "{}", stderr(&output));
+    let file = TempFile::new("doctest-unavailable.ok", b"module sample;\n// ```okkama,run\n// main() is int { panic \"must not execute\"; }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    let unavailable = file.0.join("nonexistent");
+    let out = okkama().args(["run", "-t", file.path()]).env("TMPDIR", unavailable).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("compile-only: isolation unavailable"), "{}", stdout(&out));
+}
+
+#[test]
+fn doctest_multifile_module_preserves_local_imports_and_explicit_module_context() {
+    let root = std::env::temp_dir().join(format!("okkama-doctest-imports-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let first = root.join("first.ok");
+    let second = root.join("second.ok");
+    std::fs::write(root.join("dependency.ok"), "module dependency; object Dependency { Dependency(); answer() is int { 41; } }").unwrap();
+    std::fs::write(&first, "module sample;\nimport \"dependency\" as dep;\n// ```okkama\n// main() is int { dep.Dependency().answer() + Value().answer(); }\n// ```\n//\n// ```okkama\n// module independent;\n// import \"dependency\" take Dependency;\n// main() is int { Dependency().answer(); }\n// ```\n\nobject Marker { Marker(); }\n").unwrap();
+    std::fs::write(&second, "module sample; object Value { Value(); answer() is int { 1; } }").unwrap();
+    let output = okkama().args(["run", "-t", first.to_str().unwrap(), second.to_str().unwrap()]).output().unwrap();
+    assert!(output.status.success(), "{}\n{}", stdout(&output), stderr(&output));
+    assert_eq!(stdout(&output).matches("(compile)").count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn doctest_runtime_failure_points_to_the_original_statement() {
+    let output = doctest_run("doctest-runtime-place.ok", "module sample;\n// ```okkama,run\n// main() is int {\n//     let number = 1;\n//     panic number.string();\n// }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("doctest-runtime-place.ok:5:"), "{}", stderr(&output));
+}
+
+#[test]
+fn doctest_syntax_failures_keep_positions_and_filters_select_examples() {
+    let source = "module sample;\n// ```okkama\n// main() is int {\n//     let = 1;\n//     0;\n// }\n// ```\n\nobject Marker { Marker(); }\n";
+    let output = doctest_run("doctest-syntax.ok", source);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("doctest-syntax.ok:4:"), "{}", stderr(&output));
+    let file = TempFile::new("doctest-filter.ok", b"module sample;\n// ```okkama\n// let count is int = 42;\n// ```\n\nobject Marker { Marker(); }\ntest \"inline\" { test.ok(true); }\n");
+    let selected = run(&["run", "-t", "--filter", "doctest", file.path()]);
+    assert!(selected.status.success(), "{}", stderr(&selected));
+    assert!(stdout(&selected).contains("(compile)"));
+    let inline = run(&["run", "-t", "--filter", "inline", file.path()]);
+    assert!(inline.status.success(), "{}", stderr(&inline));
+    assert!(!stdout(&inline).contains("(compile)"));
+}
+
+#[test]
+fn doctest_compile_checks_test_and_fake_bodies_instead_of_skipping_them() {
+    let output = doctest_run("doctest-test-body.ok", "module sample;\n// ```okkama\n// test \"typed\" {\n//     let number is int = \"bad\";\n//     test.is(number, 1);\n// }\n// ```\n\nobject Marker { Marker(); }\n");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("doctest-test-body.ok:4:"), "{}", stderr(&output));
+    let source = "module sample;\n// ```okkama\n// role Counter {\n//     count() is int;\n//     fake {\n//         count() is int { \"bad\"; }\n//     }\n// }\n// test \"fake\" { test.is(Counter.fake().count(), 1); }\n// ```\n\nobject Marker { Marker(); }\n";
+    let fake = doctest_run("doctest-fake-body.ok", source);
+    assert_eq!(fake.status.code(), Some(1));
+    assert!(stderr(&fake).contains("doctest-fake-body.ok:6:"), "{}", stderr(&fake));
+    let valid = source.replace("\"bad\"", "1").replace("// ```okkama\n", "// ```okkama,run\n")
+        .replace("// ```\n\nobject", "// ```\n// ```output\n// ```\n\nobject");
+    let compiled = doctest_run("doctest-test-profile.ok", &valid);
+    assert!(compiled.status.success(), "{}", stderr(&compiled));
+    assert!(stdout(&compiled).contains("compile-only: isolation unavailable"), "{}", stdout(&compiled));
+}
+
+
+#[test]
+fn missing_docs_gate_preserves_normal_frontend_diagnostic_locations() {
+    let source = TempFile::new("missing-docs-syntax.ok", b"module sample;\nmain() is int {\n    let = 1;\n}\n");
+    for command in ["check", "ir", "build", "run"] {
+        let mut args = vec![command, source.path()];
+        let output_file = TempFile::absent("missing-docs-unused.spb");
+        if command == "build" { args.extend(["-o", output_file.path()]); }
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr(&output).contains("missing-docs-syntax.ok:3:"), "{command}: {}", stderr(&output));
+    }
+}
+
+
+#[test]
+#[cfg(not(unix))]
+fn doctest_unsupported_process_monitor_falls_back_to_compile_only() {
+    let output = doctest_run("doctest-platform.ok", "module sample;\n// ```okkama,run\n// main() is int { panic \"never execute without isolation\"; }\n// ```\n// ```output\n// ```\n\nobject Marker { Marker(); }\n");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("compile-only: isolation unavailable"));
+}
+
+#[test]
+fn doctest_can_import_the_documented_module_as_a_caller() {
+    let root = std::env::temp_dir().join(format!("okkama-doctest-self-import-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("api.ok");
+    std::fs::write(&file, "module api;\n// ```okkama\n// import \"api\" as library;\n// main() is int { library.Value().answer(); }\n// ```\n\nobject Value { Value(); answer() is int { 42; } }\n").unwrap();
+    let output = run(&["run", "-t", file.to_str().unwrap()]);
+    assert!(output.status.success(), "{}\n{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("(compile)"));
+    std::fs::remove_dir_all(root).unwrap();
+}

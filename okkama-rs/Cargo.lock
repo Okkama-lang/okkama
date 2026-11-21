@@ -1231,6 +1231,7 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "mimalloc",
+ "nix 0.29.0",
  "okkama-allocation-counter",
  "okkama-compiler",
  "okkama-devtrace",

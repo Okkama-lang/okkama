@@ -21,9 +21,14 @@
 //! even a string over several lines, is never a comment, and nothing inside an
 //! action body is ever taken for documentation.
 //!
-//! Hidden declarations, fields, tests, fakes and `destroy` never appear.
+//! Hidden declarations, stored fields, tests, fakes and `destroy` never appear.
+//! Public enum cases and computed cap fields do appear. Inline enum cases
+//! may be documented by ``- `case`: Description.`` list entries in the enum's
+//! comment; a directly attached case comment takes precedence.
 
 pub mod render;
+pub mod examples;
+pub mod coverage;
 mod links;
 pub use links::{DeclarationLink, Documentation, LinkDeclaration, LinkWarning, SearchEntry, document, target as declaration_target};
 #[cfg(test)]
@@ -99,6 +104,8 @@ pub enum MemberKind {
     /// An action signature of a role.
     Signature,
     Cap,
+    Case,
+    Field,
 }
 
 /// A public module-scope declaration.
@@ -109,8 +116,9 @@ pub struct ItemDoc {
     /// As it would be declared, without a body: `object Stdout does Writing`.
     pub signature: String,
     pub doc: Option<DocText>,
-    /// Constructors, public actions and caps of an object; the action
-    /// signatures of a role.
+    /// Constructors, public actions, caps and their computed fields; role
+    /// signatures; enum cases; fields of module-scope caps. Nested cap fields
+    /// use `Cap.field` names within the owning object's members.
     pub members: Vec<MemberDoc>,
     pub span: Span,
 }
@@ -205,6 +213,11 @@ impl ModuleDoc {
         let mut items = Vec::new();
         let mut owned = Vec::new();
         for item in &program.items {
+            if let ast::Item::Cap(cap) = item
+                && cap.owner.as_ref().is_some_and(|owner| program.items.iter().any(|item| match item {
+                    ast::Item::Object(decl) => decl.hidden && decl.name.text == owner.text,
+                    _ => false,
+                })) { continue; }
             let Some(doc) = item_doc(source, &lines, item) else {
                 continue;
             };
@@ -313,7 +326,16 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
                 let roles: Vec<String> = decl.roles.iter().map(type_text).collect();
                 signature.push_str(&format!(" does {}", roles.join(", ")));
             }
-            let members = decl.members.iter().filter_map(|member| object_member(source, lines, member)).collect();
+            let mut members = Vec::new();
+            for member in &decl.members {
+                if let Some(mut doc) = object_member(source, lines, member) {
+                    doc.doc = doc.doc.filter(|text| text.span.start > decl.span.start);
+                    members.push(doc);
+                }
+                if let ast::ObjectMember::Cap(cap) = member {
+                    members.extend(cap_fields(lines, cap, &format!("{}.", cap.name.text)));
+                }
+            }
             ItemDoc { name: decl.name.text.clone(), kind: ItemKind::Object, signature, doc, members, span: decl.span }
         }
         ast::Item::Role(decl) => {
@@ -328,7 +350,7 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
                         name: signature.name.text.clone(),
                         kind: MemberKind::Signature,
                         signature: action_text(source, signature.is_async, &signature.name, &signature.params, &signature.result),
-                        doc: lines.above(lines.line_of(signature.span.start)),
+                        doc: lines.above(lines.line_of(signature.span.start)).filter(|text| text.span.start > decl.span.start),
                         span: signature.span,
                     }),
                     _ => None,
@@ -362,8 +384,13 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
                 name: decl.name.text.clone(),
                 kind: if error { ItemKind::Error } else { ItemKind::Enum },
                 signature: format!("enum {}{}{role} = ({})", decl.name.text, generics_text(&decl.generics), cases.join(", ")),
-                doc,
-                members: Vec::new(),
+                doc: doc.clone(),
+                members: decl.cases.iter().zip(&cases).map(|(case, signature)| MemberDoc {
+                    name: case.text.clone(), kind: MemberKind::Case, signature: signature.clone(),
+                    doc: lines.above(lines.line_of(case.span.start)).filter(|doc| doc.span.start > decl.span.start)
+                        .or_else(|| doc.as_ref().and_then(|text| named_case_doc(text, &case.text))),
+                    span: case.span,
+                }).collect(),
                 span: decl.span,
             }
         }
@@ -404,11 +431,42 @@ fn item_doc(source: &SourceFile, lines: &CommentLines<'_>, item: &ast::Item) -> 
             kind: ItemKind::Cap,
             signature: cap_text(decl),
             doc,
-            members: Vec::new(),
+            members: cap_fields(lines, decl, ""),
             span: decl.span,
         },
         ast::Item::Test(_) | ast::Item::Action(_) => return None,
     })
+}
+
+/// Inline enum declarations can keep their code unchanged: a named list
+/// entry in the enum comment documents that case. CommonMark parsing keeps
+/// list-like text inside a code block from being counted as documentation.
+fn named_case_doc(doc: &DocText, name: &str) -> Option<DocText> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let prefix = format!("- `{name}`: ");
+    for (event, range) in Parser::new(&doc.text).into_offset_iter() {
+        if let Event::Start(Tag::Item) = event {
+            let line = doc.text[range.clone()].lines().next().unwrap_or("");
+            if let Some(body) = line.strip_prefix(&prefix).filter(|body| !body.trim().is_empty()) {
+                let start = range.start + prefix.len();
+                let end = start + body.len();
+                return Some(DocText {
+                    text: body.into(), span: Span::new(doc.offsets[start], doc.offsets[end - 1] + 1),
+                    links: Vec::new(), offsets: doc.offsets[start..end].to_vec(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn cap_fields(lines: &CommentLines<'_>, cap: &ast::CapDecl, prefix: &str) -> Vec<MemberDoc> {
+    cap.fields.iter().map(|field| MemberDoc {
+        name: format!("{prefix}{}", field.name.text), kind: MemberKind::Field,
+        signature: format!("{} is {}", field.name.text, type_text(&field.ty)),
+        doc: lines.above(lines.line_of(field.span.start)).filter(|doc| doc.span.start > cap.span.start),
+        span: field.name.span,
+    }).collect()
 }
 
 fn object_member(source: &SourceFile, lines: &CommentLines<'_>, member: &ast::ObjectMember) -> Option<MemberDoc> {

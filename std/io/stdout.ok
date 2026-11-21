@@ -2,6 +2,13 @@ module io/stdout v1.0.0;
 
 // The process's standard output and standard error.
 //
+// ```okkama,run
+// Stdout().writeln("ready");
+// ```
+// ```output
+// ready
+// ```
+//
 //     Stdout().writeln("ready");
 //     Stdout().write("answer: ", answer.string());
 //     Stdout() <- "raw UTF-8 text" <- packet <- "\n";

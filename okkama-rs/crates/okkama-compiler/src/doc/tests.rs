@@ -187,6 +187,7 @@ fn declarations_own_the_comment_right_above_and_hidden_ones_vanish() {
         ("write", MemberKind::Action),
         ("write", MemberKind::Action),
         ("Head", MemberKind::Cap),
+        ("Head.status", MemberKind::Field),
     ]);
     assert_eq!(thing.members[1].signature, "Thing(parts is @string, separator is string = \"/\")");
     assert_eq!(thing.members[2].signature, "joined(parts is ...string) is string");
@@ -354,4 +355,108 @@ fn errors_text_and_error_enums_stand_apart() {
     let doc = doc("module m;\n\n// Things.\n//\n// # Errors\n//\n// Bad input is Bad.\n\n// Bad input.\nenum Bad is Error = (input);\n");
     let page = module_text(&doc, &Style::default());
     assert!(page.contains("ERRORS\n    Bad input is Bad.\n\n    enum Bad is Error = (input)\n"), "{page}");
+}
+
+
+#[test]
+fn doctest_kinds_output_and_exact_unicode_crlf_locations() {
+    use super::examples::ExampleKind;
+    let text = "module demo;\r\n\r\n// Résumé.\r\n//\r\n// ```okkama,ignore\r\n// unfinished …\r\n// ```\r\n//\r\n// ```okkama\r\n// let café = 1;\r\n// ```\r\n//\r\n// ```okkama,run\r\n// main() is int { 0; }\r\n// ```\r\n// ```output\r\n// ready\r\n// ```\r\n\r\nobject Demo {}\r\n";
+    let doc = doc(text);
+    let examples = doc.examples().unwrap();
+    assert_eq!(examples.len(), 3);
+    assert_eq!(examples[0].kind, ExampleKind::Illustrative);
+    assert_eq!(examples[1].kind, ExampleKind::Compile);
+    assert_eq!(examples[2].kind, ExampleKind::Run);
+    assert_eq!(examples[2].expected.as_deref(), Some("ready\n"));
+    let at = examples[1].code.find("café").unwrap();
+    let span = examples[1].source_span(crate::source::Span::new(at as u32, (at + "café".len()) as u32));
+    assert_eq!(&text[span.range()], "café");
+    assert_eq!(examples[1].code, "let café = 1;\n");
+}
+
+#[test]
+fn doctest_metadata_never_silently_skips_marked_examples() {
+    for body in [
+        "// ```okkama,run\n// 0;\n// ```\n",
+        "// ```okkama,typo\n// 0;\n// ```\n",
+        "// ```okkama run\n// 0;\n// ```\n",
+        "// ```okkama,compile,run\n// 0;\n// ```\n",
+    ] {
+        assert!(doc(&format!("module demo;\n{body}\nobject X {{}}\n")).examples().is_err());
+    }
+    let parsed = doc("module demo;\n// ```okkama\n// main() is int { panic \"never execute\"; }\n// ```\n//\n//     fragment …\n//\n// ```python\n// raise Exception()\n// ```\n\nobject X {}\n");
+    let examples = parsed.examples().unwrap();
+    assert_eq!(examples.iter().filter(|e| e.kind == super::examples::ExampleKind::Compile).count(), 1);
+    assert!(examples.iter().all(|e| e.kind != super::examples::ExampleKind::Run));
+}
+
+#[test]
+fn missing_docs_counts_real_declarations_overloads_cases_caps_and_hidden() {
+    let text = "module demo;\n// Public.\nobject Public {\n    // Construct.\n    Public();\n    // First overload.\n    read(x is int) is int { x; }\n    read(x is string) is string { x; }\n    hidden secret() is void {}\n    // A view.\n    cap View {\n        value is int { 1; }\n    }\n}\n// States.\nenum State = (\n    // Ready.\n    ready,\n    waiting\n);\nhidden object Secret { Secret(); action() is void {} }\n// Reader.\nrole Reader { read() is int; }\n";
+    let coverage = doc(text).coverage();
+    assert_eq!(coverage.total, 11);
+    assert_eq!(coverage.documented, 7);
+    let names: Vec<_> = coverage.missing.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["Public.read", "Public.View.value", "State.waiting", "Reader.read"]);
+    assert_eq!(&text[coverage.missing[2].span.range()], "waiting");
+    assert!(super::coverage::completed_wave("io/stdout"));
+    assert!(!super::coverage::completed_wave("http/client"));
+}
+
+#[test]
+fn std_documentation_coverage_and_completed_waves() {
+    fn visit(path: &std::path::Path, totals: &mut (usize, usize, usize), missing: &mut Vec<String>) {
+        let mut paths: Vec<_> = std::fs::read_dir(path).unwrap().map(|p| p.unwrap().path()).collect();
+        paths.sort();
+        for path in paths {
+            if path.is_dir() { visit(&path, totals, missing); }
+            else if path.extension().is_some_and(|e| e == "ok") {
+                let module = ModuleDoc::load(&path).unwrap();
+                let coverage = module.coverage();
+                totals.0 += 1;
+                totals.1 += coverage.documented;
+                totals.2 += coverage.total;
+                if super::coverage::completed_wave(&module.path) {
+                    println!("{}: {}/{}", module.path, coverage.documented, coverage.total);
+                    missing.extend(coverage.missing.iter().map(|item| format!("{}: {}", module.path, item.name)));
+                }
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    let mut totals = (0, 0, 0);
+    let mut missing = Vec::new();
+    visit(&root, &mut totals, &mut missing);
+    for module in super::coverage::COMPLETED_WAVES.lines().filter(|s| !s.is_empty() && !s.starts_with('#')) {
+        let path = root.join(format!("{module}.ok"));
+        assert!(path.is_file(), "completed module disappeared: {module}");
+        assert_eq!(ModuleDoc::load(&path).unwrap().path, module, "completed module identity changed");
+    }
+    println!("std documentation baseline: {} modules, {}/{} public declarations documented", totals.0, totals.1, totals.2);
+    assert!(missing.is_empty(), "undocumented completed wave declarations: {missing:?}");
+}
+
+#[test]
+fn inline_enum_cases_have_named_comment_docs_without_code_edits() {
+    let text = "module demo;\n// File modes.\n//\n// - `reading`: Opens for reading.\n// - `writing`: Truncates for writing.\n//\n// ```text\n// - `missing`: This is code, not case documentation.\n// ```\nenum Mode = (reading, writing, missing);\n";
+    let parsed = doc(text);
+    let coverage = parsed.coverage();
+    assert_eq!((coverage.documented, coverage.total), (3, 4));
+    assert_eq!(coverage.missing[0].name, "Mode.missing");
+    let text_doc = parsed.items[0].members[0].doc.as_ref().unwrap();
+    assert_eq!(text_doc.text, "Opens for reading.");
+    assert_eq!(&text[text_doc.span.range()], "Opens for reading.");
+    let source = crate::source::SourceFile::new("demo.ok", "module demo;\n// Modes.\n//\n// - `reading`: See [Missing].\nenum Mode = (reading);\n").unwrap();
+    let resolved = super::document(&source, &mut NoModules).unwrap();
+    assert_eq!(resolved.link_warnings.len(), 1, "one original link cannot produce duplicate warnings");
+}
+
+
+#[test]
+fn coverage_excludes_caps_of_hidden_owners_and_does_not_inherit_parent_comments() {
+    let hidden = doc("module demo;\nhidden object Secret {}\n// Hidden view.\ncap Secret::View { value is int { 1; } }\n");
+    assert_eq!(hidden.coverage().total, 0);
+    let public = doc("module demo;\n// Object docs cannot document the inline constructor.\nobject Public { Public(); }\n// Cap docs cannot document the inline field.\ncap Public::View { value is int { 1; } }\n");
+    assert_eq!((public.coverage().documented, public.coverage().total), (2, 4));
 }
