@@ -299,3 +299,28 @@ fn invalid_source_is_a_syntax_error() {
         SourceFile::new("t.ok", "module app v1.0.0;\nmain() is int { let = 1; }\n").unwrap();
     assert!(matches!(format(&source), Err(FormatError::Syntax(_))));
 }
+
+/// #921: a compact `if` keeps its spelling, nested and grouped ones included, and a branch's grouped fallback
+/// keeps its parentheses; the block form is unchanged.
+#[test]
+fn compact_if_keeps_its_form() {
+    let text = "module app v1.0.0;\nmain() is int {\nlet x = if ready:1 else:0;\nlet y = if a: if b: 1 else: 2 else: 3;\nlet z = if a: (o else 10) else: (if b: 1 else: 2);\nlet w = if c { 1; } else { 2; };\nif ready: 0 else: 1;\n}\n";
+    assert_eq!(
+        fmt(text),
+        "module app v1.0.0;
+
+main() is int {
+    let x = if ready: 1 else: 0;
+    let y = if a: if b: 1 else: 2 else: 3;
+    let z = if a: (o else 10) else: (if b: 1 else: 2);
+    let w = if c {
+        1;
+    }
+    else {
+        2;
+    };
+    if ready: 0 else: 1;
+}
+"
+    );
+}

@@ -1374,6 +1374,16 @@ impl<'s> Printer<'s> {
                 then_block,
                 else_block,
             } => {
+                // The compact form (#921) keeps its spelling: `if c: a else: b`.
+                if let (Some(then_value), Some(else_value)) = (sole_expression(then_block), sole_expression(else_block)) {
+                    self.word("if ");
+                    self.expr(condition);
+                    self.word(": ");
+                    self.expr(then_value);
+                    self.word(" else: ");
+                    self.expr(else_value);
+                    return;
+                }
                 self.word("if ");
                 self.expr(condition);
                 self.word(" ");
@@ -1462,6 +1472,15 @@ impl<'s> Printer<'s> {
             }
             self.expr(operand);
         }
+    }
+}
+
+/// The expression of a branch the parser built from one (a compact `if`, #921): a block holding that expression
+/// alone and spanning exactly it. A written block also spans its braces.
+fn sole_expression(block: &Block) -> Option<&Expr> {
+    match block.stmts.as_slice() {
+        [Stmt { kind: StmtKind::Expr { expr, condition: None }, span }] if *span == block.span => Some(expr),
+        _ => None,
     }
 }
 

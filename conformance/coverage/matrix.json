@@ -739,11 +739,13 @@
     "interaction": {
      "cases": [
       "L08.failure.spawned-task-observed",
-      "L08.spawn.event-barrier"
+      "L08.spawn.event-barrier",
+      "L08.spawn.unawaited-outcome-released"
      ],
      "mandatory_cases": [
       "L08.failure.spawned-task-observed",
-      "L08.spawn.event-barrier"
+      "L08.spawn.event-barrier",
+      "L08.spawn.unawaited-outcome-released"
      ],
      "requirement": "required"
     },
@@ -819,9 +821,21 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L08.cancel.after-await-settled",
+      "L08.cancel.final-async-destroy-shielded",
+      "L08.cancel.final-defer-await-interrupted",
+      "L08.cancel.final-exit-window",
+      "L08.cancel.late-after-last-await",
+      "L08.cancel.nested-frame-next-await",
       "L08.cancel.shared-awaited-survives"
      ],
      "mandatory_cases": [
+      "L08.cancel.after-await-settled",
+      "L08.cancel.final-async-destroy-shielded",
+      "L08.cancel.final-defer-await-interrupted",
+      "L08.cancel.final-exit-window",
+      "L08.cancel.late-after-last-await",
+      "L08.cancel.nested-frame-next-await",
       "L08.cancel.shared-awaited-survives"
      ],
      "requirement": "required"
@@ -2249,10 +2263,12 @@
    "aspects": {
     "boundary": {
      "cases": [
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
      "mandatory_cases": [
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
@@ -2276,12 +2292,14 @@
      "cases": [
       "L00.exit.if-expression",
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
      "mandatory_cases": [
       "L00.exit.if-expression",
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if",
       "L03.if.statement-and-expression"
      ],
@@ -4598,22 +4616,26 @@
      "cases": [
       "L01.gram.if.dangling-else",
       "L01.gram.if.else-expression",
-      "L01.gram.if.no-braces"
+      "L01.gram.if.no-braces",
+      "L03.if.compact-without-else"
      ],
      "mandatory_cases": [
       "L01.gram.if.dangling-else",
       "L01.gram.if.else-expression",
-      "L01.gram.if.no-braces"
+      "L01.gram.if.no-braces",
+      "L03.if.compact-without-else"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if"
      ],
      "mandatory_cases": [
       "L01.gram.if.chains",
+      "L03.if.compact",
       "L03.if.expression-else-if"
      ],
      "requirement": "required"
@@ -6607,11 +6629,13 @@
     "interaction": {
      "cases": [
       "L07.destroy.async-on-cancel",
-      "L07.destroy.async-on-failure"
+      "L07.destroy.async-on-failure",
+      "L08.cancel.final-async-destroy-shielded"
      ],
      "mandatory_cases": [
       "L07.destroy.async-on-cancel",
-      "L07.destroy.async-on-failure"
+      "L07.destroy.async-on-failure",
+      "L08.cancel.final-async-destroy-shielded"
      ],
      "requirement": "required"
     },
@@ -27272,6 +27296,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "mandatory_cases": [
@@ -27279,6 +27306,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "requirement": "required"
@@ -27287,18 +27317,12 @@
      "cases": [
       "L05.choice.exhaustiveness",
       "L05.choice.mixed",
-      "L05.choice.nested-branch",
-      "L05.choice.nested-call",
-      "L05.choice.nested-subject",
       "L05.choice.scope",
       "L05.choice.types"
      ],
      "mandatory_cases": [
       "L05.choice.exhaustiveness",
       "L05.choice.mixed",
-      "L05.choice.nested-branch",
-      "L05.choice.nested-call",
-      "L05.choice.nested-subject",
       "L05.choice.scope",
       "L05.choice.types"
      ],
@@ -27310,6 +27334,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "mandatory_cases": [
@@ -27317,6 +27344,9 @@
       "L05.choice.empty-collections",
       "L05.choice.enum",
       "L05.choice.evaluation",
+      "L05.choice.nested-branch",
+      "L05.choice.nested-call",
+      "L05.choice.nested-subject",
       "L05.choice.variants"
      ],
      "requirement": "required"
@@ -29523,20 +29553,26 @@
     },
     "invalid": {
      "cases": [
+      "L12.future-successor-bound-dropped",
       "L12.future-successor-dropped",
-      "L12.future-successor-obligation"
+      "L12.future-successor-obligation",
+      "L12.future-successor-typed-local-dropped"
      ],
      "mandatory_cases": [
+      "L12.future-successor-bound-dropped",
       "L12.future-successor-dropped",
-      "L12.future-successor-obligation"
+      "L12.future-successor-obligation",
+      "L12.future-successor-typed-local-dropped"
      ],
      "requirement": "required"
     },
     "normal": {
      "cases": [
+      "L12.future-successor-handoff",
       "L12.future-successor-obligation"
      ],
      "mandatory_cases": [
+      "L12.future-successor-handoff",
       "L12.future-successor-obligation"
      ],
      "requirement": "required"
@@ -31220,5 +31256,5 @@
  },
  "results_from": [],
  "schema": "ocs-coverage/2",
- "suite_tree_sha256": "07a1cd887f47cc3c220c02f39ccbb230cc3195b79791dccc84403a751feabe07"
+ "suite_tree_sha256": "5b525ac966f2016a326f912b74c2f53b31243467b3824bab3ada4c2a037b1ba7"
 }

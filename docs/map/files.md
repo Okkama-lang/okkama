@@ -2,7 +2,7 @@
 
 Lines of code (no blank or comment lines) and the first line of each file's `//!` header. Tests (`*_tests.rs`, `tests/`) are left out.
 
-## front — 35 files, 21177 lines
+## front — 35 files, 21273 lines
 
 - `okkama-compiler/src/analysis/flow.rs` 992 — Проверки потока по THIR (после типизации).
 - `okkama-compiler/src/analysis/mod.rs` 95 — Семантический анализ: всё, что можно проверить до исполнения.
@@ -19,7 +19,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/analysis/check/mod.rs` 831 — Проверка тел: имена, типы, вызовы, управление потоком.
 - `okkama-compiler/src/analysis/check/stmt.rs` 667 — Операторы: `let`, связывание полей и rebind, `return`, `confirm`,
 - `okkama-compiler/src/analysis/check/variants.rs` 579 — Nominal variant construction, pattern bindings, and optional fallback.
-- `okkama-compiler/src/syntax/format.rs` 1361 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
+- `okkama-compiler/src/syntax/format.rs` 1376 — Форматтер исходников Okkama (`okkama fmt`, форматирование в редакторе).
 - `okkama-compiler/src/syntax/limits.rs` 297 — Бюджет синтаксического дерева (H-03): глубина и число узлов.
 - `okkama-compiler/src/syntax/mod.rs` 64 — The syntactic front end: tokens, lexer, AST, parser, pruning, printers.
 - `okkama-compiler/src/syntax/prune.rs` 238 — Production pruning: removing test-only declarations from a parsed tree.
@@ -30,9 +30,9 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/ast/types.rs` 45 — Type expressions and action result specifications.
 - `okkama-compiler/src/syntax/lexer/mod.rs` 599 — The Okkama lexer.
 - `okkama-compiler/src/syntax/parser/decl.rs` 877 — Module items and object/role members.
-- `okkama-compiler/src/syntax/parser/expr.rs` 880 — Expressions.
+- `okkama-compiler/src/syntax/parser/expr.rs` 944 — Expressions.
 - `okkama-compiler/src/syntax/parser/mod.rs` 524 — The Okkama parser.
-- `okkama-compiler/src/syntax/parser/stmt.rs` 528 — Blocks and statements.
+- `okkama-compiler/src/syntax/parser/stmt.rs` 545 — Blocks and statements.
 - `okkama-compiler/src/syntax/parser/types.rs` 195 — Type expressions, result specifications and generic parameter lists.
 - `okkama-compiler/src/syntax/print/build.rs` 579 — Conversion of the typed AST into the printer [`Node`] description.
 - `okkama-compiler/src/syntax/print/json.rs` 189 — The `json` format: deterministic, pretty-printed JSON.

@@ -105,6 +105,12 @@ let checks = 0;
   check('let rows = try? db.query(sql) else 0;', 0, '?', 'invalid.illegal.removed-operator.okkama', true);
   check('try! config.parse(text);', 0, '!', 'keyword.operator.try-mark.okkama');
   check('let bad = a ? b;', 0, '?', 'invalid.illegal.removed-operator.okkama');
+  // compact if (#921): keywords, colon separators, nothing taken for a label
+  check('let x = if ready: 1 else: 0;', 0, 'if', 'keyword.control.conditional.okkama');
+  check('let x = if ready: 1 else: 0;', 0, 'else', 'keyword.control.conditional.okkama');
+  check('let x = if ready: 1 else: 0;', 0, ':', 'punctuation.separator.okkama');
+  check('let x = if ready: 1 else: 0;', 0, 'ready', 'entity.name.function.okkama', true);
+  check('let y = if a: (o else 10) else: 0;', 0, '10', 'constant.numeric.integer.okkama');
   // built-in types
   check('enum DbError is Error = (closed);', 0, 'Error', 'support.type.builtin.okkama');
   check('let m is Maybe<int> = Maybe<int>.none;', 0, 'Maybe', 'support.type.builtin.okkama');

@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Added
+
+- **Compact `if`: `if condition: a else: b` (#921).** The same `if` with one expression per branch, built by the
+  parser as the block form (each branch a block holding its expression), so analysis, lowering and the runtime
+  are unchanged. Both branches are required; a branch is an expression, never a block; the forms do not mix.
+  `else:` goes to the nearest `if`, and `else` followed by `:` never starts a fallback, so a branch's own
+  fallback takes parentheses: `if ready: (cache else 0) else: 1`. `okkama fmt` keeps the compact spelling. Book
+  11.6, spec 8.11 and the grammar, conformance `L03.if.compact`/`L03.if.compact-without-else`, VS Code 0.11.0.
+
 ## [0.6.0] — 2026-11-21
 
 0.6.0 is the rebuild ("Tweed"). Ownership is tracked per instance on Tomato's pipeline: a resource is destroyed

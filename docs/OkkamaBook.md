@@ -1093,6 +1093,27 @@ let size = if n > 5 { "large" } else if n > 2 { "medium" } else { "small" };
 An `else if` chain is an expression too: every link needs its `else`, and
 all branches produce one type.
 
+When each branch is a single expression, the compact form spells the same
+`if` with colons:
+
+```okkama
+let x = if ready: 1 else: 0;
+let label = if active: "Active" else: "Inactive";
+let size = if n > 5: "large" else: if n > 2: "medium" else: "small";
+let result = if condition:
+    calculate()
+else:
+    fallback();
+```
+
+Both branches are required, each is one expression (not a block), and the two
+forms do not mix (`if c: a else { b; }` is an error). An `else:` goes to the
+nearest `if`, so `if a: if b: 1 else: 2 else: 3` reads as written;
+parentheses group as anywhere else. `else:` never starts a fallback, so a
+branch's own fallback takes parentheses: `if ready: (cache else 0) else: 1`.
+Semantics are those of the block form: the condition is evaluated once and
+only the chosen branch runs.
+
 `match` may also be used in expression position with the same syntax as the
 match statement (Chapter 12).
 

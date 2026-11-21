@@ -48,9 +48,10 @@ impl Parser<'_> {
         let enclosing_confirm = std::mem::replace(&mut self.confirm_condition, !optional);
         let result = self.nested(|parser| {
             let mut expr = parser.logic_or()?;
+            // `else {` belongs to a statement and `else:` to a compact `if` (#921): neither starts a fallback.
             if optional
                 && parser.check(TokenKind::Else)
-                && parser.nth(1).kind != TokenKind::LeftBrace
+                && !matches!(parser.nth(1).kind, TokenKind::LeftBrace | TokenKind::Colon)
             {
                 parser.advance();
                 let fallback = if parser.eat(TokenKind::Throw) {
@@ -454,7 +455,12 @@ impl Parser<'_> {
                     "Expect \"]\" after index expression.",
                 )?;
                 // In a `confirm` condition the `else` is the confirm's (#521).
-                let fallback = if !self.confirm_condition && self.eat(TokenKind::Else) {
+                // `else:` is a compact `if`'s (#921), never the index's fallback.
+                let fallback = if !self.confirm_condition
+                    && self.check(TokenKind::Else)
+                    && self.nth(1).kind != TokenKind::Colon
+                    && self.eat(TokenKind::Else)
+                {
                     Some(Box::new(self.expression()?))
                 } else {
                     None
@@ -930,8 +936,13 @@ impl Parser<'_> {
     fn if_expression(&mut self, start: Span) -> PResult<Expr> {
         self.nested(|parser| {
             let condition = parser.expression()?;
+            parser.expect_if_body()?;
+            if parser.check(TokenKind::Colon) {
+                return parser.compact_if(start, condition);
+            }
             let then_block = parser.block()?;
             parser.consume(TokenKind::Else, "If expression requires else branch.")?;
+            parser.reject_compact_else()?;
             let else_block = if parser.eat(TokenKind::If) {
                 let nested_start = parser.previous().span;
                 Self::expression_block(parser.if_expression(nested_start)?)
@@ -947,6 +958,73 @@ impl Parser<'_> {
                 },
             })
         })
+    }
+}
+
+impl Parser<'_> {
+    /// The compact form after `if condition` (#921): `":" expression "else" ":" expression`. It builds the same
+    /// `ExprKind::If` as the block form, each branch a block holding its expression alone and spanning exactly
+    /// it, which is how the formatter tells the forms apart. `else` is mandatory, a branch is one expression (no
+    /// block), and the forms do not mix. A branch's own fallback needs parentheses: `else:` never starts one.
+    pub(super) fn compact_if(&mut self, start: Span, condition: Expr) -> PResult<Expr> {
+        self.consume(TokenKind::Colon, "Expect \":\" after the condition of a compact if.")?;
+        let then_value = self.compact_branch("if condition:")?;
+        // `if c: a else b`: the branch swallowed a fallback; the other branch needs `else:`.
+        if let ExprKind::Coalesce { fallback, .. } = &then_value.kind
+            && !self.check(TokenKind::Else)
+        {
+            return Err(self.error_at_span(
+                fallback.span,
+                "A compact if writes \"else:\" before its other branch; a fallback inside a branch takes parentheses: `if c: (x else y) else: z`.",
+            ));
+        }
+        if !self.check(TokenKind::Else) {
+            return Err(self.error_here("A compact if needs an else branch: `if condition: value else: other`."));
+        }
+        self.advance();
+        if !self.check(TokenKind::Colon) {
+            return Err(self.error_here(
+                "Expect \":\" after \"else\" in a compact if; the forms do not mix: `if c: a else: b` or `if c { a; } else { b; }`.",
+            ));
+        }
+        self.advance();
+        let else_value = self.compact_branch("else:")?;
+        Ok(Expr {
+            span: start.to(else_value.span),
+            kind: ExprKind::If {
+                condition: Box::new(condition),
+                then_block: Self::expression_block(then_value),
+                else_block: Self::expression_block(else_value),
+            },
+        })
+    }
+
+    /// One branch of a compact `if`: an expression, never a block.
+    fn compact_branch(&mut self, after: &str) -> PResult<Expr> {
+        if self.check(TokenKind::LeftBrace) {
+            return Err(self.error_here(&format!(
+                "A compact if takes an expression after \"{after}\", not a block; write blocks as `if c {{ a; }} else {{ b; }}`."
+            )));
+        }
+        self.expression()
+    }
+
+    /// After the condition of an `if`: a block or, compact, `:` (#921).
+    pub(super) fn expect_if_body(&self) -> PResult<()> {
+        if !matches!(self.peek().kind, TokenKind::LeftBrace | TokenKind::Colon) {
+            return Err(self.error_here("Expect \"{\" or \":\" after the if condition."));
+        }
+        Ok(())
+    }
+
+    /// After the `else` of a block-form `if`: `else:` belongs to the compact form only.
+    pub(super) fn reject_compact_else(&self) -> PResult<()> {
+        if self.check(TokenKind::Colon) {
+            return Err(self.error_here(
+                "A block if takes a block after \"else\"; the forms do not mix: `if c { a; } else { b; }` or `if c: a else: b`.",
+            ));
+        }
+        Ok(())
     }
 }
 

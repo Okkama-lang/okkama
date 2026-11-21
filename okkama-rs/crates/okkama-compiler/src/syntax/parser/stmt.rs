@@ -81,9 +81,19 @@ impl Parser<'_> {
             TokenKind::LeftBrace => self.block_statement()?,
             TokenKind::If => {
                 self.advance();
-                let statement = self.if_statement(start)?;
-                self.eat(TokenKind::Semicolon);
-                StmtKind::If(statement)
+                match self.if_statement_or_compact(start)? {
+                    Ok(statement) => {
+                        self.eat(TokenKind::Semicolon);
+                        StmtKind::If(statement)
+                    }
+                    // A compact `if` (#921) is an expression: it stands as an expression statement.
+                    Err(expr) => {
+                        if !self.check(TokenKind::RightBrace) {
+                            self.consume(TokenKind::Semicolon, "Expect \";\" after expression.")?;
+                        }
+                        StmtKind::Expr { expr, condition: None }
+                    }
+                }
             }
             TokenKind::Match => {
                 self.advance();
@@ -391,32 +401,44 @@ impl Parser<'_> {
 
     /// After `if`: `expr block ("else" (if_stmt | block))?`. `else if`
     /// chains recurse, so each link counts against the nesting limit.
+    /// `if` in statement position: the block form as a statement, or the compact form (#921) as the
+    /// expression it is.
+    fn if_statement_or_compact(&mut self, start: Span) -> PResult<Result<IfStmt, Expr>> {
+        self.nested(|parser| {
+            let condition = parser.expression()?;
+            parser.expect_if_body()?;
+            if parser.check(TokenKind::Colon) {
+                return parser.compact_if(start, condition).map(Err);
+            }
+            parser.finish_if_statement(start, condition).map(Ok)
+        })
+    }
+
     fn if_statement(&mut self, start: Span) -> PResult<IfStmt> {
         self.nested(|parser| {
             let condition = parser.expression()?;
-            let then_block = parser.block()?;
-            let mut else_branch = None;
-            if parser.eat(TokenKind::Else) {
-                if parser.eat(TokenKind::If) {
-                    let nested_start = parser.previous().span;
-                    else_branch =
-                        Some(ElseBranch::If(Box::new(parser.if_statement(nested_start)?)));
-                } else {
-                    else_branch = Some(ElseBranch::Block(parser.block()?));
-                }
-            }
-            let end = match &else_branch {
-                None => then_block.span,
-                Some(ElseBranch::Block(block)) => block.span,
-                Some(ElseBranch::If(nested)) => nested.span,
-            };
-            Ok(IfStmt {
-                condition,
-                then_block,
-                else_branch,
-                span: start.to(end),
-            })
+            parser.finish_if_statement(start, condition)
         })
+    }
+
+    fn finish_if_statement(&mut self, start: Span, condition: Expr) -> PResult<IfStmt> {
+        let then_block = self.block()?;
+        let mut else_branch = None;
+        if self.eat(TokenKind::Else) {
+            self.reject_compact_else()?;
+            if self.eat(TokenKind::If) {
+                let nested_start = self.previous().span;
+                else_branch = Some(ElseBranch::If(Box::new(self.if_statement(nested_start)?)));
+            } else {
+                else_branch = Some(ElseBranch::Block(self.block()?));
+            }
+        }
+        let end = match &else_branch {
+            None => then_block.span,
+            Some(ElseBranch::Block(block)) => block.span,
+            Some(ElseBranch::If(nested)) => nested.span,
+        };
+        Ok(IfStmt { condition, then_block, else_branch, span: start.to(end) })
     }
 
     /// After `match`: `expr "{" ("case" patterns body | "else" body)* "}"`, where a body is a block or, in the
