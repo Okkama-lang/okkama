@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **Regex search reuses its scratch (#463).** The NFA simulation keeps two state frontiers and swaps them, stamps
+  its visited marks with a generation (cleared in O(1)) and reuses one ε-traversal stack, instead of allocating
+  all three for every input character: a search over 900 characters is 24% faster without captures and 15% with
+  them (host, `\d+x` and `(\w)(\d+)x`).
+
 - **`match` gets compact cases; `?? … !!` is removed (#893).** A case body is a block or `case pattern: value;`, and
   the two forms mix in one `match`; `case _` is the remainder (another spelling of `else`). Nothing else about
   `match` changes: one evaluation of the subject, only the chosen case runs, bindings stay in their case, the

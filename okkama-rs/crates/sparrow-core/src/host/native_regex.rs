@@ -686,6 +686,37 @@ const SIMPLE_FOLD_EXTRAS: &[(char, char)] = &[
 ];
 
 // Identifies C/S classes; Cherokee uses a lowercase representative (#550).
+/// Visited marks of one NFA frontier, by instruction (#463): a mark is the generation that set it, so moving to
+/// the next input position clears every mark at once.
+struct Visited {
+    marks: Vec<u32>,
+    generation: u32,
+}
+
+impl Visited {
+    fn new(instructions: usize) -> Self {
+        Visited { marks: vec![0; instructions], generation: 1 }
+    }
+
+    /// Whether `at` is reached for the first time in this generation (and mark it).
+    fn first_visit(&mut self, at: usize) -> bool {
+        if self.marks[at] == self.generation {
+            return false;
+        }
+        self.marks[at] = self.generation;
+        true
+    }
+
+    fn next_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            // After 2^32 positions the stamps wrap: start again from clean marks.
+            self.marks.fill(0);
+            self.generation = 1;
+        }
+    }
+}
+
 fn fold_key(c: char) -> char {
     match c {
         // Dotless i has no C/S mapping (#550).
@@ -798,20 +829,21 @@ impl Program {
     fn add_tagged(
         &self,
         states: &mut Vec<Tagged>,
-        seen: &mut [bool],
+        seen: &mut Visited,
+        stack: &mut Vec<(i64, Vec<i64>)>,
         index: i64,
         captures: Vec<i64>,
         match_start: usize,
         position: usize,
         points: &[u32],
     ) {
-        let mut stack = vec![(index, captures)];
+        stack.clear();
+        stack.push((index, captures));
         while let Some((at, tags)) = stack.pop() {
-            if at < 0 || seen[at as usize] {
+            if at < 0 || !seen.first_visit(at as usize) {
                 continue;
             }
             let at = at as usize;
-            seen[at] = true;
             let instruction = &self.instructions[at];
             match instruction.op {
                 Op::Jump => stack.push((instruction.out, tags)),
@@ -848,7 +880,8 @@ impl Program {
     fn append_initial(
         &self,
         states: &mut Vec<Tagged>,
-        seen: &mut [bool],
+        seen: &mut Visited,
+        stack: &mut Vec<(i64, Vec<i64>)>,
         position: usize,
         points: &[u32],
     ) {
@@ -856,6 +889,7 @@ impl Program {
         self.add_tagged(
             states,
             seen,
+            stack,
             self.start as i64,
             captures,
             position,
@@ -904,9 +938,13 @@ impl Program {
         if minimum_start > length {
             return None;
         }
+        // #463: one scratch per search, reused for every input position: two state frontiers swapped in turn,
+        // visited marks stamped with a generation (cleared in O(1)), one ε-traversal stack.
         let mut states = Vec::new();
-        let mut seen = vec![false; self.instructions.len()];
-        self.append_initial(&mut states, &mut seen, minimum_start, points);
+        let mut next = Vec::new();
+        let mut seen = Visited::new(self.instructions.len());
+        let mut stack = Vec::new();
+        self.append_initial(&mut states, &mut seen, &mut stack, minimum_start, points);
         let mut best = self.best_acceptance(&states, minimum_start, None);
         if best
             .as_ref()
@@ -915,8 +953,8 @@ impl Program {
             return best;
         }
         for index in minimum_start..length {
-            let mut next = Vec::new();
-            let mut next_seen = vec![false; self.instructions.len()];
+            next.clear();
+            seen.next_generation();
             for state in &states {
                 let instruction = &self.instructions[state.index];
                 if instruction.op != Op::Consume
@@ -929,7 +967,8 @@ impl Program {
                 }
                 self.add_tagged(
                     &mut next,
-                    &mut next_seen,
+                    &mut seen,
+                    &mut stack,
                     instruction.out,
                     state.captures.clone(),
                     state.match_start,
@@ -937,8 +976,8 @@ impl Program {
                     points,
                 );
             }
-            self.append_initial(&mut next, &mut next_seen, index + 1, points);
-            states = next;
+            self.append_initial(&mut next, &mut seen, &mut stack, index + 1, points);
+            std::mem::swap(&mut states, &mut next);
             best = self.best_acceptance(&states, index + 1, best);
             if best
                 .as_ref()
@@ -1487,6 +1526,20 @@ impl Heap {
 
 #[cfg(test)]
 mod tests {
+    /// #463: a visited mark lasts one generation, and the generation after the last one starts clean.
+    #[test]
+    fn visited_marks_clear_with_each_generation() {
+        let mut seen = super::Visited::new(3);
+        assert!(seen.first_visit(1));
+        assert!(!seen.first_visit(1));
+        seen.next_generation();
+        assert!(seen.first_visit(1));
+        seen.generation = u32::MAX;
+        assert!(seen.first_visit(2));
+        seen.next_generation();
+        assert!(seen.first_visit(2), "wrapping clears the marks");
+    }
+
     use super::*;
 
     fn regex_program(pattern: &str, ascii: bool, ignore_case: bool) -> Program {
