@@ -3650,7 +3650,7 @@
     },
     {
       "id": "STD.IO.DECORATORS",
-      "title": "std io/decorators public contract (BufferedReading, ByteSnapshot, ChainedReading, ClosedReading, Discarding, InvalidReading, LimitedReading, TeeWriting)",
+      "title": "std io/decorators public contract (BrokenAsyncWriting, BufferedAsyncWriting, BufferedReading, ByteSnapshot, ChainedReading, ClosedReading, CountingAsyncReading, Discarding, InvalidReading, LimitedAsyncReading, LimitedReading, TeeWriting, TimedAsyncReading)",
       "family": "Standard library: io",
       "spec_refs": [
         "std/io/decorators.ok"

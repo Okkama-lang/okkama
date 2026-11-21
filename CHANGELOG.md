@@ -14,6 +14,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   capitals, as Unicode's SpecialCasing.txt says; other languages take the default of `string.lower()` and
   `upper()`. `title()` starts each word with its title case (`"ǆemal"` → `"ǅemal"`, `"ßa"` → `"Ssa"`,
   Georgian unchanged), a word joined across an apostrophe or a full stop (`"don't"`).
+- **Asynchronous stream decorators (#131).** `io/decorators` gets `LimitedAsyncReading` (an allowance shared by
+  reads that take turns, so overlapping reads cannot pass it; a zero limit never reads), `CountingAsyncReading`
+  (delivered bytes only, once per read, into its own or a given `Atomic<int>`), `TimedAsyncReading` (a limit per
+  read from when it runs, or one shared monotonic deadline; time cancels the read and awaits its cleanup through
+  `Within`/`Before`, then `TimedOut`) and `BufferedAsyncWriting` (bounded, ordered, explicit `flush()`; a failed
+  or cancelled send breaks it with `BrokenAsyncWriting` and never resends). The HTTP server counts with
+  `CountingAsyncReading` and times bodies with `TimedAsyncReading`; `100 Continue` and the head deadlines stay
+  HTTP's own. A body pausing past the idle timeout is answered with 408, now under test.
 - **Month and year arithmetic, today and now (#198).** `date.plus_months(n)` and `date.plus_years(n)` keep the day
   where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
   2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and

@@ -55,6 +55,7 @@ import "crypto/x509/trust" take PemTrustStore;
 import "net/endpoint" take IpEndpoint;
 import "net/failure" take NetworkClosed;
 import "io/stream" take AsyncReading, AsyncWriting, Closing;
+import "io/decorators" take CountingAsyncReading, TimedAsyncReading;
 import "url/value" take UrlParts;
 import "async/atomic" take Atomic;
 import "async/event" take Event;
@@ -787,7 +788,7 @@ hidden object HttpServerPeer {
             }
             cancelled.cancelling().check();
             let reading = Http1RequestHeadReading(
-                origin: HttpServerObservedInput(stream.input(), seen),
+                origin: CountingAsyncReading(origin: stream.input(), count: seen),
                 prefix: prefix.value(),
                 limits: limits,
                 chunk_bytes: 4096
@@ -1259,24 +1260,22 @@ hidden object HttpServerDeadline<T> {
     }
 }
 
+// HTTP's body idle timeout over TimedAsyncReading: a zero limit turns it off,
+// and running out is HttpServerBodyTimedOut, which the server answers with 408.
 hidden object HttpServerTimedInput does AsyncReading {
-    has origin is AsyncReading;
-    has limit is Duration;
-    has clock is Timing;
+    has timed is AsyncReading;
 
     HttpServerTimedInput(origin is AsyncReading, limit is Duration, clock is Timing) {
-        self.origin = origin;
-        self.limit = limit;
-        self.clock = clock;
+        timed = if limit::Span::seconds == 0.rat() {
+            origin;
+        }
+        else {
+            TimedAsyncReading(origin: origin, limit: limit, clock: clock);
+        };
     }
 
     async bytes(amount is int) is @byte {
-        let deadline is HttpServerDeadline<@byte> = HttpServerDeadline(
-            waiting: origin.bytes(amount),
-            limit: limit,
-            clock: clock
-        );
-        let reading = deadline.outcome();
+        let reading = timed.bytes(amount);
         try {
             await reading;
         }
@@ -1288,23 +1287,6 @@ hidden object HttpServerTimedInput does AsyncReading {
 
 // A request the server answered with 400 itself; reason says why.
 enum BadRequest is Error = (because(reason is string));
-
-hidden object HttpServerObservedInput does AsyncReading {
-    has origin is AsyncReading;
-    has seen is Atomic<int>;
-
-    HttpServerObservedInput(origin is AsyncReading, seen is Atomic<int>) {
-        self.origin = origin;
-        self.seen = seen;
-    }
-
-    async bytes(limit is int) is @byte {
-        let pending = origin.bytes(limit);
-        let bytes = await pending;
-        seen.replace(seen.value() + bytes.size());
-        bytes;
-    }
-}
 
 // Interims are emitted only upon the first actual source body read. Bodies
 // already in the head prefix may legitimately proceed without 100. A final
@@ -1528,6 +1510,53 @@ async test "a server answers HTTP/1.0 and keeps its connection only when asked" 
     kept.close();
     await server.drain(limit: Duration(seconds: 5));
     test.is(server.closed(), true);
+}
+
+async test "a request body that pauses past the idle timeout is answered with 408" {
+    let listener = await TcpListening(port: 0).listener();
+    let policy = ServerPolicy(
+        protocols: OrderedSet([HttpVersion.http_1_1]),
+        limits: HttpLimits(),
+        timeouts: ServerTimeouts(
+            headers: Duration(seconds: 30),
+            body_idle: Duration(milliseconds: 100),
+            keep_alive: Duration(seconds: 5),
+            handling: Duration(seconds: 30)
+        ),
+        connections: 8,
+        ranges: 16
+    );
+    let server = HttpServer(
+        listener: listener,
+        handling: EchoApplication(),
+        policy: policy,
+        clock: SystemClock()
+    ).started();
+    // A body that keeps coming is read whole.
+    let quick = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    await quick.output().write("POST /quick HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+    let answer = Atomic("");
+    loop {
+        let chunk = await quick.input().bytes(4096);
+        last if chunk.size() == 0;
+        answer.replace(answer.value() + Utf8Decoded(chunk).string());
+    }
+    quick.close();
+    test.ok(answer.value().starts_with("HTTP/1.1 200 OK\r\n"));
+    test.ok(answer.value().ends_with("POST /quick hello"));
+    // Three bytes of ten, then silence: 408, and the connection closes.
+    let slow = await TcpConnecting(address: IpAddress("127.0.0.1"), port: server::Local::port).connection();
+    await slow.output().write("POST /slow HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nabc");
+    let refusal = Atomic("");
+    loop {
+        let chunk = await slow.input().bytes(4096);
+        last if chunk.size() == 0;
+        refusal.replace(refusal.value() + Utf8Decoded(chunk).string());
+    }
+    slow.close();
+    test.ok(refusal.value().starts_with("HTTP/1.1 408 "));
+    test.ok(refusal.value().contains("\r\nConnection: close\r\n"));
+    await server.drain(limit: Duration(seconds: 5));
 }
 
 // The test CA of net/tls and its server certificate for 127.0.0.1.

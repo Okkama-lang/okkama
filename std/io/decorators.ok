@@ -21,8 +21,53 @@ module io/decorators v1.0.0;
 //   destination in order; the first failure stops the rest, and outputs already
 //   written are not undone.
 // - Discarding reads source.bytes() once and keeps nothing.
+//
+// The asynchronous ones wrap AsyncReading and AsyncWriting the same way (#131):
+//
+//     let body = LimitedAsyncReading(origin: socket.input(), limit: length);
+//     let counted = CountingAsyncReading(origin: socket.input());
+//     let patient = TimedAsyncReading(origin: socket.input(), limit: Duration(seconds: 5), clock: clock);
+//     let output = BufferedAsyncWriting(origin: socket.output(), capacity: 16384);
+//     await output.write(packet);
+//     await output.flush();
+//
+// - LimitedAsyncReading gives at most limit bytes over all its reads and never
+//   asks origin for more than is left; a zero limit ends at once without
+//   reading. Its reads take turns, one at a time in the order they began, so
+//   overlapping reads cannot pass the limit together.
+// - CountingAsyncReading adds the size of each read it delivers to its count;
+//   an end ([]), a failure or a cancelled read adds nothing. Reads go straight
+//   to origin, overlapping ones too, and each delivered size is added once.
+//   Its count is an Atomic<int>: its own from zero, or one the caller passes
+//   and reads; an int does not overflow.
+// - TimedAsyncReading limits each read to limit, its clock starting when the
+//   read runs, or every read to one deadline fixed beforehand. When time wins,
+//   the read is cancelled and its cleanup awaited (Within, Before) before
+//   TimedOut is thrown, so nothing goes on reading behind it; a read that
+//   settles first keeps its bytes or its failure. A zero limit, or a deadline
+//   already passed, leaves only a read already settled. The guarantee is
+//   cancellation's: a cleanup that never ends holds the read too.
+// - BufferedAsyncWriting gathers writes, in order, up to capacity bytes. A write
+//   resolves once its bytes are in the buffer or, when they do not fit, once
+//   the buffer and they have gone to origin: a full buffer waits for origin,
+//   and nothing reaches origin before flush() or an overflow sends it. Writes
+//   and flushes take turns in the order they began. When origin fails or a
+//   send is cancelled, part of the bytes may be out and the rest are dropped,
+//   never sent twice: the writer is broken and every later write or flush
+//   throws BrokenAsyncWriting. It does not flush when it goes; flush() before.
+//   A flush hands bytes to origin and promises nothing about a disk or a peer.
+//
+// None of the asynchronous ones owns or closes origin either.
 
-import "io/stream" take ByteSource, Reading, Writing, Closing, InvalidReadLimit;
+import "io/stream" take ByteSource, Reading, Writing, Closing, InvalidReadLimit, AsyncReading,
+    AsyncWriting;
+import "async/atomic" take Atomic;
+import "async/lock" take Lock;
+import "async/timeout" take Within, Before, TimedOut;
+import "time/duration" take Duration;
+import "time/clock" take Timing, MonotonicInstant, SystemClock;
+import "async/event" take Event;
+import "async/collect" take AllFutures;
 import "collections/sequence" take Sequencing;
 import "error" take InvalidArgument;
 import "io/buffer" take ByteBuffer;
@@ -226,6 +271,217 @@ object Discarding does Writing {
     flush() is void {}
 }
 
+// At most limit bytes of origin over all its reads, which take turns (#131).
+object LimitedAsyncReading does AsyncReading {
+    has origin is AsyncReading;
+    has left is Atomic<int>;
+    has turns is Lock;
+
+    // Reads at most limit bytes of origin; limit must not be negative.
+    LimitedAsyncReading(origin is AsyncReading, limit is int) {
+        confirm limit >= 0
+            else throw InvalidArgument.because("reading limit cannot be negative");
+        self.origin = origin;
+        left = Atomic(limit);
+        turns = Lock();
+    }
+
+    // How many bytes the limit still allows.
+    remaining() is int {
+        left.value();
+    }
+
+    // At most size bytes and no more than the limit has left; [] once it is used
+    // up or origin ends.
+    async bytes(size is int) is @byte {
+        confirm size > 0 else throw InvalidReadLimit.limit(size);
+        let guard = await turns.guard();
+        defer guard.close();
+        let allowed = left.value();
+        if allowed == 0 {
+            let ended is @byte = [];
+            return ended;
+        }
+        let requested = if size < allowed {
+            size;
+        }
+        else {
+            allowed;
+        };
+        let reading = origin.bytes(requested);
+        let chunk is @byte = await reading;
+        confirm chunk.size() <= requested
+            else throw InvalidReading.because("origin exceeded the limited-reading request");
+        left.replace(allowed - chunk.size());
+        chunk;
+    }
+}
+
+// origin, counting the bytes its reads deliver (#131).
+object CountingAsyncReading does AsyncReading {
+    has origin is AsyncReading;
+    has counted is Atomic<int>;
+
+    // origin, counted from zero.
+    CountingAsyncReading(origin is AsyncReading) {
+        self.origin = origin;
+        counted = Atomic(0);
+    }
+
+    // origin, counted into count, which may hold bytes counted before.
+    CountingAsyncReading(origin is AsyncReading, count is Atomic<int>) {
+        self.origin = origin;
+        counted = count;
+    }
+
+    // The bytes counted so far.
+    count() is int {
+        counted.value();
+    }
+
+    // origin's read of at most size bytes, counted once it is delivered.
+    async bytes(size is int) is @byte {
+        confirm size > 0 else throw InvalidReadLimit.limit(size);
+        let reading = origin.bytes(size);
+        let chunk is @byte = await reading;
+        loop {
+            let before = counted.value();
+            if counted.compare_and_replace(before, before + chunk.size()) {
+                last;
+            }
+        }
+        chunk;
+    }
+}
+
+// origin with a time limit on each read, or one deadline for all (#131).
+object TimedAsyncReading does AsyncReading {
+    has origin is AsyncReading;
+    has each is bool;
+    has limit is Duration;
+    has deadline is MonotonicInstant;
+    has clock is Timing;
+
+    // Each read of origin limited to limit on clock, from when it runs; limit
+    // must not be negative.
+    TimedAsyncReading(origin is AsyncReading, limit is Duration, clock is Timing) {
+        confirm limit::Span::seconds >= 0.rat()
+            else throw InvalidArgument.because("timeout duration cannot be negative");
+        self.origin = origin;
+        each = true;
+        self.limit = limit;
+        deadline = clock.monotonic_instant();
+        self.clock = clock;
+    }
+
+    // Every read of origin bounded by deadline on clock.
+    TimedAsyncReading(origin is AsyncReading, deadline is MonotonicInstant, clock is Timing) {
+        self.origin = origin;
+        each = false;
+        limit = Duration(seconds: 0);
+        self.deadline = deadline;
+        self.clock = clock;
+    }
+
+    // origin's read of at most size bytes, or TimedOut.
+    async bytes(size is int) is @byte {
+        confirm size > 0 else throw InvalidReadLimit.limit(size);
+        let reading = origin.bytes(size);
+        if each {
+            let bounded is Within<@byte> = Within(origin: reading, limit: limit, clock: clock);
+            let outcome = bounded.outcome();
+            await outcome;
+        }
+        else {
+            let bounded is Before<@byte> = Before(origin: reading, deadline: deadline, clock: clock);
+            let outcome = bounded.outcome();
+            await outcome;
+        }
+    }
+}
+
+// Writes gathered up to capacity bytes before they go to origin (#131).
+object BufferedAsyncWriting does AsyncWriting {
+    has origin is AsyncWriting;
+    has capacity is int;
+    has held is Atomic<@byte>;
+    has broken is Atomic<bool>;
+    has turns is Lock;
+
+    // Writes to origin through a buffer of capacity bytes, 8192 unless told;
+    // capacity must be positive.
+    BufferedAsyncWriting(origin is AsyncWriting, capacity is int = 8192) {
+        confirm capacity > 0
+            else throw InvalidArgument.because("buffer capacity must be positive");
+        self.origin = origin;
+        self.capacity = capacity;
+        let empty is @byte = [];
+        held = Atomic(empty);
+        broken = Atomic(false);
+        turns = Lock();
+    }
+
+    // How many bytes wait in the buffer.
+    buffered() is int {
+        held.value().size();
+    }
+
+    // Writes source.bytes(), taken once.
+    async write(source is ByteSource) is AsyncWriting {
+        await self.write(source.bytes());
+    }
+
+    // Puts bytes in the buffer, or sends the buffer and them on when they do not
+    // fit.
+    async write(bytes is @byte) is AsyncWriting {
+        let guard = await turns.guard();
+        defer guard.close();
+        confirm !broken.value() else throw BrokenAsyncWriting.earlier;
+        let waiting = held.value();
+        if waiting.size() + bytes.size() <= capacity {
+            held.replace(waiting + bytes);
+        }
+        else {
+            await self.sent(waiting);
+            if bytes.size() >= capacity {
+                await self.sent(bytes);
+            }
+            else {
+                held.replace(bytes);
+            }
+        }
+        self;
+    }
+
+    // Sends what waits in the buffer on to origin and gives back this output.
+    async flush() is AsyncWriting {
+        let guard = await turns.guard();
+        defer guard.close();
+        confirm !broken.value() else throw BrokenAsyncWriting.earlier;
+        await self.sent(held.value());
+        self;
+    }
+
+    // The buffer emptied and bytes written to origin; broken unless the write
+    // succeeds.
+    hidden async sent(bytes is @byte) is bool {
+        let empty is @byte = [];
+        held.replace(empty);
+        if bytes.size() == 0 {
+            return true;
+        }
+        broken.replace(true);
+        let sending = origin.write(bytes);
+        await sending;
+        broken.replace(false);
+        true;
+    }
+}
+
+// An earlier send of a BufferedAsyncWriting failed or was cancelled: part of its
+// bytes may be out, the rest were dropped, and it writes no more.
+enum BrokenAsyncWriting is Error = (earlier);
+
 // The reading was closed.
 enum ClosedReading is Error = (closed);
 
@@ -278,4 +534,442 @@ test "chained readings, snapshots, tees and discarding" {
     test.is(left.content().bytes(), [byte(7), byte(8)]);
     test.is(right.content().bytes(), [byte(7), byte(8)]);
     Discarding().write([byte(1)]);
+}
+
+// Pieces handed out one per read once gate is open, and a failure at read
+// fail_at, for the tests below.
+hidden object DecoratorTestPieces does AsyncReading {
+    has pieces is @@byte;
+    has gate is Event;
+    has fail_at is int;
+    has reads is Atomic<int>;
+    has asked is Atomic<@int>;
+
+    DecoratorTestPieces(pieces is @@byte, gate is Event = Event(ready: true), fail_at is int = -1) {
+        self.pieces = pieces;
+        self.gate = gate;
+        self.fail_at = fail_at;
+        reads = Atomic(0);
+        let none_asked is @int = [];
+        asked = Atomic(none_asked);
+    }
+
+    async bytes(limit is int) is @byte {
+        confirm limit > 0 else throw InvalidReadLimit.limit(limit);
+        asked.replace(asked.value() + [limit]);
+        let opening = gate.wait();
+        await opening;
+        let at = reads.value();
+        reads.replace(at + 1);
+        confirm at != fail_at else throw ClosedReading.closed;
+        if at >= pieces.size() {
+            let ended is @byte = [];
+            return ended;
+        }
+        let piece = pieces[at];
+        if piece.size() > limit {
+            piece.slice(0, limit);
+        }
+        else {
+            piece;
+        }
+    }
+
+    count() is int {
+        reads.value();
+    }
+
+    limits() is @int {
+        asked.value();
+    }
+}
+
+// Writes kept in order; the write at fail_at puts out half its bytes and fails.
+hidden object DecoratorTestSink does AsyncWriting {
+    has kept is Atomic<@byte>;
+    has sizes is Atomic<@int>;
+    has fail_at is int;
+    has gate is Event;
+
+    DecoratorTestSink(fail_at is int = -1, gate is Event = Event(ready: true)) {
+        self.gate = gate;
+        let empty is @byte = [];
+        kept = Atomic(empty);
+        let no_sizes is @int = [];
+        sizes = Atomic(no_sizes);
+        self.fail_at = fail_at;
+    }
+
+    async write(source is ByteSource) is AsyncWriting {
+        await self.write(source.bytes());
+    }
+
+    async write(bytes is @byte) is AsyncWriting {
+        let opening = gate.wait();
+        await opening;
+        let at = sizes.value().size();
+        sizes.replace(sizes.value() + [bytes.size()]);
+        if at == fail_at {
+            kept.replace(kept.value() + bytes.slice(0, (bytes.size() / 2).int()));
+            throw ClosedReading.closed;
+        }
+        kept.replace(kept.value() + bytes);
+        self;
+    }
+
+    bytes() is @byte {
+        kept.value();
+    }
+
+    writes() is @int {
+        sizes.value();
+    }
+}
+
+// Opens gate when it runs: the last of a group of futures started together,
+// it lets the others begin, and wait, first.
+hidden object DecoratorTestOpener does AsyncReading, AsyncWriting {
+    has gate is Event;
+
+    DecoratorTestOpener(gate is Event) {
+        self.gate = gate;
+    }
+
+    async bytes(limit is int) is @byte {
+        gate.set();
+        let ended is @byte = [];
+        ended;
+    }
+
+    async write(source is ByteSource) is AsyncWriting {
+        gate.set();
+        self;
+    }
+
+    async write(bytes is @byte) is AsyncWriting {
+        gate.set();
+        self;
+    }
+}
+
+async test "a limited async reading stops at its limit and asks for no more" {
+    test.throws(InvalidArgument) {
+        let negative = LimitedAsyncReading(origin: DecoratorTestPieces([]), limit: -1);
+    };
+    let untouched = DecoratorTestPieces([[byte(1)]]);
+    let zero = LimitedAsyncReading(origin: untouched, limit: 0);
+    test.is((await zero.bytes(10)).size(), 0);
+    test.is(untouched.count(), 0);
+    test.is(
+        try {
+            await zero.bytes(0);
+            "settled";
+        }
+        catch e is InvalidReadLimit {
+            "thrown";
+        },
+        "thrown"
+    );
+    let source = DecoratorTestPieces(
+        [[byte(1), byte(2), byte(3)], [byte(4)], [byte(5), byte(6), byte(7)]]
+    );
+    let limited = LimitedAsyncReading(origin: source, limit: 5);
+    test.is(await limited.bytes(2), [byte(1), byte(2)]);
+    test.is(limited.remaining(), 3);
+    test.is(await limited.bytes(10), [byte(4)]);
+    test.is(await limited.bytes(10), [byte(5), byte(6)]);
+    test.is((await limited.bytes(10)).size(), 0);
+    test.is(source.limits(), [2, 3, 2]);
+    test.is(source.count(), 3);
+    let short = LimitedAsyncReading(origin: DecoratorTestPieces([[byte(9)]]), limit: 10);
+    test.is(await short.bytes(4), [byte(9)]);
+    test.is((await short.bytes(4)).size(), 0);
+    test.is(short.remaining(), 9);
+    let failing = LimitedAsyncReading(
+        origin: DecoratorTestPieces(pieces: [[byte(1)]], fail_at: 0),
+        limit: 3
+    );
+    test.is(
+        try {
+            await failing.bytes(3);
+            "ended";
+        }
+        catch e is ClosedReading {
+            "failed";
+        },
+        "failed"
+    );
+    test.is(failing.remaining(), 3);
+}
+
+async test "a limited async reading: one allowance for repeated awaits and overlapping reads" {
+    let source = DecoratorTestPieces([[byte(1), byte(2)], [byte(3), byte(4)], [byte(5), byte(6)]]);
+    let limited = LimitedAsyncReading(origin: source, limit: 3);
+    let first = limited.bytes(2);
+    test.is(await first, [byte(1), byte(2)]);
+    test.is(await first, [byte(1), byte(2)]);
+    test.is(limited.remaining(), 1);
+    let gate = Event();
+    let slow = DecoratorTestPieces(
+        pieces: [[byte(1), byte(2), byte(3)], [byte(4), byte(5), byte(6)]],
+        gate: gate
+    );
+    let shared = LimitedAsyncReading(origin: slow, limit: 4);
+    let reads is @Future<@byte> = [
+        shared.bytes(3),
+        shared.bytes(3),
+        DecoratorTestOpener(gate).bytes(1)
+    ];
+    let both is AllFutures<@byte> = AllFutures(origins: reads);
+    let results = await both.results();
+    test.is(results.item(0), [byte(1), byte(2), byte(3)]);
+    test.is(results.item(1), [byte(4)]);
+    test.is(slow.limits(), [3, 1]);
+    test.is(shared.remaining(), 0);
+}
+
+async test "a counting async reading counts what its reads deliver, once" {
+    let source = DecoratorTestPieces([[byte(1), byte(2)], [byte(3)]]);
+    let counting = CountingAsyncReading(origin: source);
+    test.is(counting.count(), 0);
+    let first = counting.bytes(8);
+    test.is(await first, [byte(1), byte(2)]);
+    test.is(await first, [byte(1), byte(2)]);
+    test.is(counting.count(), 2);
+    test.is(await counting.bytes(1), [byte(3)]);
+    test.is((await counting.bytes(8)).size(), 0);
+    test.is(counting.count(), 3);
+    let failing = CountingAsyncReading(origin: DecoratorTestPieces(pieces: [[byte(1)]], fail_at: 0));
+    test.is(
+        try {
+            await failing.bytes(4);
+            "settled";
+        }
+        catch e is ClosedReading {
+            "thrown";
+        },
+        "thrown"
+    );
+    test.is(failing.count(), 0);
+    let total = Atomic(10);
+    let gate = Event();
+    let slow = DecoratorTestPieces(
+        pieces: [[byte(1), byte(2)], [byte(3), byte(4), byte(5)]],
+        gate: gate
+    );
+    let shared = CountingAsyncReading(origin: slow, count: total);
+    let reads is @Future<@byte> = [
+        shared.bytes(8),
+        shared.bytes(8),
+        DecoratorTestOpener(gate).bytes(1)
+    ];
+    let both is AllFutures<@byte> = AllFutures(origins: reads);
+    await both.results();
+    test.is(shared.count(), 15);
+    test.is(total.value(), 15);
+}
+
+async test "a timed async reading: per read, a shared deadline, and nothing read behind a timeout" {
+    let clock = SystemClock();
+    test.throws(InvalidArgument) {
+        let negative = TimedAsyncReading(
+            origin: DecoratorTestPieces([]),
+            limit: Duration(seconds: -1),
+            clock: clock
+        );
+    };
+    let quick = TimedAsyncReading(
+        origin: DecoratorTestPieces([[byte(1)]]),
+        limit: Duration(seconds: 30),
+        clock: clock
+    );
+    test.is(await quick.bytes(4), [byte(1)]);
+    test.is((await quick.bytes(4)).size(), 0);
+    let failing = TimedAsyncReading(
+        origin: DecoratorTestPieces(pieces: [[byte(1)]], fail_at: 0),
+        limit: Duration(seconds: 30),
+        clock: clock
+    );
+    test.is(
+        try {
+            await failing.bytes(4);
+            "read";
+        }
+        catch e is ClosedReading {
+            "failed";
+        },
+        "failed"
+    );
+    let gate = Event();
+    let held = DecoratorTestPieces(pieces: [[byte(7)], [byte(8)]], gate: gate);
+    let timed = TimedAsyncReading(origin: held, limit: Duration(milliseconds: 20), clock: clock);
+    let late = timed.bytes(4);
+    test.is(
+        try {
+            await late;
+            "read";
+        }
+        catch e is TimedOut {
+            "timed out";
+        },
+        "timed out"
+    );
+    test.is(
+        try {
+            await late;
+            "read";
+        }
+        catch e is TimedOut {
+            "timed out";
+        },
+        "timed out"
+    );
+    test.is(held.count(), 0);
+    let zero = TimedAsyncReading(origin: held, limit: Duration(seconds: 0), clock: clock);
+    test.is(
+        try {
+            await zero.bytes(4);
+            "settled";
+        }
+        catch e is TimedOut {
+            "thrown";
+        },
+        "thrown"
+    );
+    gate.set();
+    test.is(await held.bytes(4), [byte(7)]);
+    let closed = Event();
+    let waiting = DecoratorTestPieces(pieces: [[byte(1)]], gate: closed);
+    let started = clock.monotonic_instant();
+    let passed = TimedAsyncReading(
+        origin: waiting,
+        deadline: started + Duration(milliseconds: 30),
+        clock: clock
+    );
+    test.is(
+        try {
+            await passed.bytes(4);
+            "settled";
+        }
+        catch e is TimedOut {
+            "thrown";
+        },
+        "thrown"
+    );
+    test.is(
+        try {
+            await passed.bytes(4);
+            "settled";
+        }
+        catch e is TimedOut {
+            "thrown";
+        },
+        "thrown"
+    );
+    // One deadline for both reads: the second is not given a fresh one.
+    test.ok(clock.monotonic_instant().minus(started)::Span::seconds < 2.rat());
+    test.is(waiting.count(), 0);
+    let ahead = TimedAsyncReading(
+        origin: DecoratorTestPieces([[byte(1)], [byte(2)]]),
+        deadline: clock.monotonic_instant() + Duration(seconds: 30),
+        clock: clock
+    );
+    test.is(await ahead.bytes(4), [byte(1)]);
+    test.is(await ahead.bytes(4), [byte(2)]);
+}
+
+async test "a buffered async writing holds writes until a flush or an overflow sends them" {
+    test.throws(InvalidArgument) {
+        let refused = BufferedAsyncWriting(origin: DecoratorTestSink(), capacity: 0);
+    };
+    let sink = DecoratorTestSink();
+    let buffered = BufferedAsyncWriting(origin: sink, capacity: 4);
+    await buffered.flush();
+    test.is(sink.writes().size(), 0);
+    await buffered.write([byte(1), byte(2)]);
+    await buffered.write(ByteSnapshot([byte(3)]));
+    test.is(sink.bytes().size(), 0);
+    test.is(buffered.buffered(), 3);
+    await buffered.write([byte(4), byte(5)]);
+    test.is(sink.bytes(), [byte(1), byte(2), byte(3)]);
+    test.is(buffered.buffered(), 2);
+    await buffered.write([byte(6), byte(7), byte(8), byte(9)]);
+    test.is(
+        sink.bytes(),
+        [byte(1), byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), byte(8), byte(9)]
+    );
+    test.is(sink.writes(), [3, 2, 4]);
+    await buffered.write([byte(10)]);
+    await buffered.flush();
+    await buffered.flush();
+    test.is(sink.writes(), [3, 2, 4, 1]);
+    test.is(buffered.buffered(), 0);
+}
+
+async test "a buffered async writing keeps order and breaks without sending twice" {
+    let gate = Event();
+    let sink = DecoratorTestSink(gate: gate);
+    let buffered = BufferedAsyncWriting(origin: sink, capacity: 3);
+    let writes is @Future<AsyncWriting> = [
+        buffered.write([byte(1), byte(2)]),
+        buffered.write([byte(3), byte(4)]),
+        buffered.write([byte(5)]),
+        DecoratorTestOpener(gate).write([byte(0)]),
+    ];
+    let all is AllFutures<AsyncWriting> = AllFutures(origins: writes);
+    await all.results();
+    await buffered.flush();
+    test.is(sink.bytes(), [byte(1), byte(2), byte(3), byte(4), byte(5)]);
+    // A flush started during a write waits for it, and then sends what it left.
+    let closed = Event();
+    let gated = DecoratorTestSink(gate: closed);
+    let racing = BufferedAsyncWriting(origin: gated, capacity: 4);
+    await racing.write([byte(1), byte(2)]);
+    let steps is @Future<AsyncWriting> = [
+        racing.write([byte(3), byte(4), byte(5)]),
+        racing.flush(),
+        DecoratorTestOpener(closed).write([byte(0)]),
+    ];
+    let together is AllFutures<AsyncWriting> = AllFutures(origins: steps);
+    await together.results();
+    test.is(gated.bytes(), [byte(1), byte(2), byte(3), byte(4), byte(5)]);
+    test.is(gated.writes(), [2, 3]);
+    test.is(racing.buffered(), 0);
+    let failing = DecoratorTestSink(fail_at: 0);
+    let broken = BufferedAsyncWriting(origin: failing, capacity: 8);
+    await broken.write([byte(1), byte(2), byte(3), byte(4)]);
+    test.is(
+        try {
+            await broken.flush();
+            "flushed";
+        }
+        catch e is ClosedReading {
+            "failed";
+        },
+        "failed"
+    );
+    test.is(failing.bytes(), [byte(1), byte(2)]);
+    test.is(broken.buffered(), 0);
+    test.is(
+        try {
+            await broken.flush();
+            "flushed";
+        }
+        catch e is BrokenAsyncWriting {
+            "broken";
+        },
+        "broken"
+    );
+    test.is(
+        try {
+            await broken.write([byte(9)]);
+            "written";
+        }
+        catch e is BrokenAsyncWriting {
+            "broken";
+        },
+        "broken"
+    );
+    test.is(failing.bytes(), [byte(1), byte(2)]);
+    test.is(failing.writes(), [4]);
 }
