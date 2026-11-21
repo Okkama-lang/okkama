@@ -24,6 +24,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `Response(head:, content:)` takes the content's Content-Type (or a compatible declared one;
   `ConflictingContentType` otherwise) and known Content-Length, and `Response(head:, body:)` keeps the fields as
   given. `Response::Head` shows the one head; the existing constructors keep their behaviour.
+- **Selecting across channels without losing a message (#509).** `SelectedReceiving(receivers: [a, b])` and
+  `await selected.item()` take one message from whichever receiver is ready, as a `SelectedItem` with `source()`
+  and `value()`. Exactly one receive commits per selection, in the runtime: the other registrations are withdrawn
+  without consuming anything, a cancellation before the commit withdraws them all, and a committed message wins
+  over a cancellation or a `Within`/`Before` timeout. Ready receivers take turns from after the last winner;
+  closed ones are drained, and `ChannelClosed` comes when all are exhausted. Duplicate receivers, an empty set
+  and a second concurrent `item()` are typed errors (`examples/async/channel_selection.ok`).
 - **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
   `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
   `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in

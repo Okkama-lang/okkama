@@ -14,6 +14,17 @@ the session's memory; older rulings live in the commits and tickets named.
   only recorded completed std waves. Details and limits are implementation
   choices in the [Phase C record](../std-docs-phase-c-514.md).
 
+- **2026-11-22. Atomic channel selection (#509).** The owner authorized the
+  supplied review as the whole scope, replacing Phase A approval with an
+  implementation decision record. `SelectedReceiving<T>` is a persistent,
+  homogeneous receiver selector in Sparrow; it is not a race of receives.
+  One frame registers on distinct underlying channels. A receive commit wins
+  over subsequent cancellation, including direct `Within`/`Before` composition;
+  cleanup removes all losing registrations. Rotate ready ties after the winning
+  index, drain closed buffers, fail only after all sources are exhausted, reject
+  empty/duplicate configurations and concurrent requests with typed errors.
+  API, state machine and verification: [#509 record](../channel-selection-509.md).
+
 - **2026-11-22. Documentation Phase B (#513).** The owner made the entire ticket
   the scope, without a new approval round or language changes. Open choices
   use the simplest behavior consistent with #512 §§11, 13, 16, 18; implementation

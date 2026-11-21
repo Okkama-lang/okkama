@@ -31,6 +31,7 @@ pub enum State {
     Snapshot([i64; 4]),
     /// A channel and both of its endpoints.
     Channel(Rc<RefCell<Channel>>),
+    Selection(Selection),
     Group(Group),
     Stream(Box<Stream>),
     /// A bound action (`worker.bind`): its worker entry and receiver fields.
@@ -107,6 +108,15 @@ pub struct Channel {
     pub holders: usize,
 }
 
+/// Persistent configuration and one active request. Endpoints are ordinary
+/// fields of the selector, so GC and resource walks see their ownership.
+#[derive(Debug, Default)]
+pub struct Selection {
+    pub channels: Rc<[Rc<RefCell<Channel>>]>,
+    pub next: usize,
+    pub pending: Option<Word>,
+}
+
 #[derive(Debug, Default)]
 pub struct Group {
     /// Private ownership packet of registered Futures and their fresh inputs.
@@ -134,6 +144,9 @@ impl State {
                     visit(channel.packet, Repr::Ref);
                 }
                 channel.senders.iter().chain(&channel.receivers).for_each(|&w| visit(w, Repr::Ref));
+            }
+            Self::Selection(selection) => {
+                selection.pending.iter().for_each(|&w| visit(w, Repr::Ref));
             }
             Self::WorkerBinding { entry, fields } => {
                 visit(*entry, Repr::Ref);
@@ -342,7 +355,20 @@ impl Runtime {
             senders.into_iter().chain(receivers).collect()
         };
         for frame in blocked {
-            self.complete_wait(frame, REFUSED, None);
+            if tasks::get(frame, FLAGS) & tasks::SELECTING != 0 {
+                if Runtime::parked(frame) {
+                    self.selection_closed(frame);
+                }
+            } else {
+                self.complete_wait(frame, REFUSED, None);
+            }
+        }
+    }
+
+    pub(crate) fn selection_mut(&mut self, object: Word) -> Option<&mut Selection> {
+        match self.states.get_mut(&object) {
+            Some(State::Selection(selection)) => Some(selection),
+            _ => None,
         }
     }
 

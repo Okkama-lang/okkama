@@ -51,6 +51,8 @@ pub enum Intrinsic {
     EndpointNew,
     Send,
     Receive,
+    SelectionNew,
+    SelectionItem,
     EndpointClose,
     GroupNew,
     GroupStart,
@@ -130,6 +132,8 @@ impl Intrinsic {
             "okkama.channel.Sending.new" | "okkama.channel.Receiving.new" => EndpointNew,
             "okkama.channel.Sending.send" => Send,
             "okkama.channel.Receiving.item" => Receive,
+            "okkama.channel.SelectedReceiving.new_receivers" => SelectionNew,
+            "okkama.channel.SelectedReceiving.item" => SelectionItem,
             "okkama.channel.Sending.close" | "okkama.channel.Receiving.close" => EndpointClose,
             "okkama.scope.FutureGroup.new" => GroupNew,
             "okkama.scope.FutureGroup.start" => GroupStart,
@@ -492,6 +496,29 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
             Value(object, Repr::Ref)
         }
         EndpointNew => Value(new(runtime, &[]), Repr::Ref),
+        SelectionNew => {
+            let endpoints = runtime.heap.elements(args[0]).into_owned();
+            if endpoints.is_empty() {
+                return Fail(thrown(runtime, function, 1, &[]));
+            }
+            let mut seen = crate::word::FastSet::default();
+            let mut channels = Vec::with_capacity(endpoints.len());
+            for endpoint in endpoints {
+                let Some(channel) = runtime.channel_of(endpoint) else {
+                    return program_failure("Invalid channel endpoint");
+                };
+                if !seen.insert(Rc::as_ptr(&channel) as usize) {
+                    return Fail(thrown(runtime, function, 2, &[]));
+                }
+                channels.push(channel);
+            }
+            let object = new(runtime, &[args[0]]);
+            runtime.created(related(runtime, function, 0) as usize, object);
+            runtime.state_new(object, State::Selection(primitives::Selection {
+                channels: channels.into(), ..Default::default()
+            }));
+            Value(object, Repr::Ref)
+        }
         EndpointClose => {
             let Some(channel) = runtime.channel_of(args[0]) else {
                 return program_failure("Invalid channel endpoint");

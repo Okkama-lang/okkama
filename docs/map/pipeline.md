@@ -45,3 +45,12 @@ and owns the completed-wave list and resolver-based file identity policy.
 IDE indexing reports `missing-docs` warnings (errors for completed std files);
 CLI root check/IR/build/run gates apply the same coverage and identity rule.
 Extraction, man and IDE documentation still never generate or execute code.
+
+Channel selection (#509) follows the existing intrinsic path:
+`lowering/intrinsics.rs` and `ir::INTRINSICS` register the selector constructor
+and async `item`; `sparrow-core/contracts.rs` validates endpoint-array and
+selected-result layouts and payload type agreement. `drivers.rs` performs one
+atomic receive, queue registration and cleanup; `primitives.rs` updates parked
+selectors on close. Channel carrier analysis in `ir/mod.rs` and `failures.rs`
+includes endpoints used only through selection. Direct timeout composition
+publishes an already committed selection before attempting cancellation.

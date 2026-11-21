@@ -26,7 +26,10 @@ fn check(body: &str) {
         module app v1.0.0;
         import "async/atomic" take Atomic;
         import "async/event" take Event;
-        import "async/channel" take Channel;
+        import "async/channel" take Channel, Sending, SelectedReceiving, SelectedItem;
+        import "async/timeout" take Within;
+        import "time/clock" take Timing, Instant, MonotonicInstant, SystemClock;
+        import "time/duration" take Duration;
         object Res {{
             has name is string;
             has log is Atomic<string>;
@@ -58,6 +61,14 @@ fn check(body: &str) {
             async pairs(channel is Channel<Pair>, left is Res, right is Res) is void {{
                 await channel.sending().send(Pair(left: left, right: right));
             }}
+        }}
+        object SelectionTimer does Timing {{
+            has output is Sending<Res>;
+            has log is Atomic<string>;
+            SelectionTimer(:output, :log);
+            instant() is Instant {{ SystemClock().instant(); }}
+            monotonic_instant() is MonotonicInstant {{ SystemClock().monotonic_instant(); }}
+            async wait(duration is Duration) is void {{ await output.send(Res("T", log)); }}
         }}
         async main() is int {{
             let log = Atomic("");
@@ -247,5 +258,117 @@ fn unread_pins_go_with_the_channel() {
             confirm owned.use() == "U";
         }
         confirm log.value() == "U";
+    "#);
+}
+
+// #509: selection alone must make endpoints carry their payload ownership,
+// even when Receiving.item is never instantiated for this element type.
+#[test]
+fn selection_owns_winner_and_preserves_losing_buffered_resource() {
+    check(r#"
+        {
+            let a is Channel<Res> = Channel(capacity: 1);
+            let b is Channel<Res> = Channel(capacity: 1);
+            await Work().deliver(a, Res("A", log));
+            await Work().deliver(b, Res("B", log));
+            let selected is SelectedReceiving<Res> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+            {
+                let received = await selected.item();
+                confirm received.source() == 0;
+                confirm received.value().use() == "A";
+                confirm log.value() == "";
+            }
+            confirm log.value() == "A";
+            {
+                let received = await selected.item();
+                confirm received.source() == 1;
+                confirm received.value().use() == "B";
+            }
+            confirm log.value() == "AB";
+        }
+        confirm log.value() == "AB";
+    "#);
+}
+
+#[test]
+fn selection_committed_rendezvous_retains_resource_after_cancel() {
+    check(r#"
+        {
+            let a is Channel<Res> = Channel(capacity: 0);
+            let b is Channel<Res> = Channel(capacity: 0);
+            let selected is SelectedReceiving<Res> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+            let waiting_action is async () is SelectedItem<Res> = selected.item;
+            let waiting = spawn waiting_action();
+            await Work().deliver(b, Res("R", log));
+            waiting.cancel();
+            confirm log.value() == "";
+            { let received = await waiting; confirm received.value().use() == "R"; }
+            confirm log.value() == "";
+        }
+        confirm log.value() == "R";
+    "#);
+}
+
+#[test]
+fn selection_keeps_unread_resource_and_destroys_shared_payload_once() {
+    check(r#"
+        {
+            let a is Channel<Res> = Channel(capacity: 1);
+            let b is Channel<Res> = Channel(capacity: 1);
+            let shared = Res("S", log);
+            await a.sending().send(shared);
+            await b.sending().send(shared);
+            let selected is SelectedReceiving<Res> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+            { let received = await selected.item(); confirm received.value().use() == "S"; }
+            confirm log.value() == "";
+        }
+        confirm log.value() == "S";
+        log.replace("");
+        {
+            let a is Channel<Res> = Channel(capacity: 1);
+            let b is Channel<Res> = Channel(capacity: 1);
+            await Work().deliver(a, Res("A", log));
+            await Work().deliver(b, Res("B", log));
+            let selected is SelectedReceiving<Res> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+            { let received = await selected.item(); confirm received.value().use() == "A"; }
+            confirm log.value() == "A";
+        }
+        confirm log.value() == "AB";
+    "#);
+}
+
+#[test]
+fn selection_example_and_conformance_fixture_run() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for relative in [
+        "examples/async/channel_selection.ok",
+        "conformance/cases/L08-async-and-concurrency/channel.atomic-selection/main.ok",
+    ] {
+        let text = std::fs::read_to_string(root.join(relative)).unwrap();
+        let source = SourceFile::new(relative, text).unwrap();
+        let program = syntax::parse(&source, &syntax::ParseOptions::default()).unwrap();
+        let module = lowering::lower_linked(&program, source.name(), &mut Stdlib(root.join("std"))).unwrap();
+        ir::verify(&module).unwrap();
+        assert_eq!(support::sparrow(&module), support::Ending::Value(0), "{relative}");
+    }
+}
+
+#[test]
+fn selection_timeout_boundary_retains_committed_resource() {
+    check(r#"
+        {
+            let a is Channel<Res> = Channel(capacity: 0);
+            let b is Channel<Res> = Channel(capacity: 0);
+            let selected is SelectedReceiving<Res> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+            {
+                let received = await Within(origin: selected.item(), limit: Duration(seconds: 1),
+                    clock: SelectionTimer(output: b.sending(), log: log)).outcome();
+                confirm received.source() == 1;
+                confirm received.value().use() == "T";
+                confirm log.value() == "";
+            }
+            confirm log.value() == "T";
+        }
+        confirm log.value() == "T";
     "#);
 }

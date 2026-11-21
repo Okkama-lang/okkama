@@ -276,6 +276,18 @@ pub(crate) fn descriptor_flags(program: &Program) -> Vec<bool> {
                     carried.push((message.0 as usize, holder));
                 }
             }
+            "okkama.channel.SelectedReceiving.item" => {
+                if let (Some(selector), Some(item)) = (param(0), function.result)
+                    && let Some(Type::Object(selector)) = program.ty(selector)
+                    && let Some(Type::Object(item)) = program.ty(item)
+                    && let Some((_, array)) = program.objects[selector.0 as usize].fields.first()
+                    && let Some(Type::Array(receiver)) = program.ty(*array)
+                    && let Some(holder) = object_of(*receiver)
+                    && let Some((_, message)) = program.objects[item.0 as usize].fields.get(1)
+                {
+                    carried.push((message.0 as usize, holder));
+                }
+            }
             "okkama.channel.Channel.sending" | "okkama.channel.Channel.receiving" => {
                 if let (Some(channel), Some(endpoint)) = (param(0).and_then(object_of), function.result.and_then(object_of)) {
                     carried.push((channel, endpoint));

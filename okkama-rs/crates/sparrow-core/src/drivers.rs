@@ -287,6 +287,7 @@ fn intrinsic_step(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: u
             }
         }
         Send | Receive => channel(runtime, frame, function, intrinsic == Send, deliver),
+        SelectionItem => selection(runtime, frame, function, deliver),
         GroupWait | ScopeResult => group_wait(runtime, ctx, frame, function, intrinsic == ScopeResult, deliver),
         CollectAll | CollectRace | CollectFirst | TimeoutBefore | TimeoutWithin => {
             collect(runtime, ctx, frame, function, intrinsic, deliver)
@@ -350,7 +351,11 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
         if let Some(receiver) = Runtime::pop_parked(&mut c.receivers) {
             drop(c);
             runtime.message_deliver(runtime.held(frame, tasks::Held::Inputs), receiver, value, repr);
-            runtime.complete_wait(receiver, COMPLETED, Some(value));
+            if tasks::get(receiver, FLAGS) & tasks::SELECTING != 0 {
+                runtime.selection_commit(receiver, &channel, value);
+            } else {
+                runtime.complete_wait(receiver, COMPLETED, Some(value));
+            }
             return Done(endpoint);
         }
         if c.messages.len() < c.capacity {
@@ -391,6 +396,136 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     }
     c.receivers.push_back(frame);
     drop(c);
+    wait(frame, 0);
+    Pending
+}
+
+// ---- Atomic channel selection (#509) ----
+
+impl Runtime {
+    /// Remove all alternatives synchronously. No user code or safepoint occurs
+    /// between committing the winner, clearing PARKED and this cleanup.
+    fn selection_unwait(&mut self, frame: Word) {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let channels = self.selection_mut(selector).expect("selection").channels.clone();
+        for channel in channels.iter() {
+            channel.borrow_mut().receivers.retain(|&w| w != frame);
+        }
+    }
+
+    fn selection_result(&mut self, frame: Word, index: usize, value: Word) -> Word {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let selection = self.selection_mut(selector).expect("selection");
+        selection.next = (index + 1) % selection.channels.len();
+        let owner = self.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
+        let source = self.heap.int(index as i64);
+        let item = self.heap.object_new(owner, &[source, value]);
+        self.created(owner as usize, item);
+        item
+    }
+
+    /// Called only for a still-parked receiver popped by a sender. The sender
+    /// has transferred ownership; completion irrevocably claims this frame.
+    fn selection_commit(&mut self, frame: Word, channel: &std::rc::Rc<std::cell::RefCell<crate::primitives::Channel>>, value: Word) {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let index = self.selection_mut(selector).expect("selection").channels.iter()
+            .position(|c| std::rc::Rc::ptr_eq(c, channel)).expect("registered channel");
+        let item = self.selection_result(frame, index, value);
+        let committed = self.complete_wait(frame, COMPLETED, Some(item));
+        debug_assert!(committed);
+        self.selection_unwait(frame);
+    }
+
+    /// One close cannot refuse a selector with another usable source. A
+    /// suspended selection has no buffered messages; still test exhaustion
+    /// explicitly so the rule remains the same as a ready scan's.
+    pub(crate) fn selection_closed(&mut self, frame: Word) {
+        let function = self.function_of(frame);
+        let selector = param(self, frame, function, 0);
+        let channels = self.selection_mut(selector).expect("selection").channels.clone();
+        if channels.iter().all(|c| { let c = c.borrow(); c.closed && c.messages.is_empty() }) {
+            self.complete_wait(frame, REFUSED, None);
+            self.selection_unwait(frame);
+        }
+    }
+}
+
+fn selection(runtime: &mut Runtime, frame: Word, function: usize, deliver: bool) -> Step {
+    let selector = param(runtime, frame, function, 0);
+    let Some(s) = runtime.selection_mut(selector) else {
+        return fail(runtime, FailureKind::Program("Invalid channel selector".into()));
+    };
+    match resume(frame) {
+        COMPLETED | REFUSED => {
+            s.pending = None;
+            tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) & !tasks::SELECTING);
+            return if resume(frame) == COMPLETED { Done(tasks::get(frame, RESULT)) }
+                else { Failed(failure_of(runtime, function, 1)) };
+        }
+        _ if deliver => {
+            // A cancelled cold request has never reserved the selector. Never
+            // clear another request's reservation (including rejected calls).
+            if s.pending == Some(frame) {
+                runtime.selection_unwait(frame);
+                runtime.selection_mut(selector).expect("selection").pending = None;
+            }
+            tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) & !tasks::SELECTING);
+            return cancelled(runtime);
+        }
+        WAITING => return Pending,
+        _ => {}
+    }
+    if s.pending.is_some() {
+        return Failed(failure_of(runtime, function, 2));
+    }
+    let channels = s.channels.clone();
+    let start = s.next;
+    let owner = runtime.loaded.program.functions[function].intrinsic.as_ref().expect("intrinsic").objects[0].0;
+    let payload = runtime.loaded.program.objects[owner as usize].fields[1].1;
+    let repr = Kind::of(&runtime.loaded.program, payload).repr();
+    let mut open = false;
+    for offset in 0..channels.len() {
+        let index = (start + offset) % channels.len();
+        let channel = &channels[index];
+        let mut c = channel.borrow_mut();
+        if *c.repr.get_or_insert(repr) != repr {
+            drop(c);
+            return fail(runtime, FailureKind::Program("Channel endpoints disagree on the message type".into()));
+        }
+        if let Some(value) = c.messages.pop_front() {
+            let packet = c.packet;
+            let sender = Runtime::pop_parked(&mut c.senders);
+            drop(c);
+            runtime.message_deliver(packet, frame, value, repr);
+            if let Some(sender) = sender {
+                let payload = param(runtime, sender, runtime.function_of(sender), 1);
+                channel.borrow_mut().messages.push_back(payload);
+                runtime.message_accept(sender, channel, payload, repr);
+                runtime.complete_wait(sender, COMPLETED, None);
+            }
+            return Done(runtime.selection_result(frame, index, value));
+        }
+        if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
+            drop(c);
+            let value = param(runtime, sender, runtime.function_of(sender), 1);
+            runtime.message_deliver(runtime.held(sender, tasks::Held::Inputs), frame, value, repr);
+            runtime.complete_wait(sender, COMPLETED, None);
+            return Done(runtime.selection_result(frame, index, value));
+        }
+        open |= !c.closed;
+    }
+    if !open {
+        return Failed(failure_of(runtime, function, 1));
+    }
+    runtime.selection_mut(selector).expect("selection").pending = Some(frame);
+    tasks::set(frame, FLAGS, tasks::get(frame, FLAGS) | tasks::SELECTING);
+    for channel in channels.iter() {
+        let mut c = channel.borrow_mut();
+        if !c.closed { c.receivers.push_back(frame); }
+    }
     wait(frame, 0);
     Pending
 }
@@ -827,7 +962,7 @@ fn collect(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
             runtime.listen(entry, frame);
         }
     }
-    if deliver {
+    if deliver && !timeout_committed_selection(runtime, ctx, frame, function) {
         let failure = runtime.cancelled_failure();
         collection(runtime, frame).external = Some(failure);
         cancel_collection(runtime, ctx, frame);
@@ -983,6 +1118,16 @@ fn cancel_collection(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word) {
 }
 
 fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, index: usize) {
+    // A timeout's cancellation cannot abandon an irrevocably received value,
+    // even if its timer notification was queued before origin publication.
+    if index == 1 {
+        let c = collection(runtime, frame);
+        if c.strategy == Strategy::Timeout && !c.finishing
+            && tasks::get(c.entries[1], tasks::STATE) == DONE
+        {
+            timeout_committed_selection(runtime, ctx, frame, function);
+        }
+    }
     let entry = collection(runtime, frame).entries[index];
     let mut result = match tasks::get(entry, tasks::STATE) {
         DONE => Ok(tasks::get(entry, RESULT)),
@@ -1028,6 +1173,33 @@ fn consume(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize, i
     if cancel {
         cancel_collection(runtime, ctx, frame);
     }
+}
+
+/// Resolve a timeout's directly selected origin before attempting cancellation.
+/// This only publishes a receive already committed by the channel: it never
+/// starts or polls an uncommitted origin, nor changes ordinary future races.
+fn timeout_committed_selection(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize) -> bool {
+    let c = collection(runtime, frame);
+    if c.strategy != Strategy::Timeout || c.finishing || c.consumed[0] {
+        return false;
+    }
+    let origin = c.entries[0];
+    let selected = runtime.intrinsics[runtime.function_of(origin)] == Some(Intrinsic::SelectionItem);
+    let committed = tasks::get(origin, tasks::STATE) == DONE
+        || (tasks::get(origin, tasks::STATE) == tasks::RUNNING && resume(origin) == COMPLETED);
+    if !selected || !committed {
+        return false;
+    }
+    if tasks::get(origin, tasks::STATE) != DONE {
+        // The selection driver only publishes its committed outcome here;
+        // there is no user code, safepoint or further channel operation.
+        drive(runtime, ctx, origin);
+    }
+    consume(runtime, ctx, frame, function, 0);
+    let c = collection(runtime, frame);
+    c.ready.retain(|&index| index != 0);
+    c.inbox.retain(|&entry| entry != origin);
+    true
 }
 
 fn collect_finish(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, function: usize) -> Step {
@@ -1223,3 +1395,7 @@ fn drain(runtime: &mut Runtime, ctx: *mut Ctx, frame: Word, receiver: Word) -> S
     }
     Failed(primary)
 }
+
+#[cfg(test)]
+#[path = "selection_tests.rs"]
+mod selection_tests;

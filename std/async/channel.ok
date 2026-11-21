@@ -1,6 +1,9 @@
 module async/channel v1.0.0;
 
 import "async/atomic" take Atomic;
+import "async/timeout" take Within, Before, TimedOut;
+import "time/clock" take SystemClock, Timing, Instant, MonotonicInstant;
+import "time/duration" take Duration;
 
 // Bounded typed channels for cooperative async work.
 //
@@ -139,6 +142,64 @@ object Receiving<T> {
 // The channel was closed.
 enum ChannelClosed is Error = (closed);
 
+// A persistent atomic receive across channels of the same element type.
+//
+//     let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+//     let message = await selected.item();
+//     test.is(message.source(), 0);
+//
+// Receivers must be nonempty and refer to distinct underlying channels. A ready
+// tie uses cyclic input order, initially from zero, then from the index after
+// the previous winner. Suspended alternatives retain channel FIFO order.
+// Closed buffers are drained; ChannelClosed means every source is exhausted.
+// One item() may run at a time. Cancellation before commit withdraws all
+// alternatives; a committed receive wins over later cancellation. Within and
+// Before compose with item() for timeouts and await its cancellation cleanup.
+object SelectedReceiving<T> {
+    has receivers is @Receiving<T>;
+
+    // Binds distinct receivers; EmptyChannelSelection or DuplicateChannelReceiver
+    // rejects an invalid configuration before a selector exists.
+    SelectedReceiving(receivers is @Receiving<T>) {
+        panic "SelectedReceiving.new_receivers is a VM intrinsic";
+    }
+
+    // Exactly one message and its input index. ConcurrentChannelSelection if
+    // another request is pending on this selector.
+    async item() is SelectedItem<T> {
+        panic "SelectedReceiving.item is a VM intrinsic";
+    }
+}
+
+// A selected message, retaining the winning value and its zero-based source.
+//
+//     let message = await selected.item();
+//     consume(message.source(), message.value());
+object SelectedItem<T> {
+    has index is int;
+    has payload is T;
+
+    SelectedItem(source is int, value is T) {
+        self.index = source;
+        self.payload = value;
+    }
+
+    // The receiver's zero-based position in the selector's input array.
+    source() is int { index; }
+
+    // The message whose receive committed.
+    value() is T { payload; }
+}
+
+// No alternatives were supplied to the selector constructor.
+enum EmptyChannelSelection is Error = (empty);
+
+// Two input endpoints refer to the same underlying channel.
+enum DuplicateChannelReceiver is Error = (duplicate);
+
+// A second item() started while the previous request was still pending.
+enum ConcurrentChannelSelection is Error = (pending);
+
 // A negative capacity.
 enum InvalidChannelCapacity is Error = (capacity(capacity is int));
 
@@ -218,4 +279,214 @@ async test "a receiver is walked with for await until closed and drained" {
         walked.replace(walked.value() + 1);
     }
     test.is(walked.value(), 0);
+}
+
+async test "selection rotates three buffered sources without consuming losers" {
+    let a is Channel<int> = Channel(capacity: 64);
+    let b is Channel<int> = Channel(capacity: 64);
+    let c is Channel<int> = Channel(capacity: 64);
+    for 0..64 -> i {
+        await a.sending().send(i);
+        await b.sending().send(100 + i);
+        await c.sending().send(200 + i);
+    }
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving(), c.receiving()]);
+    for 0..192 -> i {
+        let received = await selected.item();
+        test.is(received.source(), i % 3);
+        test.is(received.value(), (i % 3) * 100 + (i / 3).int());
+    }
+    a.sending().close();
+    b.sending().close();
+    c.sending().close();
+    test.is(try { await selected.item(); false; } catch error is ChannelClosed { true; }, true);
+}
+
+async test "selection acknowledges one rendezvous and leaves the other sender waiting" {
+    let a is Channel<int> = Channel(capacity: 0);
+    let b is Channel<int> = Channel(capacity: 0);
+    let first = spawn a.sending().send(11);
+    let second = spawn b.sending().send(22);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let received = await selected.item();
+    test.is(received.source(), 0);
+    test.is(received.value(), 11);
+    await first;
+    test.is(await b.receiving().item(), 22);
+    await second;
+}
+
+async test "a suspended selector accepts an arriving sender and can be reused" {
+    let a is Channel<int> = Channel(capacity: 0);
+    let b is Channel<int> = Channel(capacity: 0);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let waiting_action is async () is SelectedItem<int> = selected.item;
+    let waiting = spawn waiting_action();
+    await b.sending().send(42);
+    let received = await waiting;
+    test.is(received.source(), 1);
+    test.is(received.value(), 42);
+    let again_action is async () is SelectedItem<int> = selected.item;
+    let again = spawn again_action();
+    await a.sending().send(43);
+    test.is((await again).value(), 43);
+}
+
+async test "selection cancellation withdraws every alternative without losing messages" {
+    let a is Channel<int> = Channel(capacity: 1);
+    let b is Channel<int> = Channel(capacity: 1);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let cold = selected.item();
+    cold.cancel();
+    let waiting_action is async () is SelectedItem<int> = selected.item;
+    let waiting = spawn waiting_action();
+    waiting.cancel();
+    waiting.cancel();
+    try { await waiting; } catch error is Cancelled { error.text(); }
+    await a.sending().send(10);
+    await b.sending().send(20);
+    test.is(await a.receiving().item(), 10);
+    test.is(await b.receiving().item(), 20);
+    // Timeout drains the cancelled request before permitting reuse.
+    test.is(try {
+        await Within(origin: selected.item(), limit: Duration(milliseconds: 1), clock: SystemClock()).outcome();
+        false;
+    } catch error is TimedOut { true; }, true);
+    await a.sending().send(30);
+    test.is((await selected.item()).value(), 30);
+}
+
+async test "selection keeps a committed rendezvous when cancellation arrives before delivery" {
+    let a is Channel<int> = Channel(capacity: 0);
+    let b is Channel<int> = Channel(capacity: 0);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let waiting_action is async () is SelectedItem<int> = selected.item;
+    let waiting = spawn waiting_action();
+    await b.sending().send(99);
+    waiting.cancel();
+    test.is((await waiting).value(), 99);
+}
+
+async test "selection ignores closed drained sources and drains closed buffers" {
+    let a is Channel<int> = Channel(capacity: 1);
+    let b is Channel<int> = Channel(capacity: 0);
+    await a.sending().send(7);
+    a.sending().close();
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    test.is((await selected.item()).value(), 7);
+    let waiting_action is async () is SelectedItem<int> = selected.item;
+    let waiting = spawn waiting_action();
+    a.sending().close();
+    await b.sending().send(8);
+    test.is((await waiting).source(), 1);
+    let exhausted_action is async () is SelectedItem<int> = selected.item;
+    let exhausted = spawn exhausted_action();
+    b.sending().close();
+    test.is(try { await exhausted; false; } catch error is ChannelClosed { true; }, true);
+}
+
+async test "closing one suspended alternative preserves the other registration" {
+    let a is Channel<int> = Channel(capacity: 0);
+    let b is Channel<int> = Channel(capacity: 0);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let waiting_action is async () is SelectedItem<int> = selected.item;
+    let waiting = spawn waiting_action();
+    a.sending().close();
+    await b.sending().send(5);
+    test.is((await waiting).value(), 5);
+}
+
+async test "selection rejects empty sets aliases and concurrent requests" {
+    let a is Channel<int> = Channel(capacity: 0);
+    let b is Channel<int> = Channel(capacity: 0);
+    let empty is @Receiving<int> = [];
+    test.is(try { let refused is SelectedReceiving<int> = SelectedReceiving(receivers: empty); false; }
+        catch error is EmptyChannelSelection { true; }, true);
+    let endpoint = a.receiving();
+    test.is(try { let refused is SelectedReceiving<int> = SelectedReceiving(receivers: [endpoint, endpoint]); false; }
+        catch error is DuplicateChannelReceiver { true; }, true);
+    test.is(try { let refused is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), a.receiving()]); false; }
+        catch error is DuplicateChannelReceiver { true; }, true);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let waiting_action is async () is SelectedItem<int> = selected.item;
+    let waiting = spawn waiting_action();
+    test.is(try { await selected.item(); false; }
+        catch error is ConcurrentChannelSelection { true; }, true);
+    await a.sending().send(1);
+    test.is((await waiting).value(), 1);
+}
+
+async test "Within and Before withdraw all selection registrations" {
+    let a is Channel<int> = Channel(capacity: 1);
+    let b is Channel<int> = Channel(capacity: 1);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let clock = SystemClock();
+    test.is(try {
+        await Within(origin: selected.item(), limit: Duration(milliseconds: 1), clock: clock).outcome();
+        false;
+    } catch error is TimedOut { true; }, true);
+    test.is(try {
+        await Before(origin: selected.item(), deadline: clock.monotonic_instant() + Duration(milliseconds: 1), clock: clock).outcome();
+        false;
+    } catch error is TimedOut { true; }, true);
+    await a.sending().send(12);
+    await b.sending().send(13);
+    test.is((await selected.item()).value(), 12);
+    test.is(await b.receiving().item(), 13);
+}
+
+async test "two ready sources rotate and an occasional source is not starved" {
+    let a is Channel<int> = Channel(capacity: 80);
+    let b is Channel<int> = Channel(capacity: 80);
+    let c is Channel<int> = Channel(capacity: 1);
+    for 0..80 -> i {
+        await a.sending().send(i);
+        await b.sending().send(i);
+    }
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving(), c.receiving()]);
+    let occasional = Atomic(0);
+    for 0..60 -> i {
+        if i % 6 == 0 { await c.sending().send(i); }
+        let received = await selected.item();
+        if received.source() == 2 { occasional.replace(occasional.value() + 1); }
+    }
+    test.is(occasional.value(), 10);
+}
+
+async test "a single configured source and noninteger payloads work" {
+    let text is Channel<string> = Channel(capacity: 1);
+    await text.sending().send("selected");
+    let strings is SelectedReceiving<string> = SelectedReceiving(receivers: [text.receiving()]);
+    let received = await strings.item();
+    test.is(received.source(), 0);
+    test.is(received.value(), "selected");
+    let a is Channel<float> = Channel(capacity: 1);
+    let b is Channel<float> = Channel(capacity: 1);
+    await b.sending().send(1.5);
+    let floats is SelectedReceiving<float> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    test.is((await floats.item()).value(), 1.5);
+}
+
+// The timer body commits a send and settles before the receive driver gets
+// its next scheduler turn: a deterministic commit-versus-timeout boundary.
+hidden object SelectionSendingClock does Timing {
+    has output is Sending<int>;
+    SelectionSendingClock(:output);
+
+    instant() is Instant { SystemClock().instant(); }
+    monotonic_instant() is MonotonicInstant { SystemClock().monotonic_instant(); }
+    async wait(duration is Duration) is void { await output.send(47); }
+}
+
+async test "a committed selection wins over a timer settled before publication" {
+    let a is Channel<int> = Channel(capacity: 0);
+    let b is Channel<int> = Channel(capacity: 0);
+    let selected is SelectedReceiving<int> = SelectedReceiving(receivers: [a.receiving(), b.receiving()]);
+    let clock = SelectionSendingClock(output: b.sending());
+    let within = await Within(origin: selected.item(), limit: Duration(seconds: 1), clock: clock).outcome();
+    test.is(within.source(), 1);
+    test.is(within.value(), 47);
+    let before = await Before(origin: selected.item(),
+        deadline: clock.monotonic_instant() + Duration(seconds: 1), clock: clock).outcome();
+    test.is(before.value(), 47);
 }

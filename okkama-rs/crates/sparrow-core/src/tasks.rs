@@ -75,6 +75,8 @@ const AWAIT_SUSPENDED: u64 = 256;
 const COMPLETING: u64 = 512;
 /// With COMPLETING: the action returned a result (RESULT), not a failure.
 const RESERVED: u64 = 1024;
+/// One atomic channel-selection request, possibly in several receiver queues.
+pub const SELECTING: u64 = 2048;
 
 /// Several frames awaiting one Future.
 #[derive(Debug, Default)]
