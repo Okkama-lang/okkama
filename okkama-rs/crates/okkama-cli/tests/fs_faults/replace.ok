@@ -1,0 +1,29 @@
+module replace v1.0.0;
+
+// Run by tests/fs_faults.rs (#934) with SPARROW_CORE_FS_FAULTS set: replaces
+// DIR/notes.txt, which the test filled with "old", with "new", and prints how
+// the replace ended, what the file holds and how many entries the directory
+// has.
+import "fs/file" take File;
+import "fs/error" take FileError;
+import "fs/path" take Path;
+import "runtime/fs" take directory_entries, path_encode;
+import "cli/arguments" take ProcessArguments;
+import "io/stdout" take Stdout;
+
+main() is int {
+    let directory = Path(ProcessArguments().strings()[0]);
+    let path = directory.child("notes.txt");
+    let ended = try {
+        File(path: path).text().replace("new");
+        "replaced";
+    }
+    catch e is FileError {
+        "refused: " + e.text();
+    };
+    let out = Stdout();
+    out.writeln(ended);
+    out.writeln("content: " + File(path: path).text().content());
+    out.writeln("entries: " + directory_entries(path_encode(directory.string())).size().string());
+    0;
+}

@@ -62,6 +62,7 @@ pub(crate) fn handles(n: Native) -> bool {
 /// file is refused; `sync_all` is F_FULLFSYNC on macOS. Hosts without POSIX
 /// directories answer `Unsupported`.
 fn sync_directory(path: &Path) -> std::io::Result<()> {
+    crate::host::native_fs::injected_fault("directory_sync")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
