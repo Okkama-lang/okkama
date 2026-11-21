@@ -82,14 +82,14 @@ fn cold_future_cancelled_before_start_retains_dependencies() {
 }
 
 #[test]
-fn cold_future_awaited_twice_keeps_dependencies_until_owner_exits() {
+fn cold_future_awaited_twice_releases_unused_inputs_at_completion() {
     check(r#"
         {
             let cold = Factory().make(log);
             confirm log.value() == "";
             confirm await cold == "RA";
             confirm await cold == "RA";
-            confirm log.value() == "";
+            confirm log.value() == "AR";
         }
         confirm log.value() == "AR";
     "#);
@@ -120,7 +120,7 @@ fn cold_future_in_object_transfers_dependencies() {
 }
 
 #[test]
-fn cold_future_completed_then_escaped_retains_original_arguments() {
+fn cold_future_completed_then_escaped_keeps_cache_without_unused_inputs() {
     check(r#"
         {
             let cold = if true {
@@ -128,7 +128,7 @@ fn cold_future_completed_then_escaped_retains_original_arguments() {
                 confirm await inner == "RA";
                 inner;
             } else { Factory().make(log); };
-            confirm log.value() == "";
+            confirm log.value() == "AR";
             confirm await cold == "RA";
         }
         confirm log.value() == "AR";

@@ -687,6 +687,37 @@ impl Function {
     }
 }
 
+/// #587 (OIR-2 §7.3): a channel's capabilities own the fresh messages it buffers, so `Channel<T>`, `Sending<T>`
+/// and `Receiving<T>` carry `T` as if it were a field. Pairs (object, carried type) read off the channel
+/// intrinsics' signatures; the runtime's `descriptor_flags` applies the same rule.
+pub(crate) fn channel_carriers(module: &Module) -> Vec<(usize, Type)> {
+    let mut carried = Vec::new();
+    for function in &module.functions {
+        let Some((name, _)) = function.intrinsic() else { continue };
+        let param = |index: usize| function.params.get(index).and_then(|value| function.values.get(value.0));
+        let result = match &function.result {
+            ResultType::Value(ty) => Some(ty),
+            ResultType::Void => None,
+        };
+        match (name, param(0)) {
+            ("okkama.channel.Sending.send", Some(Type::Object(holder))) => {
+                carried.extend(param(1).map(|message| (holder.0, message.clone())));
+            }
+            ("okkama.channel.Receiving.item", Some(Type::Object(holder))) => {
+                carried.extend(result.map(|message| (holder.0, message.clone())));
+            }
+            ("okkama.channel.Channel.sending" | "okkama.channel.Channel.receiving", Some(Type::Object(channel))) => {
+                if let Some(Type::Object(endpoint)) = result {
+                    carried.push((channel.0, Type::Object(*endpoint)));
+                    carried.push((endpoint.0, Type::Object(*channel)));
+                }
+            }
+            _ => {}
+        }
+    }
+    carried
+}
+
 /// Базовый блок: параметры, инструкции и обязательный терминатор.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {

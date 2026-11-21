@@ -40,10 +40,10 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/syntax/print/tokens.rs` 85 — Token dumps (`okkama tokens`).
 - `okkama-compiler/src/syntax/print/tree.rs` 95 — The `tree` format: an indented tree with node kinds and labelled fields.
 
-## lower — 14 files, 11595 lines
+## lower — 14 files, 11605 lines
 
 - `okkama-compiler/src/lowering/builder.rs` 236 — Построение тела функции OIR.
-- `okkama-compiler/src/lowering/ctx.rs` 1583 — Контекст lowering из THIR: специализации, функции, объявления OIR.
+- `okkama-compiler/src/lowering/ctx.rs` 1593 — Контекст lowering из THIR: специализации, функции, объявления OIR.
 - `okkama-compiler/src/lowering/futures.rs` 126 — Conservative unique-cache proofs, independent of optional OIR passes (#581).
 - `okkama-compiler/src/lowering/intrinsics.rs` 345 — Intrinsics std `async/*` (OIR-1 §14.2): действия и конструкторы объектов,
 - `okkama-compiler/src/lowering/mod.rs` 766 — Преобразование AST в OIR-1 (§19 спецификации `docs/compiler/OIR-1.md`).
@@ -57,18 +57,18 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-compiler/src/lowering/body/mod.rs` 3082 — Lowering тела функции из THIR: SSA-переменные, слияние ветвей, области.
 - `okkama-compiler/src/lowering/body/scopes.rs` 379 — Области Okkama: регионы владения, `defer` и выходы (OIR-1 §7, §19.3).
 
-## ir — 12 files, 7378 lines
+## ir — 12 files, 7409 lines
 
 - `okkama-compiler/src/ir/cfg.rs` 573 — Граф управления функции: преемники, доминаторы, места определений.
 - `okkama-compiler/src/ir/fold.rs` 82 — Constant folding with exact arithmetic (H-36).
 - `okkama-compiler/src/ir/hoist.rs` 57 — Константы циклов — перед циклом.
 - `okkama-compiler/src/ir/linearity.rs` 205 — The ownership linearity check (#910): in every function after the IR passes, each cleanup region and each
-- `okkama-compiler/src/ir/mod.rs` 1536 — OIR-1 — промежуточное представление программы (`docs/compiler/OIR-1.md`).
+- `okkama-compiler/src/ir/mod.rs` 1563 — OIR-1 — промежуточное представление программы (`docs/compiler/OIR-1.md`).
 - `okkama-compiler/src/ir/ownership.rs` 941 — Read-only ownership census after the OIR passes (#553).
-- `okkama-compiler/src/ir/param_adopts.rs` 293 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
+- `okkama-compiler/src/ir/param_adopts.rs` 295 — Closed-world parameter borrowing; runtime regions remain authoritative (#555).
 - `okkama-compiler/src/ir/print.rs` 907 — Канонический текст OIR-1 (§18 спецификации).
 - `okkama-compiler/src/ir/recursion.rs` 257 — Рекурсия в OIR: проверка бесконечной рекурсии и хвостовой самовызов → цикл.
-- `okkama-compiler/src/ir/regions.rs` 257 — Регионы, которые никогда не владеют идентичностями, — убираются.
+- `okkama-compiler/src/ir/regions.rs` 259 — Регионы, которые никогда не владеют идентичностями, — убираются.
 - `okkama-compiler/src/ir/statics.rs` 384 — Static resources (#909 step 2b): a resource created, used and ending in one scope of one function is destroyed
 - `okkama-compiler/src/ir/verify.rs` 1886 — Верификатор OIR-1 (§17 спецификации).
 
@@ -105,19 +105,19 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-sparrow/src/typing.rs` 1136 — Типы операндов и результатов инструкций (OIR-1, как верификатор IR
 - `okkama-sparrow/src/verify.rs` 510 — Проверка программы до исполнения: ссылки таблиц, регистры, переходы и
 
-## ownership-runtime — 2 files, 2298 lines
+## ownership-runtime — 2 files, 2519 lines
 
-- `sparrow-core/src/failures.rs` 1681 — Failures, resource regions and the text of a failure that reaches the top.
-- `sparrow-core/src/tasks.rs` 617 — Stackless async: the heap frame of an async call is also its Future.
+- `sparrow-core/src/failures.rs` 1833 — Failures, resource regions and the text of a failure that reaches the top.
+- `sparrow-core/src/tasks.rs` 686 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30390 lines
+## sparrow — 63 files, 30409 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
 - `sparrow-core/src/contracts.rs` 439 — Load-time contracts of intrinsics: what the core assumes about the SPB
-- `sparrow-core/src/drivers.rs` 1094 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
+- `sparrow-core/src/drivers.rs` 1102 — Drivers: the bodies of async natives and intrinsics (see `tasks`).
 - `sparrow-core/src/heap.rs` 2062 — Non-moving precise heap (decision R1). Every object starts with a header:
-- `sparrow-core/src/intrinsics.rs` 1008 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
+- `sparrow-core/src/intrinsics.rs` 1013 — Runtime-provided functions (SPB `intrinsic`). Synchronous ones run here;
 - `sparrow-core/src/io.rs` 175 — External waits: native I/O requests (Rust futures of the providers) and
 - `sparrow-core/src/jit.rs` 2700 — Whole-function compilation to machine code (Cranelift), lazily on first call.
 - `sparrow-core/src/lib.rs` 365 — Sparrow execution core (rebuild journal: okkama-docs `runtime/new-runtime/core-rebuild.md`).
@@ -125,8 +125,8 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/natives.rs` 301 — Native providers. Arguments and results are words whose representation
 - `sparrow-core/src/ops.rs` 1748 — Exact semantics of value instructions without an inline fast path.
 - `sparrow-core/src/pointer_free.rs` 351 — Whole-register proofs for GC root omission (#535/#539), after SPB verification.
-- `sparrow-core/src/primitives.rs` 367 — State of the async primitives (Atomic, Event and Cancellation, Lock and
-- `sparrow-core/src/program.rs` 185 — Static facts about a loaded SPB program: the machine representation of every
+- `sparrow-core/src/primitives.rs` 372 — State of the async primitives (Atomic, Event and Cancellation, Lock and
+- `sparrow-core/src/program.rs` 186 — Static facts about a loaded SPB program: the machine representation of every
 - `sparrow-core/src/runtime.rs` 909 — Runtime state shared with machine code, runtime helpers called from it, and
 - `sparrow-core/src/scalar.rs` 45 — Scalar text forms shared with the previous engine (byte-identical output).
 - `sparrow-core/src/word.rs` 71 — One machine word per value. The representation is chosen by the static SPB

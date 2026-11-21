@@ -2698,7 +2698,10 @@ A lazy ordinary async call retains its receiver and evaluated arguments in the
 ownership graph before it starts. An escaping Future transfers fresh owned
 dependencies; borrowed outer resources retain their existing owner. Cancelling
 before startup or never awaiting the Future still permits exactly-once cleanup
-at the owning scope's exit.
+at the owning scope's exit. Once the action completes, the inputs its result
+does not keep are destroyed before the Future publishes that result. Runtime
+operations (channel sends and receives, collectors) keep their inputs until the
+Future itself goes.
 
 Fresh identities in one acquired aggregate register in creation order, so map
 key sorting and closure capture enumeration cannot change reverse cleanup order.

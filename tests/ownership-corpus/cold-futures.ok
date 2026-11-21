@@ -1,4 +1,5 @@
 // Book 20.2, 31.5: lazy futures retain receiver and arguments before startup.
+// #587: completed actions release inputs not retained by their cached outcome.
 module ownership v1.0.0;
 
 import "tap" take Tap;
@@ -95,11 +96,11 @@ async main() is int {
         let second = await cold;
         t.note("repeated await result: " + second);
         t = t.is(second, "RA", "repeated await uses cached result");
-        t.note("await keeps dependencies in future owner: " + log.value());
-        t = t.is(log.value(), "", "await keeps dependencies in future owner");
+        t.note("completed action releases inputs not retained by outcome: " + log.value());
+        t = t.is(log.value(), "AR", "completed action releases inputs not retained by outcome");
     }
 
-    t.note("awaited future releases dependencies once in reverse order: " + log.value());
-    t = t.is(log.value(), "AR", "awaited future releases dependencies once in reverse order");
+    t.note("Future owner exit does not repeat completed input cleanup: " + log.value());
+    t = t.is(log.value(), "AR", "Future owner exit does not repeat completed input cleanup");
     t.done();
 }

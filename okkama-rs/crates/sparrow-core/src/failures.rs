@@ -12,6 +12,8 @@ use crate::runtime::{Ctx, FAILED, Failure, FailureKind, OK, Runtime};
 use crate::word::{Repr, UNBOUND, Word};
 use okkama_sparrow::{CatchKind, Instruction as I, Program, Type};
 use crate::word::{FastMap as HashMap, FastSet as HashSet};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Owner {
@@ -89,9 +91,6 @@ pub struct Resources {
     pub(crate) root: Option<Word>,
     /// The root closer is running: what still runs then has nowhere further to go.
     root_closing: bool,
-    /// #845: driver frames whose private region also holds their inputs (fresh Futures a collector's sequence
-    /// made); taking such a frame's outcome releases only the outcome's package.
-    inputs: HashSet<Word>,
     /// Containers whose walk found no free identity (#9), with `serial` at
     /// that moment: every identity they reach is at most that old. Freeing
     /// an identity no newer than `summarized` drops them all.
@@ -213,7 +212,6 @@ impl Resources {
             self.summaries.remove(object);
             self.origins.remove(object);
             self.structure.remove(object);
-            self.inputs.remove(object);
         }
     }
 }
@@ -232,6 +230,39 @@ pub(crate) fn descriptor_flags(program: &Program) -> Vec<bool> {
         {
             pending.push(offset + intrinsic.objects[0].0 as usize);
         }
+    }
+    // #587: a channel's capabilities own its unread messages (OIR-2 §7.3), so Channel<T>, Sending<T> and
+    // Receiving<T> carry T as if it were a field; the same rule as the compiler's (`ir::channel_carriers`).
+    let object_of = |ty: okkama_sparrow::TypeRef| match program.types.get(ty.0 as usize) {
+        Some(Type::Object(id)) => Some(offset + id.0 as usize),
+        _ => None,
+    };
+    let mut carried = Vec::new();
+    for function in &program.functions {
+        let Some(intrinsic) = &function.intrinsic else { continue };
+        let param = |index: usize| function.params.get(index).map(|register| function.registers[register.0 as usize]);
+        match intrinsic.name.as_str() {
+            "okkama.channel.Sending.send" => {
+                if let (Some(holder), Some(message)) = (param(0).and_then(object_of), param(1)) {
+                    carried.push((message.0 as usize, holder));
+                }
+            }
+            "okkama.channel.Receiving.item" => {
+                if let (Some(holder), Some(message)) = (param(0).and_then(object_of), function.result) {
+                    carried.push((message.0 as usize, holder));
+                }
+            }
+            "okkama.channel.Channel.sending" | "okkama.channel.Channel.receiving" => {
+                if let (Some(channel), Some(endpoint)) = (param(0).and_then(object_of), function.result.and_then(object_of)) {
+                    carried.push((channel, endpoint));
+                    carried.push((endpoint, channel));
+                }
+            }
+            _ => {}
+        }
+    }
+    for (child, parent) in carried {
+        parents[child].push(parent);
     }
     for (index, ty) in program.types.iter().enumerate() {
         let child = match ty {
@@ -410,12 +441,39 @@ impl Runtime {
         }
     }
 
-    /// Publication owns the outcome until cache cleanup or a proven unique take.
+    /// #587 (OIR-2 §10.1): the fresh call inputs of a new Future belong to it, in its INPUTS region; inputs that
+    /// already have an owner stay borrowed. Made only when an argument reaches a free identity.
+    pub(crate) fn own_inputs(&mut self, frame: Word, arguments: &[Word]) {
+        if !self.resources.enabled || arguments.is_empty() {
+            return;
+        }
+        let function = self.function_of(frame);
+        let mut inputs = UNBOUND;
+        for (index, &value) in arguments.iter().enumerate() {
+            let Some(param) = self.loaded.program.functions[function].params.get(index) else { break };
+            let repr = self.loaded.functions[function].kinds[param.0 as usize].repr();
+            let Some(value) = repr.pointer(value) else { continue };
+            if !self.may_reach_free(value) {
+                continue;
+            }
+            if inputs == UNBOUND {
+                inputs = self.frame_inputs(frame);
+            }
+            self.region_add(inputs, value, true);
+        }
+        if inputs != UNBOUND && self.region_len(inputs) == 0 {
+            crate::tasks::set(frame, crate::tasks::INPUTS, UNBOUND);
+        }
+    }
+
+    /// Publication owns the outcome until cache cleanup or a proven unique take. What it reaches of the frame's
+    /// own inputs moves with it (#587): those inputs are part of the outcome now. An async body also keeps the
+    /// input Futures whose caches its outcome borrows, since its other inputs are released at completion.
     pub(crate) fn own_outcome(&mut self, frame: Word, success: bool, value: Word) {
         if !self.resources.enabled {
             return;
         }
-        let roots = if success {
+        let roots: Vec<Word> = if success {
             let repr = self.heap.layouts().frames[self.function_of(frame)][1];
             repr.pointer(value).into_iter().collect()
         } else {
@@ -424,10 +482,67 @@ impl Runtime {
         if roots.is_empty() {
             return;
         }
-        let owned = self.frame_region(frame);
-        for value in roots {
-            self.region_add(owned, value, true);
+        let inputs = crate::tasks::get(frame, crate::tasks::INPUTS);
+        if inputs != UNBOUND && self.region_len(inputs) > 0 {
+            let owned = self.frame_region(frame);
+            for &root in &roots {
+                self.region_transfer(inputs, owned, root);
+            }
+            if !self.is_driver_frame(frame) {
+                let entries: Vec<Word> = (0..self.region_len(inputs)).map(|i| self.region_get(inputs, i)).collect();
+                for input in entries {
+                    if heap::kind(self.heap.header_of(input)) == heap::FRAME
+                        && self.owner_of(input) == Some(Owner::Region(inputs))
+                        && self.outcome_reaches_frame(&roots, input)
+                    {
+                        self.region_transfer(inputs, owned, input);
+                    }
+                }
+            }
         }
+        // A plain value (no identity anywhere) needs no region.
+        if !roots.iter().any(|&root| self.may_reach_free(root)) {
+            return;
+        }
+        let owned = self.frame_region(frame);
+        for root in roots {
+            self.region_add(owned, root, true);
+        }
+    }
+
+    fn is_driver_frame(&self, frame: Word) -> bool {
+        self.loaded.functions[self.function_of(frame)].driver
+    }
+
+    /// Does an outcome reached from `roots` borrow what Future `frame` owns (its cache, its inputs, or those of
+    /// the Futures it owns in turn)? Those ownership edges are hidden from value walks.
+    fn outcome_reaches_frame(&mut self, roots: &[Word], frame: Word) -> bool {
+        let mut pending = vec![frame];
+        let mut seen = HashSet::default();
+        while let Some(frame) = pending.pop() {
+            if !seen.insert(frame) {
+                continue;
+            }
+            for slot in [crate::tasks::OWNED, crate::tasks::INPUTS] {
+                let region = crate::tasks::get(frame, slot);
+                if region == UNBOUND || self.region_len(region) == 0 {
+                    continue;
+                }
+                okkama_devtrace::count!("runtime", "walk from: outcome reaches input");
+                if !self.resource_graph(roots, Some(region)).is_empty() {
+                    return true;
+                }
+                for index in 0..self.region_len(region) {
+                    let child = self.region_get(region, index);
+                    if heap::kind(self.heap.header_of(child)) == heap::FRAME
+                        && self.owner_of(child) == Some(Owner::Region(region))
+                    {
+                        pending.push(child);
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// A frame's private region, made on first use.
@@ -441,18 +556,94 @@ impl Runtime {
         owned
     }
 
-    /// #845: a driver takes `input`, a fresh Future it made itself (a collector's sequence `item`): the driver's
-    /// private region owns it until the driver closes, so its outcome is released with the driver's owner.
+    /// A frame's input region (#587), made on first use.
+    fn frame_inputs(&mut self, frame: Word) -> Word {
+        let inputs = crate::tasks::get(frame, crate::tasks::INPUTS);
+        if inputs != UNBOUND {
+            return inputs;
+        }
+        let inputs = self.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        crate::tasks::set(frame, crate::tasks::INPUTS, inputs);
+        inputs
+    }
+
+    /// #845: a driver takes `input`, a fresh Future it made itself (a collector's sequence `item`): its INPUTS own
+    /// it until the driver closes (a driver keeps its inputs past settlement, #587), so its outcome is released
+    /// with the driver's owner.
     pub(crate) fn driver_input(&mut self, frame: Word, input: Word) {
         if !self.resources.enabled || heap::kind(self.heap.header_of(input)) != heap::FRAME
             || self.owner_of(input) != Some(Owner::Free)
         {
             return;
         }
-        let owned = self.frame_region(frame);
-        self.set_owner(input, Owner::Region(owned));
-        self.region_push(owned, input);
-        self.resources.inputs.insert(frame);
+        let inputs = self.frame_inputs(frame);
+        self.set_owner(input, Owner::Region(inputs));
+        self.region_push(inputs, input);
+    }
+
+    /// #587: a new capability of `channel` (the channel or an endpoint, `descriptor`): with an identity it holds
+    /// the channel's message packet open.
+    pub(crate) fn channel_holder(&mut self, channel: &Rc<RefCell<crate::primitives::Channel>>, descriptor: usize, object: Word) {
+        self.created(descriptor, object);
+        if self.resources.enabled && self.heap.header_of(object) & heap::IDENTITY != 0 {
+            channel.borrow_mut().holders += 1;
+        }
+    }
+
+    /// #587 (OIR-2 §7.3): move what region `from` owns of `value` into the region `to` makes (on first need).
+    /// Values owned elsewhere stay borrowed.
+    fn hand_over(&mut self, from: Word, value: Word, to: impl FnOnce(&mut Self) -> Word) {
+        if from == UNBOUND || self.region_len(from) == 0 {
+            return;
+        }
+        okkama_devtrace::count!("runtime", "walk from: channel hand-over");
+        let moved: Vec<Word> = self
+            .resource_graph(&[value], Some(from))
+            .into_iter()
+            .filter(|&object| self.owner_of(object) == Some(Owner::Region(from)))
+            .collect();
+        if moved.is_empty() {
+            return;
+        }
+        let to = to(self);
+        for object in moved {
+            self.set_owner(object, Owner::Region(to));
+            self.region_push(to, object);
+            self.dev_owned(object, to);
+        }
+    }
+
+    /// A send is accepted into the buffer: the channel's packet takes the fresh message from the sender's INPUTS.
+    pub(crate) fn message_accept(&mut self, sender: Word, channel: &Rc<RefCell<crate::primitives::Channel>>, value: Word, repr: Repr) {
+        let Some(value) = repr.pointer(value).filter(|_| self.resources.enabled) else { return };
+        let inputs = crate::tasks::get(sender, crate::tasks::INPUTS);
+        self.hand_over(inputs, value, |runtime| {
+            let packet = channel.borrow().packet;
+            if packet != UNBOUND {
+                return packet;
+            }
+            let packet = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+            channel.borrow_mut().packet = packet;
+            packet
+        });
+    }
+
+    /// A message reaches `receiver`: from the channel's packet (buffered) or straight from a sender's INPUTS
+    /// (rendezvous), into the receiver's INPUTS; its outcome takes it from there when it settles.
+    pub(crate) fn message_deliver(&mut self, from: Word, receiver: Word, value: Word, repr: Repr) {
+        let Some(value) = repr.pointer(value).filter(|_| self.resources.enabled) else { return };
+        self.hand_over(from, value, |runtime| runtime.frame_inputs(receiver));
+    }
+
+    /// A capability of a channel dies: the packet, when it was the last one, to close with it.
+    fn channel_released(&mut self, object: Word) -> Option<Word> {
+        let Some(crate::primitives::State::Channel(channel)) = self.states.get(&object) else { return None };
+        let mut channel = channel.borrow_mut();
+        channel.holders = channel.holders.saturating_sub(1);
+        if channel.holders > 0 || channel.packet == UNBOUND {
+            return None;
+        }
+        Some(std::mem::replace(&mut channel.packet, UNBOUND))
     }
 
     /// Group registration admits fresh Futures without taking external owners.
@@ -478,18 +669,19 @@ impl Runtime {
     fn queue_private(&self, object: Word, groups: &mut Vec<Word>, futures: &mut Vec<Word>) {
         if heap::kind(self.heap.header_of(object)) == heap::FRAME {
             futures.push(object);
-        } else if matches!(self.states.get(&object), Some(crate::primitives::State::Group(_))) {
+        } else if matches!(self.states.get(&object), Some(crate::primitives::State::Group(_) | crate::primitives::State::Channel(_))) {
             groups.push(object);
         }
     }
 
-    fn private_region(&self, object: Word) -> Option<Word> {
+    /// A Future's private regions (its cached outcome, its inputs) or a group's packet of registered Futures.
+    fn private_regions(&self, object: Word) -> [Option<Word>; 2] {
         if heap::kind(self.heap.header_of(object)) == heap::FRAME {
-            let owned = crate::tasks::get(object, crate::tasks::OWNED);
-            (owned != UNBOUND).then_some(owned)
+            let slot = |slot| Some(crate::tasks::get(object, slot)).filter(|&region| region != UNBOUND);
+            [slot(crate::tasks::OWNED), slot(crate::tasks::INPUTS)]
         } else if let Some(crate::primitives::State::Group(group)) = self.states.get(&object) {
-            group.resources
-        } else { None }
+            [group.resources, None]
+        } else { [None, None] }
     }
 
     /// Release only this cache's actual package. External borrows retain their
@@ -498,24 +690,6 @@ impl Runtime {
     pub(crate) fn take_outcome(&mut self, frame: Word) {
         let owned = crate::tasks::get(frame, crate::tasks::OWNED);
         if owned == UNBOUND {
-            return;
-        }
-        if self.resources.inputs.contains(&frame) {
-            // #845: the inputs stay with the driver; only the outcome's package goes to the taker.
-            let roots = match crate::tasks::get(frame, crate::tasks::STATE) {
-                crate::tasks::DONE => {
-                    let repr = self.heap.layouts().frames[self.function_of(frame)][1];
-                    repr.pointer(crate::tasks::get(frame, crate::tasks::RESULT)).into_iter().collect()
-                }
-                _ => self.failure_payloads(crate::tasks::get(frame, crate::tasks::FAILURE)),
-            };
-            for object in self.resource_graph(&roots, Some(owned)) {
-                if self.owner_of(object) == Some(Owner::Region(owned)) {
-                    self.set_owner(object, Owner::Free);
-                    let serial = self.serial_of(object);
-                    self.freed(serial);
-                }
-            }
             return;
         }
         for index in 0..self.region_len(owned) {
@@ -1298,7 +1472,12 @@ impl Runtime {
                 continue;
             }
             self.set_owner(object, Owner::Dead);
-            if let Some(owned) = self.private_region(object) {
+            // A channel's last capability closes its unread messages with it (#587).
+            let regions = match self.channel_released(object) {
+                Some(packet) => [Some(packet), None],
+                None => self.private_regions(object),
+            };
+            for owned in regions.into_iter().flatten() {
                 for index in 0..self.region_len(owned) {
                     let child = self.region_get(owned, index);
                     if group && let Some(identity) = self.resources.identities.get_mut(&child) {

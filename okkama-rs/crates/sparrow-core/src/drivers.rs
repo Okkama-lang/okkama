@@ -335,6 +335,8 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     if *channel.borrow_mut().repr.get_or_insert(repr) != repr {
         return fail(runtime, FailureKind::Program("Channel endpoints disagree on the message type".into()));
     }
+    // #587 (OIR-2 §7.3): a fresh message belongs to its send until accepted, to the channel's packet while
+    // buffered, and to the receiving Future from delivery on. A rendezvous hands it straight over.
     if send {
         let value = param(runtime, frame, function, 1);
         let mut c = channel.borrow_mut();
@@ -344,11 +346,14 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
         }
         if let Some(receiver) = Runtime::pop_parked(&mut c.receivers) {
             drop(c);
+            runtime.message_deliver(tasks::get(frame, tasks::INPUTS), receiver, value, repr);
             runtime.complete_wait(receiver, COMPLETED, Some(value));
             return Done(endpoint);
         }
         if c.messages.len() < c.capacity {
             c.messages.push_back(value);
+            drop(c);
+            runtime.message_accept(frame, &channel, value, repr);
             return Done(endpoint);
         }
         c.senders.push_back(frame);
@@ -358,10 +363,14 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     }
     let mut c = channel.borrow_mut();
     if let Some(value) = c.messages.pop_front() {
-        if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
+        let packet = c.packet;
+        let sender = Runtime::pop_parked(&mut c.senders);
+        drop(c);
+        runtime.message_deliver(packet, frame, value, repr);
+        if let Some(sender) = sender {
             let payload = send_function(runtime, sender);
-            c.messages.push_back(payload);
-            drop(c);
+            channel.borrow_mut().messages.push_back(payload);
+            runtime.message_accept(sender, &channel, payload, repr);
             runtime.complete_wait(sender, COMPLETED, None);
         }
         return Done(value);
@@ -369,6 +378,7 @@ fn channel(runtime: &mut Runtime, frame: Word, function: usize, send: bool, deli
     if let Some(sender) = Runtime::pop_parked(&mut c.senders) {
         drop(c);
         let value = send_function(runtime, sender);
+        runtime.message_deliver(tasks::get(sender, tasks::INPUTS), frame, value, repr);
         runtime.complete_wait(sender, COMPLETED, None);
         return Done(value);
     }

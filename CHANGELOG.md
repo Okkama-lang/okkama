@@ -8,6 +8,16 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **A Future owns its fresh inputs; an async action releases the unused ones when it completes (#587, OIR-2
+  §10.1).** Fresh call arguments belong to the Future (its INPUTS) instead of the caller's scope. When an async
+  body's action completes, what its result does not keep is destroyed before the Future publishes the result
+  (async destroys are awaited, shielded from cancellation; a destroy failure becomes the Future's failure).
+  Runtime drivers (collectors, channel operations) keep their inputs until the Future itself closes (#845).
+- **Channels own the messages they buffer (#587, OIR-2 §7.3).** An accepted fresh message belongs to the channel
+  until it is delivered, then to the receiving Future; a rendezvous hands it straight over. Unread messages are
+  destroyed when the channel's last capability (the channel or one of its endpoints) goes; a cancelled blocked
+  send destroys its own message. Before, the sender's scope destroyed a message even while it was still buffered.
+
 - **Ownership gate on 2026-11-21 (release/0.6.0 at 9f3740325).** In the container, 11-ownership takes 7.8 ms against
   CPython's 27.5 and Go's 5.1; micro `destroy` takes 20.6 ns (Tomato 114.6, CPython 213.8). bench/ownership/README.md.
 - **Ownership on par with CPython, measured against Go too (#903).** The container gate (`bench/ownership/run.py`,

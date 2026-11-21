@@ -682,3 +682,68 @@ fn a_region_made_by_its_first_transfer_closes_what_it_took() {
     // Inside run: 3 vaults × 2 = 6, none closed (log 0); after run: closed newest first, 3 2 1.
     support::assert_value(&module, "6000321");
 }
+
+/// #587 (OIR-2 §7.3): a channel's unread message closes with its last capability. Here that is a fresh endpoint
+/// in the INPUTS of a task still running when its scope ends: detached to the root, cancelled at shutdown, its
+/// completion releases the endpoint and the message, once.
+#[test]
+fn channel_message_closes_with_a_detached_tasks_endpoint() {
+    let output = stdout_of("channel-root", r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/channel" take Channel, Receiving;
+import "async/event" take Event;
+object Msg {
+    has name is string;
+    Msg(:name);
+    destroy { Stdout().writeln("destroy " + name); }
+}
+object Reader {
+    Reader();
+    async hold(receiving is Receiving<Msg>, gate is Event) is void { await gate.wait(); Stdout().writeln("never"); }
+}
+async main() is int {
+    let gate = Event();
+    {
+        let channel is Channel<Msg> = Channel(capacity: 1);
+        await channel.sending().send(Msg(name: "m"));
+        spawn Reader().hold(channel.receiving(), gate);
+        Stdout().writeln("scope ends");
+    }
+    Stdout().writeln("main ends");
+    0;
+}
+"#);
+    assert_eq!(output, "scope ends\nmain ends\ndestroy m\n");
+}
+
+/// #587: an async body publishes only after its unretained inputs are released; an async destroy there suspends
+/// the task, shielded: a cancellation requested meanwhile does not undo the completed action.
+#[test]
+fn input_cleanup_suspends_shielded_before_publication() {
+    let output = stdout_of("input-cleanup", r#"module app v1.0.0;
+import "io/stdout" take Stdout;
+import "async/event" take Event;
+object Slow {
+    has name is string;
+    has gate is Event;
+    Slow(:name, :gate);
+    async destroy { await gate.wait(); Stdout().writeln("destroy " + name); }
+}
+object Work {
+    Work();
+    async use(input is Slow) is int { Stdout().writeln("action ends"); 7; }
+}
+async main() is int {
+    let gate = Event();
+    let task = spawn Work().use(Slow(name: "s", gate: gate));
+    Stdout().writeln("spawned");
+    task.cancel();
+    gate.set();
+    let result = await task;
+    confirm result == 7;
+    Stdout().writeln("published");
+    0;
+}
+"#);
+    assert_eq!(output, "action ends\nspawned\ndestroy s\npublished\n");
+}

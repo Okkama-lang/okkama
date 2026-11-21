@@ -474,8 +474,12 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
                 messages: Default::default(),
                 senders: Default::default(),
                 receivers: Default::default(),
+                packet: UNBOUND,
+                holders: 0,
             };
-            runtime.state_new(object, State::Channel(Rc::new(RefCell::new(channel))));
+            let channel = Rc::new(RefCell::new(channel));
+            runtime.state_new(object, State::Channel(channel.clone()));
+            runtime.channel_holder(&channel, related(runtime, function, 0) as usize, object);
             Value(object, Repr::Ref)
         }
         ChannelEndpoint => {
@@ -483,7 +487,8 @@ fn call(ctx: *mut Ctx, runtime: &mut Runtime, function: usize, intrinsic: Intrin
                 return program_failure("Invalid channel endpoint");
             };
             let object = new(runtime, &[]);
-            runtime.state_new(object, State::Channel(channel));
+            runtime.state_new(object, State::Channel(channel.clone()));
+            runtime.channel_holder(&channel, related(runtime, function, 0) as usize, object);
             Value(object, Repr::Ref)
         }
         EndpointNew => Value(new(runtime, &[]), Repr::Ref),

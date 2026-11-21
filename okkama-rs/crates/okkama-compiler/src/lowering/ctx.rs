@@ -1390,6 +1390,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             let mut changed = false;
             for index in 0..self.objects.len() {
                 let plain = !group_decl(self.reg, self.objects[index].decl.0)
+                    && !self.carries_resource(index)
                     && self.objects[index].destroy.is_none()
                     && self.objects[index]
                         .fields
@@ -1414,6 +1415,14 @@ impl<'r, 'a> Ctx<'r, 'a> {
                 break;
             }
         }
+    }
+
+    /// #587: a channel capability (`Channel<T>`, `Sending<T>`, `Receiving<T>`) owns its unread messages, so it
+    /// is not plain when `T` may be a resource (the IR's `channel_carriers`, judged here by declarations).
+    fn carries_resource(&self, index: usize) -> bool {
+        let instance = &self.objects[index];
+        channel_decl(self.reg, instance.decl.0)
+            && !instance.env.iter().all(|(_, ty)| decl_plain_ty(ty, &self.decl_plain_objects, &self.decl_plain_roles))
     }
 
     /// Какие специализации могут достать объект с `async destroy` (#328):
@@ -1586,7 +1595,7 @@ impl<'r, 'a> Ctx<'r, 'a> {
             let variant_plain = |id: usize| self.variant_plain(id, &snapshot);
             let mut changed = false;
             for (index, object) in self.objects.iter().enumerate() {
-                let plain = !group_decl(self.reg, object.decl.0) && object.destroy.is_none()
+                let plain = !group_decl(self.reg, object.decl.0) && !self.carries_resource(index) && object.destroy.is_none()
                     && object
                         .fields
                         .iter()
@@ -1803,6 +1812,12 @@ fn decl_plain_ty(ty: &Ty, objects: &[bool], roles: &[bool]) -> bool {
 fn group_decl(reg: &Registry<'_>, object: usize) -> bool {
     reg.objects.get(object).is_some_and(|info|
         info.name == "FutureGroup" && reg.modules[info.module].name == "async/scope")
+}
+
+/// The channel capabilities of `async/channel`, which own their unread messages (#587).
+fn channel_decl(reg: &Registry<'_>, object: usize) -> bool {
+    reg.objects.get(object).is_some_and(|info|
+        matches!(info.name.as_str(), "Channel" | "Sending" | "Receiving") && reg.modules[info.module].name == "async/channel")
 }
 
 /// Объявления объектов без `destroy`, чьи поля plain (при данных ролях).

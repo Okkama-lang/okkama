@@ -292,10 +292,12 @@ impl Plain {
             objects: vec![false; module.objects.len()], roles: vec![false; module.roles.len()],
             variants: module.variants.iter().map(|variant| variant.cases.iter().map(|(_, id)| id.0).collect()).collect(),
         };
+        let carried = super::channel_carriers(module);
         loop {
             let before = (plain.objects.clone(), plain.roles.clone());
             for (index, object) in module.objects.iter().enumerate() {
-                plain.objects[index] = object.destroy.is_none() && object.fields.iter().all(|field| plain.ty(&field.ty));
+                plain.objects[index] = object.destroy.is_none() && object.fields.iter().all(|field| plain.ty(&field.ty))
+                    && carried.iter().all(|(holder, ty)| *holder != index || plain.ty(ty));
             }
             for (index, role) in plain.roles.iter_mut().enumerate() {
                 *role = module.objects.iter().enumerate().all(|(id, object)| {

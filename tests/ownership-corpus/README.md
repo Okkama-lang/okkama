@@ -20,17 +20,19 @@ failures, compile-negative fixtures and pending semantics must not enter it.
   eight checks from #579–#581 on both engines. Its temporary-await regression
   is corrected on Sparrow by the follow-up described below; the retiring IR
   engine still has borrow-only behavior.
+- #587 follows the owner's OIR-2 draft 3 §10.1 decision: `cold-futures`
+  check 9 expects completion-time input cleanup.
 - `rejected/`: six compile-negative fixtures, not executable oracle inputs.
 - All 441 assertions are in the main corpus. Original assertions are retained
   exactly once; the four historical corrections below change expected values.
   `channel-transfer` check 1 is restored to its original empty-log expectation
-  by unique temporary take. #578 adds
+  by unique temporary take; `cold-futures` check 9 changes with #587. #578 adds
   four checks for running
   an escaped Future, cached reuse, and cleanup at its owner’s exit.
 - Claude's original 0.5.8 IR/Sparrow results: 849 passing and 25 failing
   check executions (437 checks on each engine). Those saved results were
   inspected without running programs. Existing passing expectations remain
-  unchanged except for the ownership decision recorded under #581 below.
+  unchanged except for the ownership decisions recorded under #581/#587 below.
 - Regeneration command: `python3 tests/ownership-corpus/gen.py`. All 60
   generated files reproduce byte for byte after the import-path migration;
   their only change from the old location is `../support/tap` → `tap`.

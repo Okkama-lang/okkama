@@ -208,7 +208,7 @@ impl Loaded {
                 .iter()
                 .zip(&p.functions)
                 .map(|(f, source)| {
-                    // state, result, failure, waiter, awaiting, resume, flags, owned
+                    // state, result, failure, waiter, awaiting, resume, flags, owned, inputs
                     let mut layout = vec![
                         Repr::Raw,
                         f.result.map_or(Repr::Raw, Kind::repr),
@@ -217,6 +217,7 @@ impl Loaded {
                         Repr::Ref,
                         Repr::Raw,
                         Repr::Raw,
+                        Repr::Ref,
                         Repr::Ref,
                     ];
                     layout.extend(f.kinds.iter().zip(&f.pointer_free).map(|(k, free)| if *free { Repr::Raw } else { k.repr() }));

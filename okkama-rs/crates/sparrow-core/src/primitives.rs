@@ -96,9 +96,15 @@ pub struct Channel {
     /// or receives; endpoints of another representation are refused.
     pub repr: Option<Repr>,
     pub messages: VecDeque<Word>,
-    /// Blocked `send` frames; the payload stays in the frame.
+    /// Blocked `send` frames; the payload stays in the frame, owned by its INPUTS until accepted.
     pub senders: VecDeque<Word>,
     pub receivers: VecDeque<Word>,
+    /// #587 (OIR-2 §7.3): the region owning the fresh messages accepted and not yet delivered (UNBOUND: none
+    /// yet). A genuine owner: it closes with the channel's last capability, not when the collector frees it.
+    pub packet: Word,
+    /// Live capabilities (the channel and its endpoints) with an ownership identity; the last one to die closes
+    /// `packet`.
+    pub holders: usize,
 }
 
 #[derive(Debug, Default)]
@@ -124,6 +130,9 @@ impl State {
             Self::Channel(channel) => {
                 let channel = channel.borrow();
                 channel.messages.iter().for_each(|&w| visit(w, channel.repr.unwrap_or(Repr::Raw)));
+                if channel.packet != UNBOUND {
+                    visit(channel.packet, Repr::Ref);
+                }
                 channel.senders.iter().chain(&channel.receivers).for_each(|&w| visit(w, Repr::Ref));
             }
             Self::WorkerBinding { entry, fields } => {

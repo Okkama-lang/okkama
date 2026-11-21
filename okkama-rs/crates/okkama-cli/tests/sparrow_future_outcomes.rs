@@ -22,13 +22,14 @@ fn check(body: &str) {
         module app v1.0.0;
         import "async/atomic" take Atomic;
         import "async/event" take Event;
-        import "async/channel" take Channel;
+        import "async/channel" take Channel, Receiving;
         import "async/collect" take AllFutures, FutureCompletions;
         object Res {{
             has name is string;
             has log is Atomic<string>;
             Res(:name, :log);
             label() is string {{ confirm log.value() == ""; name; }}
+            title() is string {{ name; }}
             destroy {{ log.replace(log.value() + name); }}
         }}
         enum Stop is Error = (now);
@@ -56,6 +57,23 @@ fn check(body: &str) {
             async bad(name is string, log is Atomic<string>) is Bad {{ Bad(name: name, log: log); }}
             async failed() is Res {{ throw Stop.now; }}
             async receive(channel is Channel<Res>) is Res {{ await channel.receiving().item(); }}
+            async take(receiving is Receiving<Res>) is Res {{ await receiving.item(); }}
+            async field(holder is Holder) is Res {{ holder.inner(); }}
+        }}
+        object Holder {{
+            has res is Res;
+            has log is Atomic<string>;
+            Holder(:res, :log);
+            inner() is Res {{ res; }}
+            destroy {{ log.replace(log.value() + "H"); }}
+        }}
+        object Pipe {{
+            Pipe();
+            async open(log is Atomic<string>) is Receiving<Res> {{
+                let channel is Channel<Res> = Channel(capacity: 1);
+                await channel.sending().send(Res(name: "E", log: log));
+                channel.receiving();
+            }}
         }}
         async main() is int {{
             let log = Atomic("");
@@ -331,5 +349,101 @@ fn future_outcome_escaping_collector_future_retains_fresh_receiver() {
             results.item(0).label(); results.item(1).label();
         }
         confirm log.value() == "BA";
+    "#);
+}
+
+// #587 (OIR-2 §7.3): the channel owns accepted messages; FIFO delivery hands each to its receiver.
+#[test]
+fn future_outcome_channel_buffered_messages_deliver_in_order() {
+    check(r#"
+        {
+            let channel is Channel<Res> = Channel(capacity: 3);
+            await channel.sending().send(Res(name: "A", log: log));
+            await channel.sending().send(Res(name: "B", log: log));
+            await channel.sending().send(Res(name: "C", log: log));
+            confirm log.value() == "";
+            { let first = await channel.receiving().item(); confirm first.title() == "A"; }
+            confirm log.value() == "A";
+            { let second = await channel.receiving().item(); confirm second.title() == "B"; }
+            confirm log.value() == "AB";
+            channel.sending().close();
+            confirm log.value() == "AB";
+        }
+        confirm log.value() == "ABC";
+    "#);
+}
+
+// #587: logical close keeps unread messages receivable; the last capability destroys them, newest first.
+#[test]
+fn future_outcome_channel_close_keeps_unread_until_last_capability() {
+    check(r#"
+        {
+            let channel is Channel<Res> = Channel(capacity: 2);
+            await channel.sending().send(Res(name: "A", log: log));
+            await channel.sending().send(Res(name: "B", log: log));
+            channel.sending().close();
+            confirm log.value() == "";
+        }
+        confirm log.value() == "BA";
+    "#);
+}
+
+// #587: a rendezvous hands the message straight to the waiting receiver, either side arriving first.
+#[test]
+fn future_outcome_channel_rendezvous_hands_over_directly() {
+    check(r#"
+        {
+            let channel is Channel<Res> = Channel(capacity: 0);
+            let receiver = spawn Work().receive(channel);
+            await channel.sending().send(Res(name: "R", log: log));
+            confirm log.value() == "";
+            { let value = await receiver; confirm value.title() == "R"; }
+            confirm log.value() == "";
+        }
+        confirm log.value() == "R";
+        log.replace("");
+        {
+            let channel is Channel<Res> = Channel(capacity: 0);
+            let sender = spawn channel.sending().send(Res(name: "S", log: log));
+            confirm log.value() == "";
+            { let value = await Work().receive(channel); confirm value.title() == "S"; }
+            confirm log.value() == "S";
+            await sender;
+        }
+        confirm log.value() == "S";
+    "#);
+}
+
+// #587: an endpoint keeps the channel's unread messages after the channel object's scope ends.
+#[test]
+fn future_outcome_channel_endpoint_outlives_channel_object() {
+    check(r#"
+        {
+            let receiving = await Pipe().open(log);
+            confirm log.value() == "";
+            { let value = await Work().take(receiving); confirm value.title() == "E"; }
+            confirm log.value() == "E";
+        }
+        confirm log.value() == "E";
+        log.replace("");
+        {
+            let receiving = await Pipe().open(log);
+            confirm log.value() == "";
+        }
+        confirm log.value() == "E";
+    "#);
+}
+
+// #587: a fresh input's nested resource the outcome returns moves to the cache; the rest of the input closes at
+// action completion.
+#[test]
+fn future_outcome_nested_input_resource_moves_to_outcome() {
+    check(r#"
+        {
+            let future = Work().field(Holder(res: Res(name: "N", log: log), log: log));
+            { let value = await future; confirm value.title() == "N"; confirm log.value() == "H"; }
+            confirm log.value() == "H";
+        }
+        confirm log.value() == "HN";
     "#);
 }

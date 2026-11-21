@@ -111,6 +111,7 @@ Scripts: scratchpad `tweed0/` (session 36c16e3b).
     numbers inline identities and destroys static resources directly; lazy regions (#530). 11-ownership on the
     host: 9.5 → 7.5 ms. Closed as checked or done: #482, #523–#529, #531–#533, #537, #540, #552, #797, #817,
     #845, #907, #910, #912, #913.
-14. Waiting for the owner: #587 (drivers and channel handoff, comment of 2026-11-20), #769 and #846 (std
-    contracts), #790 (language), #538 (GC floor numbers). Big designs still open: #588 (REPL), #453, #457,
-    #541.
+14. Waiting for the owner: #769 and #846 (std contracts), #790 (language), #538 (GC floor numbers). Big designs
+    still open: #453, #457, #541. #588 (REPL) moved to 0.6.1 by the owner (2026-11-21).
+15. #587 (owner's approval of 2026-11-21): Future INPUTS, completion-time release for async bodies, drivers keep
+    theirs, channel packets owned by the channel's capabilities (feature/587-inputs).

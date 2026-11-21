@@ -1,9 +1,9 @@
 //! Stackless async: the heap frame of an async call is also its Future.
 //!
 //! Frame words after the header: state, result, failure, waiter, awaiting,
-//! resume point, flags, outcome ownership region, then every register of the
-//! function, an optional driver slot, and retained copies of the arguments
-//! (registers can be reused). An async body is
+//! resume point, flags, the outcome and input ownership regions (OWNED,
+//! INPUTS), then every register of the function, an optional driver slot, and
+//! retained copies of the arguments (registers can be reused). An async body is
 //! compiled as `(ctx, frame) -> 0 | 1` (completed or pending): it starts at
 //! resume point 0 with its parameters in the frame, and a suspended `await` at
 //! `pc` re-enters at `pc + 1` with every register reloaded. Whoever runs a body
@@ -37,8 +37,11 @@ pub const AWAITING: u64 = 40;
 pub const RESUME: u64 = 48;
 pub const FLAGS: u64 = 56;
 pub const OWNED: u64 = 64;
-pub const REGISTERS: u64 = 72;
-pub const FIXED_WORDS: usize = 8;
+/// #587 (OIR-2 §10.1): the region of the fresh call inputs the Future owns. An async body releases what its
+/// outcome does not retain when the action completes; a driver keeps it until the Future itself closes.
+pub const INPUTS: u64 = 72;
+pub const REGISTERS: u64 = 80;
+pub const FIXED_WORDS: usize = 9;
 
 const SPAWNED: u64 = 1;
 const OBSERVED: u64 = 2;
@@ -59,6 +62,12 @@ pub const INBOX: u64 = 128;
 /// re-entered `await` raises the pending cancellation, as before. A request
 /// that comes after the settlement stays pending for the next `await`.
 const AWAIT_SUSPENDED: u64 = 256;
+/// #587: the action of an async body has returned or failed; its outcome is reserved (in RESULT or FAILURE,
+/// owned by OWNED) and the Future settles once its unretained inputs are released. A re-entry only resumes that
+/// release, which may wait for async destroys.
+const COMPLETING: u64 = 512;
+/// With COMPLETING: the action returned a result (RESULT), not a failure.
+const RESERVED: u64 = 1024;
 
 /// Several frames awaiting one Future.
 #[derive(Debug, Default)]
@@ -145,6 +154,7 @@ impl Runtime {
             set(frame, (1 + retained + index) as u64 * 8, argument);
         }
         self.future_created(frame);
+        self.own_inputs(frame, arguments);
         frame
     }
 
@@ -177,13 +187,18 @@ impl Runtime {
 
     /// Settle a Future and queue the frames awaiting it.
     pub(crate) fn settle(&mut self, frame: Word, state: u64, value: Word) {
+        self.own_outcome(frame, state == DONE, value);
+        self.publish(frame, state, value);
+    }
+
+    /// Settle a Future whose outcome is already owned: its waiters see it now.
+    fn publish(&mut self, frame: Word, state: u64, value: Word) {
         set(frame, STATE, state);
         if state == DONE {
             set(frame, RESULT, value);
         } else {
             set(frame, FAILURE, value);
         }
-        self.own_outcome(frame, state == DONE, value);
         let waiters = get(frame, WAITER);
         set(frame, WAITER, UNBOUND);
         if waiters == UNBOUND {
@@ -239,27 +254,98 @@ impl Runtime {
             self.running.pop();
             return !pending;
         }
-        // A Champ body publishes its own outcome (draft 3 §3).
-        let code = match crate::jit::compile(self, function) {
-            Ok(code) => code,
-            Err(error) => {
-                crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
-                return true;
-            }
-        };
         self.running.push(frame);
-        // SAFETY: async bodies take their frame.
-        let pending = unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0;
-        self.running.pop();
-        let ctx = unsafe { &mut *ctx };
-        if ctx.status == FAILED {
-            ctx.status = OK;
-            let failure = ctx.failure;
-            ctx.failure = UNBOUND;
-            self.settle(frame, FAILURE_STATE, failure);
-            return true;
+        if get(frame, FLAGS) & COMPLETING == 0 {
+            let code = match crate::jit::compile(self, function) {
+                Ok(code) => code,
+                Err(error) => {
+                    self.running.pop();
+                    crate::runtime::fatal(unsafe { &mut *ctx }, self, error.0);
+                    return true;
+                }
+            };
+            // SAFETY: async bodies take their frame.
+            let pending = unsafe { crate::jit::invoke(code, ctx, &[frame]) } != 0;
+            let status = unsafe { (*ctx).status };
+            if status == FAILED {
+                let failure = unsafe {
+                    (*ctx).status = OK;
+                    std::mem::replace(&mut (*ctx).failure, UNBOUND)
+                };
+                self.complete_action(frame, FAILURE_STATE, failure);
+            } else if status != OK || pending {
+                self.running.pop();
+                return status != OK;
+            }
         }
-        ctx.status != OK || !pending
+        // The action is over: release its unretained inputs, then publish (#587).
+        self.finish_inputs(ctx, frame);
+        self.running.pop();
+        (unsafe { (*ctx).status } != OK) || get(frame, STATE) != RUNNING
+    }
+
+    /// #587: the action of an async body is over with `value` (a result or a failure). Its outcome is owned now,
+    /// with the inputs it retains; the Future publishes it after `finish_inputs`.
+    pub(crate) fn complete_action(&mut self, frame: Word, state: u64, value: Word) {
+        set(frame, if state == DONE { RESULT } else { FAILURE }, value);
+        set(frame, FLAGS, get(frame, FLAGS) | COMPLETING | if state == DONE { RESERVED } else { 0 });
+        self.own_outcome(frame, state == DONE, value);
+    }
+
+    /// #587: release the inputs a completed action does not retain, in reverse creation order, then publish. An
+    /// async destroy suspends the frame; its re-entry resumes here. A destroy failure aborts a reserved result:
+    /// that result's own resources are released too and the failure is published (a failed action keeps its
+    /// failure, with the destroy failures as secondaries).
+    fn finish_inputs(&mut self, ctx: *mut Ctx, frame: Word) {
+        let status = |ctx: *mut Ctx| unsafe { (*ctx).status };
+        let inputs = get(frame, INPUTS);
+        if inputs != UNBOUND {
+            let failure = get(frame, FAILURE);
+            if rt_region_settle(ctx, frame, inputs, UNBOUND, failure) == AWAIT_PENDING {
+                return;
+            }
+            match status(ctx) {
+                OK if failure != UNBOUND => set(frame, FAILURE, unsafe { (*ctx).scratch }),
+                OK => {}
+                FAILED => {
+                    let cleanup = unsafe {
+                        (*ctx).status = OK;
+                        std::mem::replace(&mut (*ctx).failure, UNBOUND)
+                    };
+                    set(frame, FAILURE, cleanup);
+                }
+                _ => return,
+            }
+            set(frame, INPUTS, UNBOUND);
+        }
+        let failure = get(frame, FAILURE);
+        let reserved = get(frame, FLAGS) & RESERVED != 0;
+        if failure == UNBOUND {
+            set(frame, FLAGS, get(frame, FLAGS) & !(COMPLETING | RESERVED));
+            self.publish(frame, DONE, get(frame, RESULT));
+            return;
+        }
+        if reserved {
+            // A reserved result that a destroy failure aborted: its resources go first.
+            let owned = get(frame, OWNED);
+            if owned != UNBOUND {
+                if rt_region_settle(ctx, frame, owned, UNBOUND, failure) == AWAIT_PENDING {
+                    return;
+                }
+                if status(ctx) != OK {
+                    return;
+                }
+                set(frame, FAILURE, unsafe { (*ctx).scratch });
+                set(frame, OWNED, UNBOUND);
+            }
+            set(frame, RESULT, UNBOUND);
+            set(frame, FLAGS, get(frame, FLAGS) & !RESERVED);
+            let failure = get(frame, FAILURE);
+            self.own_outcome(frame, false, failure);
+        }
+        set(frame, FLAGS, get(frame, FLAGS) & !COMPLETING);
+        let failure = get(frame, FAILURE);
+        self.publish(frame, FAILURE_STATE, failure);
     }
 
     /// Mark a cancellation of a running task delivered and return its failure.
@@ -740,12 +826,13 @@ pub extern "C" fn rt_region_settle(ctx_ptr: *mut Ctx, this: Word, region: Word, 
     AWAIT_READY
 }
 
-/// `return value` of an async body: settle its Future.
+/// `return value` of an async body: its outcome is reserved; `run_body` settles the Future after the inputs
+/// it does not retain are released (#587).
 #[inline(never)]
 pub extern "C" fn rt_complete(ctx: *mut Ctx, frame: Word, value: Word) {
     okkama_devtrace::count!("runtime", "rt_complete");
     let (_, runtime) = unsafe { parts(ctx) };
-    runtime.settle(frame, DONE, value);
+    runtime.complete_action(frame, DONE, value);
 }
 
 /// `spawn future`: start a cold Future now, on this stack.

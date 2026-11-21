@@ -229,11 +229,13 @@ impl Plain {
                 plain.objects[objects[0].0] = false;
             }
         }
+        let carried = super::channel_carriers(module);
         loop {
             let mut changed = false;
             for (index, object) in module.objects.iter().enumerate() {
                 if plain.objects[index]
-                    && (object.destroy.is_some() || !object.fields.iter().all(|field| plain.ty(&field.ty)))
+                    && (object.destroy.is_some() || !object.fields.iter().all(|field| plain.ty(&field.ty))
+                        || carried.iter().any(|(holder, ty)| *holder == index && !plain.ty(ty)))
                 {
                     plain.objects[index] = false;
                     changed = true;
