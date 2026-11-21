@@ -658,5 +658,9 @@ natives! {
     FsFileStateSync = 672, "runtime/fs@1::file_state_sync/1", "(FileState) -> bool";
     FsTemporaryFileReplace = 673, "runtime/fs@1::temporary_file_replace/2", "(FileState, @byte) -> bool";
     FsDirectorySync = 674, "runtime/fs@1::directory_sync/1", "(@byte) -> bool";
+    SignalSignalWatch = 675, "runtime/signal@1::signal_watch/1", "(@string) -> int";
+    SignalSignalArrived = 676, "runtime/signal@1::signal_arrived/1", "(int) -> string";
+    SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
+    SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
 }
 // retired: 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258

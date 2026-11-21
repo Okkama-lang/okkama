@@ -1,0 +1,107 @@
+module testing/signal v1.0.0;
+
+// Signals for tests: nothing comes until the test raises one.
+//
+//     let signals = ManualSignals();
+//     let interruption = Interruption(source: signals);
+//     signals.raise(CaughtSignal.interrupt);
+//     interruption.check();                   // throws Interrupted.signal(interrupt)
+//
+// The first signal raised is the one kept, as with the process's own. It works
+// only inside a test.
+
+import "testing/check" take CheckContext;
+import "os/signal" take Signaling, CaughtSignal, Interruption, Interrupted;
+import "async/atomic" take Atomic;
+import "async/event" take Event;
+
+// Signals a test raises by hand.
+object ManualSignals does Signaling {
+    has first is Atomic<Maybe<CaughtSignal>>;
+    has came is Event;
+    has open is Atomic<bool>;
+
+    // No signal yet; only inside a test.
+    ManualSignals() {
+        CheckContext().verify();
+        let nothing = Maybe<CaughtSignal>.none;
+        first = Atomic(nothing);
+        came = Event();
+        open = Atomic(true);
+    }
+
+    // Raises signal; only the first one raised before close() is kept.
+    raise(signal is CaughtSignal) is void {
+        if open.value() && first.compare_and_replace(Maybe<CaughtSignal>.none, Maybe.some(signal)) {
+            came.set();
+        }
+    }
+
+    // The first signal raised, if one was.
+    arrived() is Maybe<CaughtSignal> {
+        first.value();
+    }
+
+    // Waits until a signal is raised; the first one.
+    async arrival() is CaughtSignal {
+        let raised = came.wait();
+        await raised;
+        first.value() else CaughtSignal.interrupt;
+    }
+
+    // Takes no more signals.
+    close() is void {
+        open.replace(false);
+    }
+
+    // Whether it was closed.
+    closed() is bool {
+        !open.value();
+    }
+}
+
+test "a raised signal stops a loop at its check, with the status of the signal" {
+    let signals = ManualSignals();
+    let interruption = Interruption(source: signals);
+    let done = Atomic(0);
+    let stopped = try {
+        for 0..10 -> step {
+            interruption.check();
+            if step == 3 {
+                signals.raise(CaughtSignal.terminate);
+            }
+            done.replace(done.value() + 1);
+        }
+        "finished";
+    }
+    catch Interrupted.signal(signal) {
+        if signal == CaughtSignal.terminate {
+            "terminated";
+        }
+        else {
+            "other";
+        };
+    };
+    test.is(stopped, "terminated");
+    test.is(done.value(), 4);
+    test.is(interruption.status(), 143);
+    test.is(interruption.signal(), Maybe.some(CaughtSignal.terminate));
+    signals.raise(CaughtSignal.interrupt);
+    test.is(interruption.status(), 143);
+}
+
+async test "an asynchronous program waits for the signal" {
+    let signals = ManualSignals();
+    let interruption = Interruption(source: signals);
+    let waiting = interruption.arrival();
+    signals.raise(CaughtSignal.interrupt);
+    test.is(await waiting, CaughtSignal.interrupt);
+    test.is(interruption.status(), 130);
+    let hung = ManualSignals();
+    hung.raise(CaughtSignal.hangup);
+    test.is(Interruption(source: hung).status(), 129);
+    let closed = ManualSignals();
+    closed.close();
+    closed.raise(CaughtSignal.interrupt);
+    test.ok(!Interruption(source: closed).interrupted());
+}

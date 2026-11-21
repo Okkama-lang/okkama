@@ -1,0 +1,41 @@
+module stop v1.0.0;
+
+// Run by tests/interruption.rs (#638). Says "ready" on stderr and spins until
+// a signal comes. With "checked" it watches SIGINT and SIGTERM through an
+// Interruption, cleans up (defer says "cleaned") and ends with the signal's
+// status; with "stubborn" it does the same, but its cleanup never ends, so only
+// a second signal stops it; with "plain" it takes no signals, and its defer
+// would say "cleaned" if it ran.
+import "os/signal" take Interruption, Interrupted;
+import "cli/arguments" take ProcessArguments;
+import "io/stdout" take Stderr;
+
+main() is int {
+    let mode = ProcessArguments().strings()[0];
+    if mode == "plain" {
+        defer Stderr().writeln("cleaned");
+        Stderr().writeln("ready");
+        loop {
+            last if mode == "never";
+        }
+        return 0;
+    }
+    let interruption = Interruption();
+    Stderr().writeln("ready");
+    try {
+        defer Stderr().writeln("cleaned");
+        loop {
+            interruption.check();
+        }
+    }
+    catch e is Interrupted {
+        Stderr().writeln("interrupted");
+        if mode == "stubborn" {
+            Stderr().writeln("cleaning");
+            loop {
+                last if mode == "never";
+            }
+        }
+    }
+    interruption.status();
+}

@@ -8,6 +8,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
+  from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
+  `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second
+  signal ends the process at once. Without an Interruption a signal ends the process by the system's default action
+  and no `defer` or `destroy` runs (now tested on real signals). `ManualSignals` (`testing/signal`) raises signals
+  in tests. `web/app` stops through an Interruption instead of the internal `runtime/signal`.
 - **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
   `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
   `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in

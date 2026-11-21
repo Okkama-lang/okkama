@@ -5269,6 +5269,21 @@
       }
     },
     {
+      "id": "STD.OS.SIGNAL",
+      "title": "std os/signal public contract (CaughtSignal, Interrupted, Interruption, ProcessSignals, Signaling)",
+      "family": "Standard library: os",
+      "spec_refs": [
+        "std/os/signal.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.OS.STORAGE",
       "title": "std os/storage public contract (InvalidStorageUsage, Storage, StorageFailure, StorageUsage)",
       "family": "Standard library: os",
@@ -7038,6 +7053,21 @@
       "family": "Standard library: testing",
       "spec_refs": [
         "std/testing/runner.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
+      "id": "STD.TESTING.SIGNAL",
+      "title": "std testing/signal public contract (ManualSignals)",
+      "family": "Standard library: testing",
+      "spec_refs": [
+        "std/testing/signal.ok"
       ],
       "status": "mandatory",
       "aspects": {
