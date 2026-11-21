@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The collector's sweep is back to its 0.5.8 speed (#922).** The cell loop of #538 phase A (per-cell counters
+  and an extra kind test per cell) cost ~5% of all instructions on allocation-heavy programs; the ladder's
+  04-bigint and 07-objects ran 7% and 6% slower than 0.5.8. The loop has its old shape again, and the sweep
+  counters of `OKKAMA_DEV=gc` are per page (cells visited, in full pages, in empty pages). 04-bigint 2180M →
+  2075M instructions (225 → 210 ms), 07-objects 259M → 251M (20 → 17 ms).
 - **The JIT compiles a call of a field accessor as the load itself (#541).** A method whose whole body returns a
   field (`x() is int { x; }`) costs no call; its entry still counts as a step, so step budgets see the same
   program. Two accessor calls per loop round: 96 → 50 instructions, ~9.9 → ~6.0 ns. A general inliner (methods
