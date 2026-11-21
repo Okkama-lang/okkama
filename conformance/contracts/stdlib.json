@@ -305,7 +305,7 @@
     },
     {
       "id": "STD.ASYNC.CHANNEL",
-      "title": "std async/channel public contract (Channel, ChannelClosed, InvalidChannelCapacity, Receiving, Sending)",
+      "title": "std async/channel public contract (Channel, ChannelClosed, ConcurrentChannelSelection, DuplicateChannelReceiver, EmptyChannelSelection, InvalidChannelCapacity, Receiving, SelectedItem, SelectedReceiving, Sending)",
       "family": "Standard library: async",
       "spec_refs": [
         "std/async/channel.ok"

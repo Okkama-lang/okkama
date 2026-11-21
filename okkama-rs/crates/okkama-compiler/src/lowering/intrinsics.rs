@@ -11,7 +11,7 @@ use crate::ir::{self, ObjectId, ResultType, Type};
 use crate::source::Span;
 
 /// Объекты std с intrinsic-действиями: модуль и имя.
-const OBJECTS: [(&str, &str); 21] = [
+const OBJECTS: [(&str, &str); 22] = [
     ("async/scope", "FutureScope"),
     ("async/lock", "Lock"),
     ("async/lock", "LockGuard"),
@@ -22,6 +22,7 @@ const OBJECTS: [(&str, &str); 21] = [
     ("async/channel", "Channel"),
     ("async/channel", "Sending"),
     ("async/channel", "Receiving"),
+    ("async/channel", "SelectedReceiving"),
     ("async/event", "Event"),
     ("async/atomic", "Atomic"),
     ("async/cancellation", "Cancellation"),
@@ -51,6 +52,10 @@ fn related(name: &str) -> &'static [&'static str] {
         "okkama.channel.Channel.new_capacity" => &["Self", "InvalidChannelCapacity.capacity"],
         "okkama.channel.Channel.sending" => &["Sending<T>"],
         "okkama.channel.Channel.receiving" => &["Receiving<T>"],
+        "okkama.channel.SelectedReceiving.new_receivers" =>
+            &["Self", "EmptyChannelSelection.empty", "DuplicateChannelReceiver.duplicate"],
+        "okkama.channel.SelectedReceiving.item" =>
+            &["SelectedItem<T>", "ChannelClosed.closed", "ConcurrentChannelSelection.pending"],
         "okkama.channel.Sending.send"
         | "okkama.channel.Receiving.item"
         | "okkama.channel.Sending.close"

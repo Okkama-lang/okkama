@@ -82,7 +82,7 @@ pub enum Type {
 
 /// Закрытый перечень intrinsics `okkama-rs` (§14.2): действия объектов std
 /// `async/*`, чьё состояние держит рантайм.
-pub const INTRINSICS: [&str; 86] = [
+pub const INTRINSICS: [&str; 88] = [
     "okkama.timeout.Within.outcome",
     "okkama.timeout.Before.outcome",
     "okkama.scope.FutureScope.outcome",
@@ -138,6 +138,8 @@ pub const INTRINSICS: [&str; 86] = [
     "okkama.channel.Sending.send",
     "okkama.channel.Sending.close",
     "okkama.channel.Receiving.item",
+    "okkama.channel.SelectedReceiving.new_receivers",
+    "okkama.channel.SelectedReceiving.item",
     "okkama.channel.Receiving.close",
     "okkama.event.Event.new",
     "okkama.event.Event.new_ready",
@@ -705,6 +707,16 @@ pub(crate) fn channel_carriers(module: &Module) -> Vec<(usize, Type)> {
             }
             ("okkama.channel.Receiving.item", Some(Type::Object(holder))) => {
                 carried.extend(result.map(|message| (holder.0, message.clone())));
+            }
+            ("okkama.channel.SelectedReceiving.item", Some(Type::Object(selector))) => {
+                if let (Some(receivers), Some(Type::Object(item))) =
+                    (module.objects[selector.0].fields.first(), result)
+                    && let Type::Array(receiver) = &receivers.ty
+                    && let Type::Object(receiver) = receiver.as_ref()
+                    && let Some(payload) = module.objects[item.0].fields.get(1)
+                {
+                    carried.push((receiver.0, payload.ty.clone()));
+                }
             }
             ("okkama.channel.Channel.sending" | "okkama.channel.Channel.receiving", Some(Type::Object(channel))) => {
                 if let Some(Type::Object(endpoint)) = result {

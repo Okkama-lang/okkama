@@ -64,6 +64,8 @@ fn contract(intrinsic: Intrinsic) -> Contract {
         BarrierRead(3) => (false, "P", 'R'),
         BarrierRead(_) => (false, "P", 'I'),
         ChannelNew => (false, "I", 'P'),
+        SelectionNew => (false, "P", 'P'),
+        SelectionItem => (true, "P", 'P'),
         Send => (true, "P*", 'P'),
         Receive | ScopeResult => (true, "P", '*'),
         GroupStart => (false, "PP", '-'),
@@ -95,6 +97,8 @@ fn related(intrinsic: Intrinsic) -> &'static [Related] {
         CancellationNew | TokenNew | Cancelling | LockNew | LockGuard | SemaphorePermit | BarrierState
         | ChannelEndpoint | EndpointNew | GroupNew | ScopeResult => &[New("")],
         ChannelNew => &[New(""), Thrown("I")],
+        SelectionNew => &[New("P"), Thrown(""), Thrown("")],
+        SelectionItem => &[New(""), Thrown(""), Thrown("")],
         CollectAll => &[New("P")],
         BarrierWait | Send | Receive | GroupStart | CollectRace | CollectFirst | StreamCompletion | TimeoutBefore
         | TimeoutWithin => &[Thrown("")],
@@ -322,6 +326,23 @@ impl Check<'_> {
         if intrinsic == Intrinsic::ScopeResult {
             self.scope_action(params[0], declared.objects.first().map(|o| o.0 as usize), result)?;
         }
+        if intrinsic == Intrinsic::SelectionNew {
+            let array = params[0];
+            if !matches!(self.program.ty(array), Some(Type::Array(element)) if self.object(*element).is_some())
+                || !result.and_then(|r| self.object(r)).is_some_and(|o| {
+                    let fields = &self.program.objects[o].fields;
+                    fields.len() == 1 && self.program.same_type(fields[0].1, array)
+                })
+            {
+                return Err("selector constructor needs an endpoint array and matching receiver field".into());
+            }
+        }
+        if intrinsic == Intrinsic::SelectionItem {
+            let configured = self.object(params[0]).and_then(|o| self.selection_endpoint(o));
+            if configured.is_none() {
+                return Err("selector needs exactly one endpoint array field".into());
+            }
+        }
         let objects = &declared.objects;
         let rules = related(intrinsic);
         if objects.len() < rules.len() {
@@ -340,6 +361,7 @@ impl Check<'_> {
                     let fields = match intrinsic {
                         // `[results]`: an array of the waited futures' results.
                         Intrinsic::CollectAll => self.collected(object, value.flatten()),
+                        Intrinsic::SelectionItem => self.selected_payload(object).is_some(),
                         _ => self.fields(object) == *fields,
                     };
                     // ScopeResult's group is internal; the others return the object.
@@ -436,6 +458,13 @@ impl Check<'_> {
                 }
                 Intrinsic::Send => (objects(params[0]), params.get(1).copied()),
                 Intrinsic::Receive => (objects(params[0]), function.result),
+                Intrinsic::SelectionItem => {
+                    let endpoint = self.object(params[0]).and_then(|o| self.selection_endpoint(o))
+                        .ok_or("invalid selector endpoint array")?;
+                    let value = function.result.and_then(|r| self.object(r)).and_then(|o| self.selected_payload(o))
+                        .ok_or("invalid selected item layout")?;
+                    (objects(endpoint), Some(value))
+                }
                 _ => continue,
             };
             let Some((&first, rest)) = links.split_first() else { continue };
@@ -452,6 +481,19 @@ impl Check<'_> {
             }
         }
         Ok(())
+    }
+
+    fn selection_endpoint(&self, object: usize) -> Option<TypeRef> {
+        let [(_, array)] = self.program.objects[object].fields[..] else { return None };
+        match self.program.ty(array) {
+            Some(Type::Array(element)) if self.object(*element).is_some() => Some(*element),
+            _ => None,
+        }
+    }
+
+    fn selected_payload(&self, object: usize) -> Option<TypeRef> {
+        let [(_, index), (_, payload)] = self.program.objects[object].fields[..] else { return None };
+        matches!(self.program.ty(index), Some(Type::Int)).then_some(payload)
     }
 
     /// CollectAll's result object: one array of the futures' results.

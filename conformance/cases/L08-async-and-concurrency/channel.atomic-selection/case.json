@@ -1,0 +1,24 @@
+{
+  "schema": "ocs-case/2",
+  "id": "L08.channel.atomic-selection",
+  "title": "atomic selection preserves losing messages and rotates priority",
+  "purpose": "Verify exactly one receive per round, typed duplicate rejection and exhaustion.",
+  "level": "L08",
+  "contracts": [{"contract": "STD.ASYNC.CHANNEL", "aspects": ["boundary"]}],
+  "mode": "run",
+  "sources": ["main.ok"],
+  "entry": "main.ok",
+  "requires": {"environment": ["stdout"]},
+  "expect": {
+    "outcome": "success",
+    "exit_status": 0,
+    "stdout": {"text": "atomic selection ok\n"}
+  },
+  "spec_refs": ["std/async/channel.ok", "docs/channel-selection-509.md"],
+  "budget": {"timeout_s": 30},
+  "provenance": {
+    "origin": "owner's engineering review of #509, implementation authorized 2026-11-22",
+    "expected_basis": "one atomic receive per successful selection, rotating priority and explicit duplicate/exhaustion errors"
+  },
+  "status": "mandatory"
+}
