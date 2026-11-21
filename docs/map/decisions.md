@@ -129,6 +129,18 @@ Implementation choices under the owner's generator-only task:
 - Scaffolds preserve micro-v2 shape but remain unregistered until a person writes
   representative inputs and independent oracles. No generated checksum guesses.
 
+
+### m–z measurement expansion (owner task, 2026-11-22)
+
+Use bounded varying inputs and independent mathematical/content oracles, including
+an explicit PCG32 implementation from the public reproducibility contract. Measure
+pure network/terminal values without opening resources. Count explicit role calls
+separately from concrete implementations and declare directly measured support
+modules. Skip effectful-only APIs and modules without callable targets. All new
+programs preserve protocol v2 and validate measured and warmup checksums at small
+and larger N; correctness checks establish no performance result. Evidence and
+scope: [m–z record](../../bench/micro/REVIEW-244-MZ.md).
+
 ## URL transformation semantics (#133, 2026-11-22)
 
 Implementation choices under the owner's supplied review of 2026-11-21 and

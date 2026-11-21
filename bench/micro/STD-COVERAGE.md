@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-55 of 435 non-runtime module files have an explicitly declared measured action.
+117 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -36,7 +36,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `collections/enumeration` | — |
 | `collections/frequencies` | — |
 | `collections/heap` | heap-top |
-| `collections/iteration` | — |
+| `collections/iteration` | regex-parts |
 | `collections/list` | heap-top |
 | `collections/ordering` | sorted |
 | `collections/repetition` | — |
@@ -120,7 +120,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `encoding/pem` | — |
 | `encoding/quoted_printable` | — |
 | `encoding/single_byte` | — |
-| `encoding/utf` | utf8-encode, utf16-encode, form-parse |
+| `encoding/utf` | utf8-encode, utf16-encode, form-parse, plist-parse |
 | `error` | — |
 | `fs/directory` | — |
 | `fs/entry` | — |
@@ -129,7 +129,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `fs/glob` | — |
 | `fs/link` | — |
 | `fs/lock` | — |
-| `fs/path` | — |
+| `fs/path` | mime-extension, unix-address |
 | `fs/root` | — |
 | `fs/stat` | — |
 | `fs/temp` | — |
@@ -244,15 +244,15 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `i18n/gettext` | — |
 | `i18n/operands` | — |
 | `i18n/plural` | plural-ru |
-| `io/buffer` | — |
-| `io/decorators` | — |
+| `io/buffer` | template-stream |
+| `io/decorators` | mime-transfer |
 | `io/input` | — |
 | `io/stdin` | — |
 | `io/stdout` | — |
 | `io/stream` | — |
-| `io/text` | — |
+| `io/text` | template-stream |
 | `io/transfer` | — |
-| `json` | json-parse, json-round-trip, json-render, template-render |
+| `json` | json-parse, json-round-trip, json-render, template-render, html-template, template-json-value, template-sections |
 | `locale/case` | locale-case |
 | `locale/collation` | — |
 | `locale/currency` | — |
@@ -318,35 +318,35 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `mail/smtp_reading` | — |
 | `mail/smtp_reply` | — |
 | `mail/smtp_session` | — |
-| `math/aggregate` | — |
+| `math/aggregate` | aggregate-extremes |
 | `math/constants` | — |
-| `math/decimal` | locale-decimal, decimal-plus |
+| `math/decimal` | locale-decimal, decimal-plus, shortest-float |
 | `math/rounding` | — |
-| `message/header` | — |
-| `mime/disposition` | — |
-| `mime/media_type` | — |
-| `mime/part` | — |
-| `mime/transfer` | — |
-| `mime/types` | — |
-| `mime/word` | — |
-| `net/dns` | — |
-| `net/endpoint` | — |
-| `net/failure` | — |
-| `net/interface` | — |
+| `message/header` | message-header |
+| `mime/disposition` | mime-disposition |
+| `mime/media_type` | mime-media-type, mime-extension |
+| `mime/part` | mime-text-body |
+| `mime/transfer` | mime-transfer |
+| `mime/types` | mime-extension |
+| `mime/word` | mime-encoded-word |
+| `net/dns` | dns-fixed-record |
+| `net/endpoint` | dns-fixed-record, host-endpoint, public-suffix |
+| `net/failure` | network-failure |
+| `net/interface` | network-interface |
 | `net/ip` | ip-parse |
-| `net/ip_registry` | — |
-| `net/multicast` | — |
-| `net/public_suffix` | — |
-| `net/stream` | — |
-| `net/tcp` | — |
+| `net/ip_registry` | ip-classification |
+| `net/multicast` | multicast-options |
+| `net/public_suffix` | public-suffix |
+| `net/stream` | connection-endpoints |
+| `net/tcp` | tcp-options |
 | `net/tcp_racing` | — |
-| `net/tls` | — |
-| `net/udp` | — |
-| `net/unix` | — |
-| `numbers/bigint` | — |
-| `numbers/bigrational` | — |
-| `numbers/float` | — |
-| `operators` | — |
+| `net/tls` | tls-details |
+| `net/udp` | udp-datagram |
+| `net/unix` | unix-address |
+| `numbers/bigint` | bigint-add, operator-adding |
+| `numbers/bigrational` | bigrational-normalize |
+| `numbers/float` | shortest-float |
+| `operators` | operator-adding |
 | `os/account` | — |
 | `os/command` | — |
 | `os/command_capture` | — |
@@ -359,43 +359,43 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `os/signal` | — |
 | `os/storage` | — |
 | `parallel/map` | — |
-| `plist/parse` | — |
-| `plist/value` | — |
-| `plist/write` | — |
-| `random/distribution` | — |
-| `random/source` | — |
+| `plist/parse` | plist-parse |
+| `plist/value` | plist-parse, plist-integer, plist-write |
+| `plist/write` | plist-write |
+| `random/distribution` | seeded-uniform |
+| `random/source` | pcg-bytes, seeded-uniform |
 | `regex/escape` | regex-escape |
-| `regex/match` | — |
+| `regex/match` | regex-capture |
 | `regex/pattern` | regex-first-match, regex-replace |
-| `regex/range` | — |
+| `regex/range` | regex-range |
 | `regex/replace` | regex-replace |
-| `regex/search` | regex-first-match |
-| `regex/split` | — |
-| `size` | — |
+| `regex/search` | regex-first-match, regex-capture |
+| `regex/split` | regex-parts |
+| `size` | sizing-role |
 | `statistics` | statistics-median |
 | `strings/buffer` | text-buffer |
 | `strings/format` | formatted |
 | `strings/join` | joined |
 | `strings/parse` | int-parse, hex-number-parse |
-| `template/compile` | — |
+| `template/compile` | text-template, text-template-library |
 | `template/engine` | template-render |
-| `template/html` | — |
-| `template/html_library` | — |
-| `template/json` | — |
-| `template/library` | — |
-| `template/model` | — |
-| `template/path` | — |
-| `template/render` | — |
-| `template/sections` | — |
-| `template/tree` | — |
-| `terminal/capability` | — |
-| `terminal/error` | — |
+| `template/html` | html-template, html-template-library |
+| `template/html_library` | html-template-library |
+| `template/json` | template-json-value |
+| `template/library` | text-template-library |
+| `template/model` | template-binding, template-stream |
+| `template/path` | template-path |
+| `template/render` | template-stream |
+| `template/sections` | template-sections |
+| `template/tree` | template-tree |
+| `terminal/capability` | terminal-size |
+| `terminal/error` | terminal-failure |
 | `terminal/mode` | — |
 | `terminal/prompt` | — |
 | `terminal/screen` | — |
 | `terminal/session` | — |
-| `terminal/style` | — |
-| `terminal/width` | — |
+| `terminal/style` | terminal-color |
+| `terminal/width` | display-width |
 | `testing/check` | — |
 | `testing/context` | — |
 | `testing/double` | — |
@@ -409,15 +409,15 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `testing/snapshot` | — |
 | `testing/time` | — |
 | `text/layout` | text-indent |
-| `time/clock` | — |
+| `time/clock` | instant-shift, rfc3339-parse |
 | `time/date` | date-shift, date-format, iso-date |
-| `time/day` | — |
-| `time/duration` | — |
+| `time/day` | time-of-day |
+| `time/duration` | instant-shift, duration-add, local-datetime-shift, rfc3339-parse, fixed-zone |
 | `time/format` | date-format |
-| `time/iso` | — |
-| `time/local_datetime` | — |
-| `time/rfc3339` | — |
-| `time/zone` | — |
+| `time/iso` | iso-text |
+| `time/local_datetime` | local-datetime-shift |
+| `time/rfc3339` | rfc3339-parse |
+| `time/zone` | fixed-zone |
 | `toml/parse` | toml-parse |
 | `toml/value` | toml-parse |
 | `unicode/character` | unicode-category |
@@ -425,8 +425,8 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `url/form` | form-parse |
 | `url/percent` | percent-encode, percent-decode |
 | `url/query` | query-parse, form-parse |
-| `url/value` | — |
-| `uuid/generation` | — |
+| `url/value` | url-parts |
+| `uuid/generation` | uuid5-name |
 | `uuid/value` | uuid-parse |
 | `web/app` | — |
 | `web/around` | — |
@@ -437,7 +437,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `web/routing` | — |
 | `web/session` | — |
 | `web/testing` | — |
-| `xml/name` | — |
+| `xml/name` | xml-name |
 | `xml/node` | xml-attribute |
 | `xml/parse` | xml-attribute |
 | `xml/write` | xml-escape |

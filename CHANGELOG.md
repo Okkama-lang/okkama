@@ -8,13 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
-- **Std micro-benchmarks (#244).** `bench/micro/std` grows from 11 to 60 programs: hex, base32 and percent coding,
-  CRC-32 and Adler-32, SHA-1, SHA-512, SHA3-256, MD5, BLAKE2b, SHAKE128, HMAC-SHA256, AES-GCM and Ed25519, gzip and
-  zlib round trips, IP, UUID, query, form, XML, TOML and CSV, hexadecimal numbers and decimals, dates (shifting, ISO,
-  formatting), Turkish case, Russian plurals, German decimals, English lists, Unicode categories and NFC, JSON and
-  template rendering, HTML, XML and regex escaping, regex replacement, UTF-16, joining, formatting, text buffers,
-  text indentation, heaps and statistics. Each has an independent Python oracle; 51 of 435 std modules now have a
-  declared measured action.
+- **Std micro-benchmarks (#244).** `bench/micro/std` grows from 11 to 117 programs across 117 std modules (264
+  measured public actions), from hashing, ciphers and compression to dates, locales, URLs, templates, text and
+  numbers; each has an independent Python oracle. `bench/micro/actions.py` keeps an inventory of every public std
+  action (STD-ACTIONS.md, `--check` for staleness) and writes a protocol-v2 skeleton for a missing one.
 - **Tests in process workers, with captured output and deadlines (#938).** `okkama run -t --workers N` runs each
   test in its own process, at most N at a time; each test's stdout and stderr are captured up to 64 KiB (cut and
   marked beyond) and reported with it (human, JSON `stdout`/`stderr`/`truncated`, JUnit `system-out`/

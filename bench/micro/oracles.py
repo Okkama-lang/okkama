@@ -1,4 +1,6 @@
 """Independent mathematical/content oracles; never learn expected output from a VM."""
+import fractions
+import uuid
 import base64
 import html
 import re
@@ -123,7 +125,87 @@ def contribution(name, i):
     if name=='csv-round-trip':return len('name,note\r\nAda,"x, '+str(i)+'"\r\n')%7
     if name=='text-buffer':return len('<li>'+str(i)+'</li>!\n')%7
     if name=='formatted':return len(str(i)+' of 9 done')%7
+    if name == 'aggregate-extremes': return (min(i % 19, 7, 3) + max(i % 19, 7, 3)) % 7
+    if name == 'message-header': return (len(str(i))) % 7
+    if name == 'mime-disposition': return (len('attachment; filename=file'+str(i)+'.txt')) % 7
+    if name == 'mime-media-type': return (len(str(i))) % 7
+    if name == 'mime-text-body': return (len(('Привет '+str(i)).encode('utf-8'))) % 7
+    if name == 'mime-transfer': return (base64.b64encode(bytes([i % 256, 1, 2]))[0]) % 7
+    if name == 'mime-extension': return (len('image/png' if i % 2 == 0 else 'application/pdf')) % 7
+    if name == 'mime-encoded-word': return (len('=?UTF-8?B?'+base64.b64encode(('café '+str(i)).encode()).decode()+'?=')) % 7
+    if name == 'dns-fixed-record': return (len('node'+str(i)+'.example')) % 7
+    if name == 'host-endpoint': return (len('example.com:'+str(i % 65536))) % 7
+    if name == 'network-failure': return (len('failure '+str(i))) % 7
+    if name == 'network-interface': return (len('if'+str(i)) + i + 1) % 7
+    if name == 'ip-classification': return (128) % 7
+    if name == 'multicast-options': return (i % 256 + int(i % 2 == 0)) % 7
+    if name == 'public-suffix': return (len('node'+str(i)+'.co.uk')) % 7
+    if name == 'connection-endpoints': return (2*i+1) % 7
+    if name == 'tcp-options': return (i % 1024) % 7
+    if name == 'tls-details': return (len('h2-'+str(i))) % 7
+    if name == 'udp-datagram': return (i % 256) % 7
+    if name == 'unix-address': return (len('run/service'+str(i % 10000)+'.sock')) % 7
+    if name == 'bigint-add': return (10**30+i+987654321) % 7
+    if name == 'bigrational-normalize': return (fractions.Fraction(i * 6, 18).numerator) % 7
+    if name == 'shortest-float': return (int(str(i % 1000)+"5")) % 7
+    if name == 'operator-adding': return (i+9) % 7
+    if name == 'plist-parse': return (i) % 7
+    if name == 'plist-integer': return (10**12+i) % 7
+    if name == 'plist-write': return len(('<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><string>item'+str(i)+'</string></plist>\n').encode()) % 7
+    if name == 'pcg-bytes': return (pcg_first_word(i) & 255) % 7
+    if name == 'seeded-uniform': return (pcg_integer16(i)) % 7
+    if name == 'regex-capture': return (len(str(i))) % 7
+    if name == 'regex-range': return (i % 13) % 7
+    if name == 'regex-parts': return (1+len(str(i))) % 7
+    if name == 'sizing-role': return (i % 16) % 7
+    if name == 'text-template': return (len('Hi '+str(i)+'!')) % 7
+    if name == 'html-template': return (len('<p>&lt;&amp;'+str(i)+'</p>')) % 7
+    if name == 'html-template-library': return (len('<p>{{.}}</p>')+len('card'+str(i))) % 7
+    if name == 'template-json-value': return (len(str(i))) % 7
+    if name == 'text-template-library': return (len('Hi {{n}}!')+len('item'+str(i))) % 7
+    if name == 'template-binding': return (len(str(i))) % 7
+    if name == 'template-path': return (len('user.item'+str(i))) % 7
+    if name == 'template-stream': return (len(('Hi '+str(i)+'!').encode())) % 7
+    if name == 'template-sections': return (len(('value=' if i % 2 == 0 else '')+str(i))) % 7
+    if name == 'template-tree': return (len('item'+str(i))+2) % 7
+    if name == 'terminal-size': return (i % 200) % 7
+    if name == 'terminal-failure': return (len('invalid')+len('input '+str(i))) % 7
+    if name == 'terminal-color': return (len('38;5;'+str(i % 256))) % 7
+    if name == 'display-width': return (4+len(str(i))) % 7
+    if name == 'instant-shift': return (i*10**9) % 7
+    if name == 'time-of-day': return (8+(1+len(f"{i%1000:03}".rstrip("0")) if i%1000 else 0)) % 7
+    if name == 'duration-add': return (i*10**6+250000000) % 7
+    if name == 'iso-text': return (i % 28 + 1) % 7
+    if name == 'local-datetime-shift': return (i % 100000 % 60) % 7
+    if name == 'rfc3339-parse': return ((i % 60)*10**9) % 7
+    if name == 'fixed-zone': return ((i % 1440)*60*10**9) % 7
+    if name == 'url-parts': return (len('https://example.com/a/'+str(i)+'?x=1')) % 7
+    if name == 'uuid5-name': return (uuid.uuid5(uuid.NAMESPACE_DNS, 'item'+str(i)).bytes[0]) % 7
+    if name == 'xml-name': return (len('t:item'+str(i))) % 7
     raise ValueError('No independent oracle: '+name)
+
+
+def pcg_words(seed):
+    """PCG-XSH-RR 64/32, from the published random/source contract."""
+    mask = (1 << 64) - 1
+    increment = 1442695040888963407
+    state = (increment + seed) & mask
+    state = (state * 6364136223846793005 + increment) & mask
+    while True:
+        old = state
+        state = (old * 6364136223846793005 + increment) & mask
+        shifted = (((old >> 18) ^ old) >> 27) & 0xffffffff
+        rotation = old >> 59
+        yield ((shifted >> rotation) | (shifted << ((-rotation) & 31))) & 0xffffffff
+
+
+def pcg_first_word(seed):
+    return next(pcg_words(seed))
+
+
+def pcg_integer16(seed):
+    words = pcg_words(seed)
+    return ((next(words) << 32) | next(words)) % 65536
 
 
 @lru_cache(maxsize=512)
