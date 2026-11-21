@@ -354,13 +354,34 @@ impl Jit {
     pub(crate) unsafe fn frame_roots(&self, mut frame: u64, entry: u64, visit: &mut dyn FnMut(Word, Repr)) {
         // Rust frames between machine frames (a helper that calls a closure)
         // are passed over; the walk ends at the frame that entered machine code.
+        // A deep stack repeats a few return addresses (recursion): a small direct-mapped cache of what each one
+        // resolved to spares the two binary searches per frame (#917: deep, ~100 000 frames per collection).
+        const NOT_CODE: u32 = u32::MAX;
+        const NO_MAP: u32 = u32::MAX - 1;
+        let mut cache = [(0u64, 0u32); 64];
         while frame != 0 && frame != entry {
             let (caller, ret) = unsafe { (*(frame as *const u64), *((frame + 8) as *const u64)) };
-            if !self.in_code(ret) {
+            let slot = &mut cache[((ret >> 2) & 63) as usize];
+            let resolved = if slot.0 == ret && ret != 0 {
+                slot.1
+            } else {
+                let resolved = if !self.in_code(ret) {
+                    NOT_CODE
+                } else {
+                    match self.maps.binary_search_by_key(&ret, |(address, _, _)| *address) {
+                        Ok(index) => index as u32,
+                        Err(_) => NO_MAP,
+                    }
+                };
+                *slot = (ret, resolved);
+                resolved
+            };
+            if resolved == NOT_CODE {
                 frame = caller;
                 continue;
             }
-            if let Ok(index) = self.maps.binary_search_by_key(&ret, |(address, _, _)| *address) {
+            if resolved != NO_MAP {
+                let index = resolved as usize;
                 // The machine frame's SP at the call, from its own FP (`caller`):
                 // the callee's frame record says nothing about where the caller's
                 // SP was (Linux puts the record below the callee's saved registers).
@@ -3298,6 +3319,8 @@ mod profile_tests {
 mod ready_callees_tests;
 #[cfg(test)]
 mod accessor_inline_tests;
+#[cfg(test)]
+mod frame_roots_tests;
 #[cfg(test)]
 mod inline_tests;
 #[cfg(test)]

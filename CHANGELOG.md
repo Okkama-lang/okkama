@@ -24,6 +24,9 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **The root scan resolves each return address once per collection (#916).** A deep stack repeats a few return
+  addresses; a 64-entry cache in the frame walk spares the two binary searches (code ranges, stack maps) per
+  frame. `bench/gc` deep: roots 14.6 → 6.0 ms, steady 10.3 → 9.3 ms.
 - **Small methods are compiled into their callers (#926, #927).** The JIT inlines a small static callee (a
   synchronous Okkama function of up to 24 instructions, without handlers) into a synchronous caller, one level
   deep, so a recursive function inlines itself once. The program cannot tell: an inlined entry is still a step,
