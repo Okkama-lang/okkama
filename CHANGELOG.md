@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **Filesystem faults can be injected in tests, and atomic replace is tested under them (#934).**
+  `SPARROW_CORE_FS_FAULTS=write:ENOSPC,file_sync:EIO,rename:EXDEV,directory_sync:EIO` makes those steps fail (a
+  failed write after half its bytes); `File.replace` is shown to keep the old file and leave no temporary file when
+  the write, the file fsync or the rename fails, and to report `not_durable` with the new content when only the
+  directory fsync fails. `bench/io/replace.ok` compares write, write + sync and replace on the machine at hand.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second

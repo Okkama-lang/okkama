@@ -48,6 +48,49 @@ pub(crate) fn host_as(n: Native, e: std::io::Error, message: &str) -> ProviderEr
         other => other,
     }
 }
+/// A filesystem fault injected for tests (#934): `SPARROW_CORE_FS_FAULTS` is a
+/// comma-separated list of `point:ERRNO`, the points `write` (half the bytes
+/// go, then the error), `file_sync`, `rename` and `directory_sync`, the errors
+/// EIO, ENOSPC, EXDEV, EACCES and EDQUOT. Unset, nothing is injected; the
+/// variable is read once.
+pub(crate) fn injected_fault(point: &str) -> std::io::Result<()> {
+    static FAULTS: std::sync::OnceLock<Vec<(String, i32)>> = std::sync::OnceLock::new();
+    let faults = FAULTS.get_or_init(|| {
+        let Some(spec) = std::env::var_os("SPARROW_CORE_FS_FAULTS") else {
+            return Vec::new();
+        };
+        spec.to_string_lossy()
+            .split(',')
+            .filter_map(|item| {
+                let (point, name) = item.trim().split_once(':')?;
+                let errno = match name {
+                    "EIO" => libc::EIO,
+                    "ENOSPC" => libc::ENOSPC,
+                    "EXDEV" => libc::EXDEV,
+                    "EACCES" => libc::EACCES,
+                    "EDQUOT" => libc::EDQUOT,
+                    _ => return None,
+                };
+                Some((point.to_owned(), errno))
+            })
+            .collect()
+    });
+    match faults.iter().find(|(name, _)| name == point) {
+        Some(&(_, errno)) => Err(std::io::Error::from_raw_os_error(errno)),
+        None => Ok(()),
+    }
+}
+
+/// `write_all`, or, with a `write` fault injected (#934), half of `bytes`
+/// written and then the injected error: an interrupted write.
+pub(crate) fn write_all_or_fault(file: &mut impl std::io::Write, bytes: &[u8]) -> std::io::Result<()> {
+    if let Err(error) = injected_fault("write") {
+        file.write_all(&bytes[..bytes.len() / 2])?;
+        return Err(error);
+    }
+    file.write_all(bytes)
+}
+
 pub(crate) fn host(n: Native, e: std::io::Error) -> ProviderError {
     use std::io::ErrorKind::*;
     let code = match e.kind() {

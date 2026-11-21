@@ -66,7 +66,7 @@ fn replace(
     shown: String,
 ) -> Result<(), ProviderError> {
     state.seal(n)?;
-    match fs::rename(&state.path, &destination) {
+    match crate::host::native_fs::injected_fault("rename").and_then(|()| fs::rename(&state.path, &destination)) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => {
             return Err(fail(n, "invalid_input", "Cannot replace a directory with a file"));

@@ -164,7 +164,8 @@ impl FileState {
         if self.flags & 2 == 0 {
             return Err(fail(n, "invalid_input", "File is not writable"));
         }
-        self.opened(n, cwd)?.open(n)?.sync_all().map_err(|e| host(n, e))
+        let file = self.opened(n, cwd)?.open(n)?;
+        crate::host::native_fs::injected_fault("file_sync").and_then(|()| file.sync_all()).map_err(|e| host(n, e))
     }
     pub(crate) fn close(&mut self, n: Native) -> Result<(), ProviderError> {
         if let Some(mut channel) = self.channel.take() {
@@ -458,7 +459,7 @@ impl Heap {
                 }
                 // A short write goes on with the rest, so the caller sees either
                 // every byte written or the host's own failure (#122).
-                file.write_all(&bytes).map_err(|e| host(n, e))?;
+                crate::host::native_fs::write_all_or_fault(file, &bytes).map_err(|e| host(n, e))?;
                 Ok(Slot::small(bytes.len() as i64))
             }
             FsFileStateRewriteText => {
