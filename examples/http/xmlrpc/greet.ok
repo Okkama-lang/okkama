@@ -2,11 +2,7 @@ module examples/http/xmlrpc/greet v1.0.0;
 
 import "http/xmlrpc" take XmlRpcCalling, XmlRpcCall, XmlRpcResult, XmlRpcResultKind, XmlRpcSuccess,
     XmlRpcFailure, XmlRpcFault, XmlRpcText, XmlRpcHandling, XmlRpcClient, XmlRpcLimits,
-    XmlRpcWriting, XmlRpcValue, XmlRpcMember;
-import "async/atomic" take Atomic;
-import "collections/sequence" take Sequencing;
-import "math/decimal" take Decimal;
-import "time/local_datetime" take LocalDateTime;
+    WrongXmlRpcValue;
 import "http/server" take HttpServer;
 import "http/client" take HttpClient;
 import "http/endpoint" take LoopbackEndpoints;
@@ -28,46 +24,15 @@ object Greeting does XmlRpcCalling {
                 XmlRpcFault(code: -32601, message: "Unknown method " + call.method())
             );
         }
-        let who = TextOf();
-        for call.parameters() -> parameter {
-            parameter.print(who);
+        // A value reads as its own kind; a missing or non-string parameter is "stranger".
+        let who = try {
+            call.parameter(0).text();
         }
-        XmlRpcSuccess(XmlRpcText("Hello, " + who.string() + "!"));
+        catch e is WrongXmlRpcValue {
+            "stranger";
+        };
+        XmlRpcSuccess(XmlRpcText("Hello, " + who + "!"));
     }
-}
-
-// Reads an XML-RPC value as text: a value shows itself by calling the one
-// callback of its kind. Anything but a string reads as "stranger".
-object TextOf does XmlRpcWriting {
-    has seen is Atomic<string>;
-
-    TextOf() {
-        seen = Atomic("stranger");
-    }
-
-    string() is string {
-        seen.value();
-    }
-
-    text(value is string) is void {
-        seen.replace(value);
-    }
-
-    integer(value is int) is void {}
-
-    boolean(value is bool) is void {}
-
-    floating(value is Decimal) is void {}
-
-    datetime(value is LocalDateTime) is void {}
-
-    binary(value is @byte) is void {}
-
-    elements(values is Sequencing<XmlRpcValue>) is void {}
-
-    members(values is Sequencing<XmlRpcMember>) is void {}
-
-    nil_value() is void {}
 }
 
 async main() is int {
@@ -88,9 +53,7 @@ async main() is int {
     let hello = await rpc.result(XmlRpcCall(method: "greet", parameters: [XmlRpcText("Ann")]));
     match hello.kind() {
         case XmlRpcResultKind.success {
-            let reply = TextOf();
-            hello.value().print(reply);
-            out.writeln("greet: ", reply.string());
+            out.writeln("greet: ", hello.value().text());
         }
         case XmlRpcResultKind.fault {
             out.writeln("greet failed: ", hello.fault()::Fault::text);

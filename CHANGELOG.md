@@ -18,6 +18,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   (ordered `QueryParameters`, repeated names and empty values kept), `query_removed()`, and `port_replaced(port:)`
   (add, replace or remove; no scheme default is invented). The structured `UrlParts(...)` constructor takes
   defaults. The HTTP client examples build their URLs this way (`examples/http/client/build_url.ok`).
+- **XML-RPC values read themselves (#517).** Every `XmlRpcValue` answers `text()`, `int()`, `bool()`, `decimal()`,
+  `local_date_time()` and `bytes()` for its own kind, `item(index)` for an array and `member(name)` for a struct,
+  and throws `WrongXmlRpcValue` (`kind(expected, actual)`, `member(name)`, `position(position)`) otherwise;
+  `XmlRpcCall.parameter(position)` reads a call's parameters. A program no longer writes an `XmlRpcWriting` to
+  read a string: `call.parameter(0).text()`, `result.value().text()` (`examples/http/xmlrpc/greet.ok`).
 
 ## [0.6.1] — 2026-11-22
 

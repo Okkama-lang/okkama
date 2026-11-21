@@ -3185,7 +3185,7 @@
     },
     {
       "id": "STD.HTTP.XMLRPC",
-      "title": "std http/xmlrpc public contract (InvalidXmlRpc, ParsedXmlRpcCall, WrongXmlRpcResult, XmlRpcArray, XmlRpcBinary, XmlRpcBoolean, XmlRpcCall, XmlRpcCallWire, XmlRpcCalling, XmlRpcClient, XmlRpcDateTime, XmlRpcDouble, XmlRpcFailure, XmlRpcFault, XmlRpcFloat, XmlRpcHandling, XmlRpcHttpFailed, XmlRpcInteger, XmlRpcKind, XmlRpcLimitExceeded, XmlRpcLimits, XmlRpcMember, XmlRpcNil, XmlRpcResult, XmlRpcResultKind, XmlRpcStruct, XmlRpcSucce)",
+      "title": "std http/xmlrpc public contract (InvalidXmlRpc, ParsedXmlRpcCall, WrongXmlRpcResult, WrongXmlRpcValue, XmlRpcArray, XmlRpcBinary, XmlRpcBoolean, XmlRpcCall, XmlRpcCallWire, XmlRpcCalling, XmlRpcClient, XmlRpcDateTime, XmlRpcDouble, XmlRpcFailure, XmlRpcFault, XmlRpcFloat, XmlRpcHandling, XmlRpcHttpFailed, XmlRpcInteger, XmlRpcKind, XmlRpcLimitExceeded, XmlRpcLimits, XmlRpcMember, XmlRpcNil, XmlRpcResult, XmlRpcResultKind, XmlRpcS)",
       "family": "Standard library: http",
       "spec_refs": [
         "std/http/xmlrpc.ok"
@@ -7079,7 +7079,7 @@
     },
     {
       "id": "STD.TIME.CLOCK",
-      "title": "std time/clock public contract (IncompatibleClock, Instant, InvalidWait, MonotonicInstant, SystemClock, Timing)",
+      "title": "std time/clock public contract (IncompatibleClock, Instant, InvalidWait, MonotonicInstant, Now, SystemClock, Timing)",
       "family": "Standard library: time",
       "spec_refs": [
         "std/time/clock.ok"
@@ -7199,7 +7199,7 @@
     },
     {
       "id": "STD.TIME.ZONE",
-      "title": "std time/zone public contract (FixedZone, Fold, InvalidTimeZone, MissingLocalTime, TimeZone, TimeZoneDatabaseVersion, UnknownTimeZone, Zone, ZoneObservation, Zoned, ZonedDateTime)",
+      "title": "std time/zone public contract (FixedZone, Fold, InvalidTimeZone, MissingLocalTime, TimeZone, TimeZoneDatabaseVersion, Today, UnknownTimeZone, Zone, ZoneObservation, Zoned, ZonedDateTime)",
       "family": "Standard library: time",
       "spec_refs": [
         "std/time/zone.ok"
