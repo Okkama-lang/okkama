@@ -1254,6 +1254,26 @@ impl Runtime {
         Some(value)
     }
 
+    /// What a walk from the Future `value` would find, when its retained inputs reach no free identity: the
+    /// Future itself while it is free, else nothing. `None` when the walk is needed (an input may reach one, or
+    /// the frame carries a summary). A walk from a frame visits only it and its retained inputs (#932).
+    fn lone_frame(&self, value: Word) -> Option<Option<Word>> {
+        let header = self.heap.header_of(value);
+        if heap::kind(header) != heap::FRAME || header & heap::SUMMARY != 0 {
+            return None;
+        }
+        let function = heap::payload(header) as usize;
+        let layout = &self.heap.layouts().frames[function];
+        let end = layout.len() - if self.loaded.functions[function].identity_at.is_some() { 2 } else { 0 };
+        let retained = end - self.loaded.program.functions[function].params.len();
+        for index in retained..end {
+            if layout[index].pointer(self.heap.field(value, index)).is_some_and(|pointer| self.may_reach_free(pointer)) {
+                return None;
+            }
+        }
+        Some((self.owner_of(value) == Some(Owner::Free)).then_some(value))
+    }
+
     fn region_len(&self, region: Word) -> usize {
         let inline = (1..=REGION_SLOTS).take_while(|&i| self.heap.field(region, i) != UNBOUND).count();
         if inline < REGION_SLOTS {
@@ -1393,6 +1413,17 @@ impl Runtime {
             self.region_push(region, object);
             return;
         }
+        // A Future whose retained inputs reach no free identity: the walk would find at most the Future.
+        if let Some(found) = self.lone_frame(value) {
+            if let Some(frame) = found {
+                if own || self.rehomed(frame) {
+                    self.set_owner(frame, Owner::Region(region));
+                    self.dev_owned(frame, region);
+                }
+                self.region_push(region, frame);
+            }
+            return;
+        }
         // Tracking (not owning) skips what the region already holds; adopting
         // must still take ownership of tracked objects.
         let known = if own { None } else { Some(region) };
@@ -1438,6 +1469,17 @@ impl Runtime {
 
     /// Thrown payloads of a failure, its causes and secondaries.
     pub(crate) fn failure_payloads(&self, failure: Word) -> Vec<Word> {
+        // A lone record (no cause, no secondary: a cancellation, most thrown values) needs no walk (#932).
+        match self.failure(failure) {
+            None => return Vec::new(),
+            Some(record) if record.cause.is_none() && record.secondary.is_empty() => {
+                return match record.kind {
+                    FailureKind::Thrown(payload) => vec![payload],
+                    _ => Vec::new(),
+                };
+            }
+            Some(_) => {}
+        }
         let mut roots = Vec::new();
         let mut pending = vec![failure];
         let mut seen = HashSet::default();
@@ -2308,6 +2350,31 @@ mod cause_stack_tests {
     }
 
     #[test]
+    fn failure_payloads_collect_thrown_values_of_the_whole_chain() {
+        let mut runtime = runtime();
+        let a = runtime.heap.allocate_text("root");
+        let b = runtime.heap.allocate_text("cause");
+        let c = runtime.heap.allocate_text("cleanup");
+        let lone = runtime.failure_new(FailureKind::Thrown(a));
+        assert_eq!(runtime.failure_payloads(lone), [a]);
+        let panic = runtime.failure_new(FailureKind::Panic("lone".into()));
+        assert!(runtime.failure_payloads(panic).is_empty());
+        assert!(runtime.failure_payloads(a).is_empty(), "not a failure");
+        let root = runtime.failure_new(FailureKind::Thrown(a));
+        let cause = runtime.failure_new(FailureKind::Thrown(b));
+        let cleanup = runtime.failure_new(FailureKind::Thrown(c));
+        runtime.failure_link(root, cause, false);
+        let mut payloads = runtime.failure_payloads(root);
+        payloads.sort_unstable();
+        let mut expected = vec![a, b];
+        expected.sort_unstable();
+        assert_eq!(payloads, expected, "the cause's payload");
+        let only_secondary = runtime.failure_new(FailureKind::Panic("primary".into()));
+        runtime.failure_link(only_secondary, cleanup, true);
+        assert_eq!(runtime.failure_payloads(only_secondary), [c], "a secondary's payload");
+    }
+
+    #[test]
     fn native_rethrow_reuses_carrier_but_secondary_link_does_not() {
         let mut runtime = runtime();
         let payload = runtime.heap.allocate_text("native");
@@ -2376,6 +2443,7 @@ mod inline_identity_tests {
              0: const r0, int 0\n 1: ret r0\n}\n\
              function f1 \"Vault.destroy\" {\n registers [t1]\n params [r0]\n result void\n 0: ret _\n}\n\
              function f2 \"work\" async {\n registers [t0]\n params [r0]\n result t0\n 0: ret r0\n}\n\
+             function f3 \"hold\" async {\n registers [t1, t0]\n params [r0]\n result t0\n 0: const r1, int 0\n 1: ret r1\n}\n\
              entry f0\n",
         ).unwrap();
         let mut runtime = Runtime::new(crate::program::Loaded::new(program)).unwrap();
@@ -2402,6 +2470,45 @@ mod inline_identity_tests {
         assert_eq!(runtime.serial_of(frame), runtime.resources.serial);
         let layout = &runtime.heap.layouts().frames[2];
         assert_eq!(&layout[layout.len() - 2..], &[Repr::Raw, Repr::Raw], "the collector skips the identity words");
+    }
+
+    /// #932: adding a Future whose retained inputs reach no free identity finds what the walk finds (the Future
+    /// while it is free, else nothing) without walking; an input that may reach one still takes the walk (#578).
+    #[test]
+    fn a_future_with_leaf_inputs_is_added_without_a_walk() {
+        let mut runtime = runtime();
+        let walked = |runtime: &mut Runtime, frame: Word| runtime.resource_graph_into(&[frame], None, None);
+        let five = runtime.heap.int(5);
+        let leaf = runtime.future_new(2, &[five]);
+        assert_eq!(runtime.lone_frame(leaf), Some(Some(leaf)));
+        assert_eq!(walked(&mut runtime, leaf), [leaf], "the walk agrees");
+        let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.region_add(region, leaf, true);
+        assert_eq!(runtime.owner_of(leaf), Some(Owner::Region(region)));
+        assert!(runtime.region_contains(region, leaf));
+        // Owned elsewhere: neither finds anything, and a tracking add leaves the other region alone.
+        assert_eq!(runtime.lone_frame(leaf), Some(None));
+        assert!(walked(&mut runtime, leaf).is_empty());
+        let other = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+        runtime.region_add(other, leaf, false);
+        assert!(!runtime.region_contains(other, leaf));
+        assert_eq!(runtime.owner_of(leaf), Some(Owner::Region(region)));
+        // The Future takes its resource input into its INPUTS (#587): the input is no longer free, so the add
+        // finds the Future alone, as the walk does.
+        let vault = runtime.heap.object_new(0, &[7]);
+        runtime.created(0, vault);
+        let holder = runtime.future_new(3, &[vault]);
+        assert_ne!(runtime.owner_of(vault), Some(Owner::Free));
+        assert_eq!(runtime.lone_frame(holder), Some(Some(holder)));
+        assert_eq!(walked(&mut runtime, holder), [holder]);
+        // A container input may reach a free identity: the add keeps the walk.
+        let other_vault = runtime.heap.object_new(0, &[8]);
+        runtime.created(0, other_vault);
+        let list = runtime.heap.allocate_array(Repr::Ref, &[other_vault]);
+        let frame = runtime.future_new(3, &[UNBOUND]);
+        let at = runtime.loaded.functions[3].identity_at.unwrap();
+        crate::tasks::set(frame, at - 8, list);
+        assert_eq!(runtime.lone_frame(frame), None, "a reference array may reach one");
     }
 
     /// #528: an object with a destroy of its own carries its serial and owner in two words after its fields;
