@@ -42,6 +42,7 @@ pub mod runtime;
 mod scalar;
 mod pointer_free;
 pub mod tasks;
+pub mod test_report;
 pub mod word;
 pub mod worker;
 mod worker_process;
@@ -171,7 +172,7 @@ pub fn run_executable(
         }
         if program.has_tests() && let Some(out) = tests
         {
-            return Ok(test_profile(program, out).map(Execution::Tests).map_err(ExecutionError::Load));
+            return Ok(test_profile(program, None, Some(out)).map(|report| Execution::Tests(report.passed())).map_err(ExecutionError::Load));
         }
         let original_functions = program.function_count();
         let mut runtime = configured_runtime(program, arguments, stats, worker_command, limits)?;
@@ -328,27 +329,51 @@ pub fn run_reported(
 /// Run the module's test profile and write the standard textual report;
 /// true when no test failed. Each test runs on a fresh runtime.
 pub fn run_tests(bytes: Vec<u8>, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
+    run_test_report(bytes, None, Some(out)).map(|report| report.passed())
+}
+
+/// Runs the tests of `bytes` in declaration order, or in the order `seed`
+/// shuffles them to ([`test_report::execution_order`]), and gives the report
+/// (#339). With `progress`, the standard human report streams to it as the
+/// tests run; without, what the tests write to standard output goes to standard
+/// error, so that a machine-readable report owns standard output.
+pub fn run_test_report(
+    bytes: Vec<u8>,
+    seed: Option<u64>,
+    progress: Option<Box<dyn std::io::Write + Send>>,
+) -> Result<test_report::TestReport, Error> {
     on_vm_thread(move || {
         let program = decode_runtime(&bytes).map_err(|e| Error(e.to_string()))?;
-        test_profile(program, out)
+        match progress {
+            Some(out) => test_profile(program, seed, Some(out)),
+            None => okkama_runtime_core::stdout::to_stderr(|| test_profile(program, seed, None)),
+        }
     })
 }
 
 
 // Private: only a decoded, verified program reaches test execution.
-fn test_profile(program: DecodedProgram, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
+fn test_profile(
+    program: DecodedProgram,
+    seed: Option<u64>,
+    out: Option<Box<dyn std::io::Write + Send>>,
+) -> Result<test_report::TestReport, Error> {
     match program {
-        DecodedProgram::Legacy(program) => test_program(program, out),
+        DecodedProgram::Legacy(program) => test_program(program, seed, out),
     }
 }
 
-fn test_program(program: okkama_sparrow::Program, out: Box<dyn std::io::Write + Send>) -> Result<bool, Error> {
+fn test_program(
+    program: okkama_sparrow::Program,
+    seed: Option<u64>,
+    out: Option<Box<dyn std::io::Write + Send>>,
+) -> Result<test_report::TestReport, Error> {
     let tests = program.tests.clone().ok_or_else(|| Error("module has no tests".into()))?;
     if tests.is_empty() {
         return Err(Error("Test run requires at least one test".into()));
     }
     let names = tests.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
-    report_suite(&names, out, |index| {
+    report_suite(&names, seed, out, |index| {
         let function = tests[index].1;
         let declaration = &program.functions[function.0 as usize];
         if !declaration.params.is_empty() || declaration.result.is_some() {
@@ -380,39 +405,63 @@ pub(crate) struct CaseOutcome {
     pub skipped: Option<String>,
 }
 
-/// The standard textual report of a test run, shared by both runtimes: each test in order, then the
-/// verdict; true when no test failed. `case` runs one test by its index.
+/// Runs the tests named `names` in the order `seed` gives and collects the
+/// report; `case` runs one test by its declaration index. With `out`, the
+/// standard human report streams to it in execution order: `=== SEED n` first
+/// when seeded, each test as it runs, then the verdict.
 pub(crate) fn report_suite(
     names: &[String],
-    mut out: Box<dyn std::io::Write + Send>,
+    seed: Option<u64>,
+    mut out: Option<Box<dyn std::io::Write + Send>>,
     mut case: impl FnMut(usize) -> Result<CaseOutcome, Error>,
-) -> Result<bool, Error> {
+) -> Result<test_report::TestReport, Error> {
+    use test_report::{TestCase, TestOutcome};
     let io = |e: std::io::Error| Error(format!("test report: {e}"));
-    let mut passed = true;
-    for (index, name) in names.iter().enumerate() {
+    let mut cases: Vec<Option<TestCase>> = vec![None; names.len()];
+    if let (Some(out), Some(seed)) = (out.as_mut(), seed) {
+        writeln!(out, "=== SEED  {seed}").map_err(io)?;
+    }
+    for (execution, index) in test_report::execution_order(names.len(), seed).into_iter().enumerate() {
+        let name = &names[index];
         failures::Resources::trace_test(name);
-        writeln!(out, "=== RUN   {name}").map_err(io)?;
-        out.flush().map_err(io)?;
-        let CaseOutcome { failures, skipped } = case(index)?;
-        if !failures.is_empty() {
-            passed = false;
-            writeln!(out, "--- FAIL: {name}").map_err(io)?;
-            for failure in failures {
-                writeln!(out, "    {}", failure.replace('\n', "\n    ")).map_err(io)?;
-            }
-        } else if let Some(reason) = skipped {
-            writeln!(out, "--- SKIP: {name}").map_err(io)?;
-            if !reason.is_empty() {
-                writeln!(out, "    {}", reason.replace('\n', "\n    ")).map_err(io)?;
-            }
-        } else {
-            writeln!(out, "--- PASS: {name}").map_err(io)?;
+        if let Some(out) = out.as_mut() {
+            writeln!(out, "=== RUN   {name}").map_err(io)?;
+            out.flush().map_err(io)?;
         }
+        let CaseOutcome { failures, skipped } = case(index)?;
+        let outcome = if !failures.is_empty() {
+            TestOutcome::Failed(failures)
+        } else if let Some(reason) = skipped {
+            TestOutcome::Skipped(reason)
+        } else {
+            TestOutcome::Passed
+        };
+        if let Some(out) = out.as_mut() {
+            match &outcome {
+                TestOutcome::Failed(failures) => {
+                    writeln!(out, "--- FAIL: {name}").map_err(io)?;
+                    for failure in failures {
+                        writeln!(out, "    {}", failure.replace('\n', "\n    ")).map_err(io)?;
+                    }
+                }
+                TestOutcome::Skipped(reason) => {
+                    writeln!(out, "--- SKIP: {name}").map_err(io)?;
+                    if !reason.is_empty() {
+                        writeln!(out, "    {}", reason.replace('\n', "\n    ")).map_err(io)?;
+                    }
+                }
+                TestOutcome::Passed => writeln!(out, "--- PASS: {name}").map_err(io)?,
+            }
+            out.flush().map_err(io)?;
+        }
+        cases[index] = Some(TestCase { name: name.clone(), position: index, execution, outcome });
+    }
+    let report = test_report::TestReport { seed, cases: cases.into_iter().flatten().collect() };
+    if let Some(out) = out.as_mut() {
+        writeln!(out, "{}", if report.passed() { "PASS" } else { "FAIL" }).map_err(io)?;
         out.flush().map_err(io)?;
     }
-    writeln!(out, "{}", if passed { "PASS" } else { "FAIL" }).map_err(io)?;
-    out.flush().map_err(io)?;
-    Ok(passed)
+    Ok(report)
 }
 
 /// The child side of a process worker: answer the framed `request` for the

@@ -3152,6 +3152,21 @@ okkama run -t --filter parse path/to/module.ok
 `--filter TEXT` runs only the tests whose names contain TEXT, literally and
 case-sensitively; repeated, the tests that contain any of the texts.
 
+`--report human|json|junit` picks how the run is reported. `human`, the
+default, shows each test as it runs (`=== RUN`, then `--- PASS`, `--- FAIL`
+with its failed checks, or `--- SKIP` with its reason) and the verdict. `json`
+writes one JSON document and `junit` JUnit XML for CI; both own standard output,
+and what the tests print goes to standard error. Every report lists the tests in
+declaration order. `--seed N` (0 to 2^53 − 1) runs the selected tests in the
+order the seed shuffles them to, the same order for the same seed; the human
+report starts with `=== SEED  N`, and the JSON and JUnit reports name the seed
+and, in JSON, when each test ran. Without `--seed` the tests run in declaration
+order. The seed orders tests only: a property's generator keeps its own seed.
+The tests run in this process. The exit status is 0 when no test failed, 1 when
+one did, 2 for a wrong command line, and 4 when the run reached no verdict: a
+source error, no test to run (also a filter that selects none), or an engine
+error. TAP is not a report format yet.
+
 The runner retains test/fake AST across imports but executes only tests owned
 by the root file. It does not run or require `main`. Object/role test names are
 displayed as `Owner :: name`; this is namespacing only, with no implicit

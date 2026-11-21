@@ -14,6 +14,12 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   signal ends the process at once. Without an Interruption a signal ends the process by the system's default action
   and no `defer` or `destroy` runs (now tested on real signals). `ManualSignals` (`testing/signal`) raises signals
   in tests. `web/app` stops through an Interruption instead of the internal `runtime/signal`.
+- **Test reports and a seed for `okkama run -t` (#339, stage A).** `--report json` and `--report junit` write one
+  report of the run on stdout (tests in declaration order, totals, failures and skip reasons), the tests' own
+  output going to stderr; `--report human` is the familiar stream. `--seed N` runs the tests in a reproducible
+  shuffled order (Fisher-Yates on SplitMix64), printed and recorded. Exit 0 when nothing failed, 1 for failed
+  tests (and, as before, for a filter that selects none), 2 for a bad command line, 4 when the run reached no
+  verdict (a source error, nothing to run).
 - **Case by the language's rules (#261).** `LocalizedCase(text:, locale:)` in `locale/case` answers `lower()`,
   `upper()` and `title()`. Turkish and Azeri pair dotted and dotless i (`"istanbul"` → `"İSTANBUL"`,
   `"DİYARBAKIR"` → `"diyarbakır"`), Lithuanian keeps the dot above i and j under an accent and drops it in

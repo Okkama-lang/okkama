@@ -318,6 +318,8 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
              === RUN   skipped\n--- SKIP: skipped\n    not today\nPASS\n",
             "{engine}"
         );
+        // A filter that selects nothing keeps its existing error behaviour
+        // (owner's #339 review): exit 1, not the runner's 4.
         let output = run(&["run", "-t", "--filter", "nothing", source.path()]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(stderr(&output), "okkama: no test name contains \"nothing\"\n");
@@ -325,6 +327,104 @@ fn skipped_and_filtered_tests_report_alike_on_every_engine() {
     let output = run(&["run", "--filter", "skip", source.path()]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("--filter selects tests: use it with -t"));
+}
+
+const REPORTED: &str = "module app v1.0.0;\n\
+    import \"random/source\" take PcgRandom;\n\
+    import \"io/stdout\" take Stdout;\n\
+    test \"first\" { test.ok(true); }\n\
+    test \"second <&>\" { Stdout().writeln(\"printed by second\"); test.is(\"a\\\"b\", \"c\"); }\n\
+    test \"third\" { test.skip(\"not 'today'\"); }\n\
+    test \"fourth\" { test.is(PcgRandom(7).bytes(3), [byte(215), byte(136), byte(231)]); }\n";
+
+fn run_with_std(args: &[&str]) -> Output {
+    let std = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../std");
+    okkama().env("OKKAMA_STDLIB_DIR", std).args(args).output().expect("run okkama")
+}
+
+/// #339: one report of a run, shown as people read it (the default), as one
+/// JSON document or as JUnit XML; machine formats own stdout. Tests are listed
+/// in declaration order, and a seed orders the run reproducibly.
+#[test]
+fn test_reports_list_every_test_and_a_seed_orders_the_run() {
+    let source = TempFile::new("reported.ok", REPORTED.as_bytes());
+    let human = run_with_std(&["run", "-t", source.path()]);
+    assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+    assert_eq!(
+        stdout(&human),
+        "=== RUN   first\n--- PASS: first\n\
+         === RUN   second <&>\nprinted by second\n--- FAIL: second <&>\n    expected \"c\", got \"a\"b\"\n\
+         === RUN   third\n--- SKIP: third\n    not 'today'\n\
+         === RUN   fourth\n--- PASS: fourth\nFAIL\n"
+    );
+    let named = run_with_std(&["run", "-t", "--report", "human", source.path()]);
+    assert_eq!(stdout(&named), stdout(&human));
+
+    let json = run_with_std(&["run", "-t", "--report", "json", source.path()]);
+    assert_eq!(json.status.code(), Some(1));
+    assert_eq!(stderr(&json), "printed by second\n");
+    let document: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("one JSON document");
+    assert_eq!(document["seed"], serde_json::Value::Null);
+    assert_eq!(document["passed"], false);
+    assert_eq!(document["totals"], serde_json::json!({"tests": 4, "passed": 2, "failed": 1, "skipped": 1}));
+    let names: Vec<&str> = document["tests"].as_array().unwrap().iter().map(|test| test["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["first", "second <&>", "third", "fourth"]);
+    assert_eq!(document["tests"][1]["failures"], serde_json::json!(["expected \"c\", got \"a\"b\""]));
+    assert_eq!(document["tests"][2]["reason"], "not 'today'");
+
+    let junit = run_with_std(&["run", "-t", "--report", "junit", source.path()]);
+    assert_eq!(junit.status.code(), Some(1));
+    let xml = stdout(&junit);
+    assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites tests=\"4\" failures=\"1\" errors=\"0\" skipped=\"1\">\n"));
+    assert!(xml.contains("<testcase name=\"second &lt;&amp;&gt;\""));
+    assert!(xml.contains("<failure message=\"expected &quot;c&quot;, got &quot;a&quot;b&quot;\">"));
+    assert!(xml.contains("<skipped message=\"not &apos;today&apos;\"/>"));
+    assert!(!xml.contains("printed by second"));
+
+    let order = sparrow_core::test_report::execution_order(4, Some(3));
+    assert_ne!(order, [0, 1, 2, 3], "seed 3 must reorder four tests");
+    let seeded = run_with_std(&["run", "-t", "--seed", "3", source.path()]);
+    let again = run_with_std(&["run", "-t", "--seed", "3", source.path()]);
+    assert_eq!(stdout(&seeded), stdout(&again));
+    assert!(stdout(&seeded).starts_with("=== SEED  3\n"));
+    let declared = ["first", "second <&>", "third", "fourth"];
+    let seeded_text = stdout(&seeded);
+    let ran: Vec<&str> = seeded_text.lines().filter_map(|line| line.strip_prefix("=== RUN   ")).collect();
+    let wanted: Vec<&str> = order.iter().map(|&index| declared[index]).collect();
+    assert_eq!(ran, wanted);
+    // The property generator's PCG stream is the run's own: fourth passes in any order.
+    assert!(stdout(&seeded).contains("--- PASS: fourth\n"));
+    let seeded_json: serde_json::Value =
+        serde_json::from_str(&stdout(&run_with_std(&["run", "-t", "--report", "json", "--seed", "3", source.path()]))).unwrap();
+    assert_eq!(seeded_json["seed"], 3);
+    let executions: Vec<u64> = seeded_json["tests"].as_array().unwrap().iter().map(|test| test["execution"].as_u64().unwrap()).collect();
+    for (position, &index) in order.iter().enumerate() {
+        assert_eq!(executions[index], position as u64);
+    }
+    let filtered = run_with_std(&["run", "-t", "--seed", "3", "--filter", "i", source.path()]);
+    let kept: Vec<String> = stdout(&filtered).lines().filter_map(|line| line.strip_prefix("=== RUN   ")).map(str::to_owned).collect();
+    let selected = ["first", "third"];
+    let wanted: Vec<String> = sparrow_core::test_report::execution_order(2, Some(3)).iter().map(|&index| selected[index].to_owned()).collect();
+    assert_eq!(kept, wanted);
+
+    for (args, message) in [
+        (vec!["run", "-t", "--report", "tap"], "unknown report format `tap`: use human, json or junit"),
+        (vec!["run", "-t", "--seed", "-1"], "--seed needs a whole number from 0 to 9007199254740991, not `-1`"),
+        (vec!["run", "-t", "--seed", "9007199254740992"], "not `9007199254740992`"),
+        (vec!["run", "-t", "--seed", "x"], "not `x`"),
+        (vec!["run", "--seed", "1"], "--seed orders tests: use it with -t"),
+        (vec!["run", "--report", "json"], "--report reports tests: use it with -t"),
+    ] {
+        let mut args = args;
+        args.push(source.path());
+        let output = run_with_std(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(stderr(&output).contains(message), "{args:?}: {}", stderr(&output));
+    }
+    let broken = TempFile::new("broken.ok", b"module app v1.0.0;\ntest \"t\" { test.ok(missing); }\n");
+    assert_eq!(run_with_std(&["run", "-t", broken.path()]).status.code(), Some(4));
+    let passing = TempFile::new("passing.ok", b"module app v1.0.0;\ntest \"t\" { test.ok(true); }\n");
+    assert_eq!(run_with_std(&["run", "-t", "--report", "junit", passing.path()]).status.code(), Some(0));
 }
 
 /// Unequal objects, variants and nested values in a failing check show their values, not heap

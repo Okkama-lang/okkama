@@ -12,6 +12,22 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 thread_local! {
     static CAPTURE: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+    static TO_STDERR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Send what the program on the current VM thread writes to standard output
+/// to standard error instead, while `body` runs: a machine-readable test report
+/// then owns standard output alone (#339). Nothing is buffered on the way; the
+/// guard restores the previous destination even if `body` panics.
+pub fn to_stderr<T>(body: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TO_STDERR.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(TO_STDERR.with(|flag| flag.replace(true)));
+    body()
 }
 
 /// Capture a bounded embedding run on the current VM thread, including explicit flushes.
@@ -62,6 +78,11 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
         }
     }) {
         return Ok(());
+    }
+    if TO_STDERR.with(std::cell::Cell::get) {
+        let mut err = io::stderr().lock();
+        err.write_all(bytes)?;
+        return err.flush();
     }
     let mut pending = pending();
     pending.extend_from_slice(bytes);
@@ -124,5 +145,22 @@ pub fn try_flush() {
     if let Ok(mut pending) = buffer().try_lock() {
         let all = std::mem::take(&mut *pending);
         let _ = emit(&all);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #339: inside to_stderr nothing reaches the standard output buffer, and
+    /// the buffer is used again afterwards.
+    #[test]
+    fn to_stderr_keeps_program_output_out_of_stdout() {
+        let before = pending().len();
+        to_stderr(|| write(b"diverted\n").unwrap());
+        assert_eq!(pending().len(), before);
+        assert!(!TO_STDERR.with(std::cell::Cell::get));
+        let (_, captured) = capture(|| to_stderr(|| write(b"captured").unwrap()));
+        assert_eq!(captured, b"captured");
     }
 }
