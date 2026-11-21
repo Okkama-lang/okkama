@@ -805,5 +805,45 @@
       "uuid/value"
     ],
     "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "xml-attribute": {
+    "path": "std/xml-attribute.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "xml/parse"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "toml-parse": {
+    "path": "std/toml-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "toml/parse"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "statistics-median": {
+    "path": "std/statistics-median.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "statistics"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "text-indent": {
+    "path": "std/text-indent.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "text/layout"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
   }
 }

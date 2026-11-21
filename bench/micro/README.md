@@ -1,6 +1,6 @@
 # Micro-benchmarks (protocol v2)
 
-The suite contains **64 language programs** and **29 std/builtin programs**.
+The suite contains **64 language programs** and **33 std/builtin programs**.
 `manifest.json` is the machine-readable inventory. `coverage.py` reports declared
 measurement targets, not incidental imports or whole-module API coverage.
 
