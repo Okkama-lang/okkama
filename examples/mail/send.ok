@@ -1,0 +1,119 @@
+module examples/mail/send v1.0.0;
+
+import "mail/message" take MailMessage;
+import "mail/smtp_session" take SmtpConnecting, SmtpSecurity;
+import "net/tcp" take TcpListening, TcpListener;
+import "io/stream" take AsyncReading;
+import "async/atomic" take Atomic;
+import "encoding/utf" take Utf8Encoded, Utf8Decoded;
+import "io/stdout" take Stdout;
+
+// Send an e-mail: connect, submit the message, QUIT. The envelope, the sender
+// and the recipients, is given apart from the message: here linus is a
+// recipient the headers never name. A real program talks to its provider over
+// TLS with a login:
+//
+//     SmtpConnecting(
+//         host: "smtp.example.test",
+//         credentials: SmtpCredentials(user: "ada", password: SecretBytes(password)),
+//     )
+//
+// This one runs a tiny server on 127.0.0.1 that accepts everything, so it
+// speaks plaintext, which takes no password.
+
+async main() is int {
+    let listener = await TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = TinyServer(listener);
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+
+    let message = MailMessage(
+        from: "Ada <ada@example.test>",
+        to: ["Grace <grace@example.test>"],
+        subject: "Lunch on Thursday?",
+        text: "Shall we try the new place?\r\n"
+    );
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    defer session.close();
+    let submission = await session.submission(
+        message: message,
+        sender: "ada@example.test",
+        recipients: ["grace@example.test", "linus@example.test"]
+    );
+    await session.quit();
+
+    let out = Stdout();
+    out.writeln("every recipient accepted: ", submission.complete());
+    out.writeln("accepted: ", submission.accepted().size());
+    out.writeln("the server said: ", submission.reply().text());
+    out.writeln("it heard:");
+    out.writeln(await serving);
+    0;
+}
+
+// A server for one client that says yes to everything and keeps the commands.
+object TinyServer {
+    has listener is TcpListener;
+    has pending is Atomic<@byte>;
+
+    TinyServer(listener is TcpListener) {
+        self.listener = listener;
+        let empty is @byte = [];
+        pending = Atomic(empty);
+    }
+
+    async serve() is string {
+        let client = await listener.connection();
+        defer client.close();
+        let output = client.output();
+        await output.write(Utf8Encoded("220 tiny ESMTP\r\n").bytes());
+        let heard is Atomic<@string> = Atomic(["(greeting)"]);
+        loop {
+            let line = await self.upto(client.input(), "\r\n");
+            last if line == "";
+            heard.replace(heard.value() + ["  " + line]);
+            if line == "DATA" {
+                await output.write(Utf8Encoded("354 go ahead\r\n").bytes());
+                await self.upto(client.input(), "\r\n.\r\n");
+                heard.replace(heard.value() + ["  (the message)"]);
+                await output.write(Utf8Encoded("250 queued as 1\r\n").bytes());
+            }
+            else if line == "QUIT" {
+                await output.write(Utf8Encoded("221 bye\r\n").bytes());
+                last;
+            }
+            else if line.starts_with("EHLO") {
+                await output.write(Utf8Encoded("250 tiny\r\n").bytes());
+            }
+            else {
+                await output.write(Utf8Encoded("250 ok\r\n").bytes());
+            }
+        }
+        heard.value().join("\n");
+    }
+
+    // The text before mark, or "" when the client is gone.
+    async upto(input is AsyncReading, mark is string) is string {
+        loop {
+            let held = Utf8Decoded(pending.value()).string();
+            let found = held.find(mark) else -1;
+            if found >= 0 {
+                pending.replace(
+                    Utf8Encoded(held.slice(found + mark.length(), held.length())).bytes()
+                );
+                return held.slice(0, found);
+            }
+            let chunk = await input.bytes(4096);
+            if chunk.size() == 0 {
+                return "";
+            }
+            pending.replace(pending.value() + chunk);
+        }
+        "";
+    }
+}

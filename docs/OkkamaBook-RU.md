@@ -4220,14 +4220,16 @@ WebSocket-эхо.
 `mail` составляет, хранит и читает почту. `MailMessage(from:, to: […],
 subject:, text:)` добавляет Date, новый Message-ID и Content-Type и даёт байты
 RFC 5322 через `bytes()`. `ParsedMail(bytes).message()` читает их обратно.
-`Maildir(path).created()` и `Mbox(path)` хранят письма на диске. У SMTP есть
-части протокола (`PreparedSmtpData`, `SmtpReply`, `SmtpCapabilities`), но
-клиента пока нет. `ImapSession` выбирает ящики и ищет через `UnseenMail()`,
+`Maildir(path).created()` и `Mbox(path)` хранят письма на диске. `await SmtpConnecting(host:, credentials:).session()` открывает сессию
+отправки SMTP (по умолчанию STARTTLS, `SmtpSecurity.implicit_tls` на 465), а
+`await session.submission(message:, sender:, recipients:)` отправляет: конверт
+задаётся отдельно от заголовков, а результат говорит, каких получателей принял
+сервер. `ImapSession` выбирает ящики и ищет через `UnseenMail()`,
 `SinceMail(date)`, `AndMail` и `OrMail`. Выбранный ящик отвечает
 `await box.copied(uids, to:)`, `moved` и `expunged`, сессия — `created`,
 `renamed`, `deleted` и `appended`, а `MailboxEvents` следит за изменениями.
 `PopSession().mailbox()` скачивает письма. В `examples/mail/` письмо
-составляется и кладётся в Maildir.
+составляется, кладётся в Maildir и отправляется.
 
 `strings/parse` читает текст как тип, который у него просят: `Number("42").int()`,
 `Number("ff").int(16)`, `Number("6/8").rat()`, `Number("3.0").float()`,
