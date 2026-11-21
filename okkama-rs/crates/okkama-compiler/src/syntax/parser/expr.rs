@@ -1002,7 +1002,7 @@ impl Parser<'_> {
     /// One branch of a compact `if`: an expression, never a block.
     fn compact_branch(&mut self, after: &str) -> PResult<Expr> {
         if self.check(TokenKind::LeftBrace) {
-            return Err(self.error_here(&format!(
+            return Err(self.error_here(format!(
                 "A compact if takes an expression after \"{after}\", not a block; write blocks as `if c {{ a; }} else {{ b; }}`."
             )));
         }

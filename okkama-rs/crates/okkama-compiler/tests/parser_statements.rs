@@ -95,7 +95,8 @@ fn if_statements_chain_else_if() {
         "(IfStatement condition=a then={1} else=_)"
     );
     for (body, expected) in [
-        ("if a 1;", "Expect \"{\" before block."),
+        // #921: after the condition comes a block or, in the compact form, a colon
+        ("if a 1;", "Expect \"{\" or \":\" after the if condition."),
         ("else { 1; }", "Expect \";\" after expression."),
         ("if a { 1; } else 2;", "Expect \"{\" before block."),
     ] {
