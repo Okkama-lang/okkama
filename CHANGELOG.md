@@ -138,6 +138,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   it now stops waiting. `okkama run -t --workers` no longer stalls the pool when a process the test started
   holds the worker's output open: the parent reads for 500 ms more, then marks the stream cut. A parent test's
   own skip next to a failing sub-case now survives the worker report, so totals keep the skip.
+- **Cookie dates parse 17 times faster, PEM blocks 3 times (#939).** `ParsedCookieDate` compiled five regular
+  expressions per parse; it now scans tokens once (2.8 µs instead of 62 µs, the cost of `ParsedHttpDate`), with
+  the same results on a 20 008-line differential. `PemBlock` checks its text once for `kind()` and `bytes()`, and
+  the Base64 check no longer searches the alphabet per character (4.3 µs instead of 14 µs on 40 bytes).
 
 ### Changed
 

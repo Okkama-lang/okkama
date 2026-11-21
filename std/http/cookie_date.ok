@@ -12,12 +12,8 @@ import "time/clock" take Instant;
 import "time/date" take Date, InvalidDate;
 import "time/day" take TimeOfDay, InvalidTimeOfDay;
 import "time/local_datetime" take LocalDateTime;
-import "regex/pattern" take Regex;
-import "regex/search" take RegexMatches, FirstRegexMatch;
-import "regex/split" take RegexParts;
-import "http/header" take HttpAsciiLowercase;
-import "encoding/utf" take Utf8Encoded;
 import "encoding/single_byte" take Latin1Encoded, UnrepresentableLatin1Character;
+import "cell" take Cell;
 
 // RFC 6265bis draft-22 cookie-date token algorithm. Weekday/timezone words are
 // ignored, two-digit centuries are fixed and no ambient locale/clock is read.
@@ -33,28 +29,170 @@ object ParsedCookieDate {
     instant() is Instant {
         confirm origin.length() <= 4096
             else throw InvalidCookieDate.because("source limit exceeded");
-        try {
+        let octets = try {
             Latin1Encoded(origin).bytes();
         }
         catch e is UnrepresentableLatin1Character {
             throw InvalidCookieDate.because("octet source required");
-        }
+        };
+        // Tokens are the runs between delimiters: %x09, %x20-2F, %x3B-40,
+        // %x5B-60 and %x7B-7E. The end of the text closes the last one.
         let fields = CookieDateReading();
-        let separators = Regex(
-            "[\\x{09}\\x{20}-\\x{2f}\\x{3b}-\\x{40}\\x{5b}-\\x{60}\\x{7b}-\\x{7e}]+"
-        );
-        for RegexParts(origin: origin, regex: separators) -> token {
-            if token != "" {
-                fields = fields.following(token);
+        let start = Cell(-1);
+        let size = octets.size();
+        for (0..size + 1) -> at {
+            let code = if at == size {
+                9;
+            }
+            else {
+                octets[at].int();
+            };
+            let delimiter = code == 9
+                || (code >= 32 && code <= 47)
+                || (code >= 59 && code <= 64)
+                || (code >= 91 && code <= 96)
+                || (code >= 123 && code <= 126);
+            if delimiter {
+                if start.value() >= 0 {
+                    fields = fields.following(
+                        CookieDateToken(octets: octets, start: start.value(), end: at)
+                    );
+                    start.replace(-1);
+                }
+            }
+            else if start.value() < 0 {
+                start.replace(at);
             }
         }
         fields.instant();
     }
 }
 
+// One token: octets[start..end), never empty.
+hidden object CookieDateToken {
+    has octets is @byte;
+    has start is int;
+    has end is int;
+
+    CookieDateToken(octets is @byte, start is int, end is int) {
+        self.octets = octets;
+        self.start = start;
+        self.end = end;
+    }
+
+    // hour, minute and second of `1*2DIGIT ":" 1*2DIGIT ":" 1*2DIGIT` and a
+    // tail; empty when the token is not a time.
+    clock() is @int {
+        let nothing is @int = [];
+        let hour = self.digits(start);
+        let second_start = start + hour + 1;
+        if hour < 1 || hour > 2 || !self.colon(start + hour) {
+            return nothing;
+        }
+        let minute = self.digits(second_start);
+        let third_start = second_start + minute + 1;
+        if minute < 1 || minute > 2 || !self.colon(second_start + minute) {
+            return nothing;
+        }
+        let second = self.digits(third_start);
+        if second < 1 || second > 2 || !self.tail(third_start + second) {
+            return nothing;
+        }
+        [
+            self.value(start, start + hour),
+            self.value(second_start, second_start + minute),
+            self.value(third_start, third_start + second)
+        ];
+    }
+
+    // The value of a leading run of fewest..most digits and a tail; -1 when
+    // the token does not start so.
+    number(fewest is int, most is int) is int {
+        let count = self.digits(start);
+        if count < fewest || count > most || !self.tail(start + count) {
+            return -1;
+        }
+        self.value(start, start + count);
+    }
+
+    // 1..12 for a token starting with a month name in any ASCII case and a
+    // tail; 0 otherwise.
+    month() is int {
+        if end - start < 3 || !self.tail(start + 3) {
+            return 0;
+        }
+        let name = CookieDateLower(octets[start].int()).code() * 65536 +
+            CookieDateLower(octets[start + 1].int()).code() * 256 +
+            CookieDateLower(octets[start + 2].int()).code();
+        COOKIE_DATE_MONTHS[name] else 0;
+    }
+
+    // How many ASCII digits start at from.
+    hidden digits(from is int) is int {
+        let count = Cell(0);
+        let going = Cell(true);
+        for (from..end) -> at {
+            if going.value() {
+                let code = octets[at].int();
+                if code >= 48 && code <= 57 {
+                    count.replace(count.value() + 1);
+                }
+                else {
+                    going.replace(false);
+                }
+            }
+        }
+        count.value();
+    }
+
+    hidden colon(at is int) is bool {
+        at < end && octets[at].int() == 58;
+    }
+
+    // `[ non-digit *OCTET ]` as the patterns read it: nothing, or a non-digit
+    // and then no line feed up to the end of the token.
+    hidden tail(at is int) is bool {
+        if at == end {
+            return true;
+        }
+        let code = octets[at].int();
+        if code >= 48 && code <= 57 {
+            return false;
+        }
+        for (at + 1..end) -> index {
+            if octets[index].int() == 10 {
+                return false;
+            }
+        }
+        true;
+    }
+
+    hidden value(from is int, to is int) is int {
+        (from..to).reduce(0) -> result, at {
+            result * 10 + octets[at].int() - 48;
+        };
+    }
+}
+
+hidden object CookieDateLower {
+    has origin is int;
+
+    CookieDateLower(origin is int) {
+        self.origin = origin;
+    }
+
+    code() is int {
+        if origin >= 65 && origin <= 90 {
+            origin + 32;
+        }
+        else {
+            origin;
+        }
+    }
+}
+
 hidden object CookieDateReading {
     has year, month, day, hour, minute, second is int;
-    has time_pattern, day_pattern, year_pattern, month_pattern is Regex;
 
     CookieDateReading() {
         year = -1;
@@ -63,37 +201,52 @@ hidden object CookieDateReading {
         hour = -1;
         minute = -1;
         second = -1;
-        time_pattern = Regex("^([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})([^0-9].*)?$");
-        day_pattern = Regex("^([0-9]{1,2})([^0-9].*)?$");
-        year_pattern = Regex("^([0-9]{2,4})([^0-9].*)?$");
-        month_pattern = Regex("^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)([^0-9].*)?$");
     }
 
-    following(token is string) is ^CookieDateReading {
-        if hour < 0 && RegexMatches(origin: token, regex: time_pattern).found() {
-            let found = FirstRegexMatch(origin: token, regex: time_pattern);
-            ^hour = CookieDateDecimal(found.capture(1).text()).int();
-            ^minute = CookieDateDecimal(found.capture(2).text()).int();
-            ^second = CookieDateDecimal(found.capture(3).text()).int();
+    // RFC 6265bis 5.1.1 step 2: the first time, then day of month, month and
+    // year, each taken once.
+    following(token is CookieDateToken) is ^CookieDateReading {
+        let nothing is @int = [];
+        let clock = if hour < 0 {
+            token.clock();
         }
         else {
-            if day < 0 && RegexMatches(origin: token, regex: day_pattern).found() {
-                ^day = CookieDateDecimal(
-                    FirstRegexMatch(origin: token, regex: day_pattern).capture(1).text()
-                ).int();
+            nothing;
+        };
+        if clock.size() == 3 {
+            ^hour = clock[0];
+            ^minute = clock[1];
+            ^second = clock[2];
+        }
+        else {
+            let date = if day < 0 {
+                token.number(1, 2);
             }
             else {
-                let lower = HttpAsciiLowercase(token).string();
-                if month < 0 && RegexMatches(origin: lower, regex: month_pattern).found() {
-                    ^month = CookieDateMonth(
-                        FirstRegexMatch(origin: lower, regex: month_pattern).capture(1).text()
-                    ).month();
+                -1;
+            };
+            if date >= 0 {
+                ^day = date;
+            }
+            else {
+                let named = if month < 0 {
+                    token.month();
                 }
                 else {
-                    if year < 0 && RegexMatches(origin: token, regex: year_pattern).found() {
-                        ^year = CookieDateDecimal(
-                            FirstRegexMatch(origin: token, regex: year_pattern).capture(1).text()
-                        ).int();
+                    0;
+                };
+                if named > 0 {
+                    ^month = named;
+                }
+                else {
+                    let full = if year < 0 {
+                        token.number(2, 4);
+                    }
+                    else {
+                        -1;
+                    };
+                    if full >= 0 {
+                        ^year = full;
                     }
                 }
             }
@@ -135,53 +288,21 @@ hidden object CookieDateReading {
     }
 }
 
-hidden object CookieDateMonth {
-    has origin is string;
-
-    CookieDateMonth(origin is string) {
-        self.origin = origin;
-    }
-
-    month() is int {
-        let names = [
-            "jan",
-            "feb",
-            "mar",
-            "apr",
-            "may",
-            "jun",
-            "jul",
-            "aug",
-            "sep",
-            "oct",
-            "nov",
-            "dec"
-        ];
-        for (0..12) -> index {
-            if names[index] == origin {
-                return index + 1;
-            }
-        }
-        throw InvalidCookieDate.because("month token");
-    }
-}
-
-hidden object CookieDateDecimal {
-    has origin is string;
-
-    CookieDateDecimal(origin is string) {
-        self.origin = origin;
-    }
-
-    int() is int {
-        Utf8Encoded(origin).bytes().reduce(0) -> result, octet {
-            let code = octet.int();
-            confirm code >= 48 && code <= 57
-                else throw InvalidCookieDate.because("ASCII decimal required");
-            result * 10 + code - 48;
-        };
-    }
-}
+// The month names jan..dec as three octets packed into an int, to the month.
+hidden const COOKIE_DATE_MONTHS = [
+    6971758: 1,
+    6710626: 2,
+    7168370: 3,
+    6385778: 4,
+    7168377: 5,
+    6976878: 6,
+    6976876: 7,
+    6387047: 8,
+    7562608: 9,
+    7299956: 10,
+    7237494: 11,
+    6579555: 12
+];
 
 // Text without a valid cookie date; reason says why.
 enum InvalidCookieDate is Error = (because(reason is string));
@@ -197,4 +318,72 @@ test "cookie date does not validate weekday" {
     catch e is InvalidCookieDate {
         true;
     });
+}
+
+test "cookie dates read the RFC 6265 token grammar in every layout" {
+    let cases = [
+        ["Wed, 21 Oct 2015 07:28:00 GMT", "1445412480"],
+        ["21-Oct-15 07:28:00", "1445412480"],
+        ["Sunday, 06-Nov-94 08:49:37 GMT", "784111777"],
+        ["Sun Nov  6 08:49:37 1994", "784111777"],
+        ["\tjAnuary;1@2000[1:2:3`", "946688523"],
+        ["1st{JAN}2000~1:2:3", "946688523"],
+        ["1:2:3\nx 1 jan 2000", "946688523"],
+        ["001 1 jan 0:0:0", "978307200"],
+        ["21\u{e9} Oct\u{7f} 2015 0:0:0", "1445385600"],
+        ["1 jan 70 0:0:0", "0"],
+        ["31 dec 69 23:59:59", "3155759999"],
+        ["1 jan 1601 0:0:0", "-11644473600"],
+        ["1:2:3\u{7f}4 1 jan 2000", "946688523"],
+        ["0:0:0 1 jan 5 2000", "946684800"],
+        ["1:2:3 1 jan 2000 4:5:6", "946688523"],
+        ["1 jan feb 2000 0:0:0", "946684800"],
+    ];
+    for cases -> pair {
+        test.is(
+            ParsedCookieDate(pair[0]).instant().unix_duration()::Span::seconds.int().string(),
+            pair[1]
+        );
+    }
+}
+
+test "cookie date tokens take the first time, day, month and year and refuse the rest" {
+    let refused = [
+        ["123:4:5 1 jan 2000 0:0:0", "year before 1601"],
+        ["1:2:3x\ny 1 jan 2000", "missing fields"],
+        ["jan1 1 2000 0:0:0", "missing fields"],
+        ["1 ja 2000 0:0:0", "missing fields"],
+        ["1 jan 20145 0:0:0", "missing fields"],
+        ["1 jan 2000 1:2", "missing fields"],
+        ["24:00:00 1 jan 2000", "clock fields"],
+        ["0:60:0 1 jan 2000", "clock fields"],
+        ["0:0:0 0 jan 2000", "missing fields"],
+        ["0:0:0 00 1 jan 2000", "missing fields"],
+        ["0:0:0 32 jan 2000", "calendar fields"],
+        ["0:0:0 1 jan 1600", "year before 1601"],
+        ["0:0:0 1 jan 2000\u{100}", "octet source required"],
+        ["", "missing fields"],
+    ];
+    for refused -> pair {
+        test.is(
+            try {
+                ParsedCookieDate(pair[0]).instant();
+                "";
+            }
+            catch e is InvalidCookieDate {
+                e.text();
+            },
+            "InvalidCookieDate.because(\"" + pair[1] + "\")"
+        );
+    }
+    test.is(
+        try {
+            ParsedCookieDate("1 jan 2000 0:0:0 " + "x".repeat(4080)).instant();
+            "";
+        }
+        catch e is InvalidCookieDate {
+            e.text();
+        },
+        "InvalidCookieDate.because(\"source limit exceeded\")"
+    );
 }

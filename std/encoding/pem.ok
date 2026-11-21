@@ -73,11 +73,12 @@ object PemBlock does ByteSource {
         Base64Decoded(origin: pem_block_base64(origin, 0)).bytes();
     }
 
+    // Checked once per block: kind() and bytes() share the answer.
     hidden validation() is void {
-        let offset is int = pem_invalid_offset(origin);
+        once let offset is int = pem_invalid_offset(origin);
         confirm offset == -1 else throw InvalidPem.at(offset);
-        confirm pem_block_count(origin) == 1
-            else throw InvalidPem.at(origin.length());
+        once let count is int = pem_block_count(origin);
+        confirm count == 1 else throw InvalidPem.at(origin.length());
     }
 }
 
@@ -162,4 +163,32 @@ test "PEM snapshot cursors keep independent ordered branches" {
     test.is(second.item().kind(), "TWO");
     test.is(first.item().bytes(), [65.byte()]);
     test.ok(!second.successor().available());
+}
+
+test "one block answers kind and bytes alike, and refuses both when invalid" {
+    let block = PemBlock(origin: PemEncoded(kind: "TEST DATA", data: [1.byte(), 2.byte()]).string());
+    test.is(block.kind(), "TEST DATA");
+    test.is(block.bytes(), [1.byte(), 2.byte()]);
+    test.is(block.kind(), "TEST DATA");
+    let first_block = PemEncoded(kind: "A", data: [1.byte()]).string();
+    let twice = PemBlock(origin: first_block + PemEncoded(kind: "B", data: [2.byte()]).string());
+    let broken = PemBlock(origin: "-----BEGIN A-----\nAQ=\n-----END A-----\n");
+    for [twice, broken] -> invalid {
+        let first = try {
+            invalid.bytes();
+            "";
+        }
+        catch e is InvalidPem {
+            e.text();
+        };
+        let second = try {
+            invalid.kind();
+            "";
+        }
+        catch e is InvalidPem {
+            e.text();
+        };
+        test.ok(first.starts_with("InvalidPem.at("));
+        test.is(second, first);
+    }
 }

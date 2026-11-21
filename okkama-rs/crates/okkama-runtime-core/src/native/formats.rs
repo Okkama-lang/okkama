@@ -247,7 +247,18 @@ impl Csv {
 
 // ---- runtime/pem ----
 
-const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// The value of a standard Base64 digit (`A-Z a-z 0-9 + /`).
+fn sextet(symbol: char) -> Option<u64> {
+    let value = match symbol {
+        'A'..='Z' => symbol as u32 - 'A' as u32,
+        'a'..='z' => symbol as u32 - 'a' as u32 + 26,
+        '0'..='9' => symbol as u32 - '0' as u32 + 52,
+        '+' => 62,
+        '/' => 63,
+        _ => return None,
+    };
+    Some(u64::from(value))
+}
 
 fn kind_invalid_offset(kind: &str) -> i64 {
     let text = chars_of(kind);
@@ -288,7 +299,7 @@ fn base64_invalid(source: &[char]) -> i64 {
             padding += 1;
             continue;
         }
-        if inside || !ALPHABET.contains(*symbol) {
+        if inside || sextet(*symbol).is_none() {
             return offset as i64;
         }
     }
@@ -307,7 +318,7 @@ fn base64_invalid(source: &[char]) -> i64 {
     let mut buffer: u64 = 0;
     let mut bits = 0;
     for symbol in &source[..data_end] {
-        let digit = ALPHABET.find(*symbol).expect("validated base64") as u64;
+        let digit = sextet(*symbol).expect("validated base64");
         buffer = ((buffer << 6) | digit) & 0xffff_ffff;
         bits += 6;
         while bits >= 8 {
@@ -674,5 +685,36 @@ pub fn execute(native: Native, args: &[Value]) -> Result<Value, Error> {
             "native provider is not implemented: {}",
             native.symbol()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_invalid, chars_of, sextet};
+
+    #[test]
+    fn pem_sextet_is_the_standard_base64_alphabet() {
+        let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (value, symbol) in alphabet.chars().enumerate() {
+            assert_eq!(sextet(symbol), Some(value as u64));
+        }
+        for symbol in ['=', '-', '_', ' ', '\n', '\u{e9}', '\u{ff21}', '@', '[', '`', '{'] {
+            assert_eq!(sextet(symbol), None);
+        }
+    }
+
+    #[test]
+    fn pem_base64_invalid_reports_the_first_offending_offset() {
+        let offset = |text: &str| base64_invalid(&chars_of(text));
+        assert_eq!(offset(""), -1);
+        assert_eq!(offset("QUJD"), -1);
+        assert_eq!(offset("QUI="), -1);
+        assert_eq!(offset("QQ=="), -1);
+        assert_eq!(offset("QU-D"), 2);
+        assert_eq!(offset("QUJ"), 3);
+        assert_eq!(offset("QUJ="), 2);
+        assert_eq!(offset("QR=="), 1);
+        assert_eq!(offset("Q==="), 1);
+        assert_eq!(offset("QQ=A"), 3);
     }
 }
