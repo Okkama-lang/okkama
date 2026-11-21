@@ -1,0 +1,55 @@
+module bench/gc v1.0.0;
+
+// A tiny live heap under heavy allocation: a million short-lived objects, every tenth one a resource with a
+// destroy of its own, nothing kept between steps.
+import "io/stdout" take Stdout, Stderr;
+import "runtime/process" take process_arguments;
+import "runtime/time" take monotonic_clock;
+
+object Point {
+    has x, y is int;
+    Point(:x, :y);
+    sum() is int { x + y; }
+}
+
+object Handle {
+    has id is int;
+    Handle(:id);
+    id() is int { id; }
+    destroy {}
+}
+
+object Work {
+    Work();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let point = Point(x: i, y: 1);
+        if i % 10 == 0 {
+            let handle = Handle(id: i);
+            return self.run(i + 1, n, acc + point.sum() % 7 + handle.id() % 3);
+        }
+        self.run(i + 1, n, acc + point.sum() % 7);
+    }
+}
+
+// #236 protocol, as bench/ownership/ownership.ok: an argument N repeats the work N times and prints
+// "iteration <nanoseconds>" to stderr per run; stdout gets the result once.
+object Repeat {
+    Repeat();
+    run(work is () is string) is string {
+        let arguments = process_arguments();
+        if arguments.size() == 0 { return work(); }
+        let count = arguments[0].reduce(0) -> number, digit { number * 10 + digit.int() - 48; };
+        (0..count).reduce("") -> previous, index {
+            let started = monotonic_clock();
+            let result = work();
+            Stderr().writeln("iteration " + (monotonic_clock() - started).string());
+            result;
+        };
+    }
+}
+
+main() is int {
+    Stdout().writeln(Repeat().run(() is string { Work().run(0, 1000000, 0).string(); }));
+    0;
+}

@@ -1,0 +1,34 @@
+module bench/gc v1.0.0;
+
+// Payload-heavy: maps and string builders own Rust memory behind payload cells; each step builds a map of
+// 20 000 entries by updates and a joined text, then drops both.
+import "io/stdout" take Stdout, Stderr;
+import "runtime/process" take process_arguments;
+import "runtime/time" take monotonic_clock;
+
+
+// #236 protocol, as bench/ownership/ownership.ok: an argument N repeats the work N times and prints
+// "iteration <nanoseconds>" to stderr per run; stdout gets the result once.
+object Repeat {
+    Repeat();
+    run(work is () is string) is string {
+        let arguments = process_arguments();
+        if arguments.size() == 0 { return work(); }
+        let count = arguments[0].reduce(0) -> number, digit { number * 10 + digit.int() - 48; };
+        (0..count).reduce("") -> previous, index {
+            let started = monotonic_clock();
+            let result = work();
+            Stderr().writeln("iteration " + (monotonic_clock() - started).string());
+            result;
+        };
+    }
+}
+
+main() is int {
+    Stdout().writeln(Repeat().run(() is string {
+        let map = (0..20000).reduce(["seed": 0]) -> m, i { m + [i.string(): i]; };
+        let text = (0..20000).reduce("") -> s, i { s + (i % 10).string(); };
+        (map.size() + text.length()).string();
+    }));
+    0;
+}
