@@ -41,9 +41,12 @@ enum Currency = (euro, dollar);
 const MAIN: &str = r#"module app v1.0.0;
 import "shop/money" take Money, Currency;
 
+// A wallet holding its total.
 object Wallet {
     has total is Money;
+    // Bind the initial total.
     Wallet(total is Money) { self.total = total; }
+    // Add an amount to the total.
     add(amount is Money) is Money {
         let sum = total.plus(amount);
         sum;
@@ -250,7 +253,7 @@ fn locals_hover_with_their_type_and_lead_to_their_binding() {
     assert_eq!(
         definition.range.start,
         Position {
-            line: 7,
+            line: 10,
             character: 12
         }
     );
@@ -297,7 +300,7 @@ fn constructors_fields_enum_cases_and_types_resolve() {
     assert_eq!(
         field.definition.as_ref().unwrap().range.start,
         Position {
-            line: 4,
+            line: 5,
             character: 8
         }
     );
@@ -352,7 +355,7 @@ fn errors_keep_the_index_and_point_at_their_span() {
     );
     let error = &inspection.diagnostics[0];
     assert_eq!(error.severity, Severity::Error);
-    assert_eq!(error.range.start.line, 14);
+    assert_eq!(error.range.start.line, 17);
     assert!(
         at(&inspection, &text, "plus", 0, 1)
             .hover
@@ -425,6 +428,9 @@ main() is int {
             ("unused-let".to_string(), 7),
             ("unreachable".to_string(), 10),
             ("unused-hidden".to_string(), 12),
+            ("missing-docs".to_string(), 3),
+            ("missing-docs".to_string(), 5),
+            ("missing-docs".to_string(), 6),
         ],
         "{found:?}"
     );
@@ -432,7 +438,7 @@ main() is int {
     assert!(
         diagnostics
             .iter()
-            .filter(|found| found.code.is_some())
+            .filter(|found| found.code.is_some() && found.code.as_deref() != Some("missing-docs"))
             .all(|found| found.unnecessary)
     );
 }
@@ -458,7 +464,7 @@ main() is int {
     return Box(Money(camelName)).sum([1]);
 }
 "#;
-    assert_eq!(lints(text), [("snake-case".to_string(), 15)]);
+    assert_eq!(lints(text), [("snake-case".to_string(), 15), ("missing-docs".to_string(), 3), ("missing-docs".to_string(), 5), ("missing-docs".to_string(), 6)]);
 }
 
 #[test]
@@ -478,7 +484,7 @@ main() is int {
     Service().run(1);
 }
 "#;
-    assert_eq!(lints(text), [("hidden-error".to_string(), 6)]);
+    assert_eq!(lints(text), [("hidden-error".to_string(), 6), ("missing-docs".to_string(), 3), ("missing-docs".to_string(), 4), ("missing-docs".to_string(), 5)]);
 }
 
 #[test]
@@ -503,7 +509,7 @@ main() is int {
     0;
 }
 "#;
-    assert_eq!(lints(text), [("non-exhaustive-match".to_string(), 5)]);
+    assert_eq!(lints(text), [("non-exhaustive-match".to_string(), 5), ("missing-docs".to_string(), 1), ("missing-docs".to_string(), 1), ("missing-docs".to_string(), 1), ("missing-docs".to_string(), 1)]);
     let diagnostics = inspect(text).diagnostics;
     assert!(diagnostics[0].message.contains("does not handle captured"));
 }
@@ -796,4 +802,16 @@ fn chains_complete_through_fields_indexing_generics_bindings_and_new_locals() {
     assert!(complete(&fresh, "        c.").contains(&"abs".to_string()), "{:?}", complete(&fresh, "        c."));
     let typed = edit("let d is Money = sum;\n        d.");
     assert_eq!(complete(&typed, "        d."), money);
+}
+
+
+#[test]
+fn missing_docs_is_a_user_warning_and_ignores_private_implementation() {
+    let text = "module app;\nobject Public {\n    Public();\n    hidden helper() is int { 1; }\n}\nhidden object Secret { Secret(); }\nmain() is int { 0; }\n";
+    let inspection = inspect(text);
+    let found: Vec<_> = inspection.diagnostics.iter().filter(|d| d.code.as_deref() == Some("missing-docs")).collect();
+    assert_eq!(found.len(), 2, "{:?}", inspection.diagnostics);
+    assert!(found.iter().all(|d| d.severity == Severity::Warning && !d.unnecessary));
+    assert_eq!(found[0].range.start.line, 1);
+    assert_eq!(found[1].range.start.line, 2);
 }

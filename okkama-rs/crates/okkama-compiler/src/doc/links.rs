@@ -98,6 +98,9 @@ impl Documentation {
                 }
             }
             warnings.sort_by_key(|warning| warning.span.start);
+            // A named enum-case comment is also part of its enum's prose.
+            // Both views refer to the same source link, hence one diagnostic.
+            warnings.dedup_by(|a, b| a.span == b.span && a.name == b.name);
             doc.link_warnings = warnings;
             modules[module] = doc;
         }

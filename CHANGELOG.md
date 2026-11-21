@@ -42,6 +42,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   or cancelled send breaks it with `BrokenAsyncWriting` and never resends). The HTTP server counts with
   `CountingAsyncReading` and times bodies with `TimedAsyncReading`; `100 Continue` and the head deadlines stay
   HTTP's own. A body pausing past the idle timeout is answered with 408, now under test.
+- **Doctests and the `missing-docs` lint (#514).** Fenced `okkama` examples in doc comments are compile-checked
+  with the file's imports and exact positions; `okkama,ignore` is illustrative; `okkama,run` with an `output` fence
+  runs in a bounded child (no host capabilities, 3 s, memory and output limits) and compares stdout. `run -t`
+  checks a file's doctests before its tests. `missing-docs` warns for user modules and fails for std modules of a
+  completed documentation wave; the pilots io/stdout, collections/sequence, fs/file and json are fully documented.
 - **Month and year arithmetic, today and now (#198).** `date.plus_months(n)` and `date.plus_years(n)` keep the day
   where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
   2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and

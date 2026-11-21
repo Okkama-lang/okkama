@@ -4581,6 +4581,7 @@ what was meant:
 | `snake-case` | a local, parameter, field or action is not `snake_case` |
 | `non-exhaustive-match` | a `match` over a payload-free enum misses cases |
 | `hidden-error` | a public action throws a hidden error enum |
+| `missing-docs` | a public declaration has no documentation |
 
 ### 28.4 `okkama man`
 
@@ -4598,8 +4599,9 @@ okkama man --format markdown json   the page as Markdown
 
 A page has the sections NAME, VERSION, SYNOPSIS, DESCRIPTION, PUBLIC API,
 ERRORS, ENGINE NOTES and SEE ALSO, each only when there is something to say.
-Signatures come from the declarations themselves; hidden declarations, fields
-and tests never appear. Enums that are `Error` go under ERRORS.
+Signatures come from the declarations themselves; hidden declarations, stored
+fields and tests never appear. Public enum cases and computed cap fields are
+part of the reference. Enums that are `Error` go under ERRORS.
 
 Where a comment belongs:
 - The comment right after the `module` line documents the module. An older
@@ -4637,6 +4639,56 @@ A heading named Synopsis, Errors, Engine notes or See also in a module overview
 fills that section. Otherwise the first code block is the synopsis. On a
 terminal the page is wrapped to its width, headings are bold unless `NO_COLOR`
 is set, and `$PAGER` shows it when set. Through a pipe it is plain text.
+
+### 28.5 Documentation examples and coverage
+
+`okkama run -t FILE` checks examples in source doc comments before running
+inline tests. Fenced `okkama` or `okkama,compile` blocks compile by default;
+`okkama,ignore` marks illustrative code that is never checked. Indented,
+untagged and other-language blocks are illustrative too. Unknown Okkama
+metadata is an error, not a skipped check. A block containing `main()` does
+not run unless it has the explicit `okkama,run` tag.
+
+A runnable example needs an adjacent `output` fence with its exact stdout:
+
+````okkama
+module example;
+
+// ```okkama,run
+// import "io/stdout" take Stdout;
+// Stdout().writeln("ready");
+// ```
+// ```output
+// ready
+// ```
+
+main() is int { 0; }
+````
+
+Run `okkama run -t ./example.ok`. Expected output includes the final LF; an
+empty `output` fence expects no stdout. Stderr must be empty and main must
+return 0. Statements are wrapped in a generated main; snippets inherit the
+source file's imports and the supplied module files' declarations. A complete
+example with its own `module` uses its own imports and declarations.
+
+Execution uses a temporary directory and a child with a cleared environment,
+no filesystem/network/process/environment capabilities, a 3-second deadline,
+64 MiB allocation-growth and 256 MiB RSS bounds, and a 64 KiB combined output
+limit. Examples needing external files are compile-only. When isolation is
+unavailable, including an unbounded inline-test profile, the result explicitly
+says `compile-only: isolation unavailable`; it never runs unrestricted.
+Test/fake bodies in compile-checked examples are checked in full. Failures
+point back to the original source comment. `--filter doctest` selects the
+example names, which contain `doctest FILE:LINE`.
+
+`missing-docs` warns about undocumented public API in user modules. For std,
+only completed migration waves are errors; there is no global error yet.
+Coverage counts actual declarations, overloads, enum cases and computed cap
+fields, excluding hidden API and implementation code. An inline enum case
+can be documented in its enum comment with a list entry such as
+``- `reading`: Opens an existing file for reading.``. The completed pilot wave
+is `io/stdout`, `collections/sequence`, `fs/file` and `json`; see the
+[Phase C record](std-docs-phase-c-514.md) for the baseline and policy details.
 
 ## Chapter 29. What Okkama Deliberately Leaves Out
 

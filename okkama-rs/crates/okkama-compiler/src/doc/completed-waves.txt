@@ -1,0 +1,7 @@
+# Completed documentation migration waves. Each entry requires 100% of the
+# actual public declarations, including new declarations and overloads.
+# Pilot wave, #514. Add later waves only after coverage verification.
+io/stdout
+collections/sequence
+fs/file
+json
