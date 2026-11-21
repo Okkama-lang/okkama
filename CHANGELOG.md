@@ -31,6 +31,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   DIR` exports the whole std (section `3ok` man pages, a self-contained HTML site with relative links, versioned
   JSON with schema 1). `make install MAN_PAGES=1` (or `install.sh --man-pages`) also installs the man pages, and
   `make reference` builds the HTML site.
+- **Twenty-seven more std micro-benchmarks (#244).** `bench/micro/std` measures hex decoding, CRC-32, Adler-32,
+  SHA-512, SHA3-256, HMAC-SHA256, base32, gzip round trips, percent encoding and decoding, IP and UUID parsing,
+  hexadecimal numbers, date shifting, Turkish case, NFC normalization, JSON and template rendering, XML attributes,
+  TOML, statistics, text indentation, HTML escaping and unescaping, query parsing, regex replacement and UTF-16, each
+  with an independent Python oracle.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second

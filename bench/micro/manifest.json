@@ -845,5 +845,55 @@
       "text/layout"
     ],
     "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "html-escape": {
+    "path": "std/html-escape.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "html/entities"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "html-unescape": {
+    "path": "std/html-unescape.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "html/entities"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "query-parse": {
+    "path": "std/query-parse.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "url/query"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "regex-replace": {
+    "path": "std/regex-replace.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "regex/replace"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "utf16-encode": {
+    "path": "std/utf16-encode.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": false,
+    "targets": [
+      "encoding/utf"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
   }
 }

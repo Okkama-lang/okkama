@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-27 of 435 non-runtime module files have an explicitly declared measured action.
+30 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -120,7 +120,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `encoding/pem` | — |
 | `encoding/quoted_printable` | — |
 | `encoding/single_byte` | — |
-| `encoding/utf` | utf8-encode |
+| `encoding/utf` | utf8-encode, utf16-encode |
 | `error` | — |
 | `fs/directory` | — |
 | `fs/entry` | — |
@@ -134,7 +134,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `fs/stat` | — |
 | `fs/temp` | — |
 | `fs/watch` | — |
-| `html/entities` | — |
+| `html/entities` | html-escape, html-unescape |
 | `html/events` | — |
 | `http/auth` | — |
 | `http/auth_challenge` | — |
@@ -368,7 +368,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `regex/match` | — |
 | `regex/pattern` | regex-first-match |
 | `regex/range` | — |
-| `regex/replace` | — |
+| `regex/replace` | regex-replace |
 | `regex/search` | regex-first-match |
 | `regex/split` | — |
 | `size` | — |
@@ -424,7 +424,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `unicode/normalization` | normalize-nfc |
 | `url/form` | — |
 | `url/percent` | percent-encode, percent-decode |
-| `url/query` | — |
+| `url/query` | query-parse |
 | `url/value` | — |
 | `uuid/generation` | — |
 | `uuid/value` | uuid-parse |

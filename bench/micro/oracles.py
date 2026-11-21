@@ -1,5 +1,7 @@
 """Independent mathematical/content oracles; never learn expected output from a VM."""
 import base64
+import html
+import re
 import statistics
 import hmac
 import ipaddress
@@ -87,6 +89,11 @@ def contribution(name, i):
     if name=='toml-parse':return (1+len(str(i)))%7
     if name=='statistics-median':return int(statistics.median([1.0,5.0,float(i%10)]))%7
     if name=='text-indent':return len('  first\n  second'+str(i))%7
+    if name=='html-escape':return len(html.escape('<a&'+str(i)+'>',quote=False))%7
+    if name=='html-unescape':return len('café <'+str(i))%7
+    if name=='query-parse':return len(str(i))%7
+    if name=='regex-replace':return len(re.sub(r'\s+',' ','a  b   c'+str(i)))%7
+    if name=='utf16-encode':return len(('A\U0001F600'+str(i)).encode('utf-16-be'))%7
     raise ValueError('No independent oracle: '+name)
 
 
