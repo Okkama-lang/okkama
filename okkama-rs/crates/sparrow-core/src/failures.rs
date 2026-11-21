@@ -86,6 +86,8 @@ pub struct Resources {
     identities: HashMap<Word, Identity>,
     /// Work list, visited set and open containers of `resource_graph`, reused.
     scratch: (Vec<(Word, Repr)>, Vec<Word>, Vec<Walked>),
+    /// Groups and Futures queued by a closing region, reused (#932).
+    close_lists: (Vec<Word>, Vec<Word>),
     /// #817: the root region. A Future still running when its owner closes detaches here, not cancelled; the
     /// root closer (`close_root`, after shutdown) closes its outcome. A GC root (`Runtime::safepoint`).
     pub(crate) root: Option<Word>,
@@ -1266,12 +1268,39 @@ impl Runtime {
         let layout = &self.heap.layouts().frames[function];
         let end = layout.len() - if self.loaded.functions[function].identity_at.is_some() { 2 } else { 0 };
         let retained = end - self.loaded.program.functions[function].params.len();
-        for index in retained..end {
-            if layout[index].pointer(self.heap.field(value, index)).is_some_and(|pointer| self.may_reach_free(pointer)) {
+        for (index, repr) in layout.iter().enumerate().take(end).skip(retained) {
+            if repr.pointer(self.heap.field(value, index)).is_some_and(|pointer| self.may_reach_free(pointer)) {
                 return None;
             }
         }
         Some((self.owner_of(value) == Some(Owner::Free)).then_some(value))
+    }
+
+    /// Destroy order is reverse creation: sort the region's entries by serial. A region that fits its inline
+    /// slots (the common close) sorts on the stack and rewrites the slots in place (#909 step 2a, #932).
+    fn region_sort(&mut self, region: Word) {
+        let length = self.region_len(region);
+        if length < 2 {
+            return;
+        }
+        if length <= REGION_SLOTS {
+            let mut entries = [UNBOUND; REGION_SLOTS];
+            for (index, entry) in entries.iter_mut().enumerate().take(length) {
+                *entry = self.region_get(region, index);
+            }
+            entries[..length].sort_unstable_by_key(|object| self.serial_of(*object));
+            // The same entries in new places: the slots are rewritten, no membership check (#932).
+            for (index, &object) in entries[..length].iter().enumerate() {
+                self.heap.set_field(region, index + 1, object);
+            }
+        } else {
+            let mut entries: Vec<Word> = (0..length).map(|i| self.region_get(region, i)).collect();
+            entries.sort_unstable_by_key(|object| self.serial_of(*object));
+            self.region_clear(region);
+            for object in entries {
+                self.region_push(region, object);
+            }
+        }
     }
 
     fn region_len(&self, region: Word) -> usize {
@@ -1737,7 +1766,9 @@ impl Runtime {
         // dying groups first, withdrawing their edges before deciding which
         // Futures die. The surviving group packets retain a Future when its
         // lexical owner ends; the final owner releases its cache exactly once.
-        let (mut groups, mut futures) = (Vec::new(), Vec::new());
+        let (mut groups, mut futures) = std::mem::take(&mut self.resources.close_lists);
+        groups.clear();
+        futures.clear();
         for index in 0..self.region_len(region) {
             self.queue_private(self.region_get(region, index), &mut groups, &mut futures);
         }
@@ -1747,7 +1778,9 @@ impl Runtime {
             {
                 continue;
             }
-            let group = matches!(self.states.get(&object), Some(crate::primitives::State::Group(_)));
+            // Only language objects carry a runtime state; a Future never does (#932).
+            let frame = heap::kind(self.heap.header_of(object)) == heap::FRAME;
+            let group = !frame && matches!(self.states.get(&object), Some(crate::primitives::State::Group(_)));
             if !group
                 && let Some(&home) = self.resources.identities.get(&object).and_then(|identity| identity.groups.first())
             {
@@ -1759,7 +1792,7 @@ impl Runtime {
                 }
                 continue;
             }
-            if !group && !self.resources.root_closing && heap::kind(self.heap.header_of(object)) == heap::FRAME
+            if !group && !self.resources.root_closing && frame
                 && crate::tasks::get(object, crate::tasks::STATE) == crate::tasks::RUNNING
             {
                 // §2.4: a running Future outlives its owner, detached to the root with what it keeps.
@@ -1772,7 +1805,7 @@ impl Runtime {
             }
             self.set_owner(object, Owner::Dead);
             // A channel's last capability closes its unread messages with it (#587).
-            let regions = match self.channel_released(object) {
+            let regions = match if frame { None } else { self.channel_released(object) } {
                 Some(packet) => [Some(packet), None],
                 None => self.private_regions(object),
             };
@@ -1797,30 +1830,11 @@ impl Runtime {
                 }
             }
         }
+        self.resources.close_lists = (groups, futures);
         if !keep.is_empty() {
             kept.extend(self.resource_graph(keep, Some(region)));
         }
-        // Destroy order is reverse creation: sort the entries by serial. A region that fits its inline slots
-        // (the common close) sorts on the stack (#909 step 2a).
-        let length = self.region_len(region);
-        if length <= REGION_SLOTS {
-            let mut entries = [UNBOUND; REGION_SLOTS];
-            for (index, entry) in entries.iter_mut().enumerate().take(length) {
-                *entry = self.region_get(region, index);
-            }
-            entries[..length].sort_unstable_by_key(|object| self.serial_of(*object));
-            self.region_clear(region);
-            for &object in &entries[..length] {
-                self.region_push(region, object);
-            }
-        } else {
-            let mut entries: Vec<Word> = (0..length).map(|i| self.region_get(region, i)).collect();
-            entries.sort_unstable_by_key(|object| self.serial_of(*object));
-            self.region_clear(region);
-            for object in entries {
-                self.region_push(region, object);
-            }
-        }
+        self.region_sort(region);
         // The region and the primary failure stay alive while destroys run.
         self.roots.push((region, Repr::Ref));
         let mut index = self.region_len(region);
@@ -2509,6 +2523,32 @@ mod inline_identity_tests {
         let at = runtime.loaded.functions[3].identity_at.unwrap();
         crate::tasks::set(frame, at - 8, list);
         assert_eq!(runtime.lone_frame(frame), None, "a reference array may reach one");
+    }
+
+    /// #932: a closing region's entries are sorted by serial, the inline slots rewritten in place and an
+    /// overflowing region rebuilt; every entry stays a member exactly once.
+    #[test]
+    fn a_region_sorts_its_entries_by_serial() {
+        let mut runtime = runtime();
+        for count in [1, 3, REGION_SLOTS, REGION_SLOTS + 3] {
+            let vaults: Vec<Word> = (0..count as u64).map(|n| {
+                let vault = runtime.heap.object_new(0, &[n]);
+                runtime.created(0, vault);
+                vault
+            }).collect();
+            let region = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 1 + REGION_SLOTS]);
+            // Newest first, then the rest: an order rehoming produces.
+            let mut scrambled = vaults.clone();
+            scrambled.rotate_right(1);
+            scrambled.reverse();
+            for &vault in &scrambled {
+                runtime.region_push(region, vault);
+            }
+            runtime.region_sort(region);
+            let sorted: Vec<Word> = (0..runtime.region_len(region)).map(|i| runtime.region_get(region, i)).collect();
+            assert_eq!(sorted, vaults, "{count} entries");
+            assert!(vaults.iter().all(|&vault| runtime.region_contains(region, vault)));
+        }
     }
 
     /// #528: an object with a destroy of its own carries its serial and owner in two words after its fields;
