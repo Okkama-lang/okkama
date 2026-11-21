@@ -4714,6 +4714,21 @@
       }
     },
     {
+      "id": "STD.MAIL.SMTP_SESSION",
+      "title": "std mail/smtp_session public contract (InvalidSmtpEnvelope, SmtpConnecting, SmtpCredentials, SmtpFailure, SmtpRefusal, SmtpSecurity, SmtpSession, SmtpStep, SmtpSubmission)",
+      "family": "Standard library: mail",
+      "spec_refs": [
+        "std/mail/smtp_session.ok"
+      ],
+      "status": "mandatory",
+      "aspects": {
+        "normal": "required",
+        "boundary": "required",
+        "invalid": "required",
+        "interaction": "n/a: cross-module interactions are tracked as L12/L13 interaction contracts"
+      }
+    },
+    {
       "id": "STD.MATH.AGGREGATE",
       "title": "std math/aggregate public contract (Extremes, Numbers, Vectors)",
       "family": "Standard library: math",

@@ -4068,13 +4068,17 @@ service and a WebSocket echo.
 subject:, text:)` adds the Date, a fresh Message-ID and the Content-Type, and
 renders RFC 5322 bytes with `bytes()`. `ParsedMail(bytes).message()` reads them
 back. `Maildir(path).created()` and `Mbox(path)` keep messages on disk.
-SMTP has its wire pieces (`PreparedSmtpData`, `SmtpReply`,
-`SmtpCapabilities`) but no client yet. `ImapSession` selects mailboxes and
+`await SmtpConnecting(host:, credentials:).session()` opens an SMTP
+submission session (STARTTLS by default, `SmtpSecurity.implicit_tls` on 465),
+and `await session.submission(message:, sender:, recipients:)` sends: the
+envelope is given apart from the headers, and the result tells which
+recipients the server accepted. `ImapSession` selects mailboxes and
 searches with `UnseenMail()`, `SinceMail(date)`, `AndMail` and `OrMail`. A
 selected mailbox answers `await box.copied(uids, to:)`, `moved` and
 `expunged`, the session answers `created`, `renamed`, `deleted` and
 `appended`, and `MailboxEvents` follows changes. `PopSession().mailbox()`
-downloads. `examples/mail/` composes a message and keeps it in a Maildir.
+downloads. `examples/mail/` composes a message, keeps it in a Maildir and
+sends one.
 
 `strings/parse` reads text as the type asked for: `Number("42").int()`,
 `Number("ff").int(16)`, `Number("6/8").rat()`, `Number("3.0").float()`,

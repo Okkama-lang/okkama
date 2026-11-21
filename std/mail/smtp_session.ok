@@ -1,0 +1,2180 @@
+module mail/smtp_session v1.0.0;
+
+// Sending e-mail: an SMTP submission client (RFC 5321, RFC 6409).
+//
+//     let session = await SmtpConnecting(
+//         host: "smtp.example.test",
+//         credentials: SmtpCredentials(user: "ada", password: SecretBytes("secret")),
+//     ).session();
+//     defer session.close();
+//     let submission = await session.submission(
+//         message: message,
+//         sender: "ada@example.test",
+//         recipients: ["grace@example.test", "linus@example.test"],
+//     );
+//     submission.complete();               // every recipient was accepted
+//     await session.quit();
+//
+// The envelope is separate from the message. sender and recipients are what
+// the server delivers to; the From, To, Cc and Bcc headers are not read for
+// it. Bcc and Resent-Bcc never go out (DeliveredMail), so a Bcc recipient is
+// one more envelope recipient. An empty sender is the null reverse path `<>`.
+//
+// Transport security is chosen, never inferred (SmtpSecurity):
+// - start_tls, the default, on port 587: the greeting and EHLO in plaintext,
+//   then STARTTLS, which the server must offer (MissingSmtpExtension otherwise),
+//   a verified TLS handshake, and a new EHLO; what the server said before TLS
+//   is forgotten.
+// - implicit_tls, usually on port 465: TLS before the first byte of SMTP.
+// - plaintext: no TLS at all, for a trusted or test network. It takes no
+//   credentials, so a password never crosses an unverified connection.
+// The certificate is checked against trust (the system's roots by default) and
+// against host, a name or an IP address. A failed handshake or check ends the
+// connection (TlsFailure, CertificateVerificationFailed); nothing falls back
+// to plaintext.
+//
+// Authentication is AUTH PLAIN only, after TLS, when credentials are given.
+// A server that does not offer PLAIN is MissingSmtpExtension("AUTH PLAIN");
+// SCRAM, LOGIN, CRAM-MD5 and OAuth are not spoken. A refusal is
+// SmtpFailure.rejected(SmtpStep.authentication, …) and the connection is
+// closed. The password lives in a SecretBytes and appears in no error.
+// EHLO is required: a server that refuses it is SmtpFailure.rejected(hello),
+// and there is no fallback to HELO.
+//
+// One submission is one transaction, and a session sends any number of them,
+// one after another. Submissions started together wait for each other, so
+// their commands never interleave. Commands are sent one at a time, without
+// PIPELINING. The message is prepared for what the server offers
+// (PreparedSmtpData): 8-bit content needs 8BITMIME, and a non-ASCII header or
+// envelope address needs SMTPUTF8, or MissingSmtpExtension is thrown before
+// anything is sent. SIZE carries the message size, not the dot-stuffed size.
+//
+// Recipients are offered one by one, and a refused one does not stop the
+// others. DATA follows when at least one recipient was accepted;
+// submission.complete() tells whether all were, and refusals() keeps the
+// server's reply to each refused one. When every recipient is refused nothing
+// is sent: SmtpFailure.rejected(SmtpStep.recipients, …) with the reply to the
+// first. SMTP has no all-or-nothing delivery to several recipients.
+//
+// A submission is the server's acceptance (a 2xx reply after the data), not
+// delivery to a mailbox: the server has taken responsibility for the message,
+// and it may still bounce later.
+//
+// A rejection, 4xx (transient) or 5xx (permanent), is SmtpFailure.rejected
+// with the step, code and text, and the session stays usable, except 421,
+// which closes it. Anything else closes the session: a reply that breaks the
+// protocol (InvalidSmtpReply, SmtpFailure.unexpected), a lost connection
+// (SmtpFailure.disconnected), a step over timeout (SmtpFailure.timed_out), and
+// cancellation. A failure once the message data started going out is
+// SmtpFailure.uncertain: the server may or may not have accepted the message,
+// so it must not be sent again blindly. Nothing is retried here.
+//
+// Every step has its own timeout on the monotonic clock: connecting, the TLS
+// handshake, each command and its reply, the data and its final reply, and
+// QUIT. The default is five minutes, as RFC 5321 asks of most replies; it asks
+// ten for the reply after the data.
+
+import "mail/message" take MailMessage;
+import "mail/smtp" take SmtpCapabilities, SmtpFeature;
+import "mail/smtp_reply" take SmtpReply, InvalidSmtpReply, SmtpLimitExceeded;
+import "mail/smtp_reading" take SmtpReplyReading, SmtpReplyRead;
+import "mail/smtp_data" take PreparedSmtpData, SmtpBodyMode, MissingSmtpExtension;
+import "message/header" take MessageHeader, MessageHeaderName;
+import "crypto/secret" take SecretBytes;
+import "crypto/x509/trust" take TrustStore, SystemTrustStore, CertificateIdentity,
+    DnsCertificateIdentity, IpCertificateIdentity;
+import "net/tcp" take TcpConnecting, TcpConnection;
+import "net/tls" take TlsClientHandshake, TlsClientPolicy, TlsConnection, TlsFailure;
+import "net/failure" take NetworkFailure, NetworkClosed;
+import "net/dns" take Resolving, SystemResolution;
+import "net/ip" take IpAddress;
+import "net/endpoint" take HostName;
+import "io/stream" take AsyncReading, AsyncWriting, Closing;
+import "encoding/utf" take Utf8Encoded;
+import "encoding/base64" take Base64Encoded;
+import "collections/sequence" take Sequencing;
+import "compare" take Order;
+import "async/atomic" take Atomic;
+import "async/event" take Event;
+import "async/lock" take Lock;
+import "async/timeout" take Within, TimedOut;
+import "time/clock" take Timing, SystemClock;
+import "time/duration" take Duration;
+import "error" take InvalidArgument;
+import "cell" take Cell;
+import "mail/message" as fixtures take ParsedMail;
+import "net/tcp" as test_tcp take TcpListening, TcpListener;
+import "net/tls" as test_tls take TlsServerHandshake, TlsServerPolicy, TlsIdentity;
+import "net/dns" as test_dns take FixedResolution, HostAddresses;
+import "crypto/x509/trust" as test_trust take PemTrustStore, CertificateVerificationFailed;
+import "encoding/utf" as test_utf take Utf8Decoded;
+
+// How the connection is protected.
+enum SmtpSecurity = (start_tls, implicit_tls, plaintext);
+
+// The steps of a session, as failures name them.
+enum SmtpStep = (
+    connecting,
+    tls,
+    greeting,
+    hello,
+    start_tls,
+    authentication,
+    sender,
+    recipients,
+    data,
+    message,
+    reset,
+    quit
+);
+
+// What went wrong in a session: the server refused a step (rejected: 4xx is
+// transient, 5xx permanent), answered with a code the step does not allow
+// (unexpected), went away (disconnected) or was too slow (timed_out); the
+// message may or may not have been accepted (uncertain); or the session is
+// over (closed).
+enum SmtpFailure is Error = (
+    rejected(step is SmtpStep, code is int, text is string),
+    unexpected(
+        step is SmtpStep,
+        code is int,
+        text is string
+    ),
+    disconnected(step is SmtpStep),
+    timed_out(step is SmtpStep),
+    uncertain(reason is string),
+    closed
+);
+
+// An envelope that cannot be sent; reason says why.
+enum InvalidSmtpEnvelope is Error = (because(reason is string));
+
+// A user name and a password for AUTH PLAIN; the password stays a secret.
+object SmtpCredentials {
+    has user is string;
+    has password is SecretBytes;
+
+    // user (no NUL, CR or LF) with password.
+    SmtpCredentials(user is string, password is SecretBytes) {
+        confirm user != "" else throw InvalidArgument.because("SMTP user must not be empty");
+        for Utf8Encoded(user).bytes() -> octet {
+            confirm octet.int() != 0 && octet.int() != 10 && octet.int() != 13
+                else throw InvalidArgument.because("SMTP user must not hold NUL, CR or LF");
+        }
+        self.user = user;
+        self.password = password;
+    }
+
+    // The SASL PLAIN response (RFC 4616), still a secret: no authorization
+    // identity, then user and password, in base64.
+    response() is SecretBytes {
+        SecretBytes(
+            Utf8Encoded(
+                Base64Encoded(
+                    [0.byte()] + Utf8Encoded(user).bytes() + [0.byte()] + password.export_bytes()
+                ).string()
+            ).bytes()
+        );
+    }
+}
+
+// A connection to an SMTP server, to be made: SmtpConnecting(host:).session().
+object SmtpConnecting {
+    has settings is SmtpSettings;
+
+    // To host on port, protected by security (STARTTLS on 587 by default),
+    // without authentication. client is the name EHLO gives; trust checks the
+    // certificate; every step has timeout on clock.
+    SmtpConnecting(
+        host is string,
+        port is int = 587,
+        security is SmtpSecurity = SmtpSecurity.start_tls,
+        client is string = "localhost",
+        trust is TrustStore = SystemTrustStore(),
+        resolver is Resolving = SystemResolution(),
+        timeout is Duration = Duration(minutes: 5),
+        clock is Timing = SystemClock()
+    ) {
+        settings = SmtpSettings(
+            host: host,
+            port: port,
+            security: security,
+            client: client,
+            credentials: [],
+            trust: trust,
+            resolver: resolver,
+            timeout: timeout,
+            clock: clock
+        );
+    }
+
+    // The same, signing in with credentials after TLS; plaintext refuses them.
+    SmtpConnecting(
+        host is string,
+        credentials is SmtpCredentials,
+        port is int = 587,
+        security is SmtpSecurity = SmtpSecurity.start_tls,
+        client is string = "localhost",
+        trust is TrustStore = SystemTrustStore(),
+        resolver is Resolving = SystemResolution(),
+        timeout is Duration = Duration(minutes: 5),
+        clock is Timing = SystemClock()
+    ) {
+        confirm security != SmtpSecurity.plaintext
+            else throw InvalidArgument.because("SMTP credentials need TLS, not plaintext");
+        settings = SmtpSettings(
+            host: host,
+            port: port,
+            security: security,
+            client: client,
+            credentials: [credentials],
+            trust: trust,
+            resolver: resolver,
+            timeout: timeout,
+            clock: clock
+        );
+    }
+
+    // Connects, greets, secures and signs in; the session is ready to submit.
+    async session() is SmtpSession {
+        await SmtpOpening(settings).session();
+    }
+}
+
+// An open SMTP session: submissions one after another, then QUIT.
+object SmtpSession does Closing {
+    has wire is SmtpWire;
+    has offered is SmtpCapabilities;
+    has lock is Lock;
+
+    // Takes over input and output (closing owner) once the server is greeted,
+    // secured and signed in, with its capabilities and the bytes already read
+    // past its last reply; each step within timeout on clock.
+    // SmtpConnecting.session() makes one.
+    SmtpSession(
+        input is AsyncReading,
+        output is AsyncWriting,
+        owner is Closing,
+        capabilities is SmtpCapabilities,
+        prefix is @byte,
+        timeout is Duration,
+        clock is Timing
+    ) {
+        wire = SmtpWire(
+            input: input,
+            output: output,
+            owner: owner,
+            prefix: prefix,
+            timeout: timeout,
+            clock: clock
+        );
+        offered = capabilities;
+        lock = Lock();
+    }
+
+    // What the server offered in its last EHLO (after TLS, when TLS was
+    // started).
+    capabilities() is SmtpCapabilities {
+        offered;
+    }
+
+    // Sends message to recipients with sender as the return path: MAIL FROM,
+    // RCPT TO for each recipient, DATA. The result says which recipients were
+    // accepted; see the module page for failures.
+    async submission(
+        message is MailMessage,
+        sender is string,
+        recipients is Sequencing<string>
+    ) is SmtpSubmission {
+        confirm !self.closed() else throw SmtpFailure.closed;
+        let envelope = SmtpEnvelope(sender: sender, recipients: recipients);
+        let data = PreparedSmtpData(origin: message, capabilities: offered);
+        let international = envelope.international() || SmtpHeaderText(message).international();
+        confirm !international || offered.features().membership(SmtpFeature.smtp_utf8)
+            else throw MissingSmtpExtension.name("SMTPUTF8");
+        let mail = SmtpMailCommand(
+            sender: envelope.sender(),
+            data: data,
+            capabilities: offered,
+            international: international
+        ).line();
+        let guard = await lock.guard();
+        defer guard.close();
+        confirm !self.closed() else throw SmtpFailure.closed;
+        let complete = Event();
+        let cleanup = SmtpSessionCleanup(origin: self, complete: complete);
+        defer cleanup.close();
+        let opened = await wire.exchange(SmtpStep.sender, mail);
+        if opened.code() != 250 {
+            self.refuse(step: SmtpStep.sender, reply: opened, complete: complete);
+        }
+        let accepted is Atomic<@string> = Atomic([]);
+        let refused is Atomic<@SmtpRefusal> = Atomic([]);
+        for envelope.recipients() -> recipient {
+            let answer = await wire.exchange(SmtpStep.recipients, "RCPT TO:<" + recipient + ">\r\n");
+            if answer.code() == 250 || answer.code() == 251 {
+                accepted.replace(accepted.value() + [recipient]);
+            }
+            else {
+                SmtpReplyClass(step: SmtpStep.recipients, reply: answer).refusal();
+                if answer.code() == 421 {
+                    self.close();
+                    complete.set();
+                    throw SmtpFailure.rejected(SmtpStep.recipients, answer.code(), answer.text());
+                }
+                refused.replace(
+                    refused.value() + [SmtpRefusal(recipient: recipient, reply: answer)]
+                );
+            }
+        }
+        if accepted.value().size() == 0 {
+            await self.reset();
+            complete.set();
+            let first = refused.value()[0];
+            throw SmtpFailure.rejected(
+                SmtpStep.recipients,
+                first::Refusal::code,
+                first::Refusal::text
+            );
+        }
+        let start = await wire.exchange(SmtpStep.data, "DATA\r\n");
+        if start.code() != 354 {
+            SmtpReplyClass(step: SmtpStep.data, reply: start).refusal();
+            if start.code() == 421 {
+                self.close();
+            }
+            else {
+                await self.reset();
+            }
+            complete.set();
+            throw SmtpFailure.rejected(SmtpStep.data, start.code(), start.text());
+        }
+        let ending = try {
+            await wire.send(SmtpStep.message, data.bytes());
+            await wire.reply(SmtpStep.message);
+        }
+        catch stopped is Cancelled {
+            throw;
+        }
+        catch failure is Error {
+            self.close();
+            complete.set();
+            throw SmtpFailure.uncertain(failure.text());
+        };
+        if ending.code() >= 200 && ending.code() < 300 {
+            complete.set();
+            return SmtpSubmission(
+                accepted: accepted.value(),
+                refusals: refused.value(),
+                reply: ending
+            );
+        }
+        if ending.code() < 400 {
+            self.close();
+            complete.set();
+            throw SmtpFailure.uncertain(
+                "reply " + ending.code().string() + " after the message: " + ending.text()
+            );
+        }
+        if ending.code() == 421 {
+            self.close();
+        }
+        complete.set();
+        throw SmtpFailure.rejected(SmtpStep.message, ending.code(), ending.text());
+    }
+
+    // QUIT, then closes the session; a closed session does nothing.
+    async quit() is void {
+        if self.closed() {
+            return;
+        }
+        let guard = await lock.guard();
+        defer guard.close();
+        if self.closed() {
+            return;
+        }
+        defer self.close();
+        let reply = await wire.exchange(SmtpStep.quit, "QUIT\r\n");
+        confirm reply.code() == 221
+            else throw SmtpFailure.unexpected(SmtpStep.quit, reply.code(), reply.text());
+    }
+
+    // Whether it is closed.
+    closed() is bool {
+        wire.closed();
+    }
+
+    // Closes the connection without QUIT; closing again does nothing.
+    close() is void {
+        wire.close();
+    }
+
+    destroy {
+        wire.close();
+    }
+
+    // Throws the rejection of reply at step, keeping the session unless the
+    // reply is 421.
+    hidden refuse(step is SmtpStep, reply is SmtpReply, complete is Event) is void {
+        SmtpReplyClass(step: step, reply: reply).refusal();
+        if reply.code() == 421 {
+            self.close();
+        }
+        complete.set();
+        throw SmtpFailure.rejected(step, reply.code(), reply.text());
+    }
+
+    // RSET after an open transaction failed; anything but 250 ends the session.
+    hidden async reset() is void {
+        let reply = await wire.exchange(SmtpStep.reset, "RSET\r\n");
+        if reply.code() != 250 {
+            self.close();
+            throw SmtpFailure.unexpected(SmtpStep.reset, reply.code(), reply.text());
+        }
+    }
+}
+
+// What the server accepted: the message, for some or all of the recipients.
+object SmtpSubmission {
+    has taken is @string;
+    has refused is @SmtpRefusal;
+    has final is SmtpReply;
+
+    // Made by SmtpSession.submission(); not constructed directly.
+    SmtpSubmission(accepted is @string, refusals is @SmtpRefusal, reply is SmtpReply) {
+        taken = accepted;
+        refused = refusals;
+        final = reply;
+    }
+
+    // Whether every recipient was accepted.
+    complete() is bool {
+        refused.size() == 0;
+    }
+
+    // The recipients the server accepted, in order.
+    accepted() is Sequencing<string> {
+        taken;
+    }
+
+    // The recipients the server refused, with its replies.
+    refusals() is Sequencing<SmtpRefusal> {
+        refused;
+    }
+
+    // The server's acceptance of the message, often with its queue id.
+    reply() is SmtpReply {
+        final;
+    }
+}
+
+// A recipient the server refused, and how.
+object SmtpRefusal {
+    has address is string;
+    has answer is SmtpReply;
+
+    // Made by a submission; not constructed directly.
+    SmtpRefusal(recipient is string, reply is SmtpReply) {
+        address = recipient;
+        answer = reply;
+    }
+
+    // The recipient, the reply code (4xx transient, 5xx permanent) and its
+    // text.
+    cap Refusal {
+        recipient is string {
+            address;
+        }
+
+        code is int {
+            answer.code();
+        }
+
+        text is string {
+            answer.text();
+        }
+    }
+}
+
+hidden object SmtpSettings {
+    has host is string;
+    has port is int;
+    has security is SmtpSecurity;
+    has client is string;
+    has credentials is @SmtpCredentials;
+    has trust is TrustStore;
+    has resolver is Resolving;
+    has timeout is Duration;
+    has clock is Timing;
+
+    SmtpSettings(
+        host is string,
+        port is int,
+        security is SmtpSecurity,
+        client is string,
+        credentials is @SmtpCredentials,
+        trust is TrustStore,
+        resolver is Resolving,
+        timeout is Duration,
+        clock is Timing
+    ) {
+        confirm host != "" else throw InvalidArgument.because("SMTP host must not be empty");
+        confirm port > 0 && port <= 65535
+            else throw InvalidArgument.because("SMTP port must be 1..65535");
+        confirm SmtpClientName(client).valid()
+            else throw InvalidArgument.because(
+                "SMTP client name must be a domain or an address literal"
+            );
+        self.host = host;
+        self.port = port;
+        self.security = security;
+        self.client = client;
+        self.credentials = credentials;
+        self.trust = trust;
+        self.resolver = resolver;
+        self.timeout = timeout;
+        self.clock = clock;
+    }
+
+    host() is string {
+        host;
+    }
+
+    port() is int {
+        port;
+    }
+
+    security() is SmtpSecurity {
+        security;
+    }
+
+    client() is string {
+        client;
+    }
+
+    credentials() is @SmtpCredentials {
+        credentials;
+    }
+
+    trust() is TrustStore {
+        trust;
+    }
+
+    resolver() is Resolving {
+        resolver;
+    }
+
+    timeout() is Duration {
+        timeout;
+    }
+
+    clock() is Timing {
+        clock;
+    }
+}
+
+// Connection establishment: TCP, TLS, greeting, EHLO, STARTTLS, EHLO, AUTH.
+hidden object SmtpOpening {
+    has settings is SmtpSettings;
+
+    SmtpOpening(settings is SmtpSettings) {
+        self.settings = settings;
+    }
+
+    async session() is SmtpSession {
+        let tcp = await self.connection();
+        let link = SmtpLink(tcp);
+        let published = Event();
+        let anchor = SmtpUnpublished(origin: link, published: published);
+        defer anchor.close();
+        let first = if settings.security() == SmtpSecurity.implicit_tls {
+            let secure = await self.handshake(tcp);
+            link.secured(secure);
+            self.wire(input: secure.input(), output: secure.output(), owner: link);
+        }
+        else {
+            self.wire(input: tcp.input(), output: tcp.output(), owner: link);
+        };
+        let greeting = await first.reply(SmtpStep.greeting);
+        if greeting.code() != 220 {
+            SmtpReplyClass(step: SmtpStep.greeting, reply: greeting).refusal();
+            throw SmtpFailure.rejected(SmtpStep.greeting, greeting.code(), greeting.text());
+        }
+        let offered = await self.hello(first);
+        let wire = if settings.security() == SmtpSecurity.start_tls {
+            confirm offered.features().membership(SmtpFeature.start_tls)
+                else throw MissingSmtpExtension.name("STARTTLS");
+            let started = await first.exchange(SmtpStep.start_tls, "STARTTLS\r\n");
+            if started.code() != 220 {
+                SmtpReplyClass(step: SmtpStep.start_tls, reply: started).refusal();
+                throw SmtpFailure.rejected(SmtpStep.start_tls, started.code(), started.text());
+            }
+            // Bytes after the 220 came before TLS: they must not be read as
+            // protected (CVE-2011-0411).
+            confirm !first.pending()
+                else throw InvalidSmtpReply.located(0, "data after the STARTTLS reply");
+            let secure = await self.handshake(tcp);
+            link.secured(secure);
+            self.wire(input: secure.input(), output: secure.output(), owner: link);
+        }
+        else {
+            first;
+        };
+        let capabilities = if settings.security() == SmtpSecurity.start_tls {
+            await self.hello(wire);
+        }
+        else {
+            offered;
+        };
+        for settings.credentials() -> credentials {
+            let plain = capabilities.mechanisms().reduce(false) -> found, name {
+                found || name == "PLAIN";
+            };
+            confirm plain else throw MissingSmtpExtension.name("AUTH PLAIN");
+            let response = credentials.response();
+            defer response.close();
+            await wire.send(
+                SmtpStep.authentication,
+                Utf8Encoded("AUTH PLAIN ").bytes() + response.export_bytes() + [
+                    13.byte(),
+                    10.byte()
+                ]
+            );
+            let signed = await wire.reply(SmtpStep.authentication);
+            if signed.code() != 235 {
+                SmtpReplyClass(step: SmtpStep.authentication, reply: signed).refusal();
+                throw SmtpFailure.rejected(SmtpStep.authentication, signed.code(), signed.text());
+            }
+        }
+        let session = SmtpSession(
+            input: wire.input(),
+            output: wire.output(),
+            owner: link,
+            capabilities: capabilities,
+            prefix: wire.remainder(),
+            timeout: settings.timeout(),
+            clock: settings.clock()
+        );
+        published.set();
+        session;
+    }
+
+    hidden wire(input is AsyncReading, output is AsyncWriting, owner is Closing) is SmtpWire {
+        let empty is @byte = [];
+        SmtpWire(
+            input: input,
+            output: output,
+            owner: owner,
+            prefix: empty,
+            timeout: settings.timeout(),
+            clock: settings.clock()
+        );
+    }
+
+    hidden async hello(wire is SmtpWire) is SmtpCapabilities {
+        let reply = await wire.exchange(SmtpStep.hello, "EHLO " + settings.client() + "\r\n");
+        if reply.code() != 250 {
+            SmtpReplyClass(step: SmtpStep.hello, reply: reply).refusal();
+            throw SmtpFailure.rejected(SmtpStep.hello, reply.code(), reply.text());
+        }
+        SmtpCapabilities(reply);
+    }
+
+    hidden async connection() is TcpConnection {
+        let address = SmtpHostAddress(settings.host()).address();
+        let pending = if address.size() == 1 {
+            TcpConnecting(address: address[0], port: settings.port()).connection();
+        }
+        else {
+            TcpConnecting(
+                host: settings.host(),
+                port: settings.port(),
+                resolver: settings.resolver()
+            ).connection();
+        };
+        let bounded is Within<TcpConnection> = Within(
+            origin: pending,
+            limit: settings.timeout(),
+            clock: settings.clock()
+        );
+        try {
+            await bounded.outcome();
+        }
+        catch elapsed is TimedOut {
+            throw SmtpFailure.timed_out(SmtpStep.connecting);
+        }
+    }
+
+    hidden async handshake(tcp is TcpConnection) is TlsConnection {
+        let address = SmtpHostAddress(settings.host()).address();
+        let identity is CertificateIdentity = if address.size() == 1 {
+            IpCertificateIdentity(address[0]);
+        }
+        else {
+            DnsCertificateIdentity(HostName(settings.host()));
+        };
+        let bounded is Within<TlsConnection> = Within(
+            origin: TlsClientHandshake(
+                origin: tcp,
+                server: identity,
+                policy: TlsClientPolicy(trust: settings.trust())
+            ).connection(),
+            limit: settings.timeout(),
+            clock: settings.clock()
+        );
+        try {
+            await bounded.outcome();
+        }
+        catch elapsed is TimedOut {
+            throw SmtpFailure.timed_out(SmtpStep.tls);
+        }
+    }
+}
+
+// The connection of a session: TCP, then TLS over it once secured; closing
+// closes whichever is on top.
+hidden object SmtpLink does Closing {
+    has tcp is TcpConnection;
+    has secure is Atomic<@TlsConnection>;
+
+    SmtpLink(tcp is TcpConnection) {
+        self.tcp = tcp;
+        let absent is @TlsConnection = [];
+        secure = Atomic(absent);
+    }
+
+    secured(connection is TlsConnection) is void {
+        secure.replace([connection]);
+    }
+
+    closed() is bool {
+        if secure.value().size() == 1 {
+            secure.value()[0].closed();
+        }
+        else {
+            tcp.closed();
+        }
+    }
+
+    close() is void {
+        if secure.value().size() == 1 {
+            secure.value()[0].close();
+        }
+        else {
+            tcp.close();
+        }
+    }
+}
+
+hidden object SmtpUnpublished {
+    has origin is SmtpLink;
+    has published is Event;
+
+    SmtpUnpublished(origin is SmtpLink, published is Event) {
+        self.origin = origin;
+        self.published = published;
+    }
+
+    close() is void {
+        if !published.ready() {
+            origin.close();
+        }
+    }
+}
+
+// Commands and replies over one transport, one at a time (the session's lock
+// sees to that), each step within timeout. Bytes read past a reply wait for
+// the next one.
+hidden object SmtpWire does Closing {
+    has input is AsyncReading;
+    has output is AsyncWriting;
+    has owner is Closing;
+    has prefix is Atomic<@byte>;
+    has timeout is Duration;
+    has clock is Timing;
+    has stopped is Event;
+
+    SmtpWire(
+        input is AsyncReading,
+        output is AsyncWriting,
+        owner is Closing,
+        prefix is @byte,
+        timeout is Duration,
+        clock is Timing
+    ) {
+        self.input = input;
+        self.output = output;
+        self.owner = owner;
+        self.prefix = Atomic(prefix);
+        self.timeout = timeout;
+        self.clock = clock;
+        stopped = Event();
+    }
+
+    closed() is bool {
+        stopped.ready() || owner.closed();
+    }
+
+    close() is void {
+        if !stopped.ready() {
+            stopped.set();
+            owner.close();
+        }
+    }
+
+    // Whether bytes past the last reply arrived already.
+    pending() is bool {
+        prefix.value().size() > 0;
+    }
+
+    // The bytes past the last reply.
+    remainder() is @byte {
+        prefix.value();
+    }
+
+    input() is AsyncReading {
+        input;
+    }
+
+    output() is AsyncWriting {
+        output;
+    }
+
+    async exchange(step is SmtpStep, line is string) is SmtpReply {
+        await self.send(step, Utf8Encoded(line).bytes());
+        await self.reply(step);
+    }
+
+    async send(step is SmtpStep, bytes is @byte) is void {
+        confirm !self.closed() else throw SmtpFailure.closed;
+        let bounded is Within<AsyncWriting> = Within(
+            origin: output.write(bytes),
+            limit: timeout,
+            clock: clock
+        );
+        try {
+            await bounded.outcome();
+        }
+        catch elapsed is TimedOut {
+            throw SmtpFailure.timed_out(step);
+        }
+        catch gone is NetworkFailure, NetworkClosed, TlsFailure {
+            throw SmtpFailure.disconnected(step);
+        }
+    }
+
+    async reply(step is SmtpStep) is SmtpReply {
+        confirm !self.closed() else throw SmtpFailure.closed;
+        let bounded is Within<SmtpReplyRead> = Within(
+            origin: SmtpReplyReading(origin: input, prefix: prefix.value()).read(),
+            limit: timeout,
+            clock: clock
+        );
+        let read = try {
+            await bounded.outcome();
+        }
+        catch elapsed is TimedOut {
+            throw SmtpFailure.timed_out(step);
+        }
+        catch InvalidSmtpReply.located(_, reason) {
+            if reason == "truncated SMTP reply" {
+                throw SmtpFailure.disconnected(step);
+            }
+            throw;
+        }
+        catch gone is NetworkFailure, NetworkClosed, TlsFailure {
+            throw SmtpFailure.disconnected(step);
+        };
+        prefix.replace(read.remainder());
+        read.reply();
+    }
+}
+
+hidden object SmtpSessionCleanup {
+    has origin is SmtpSession;
+    has complete is Event;
+
+    SmtpSessionCleanup(origin is SmtpSession, complete is Event) {
+        self.origin = origin;
+        self.complete = complete;
+    }
+
+    close() is void {
+        if !complete.ready() {
+            origin.close();
+        }
+    }
+}
+
+// A reply that is not the success a step wanted: a 4xx or 5xx is a refusal
+// the caller handles; any other code breaks the protocol.
+hidden object SmtpReplyClass {
+    has step is SmtpStep;
+    has reply is SmtpReply;
+
+    SmtpReplyClass(step is SmtpStep, reply is SmtpReply) {
+        self.step = step;
+        self.reply = reply;
+    }
+
+    refusal() is void {
+        confirm reply.code() >= 400
+            else throw SmtpFailure.unexpected(step, reply.code(), reply.text());
+    }
+}
+
+// The IP address host spells, or none for a name.
+hidden object SmtpHostAddress {
+    has host is string;
+
+    SmtpHostAddress(host is string) {
+        self.host = host;
+    }
+
+    address() is @IpAddress {
+        try {
+            [IpAddress(host)];
+        }
+        catch failure is Error {
+            let absent is @IpAddress = [];
+            absent;
+        }
+    }
+}
+
+// MAIL FROM with the parameters the message and the server call for.
+hidden object SmtpMailCommand {
+    has sender is string;
+    has data is PreparedSmtpData;
+    has capabilities is SmtpCapabilities;
+    has international is bool;
+
+    SmtpMailCommand(
+        sender is string,
+        data is PreparedSmtpData,
+        capabilities is SmtpCapabilities,
+        international is bool
+    ) {
+        self.sender = sender;
+        self.data = data;
+        self.capabilities = capabilities;
+        self.international = international;
+    }
+
+    line() is string {
+        let size = if capabilities.features().membership(SmtpFeature.size) {
+            " SIZE=" + data.message_size().string();
+        }
+        else {
+            "";
+        };
+        let body = if data.body_mode() == SmtpBodyMode.eight_bit_mime {
+            " BODY=8BITMIME";
+        }
+        else {
+            "";
+        };
+        let utf8 = if international {
+            " SMTPUTF8";
+        }
+        else {
+            "";
+        };
+        "MAIL FROM:<" + sender + ">" + size + body + utf8 + "\r\n";
+    }
+}
+
+// Whether a message's header, as it goes out (without Bcc), needs SMTPUTF8.
+hidden object SmtpHeaderText {
+    has message is MailMessage;
+
+    SmtpHeaderText(message is MailMessage) {
+        self.message = message;
+    }
+
+    international() is bool {
+        message.headers().entries().reduce(false) -> found, field {
+            let hidden_field = field.name().order(MessageHeaderName("Bcc")) == Order.equal
+                || field.name().order(MessageHeaderName("Resent-Bcc")) == Order.equal;
+            found || (!hidden_field && SmtpAscii(field.value()).beyond());
+        };
+    }
+}
+
+hidden object SmtpAscii {
+    has text is string;
+
+    SmtpAscii(text is string) {
+        self.text = text;
+    }
+
+    beyond() is bool {
+        Utf8Encoded(text).bytes().reduce(false) -> found, octet {
+            found || octet.int() > 127;
+        };
+    }
+}
+
+// The sender and recipients, each a mailbox of RFC 5321 (with UTF-8 under
+// SMTPUTF8, RFC 6531); the sender may be empty, the null reverse path.
+hidden object SmtpEnvelope {
+    has from is string;
+    has to is @string;
+
+    SmtpEnvelope(sender is string, recipients is Sequencing<string>) {
+        if sender != "" {
+            SmtpMailbox(sender).check();
+        }
+        let addresses is @string = (0..recipients.size()).map() -> index {
+            let recipient = recipients.item(index);
+            SmtpMailbox(recipient).check();
+            recipient;
+        };
+        confirm addresses.size() > 0
+            else throw InvalidSmtpEnvelope.because("an SMTP envelope needs a recipient");
+        from = sender;
+        to = addresses;
+    }
+
+    sender() is string {
+        from;
+    }
+
+    recipients() is @string {
+        to;
+    }
+
+    // Whether any address is beyond ASCII.
+    international() is bool {
+        to.reduce(SmtpAscii(from).beyond()) -> found, address {
+            found || SmtpAscii(address).beyond();
+        };
+    }
+}
+
+// local-part@domain: a dot-string or a quoted string, then a domain or an
+// address literal; within 64, 255 and 254 octets, nothing that could end a
+// command line.
+hidden object SmtpMailbox {
+    has origin is string;
+
+    SmtpMailbox(origin is string) {
+        self.origin = origin;
+    }
+
+    check() is void {
+        let bytes = Utf8Encoded(origin).bytes();
+        confirm bytes.size() > 0 && bytes.size() <= 254
+            else throw InvalidSmtpEnvelope.because("an address has 1 to 254 octets");
+        let at = (0..bytes.size()).reduce(-1) -> found, index {
+            if bytes[index].int() == 64 {
+                index;
+            }
+            else {
+                found;
+            }
+        };
+        confirm at > 0 && at < bytes.size() - 1
+            else throw InvalidSmtpEnvelope.because("an address is local-part@domain");
+        confirm at <= 64
+            else throw InvalidSmtpEnvelope.because("a local part has at most 64 octets");
+        let local is @byte = (0..at).map() -> index {
+            bytes[index];
+        };
+        let domain is @byte = (at + 1..bytes.size()).map() -> index {
+            bytes[index];
+        };
+        confirm SmtpLocalPart(local).valid()
+            else throw InvalidSmtpEnvelope.because("invalid local part");
+        confirm SmtpDomain(domain).valid() else throw InvalidSmtpEnvelope.because("invalid domain");
+    }
+}
+
+hidden object SmtpLocalPart {
+    has bytes is @byte;
+
+    SmtpLocalPart(bytes is @byte) {
+        self.bytes = bytes;
+    }
+
+    valid() is bool {
+        if bytes[0].int() == 34 {
+            self.quoted();
+        }
+        else {
+            self.dotted();
+        }
+    }
+
+    // atext atoms joined by single dots; octets past 127 are UTF-8 (SMTPUTF8).
+    hidden dotted() is bool {
+        let count = bytes.size();
+        (0..count).reduce(true) -> good, index {
+            let code = bytes[index].int();
+            let dot = code == 46;
+            let atom = (code >= 48 && code <= 57)
+                || (code >= 65 && code <= 90)
+                || (code >= 97 && code <= 122)
+                || code > 127
+                || code == 33
+                || (code >= 35 && code <= 39)
+                || code == 42
+                || code == 43
+                || code == 45
+                || code == 47
+                || code == 61
+                || code == 63
+                || (code >= 94 && code <= 96)
+                || (code >= 123 && code <= 126);
+            let placed = !dot || (index > 0 && index < count - 1 && bytes[index - 1].int() != 46);
+            good && (atom || dot) && placed;
+        };
+    }
+
+    // "…" with printable ASCII and space, \-escapes inside.
+    hidden quoted() is bool {
+        let count = bytes.size();
+        if count < 2 || bytes[count - 1].int() != 34 {
+            return false;
+        }
+        let escape = Cell(false);
+        for (1..count - 1) -> index {
+            let code = bytes[index].int();
+            if code < 32 || code == 127 {
+                return false;
+            }
+            if escape.value() {
+                escape.replace(false);
+            }
+            else if code == 92 {
+                escape.replace(true);
+            }
+            else if code == 34 {
+                return false;
+            }
+        }
+        !escape.value();
+    }
+}
+
+hidden object SmtpDomain {
+    has bytes is @byte;
+
+    SmtpDomain(bytes is @byte) {
+        self.bytes = bytes;
+    }
+
+    valid() is bool {
+        let count = bytes.size();
+        if count == 0 || count > 255 {
+            return false;
+        }
+        if bytes[0].int() == 91 {
+            if count < 3 || bytes[count - 1].int() != 93 {
+                return false;
+            }
+            return (1..count - 1).reduce(true) -> good, index {
+                let code = bytes[index].int();
+                good && ((code >= 33 && code <= 90) || (code >= 94 && code <= 126));
+            };
+        }
+        (0..count).reduce(true) -> good, index {
+            let code = bytes[index].int();
+            let dot = code == 46;
+            let letter = (code >= 48 && code <= 57)
+                || (code >= 65 && code <= 90)
+                || (code >= 97 && code <= 122)
+                || code > 127;
+            let hyphen = code == 45;
+            let starts = index == 0 || bytes[index - 1].int() == 46;
+            let ends = index == count - 1 || bytes[index + 1].int() == 46;
+            let placed = if dot {
+                !starts && !ends;
+            }
+            else if hyphen {
+                !starts && !ends;
+            }
+            else {
+                true;
+            };
+            good && (letter || dot || hyphen) && placed;
+        };
+    }
+}
+
+// The name EHLO gives: an ASCII domain or an address literal.
+hidden object SmtpClientName {
+    has origin is string;
+
+    SmtpClientName(origin is string) {
+        self.origin = origin;
+    }
+
+    valid() is bool {
+        !SmtpAscii(origin).beyond() && SmtpDomain(Utf8Encoded(origin).bytes()).valid();
+    }
+}
+
+// A local CA and a server certificate for 127.0.0.1 and localhost (P-256, until
+// 2048), as in net/tls; openssl made them.
+hidden const SMTP_TEST_CA = "-----BEGIN CERTIFICATE-----\nMIIBdjCCARygAwIBAgIUZys025uW0l2NKLRJhlj/e/NZtfIwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAZMRcwFQYDVQQDDA5Pa2thbWEgVGVzdCBDQTBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABBFw/aXocscUbo6jObHs1PCN29BcRR+2K50QaEkwFdOx\nkiif5hQH5S72ksR2gL1PtbmPVLJv9kGhSjylkFnWMFujQjBAMA8GA1UdEwEB/wQF\nMAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBR73vV9mqv7stVB91GaNnLI\n3GuydzAKBggqhkjOPQQDAgNIADBFAiAufmQhdmE0TO2RfIcZRNt/ucAEPVLBW03q\nIRbruIX6KgIhAJsOnAIaGBgywbvntzwVyjTtIurUqVEB8oy03JNCKmNx\n-----END CERTIFICATE-----\n";
+
+hidden const SMTP_TEST_CERTIFICATE = "-----BEGIN CERTIFICATE-----\nMIIBwzCCAWigAwIBAgIUG8NUjoqvvLFxqO/t7iv/3Auy2PgwCgYIKoZIzj0EAwIw\nGTEXMBUGA1UEAwwOT2trYW1hIFRlc3QgQ0EwHhcNMjYxMTEyMTE0MjA0WhcNNDgx\nMDA3MTE0MjA0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggq\nhkjOPQMBBwNCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKEgNpBpZ4p9lZl/U7IZOja\nGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTLo4GSMIGPMBoGA1UdEQQTMBGCCWxv\nY2FsaG9zdIcEfwAAATAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNV\nHSUEDDAKBggrBgEFBQcDATAdBgNVHQ4EFgQU/R0ad9cojv2dRtb8rSPoG2ncsPsw\nHwYDVR0jBBgwFoAUe971fZqr+7LVQfdRmjZyyNxrsncwCgYIKoZIzj0EAwIDSQAw\nRgIhANTVp7yf3QQovicpuurIeJL4z3SWS68504anbBieM2edAiEA7ypMFNH5e/jc\nmX+bVt3dCMxTaQwVY8/loOQTp0PWQLg=\n-----END CERTIFICATE-----\n";
+
+hidden const SMTP_TEST_KEY = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgooq/y5Wqru57uZ/f\nLtDqQBGy63m5uDllm9k87Q2FqQuhRANCAAQaMDVadj3Njz0QDGkIC6mwMvsIrcKE\ngNpBpZ4p9lZl/U7IZOjaGwl/oQS67X/YHf5rcfdxvcb70003NsmoexTL\n-----END PRIVATE KEY-----\n";
+
+// Lines and DATA from a client, for the test server.
+hidden object SmtpTestInput {
+    has input is AsyncReading;
+    has buffer is Atomic<@byte>;
+
+    SmtpTestInput(input is AsyncReading) {
+        self.input = input;
+        let empty is @byte = [];
+        buffer = Atomic(empty);
+    }
+
+    // Whether bytes wait past the last line.
+    pending() is bool {
+        buffer.value().size() > 0;
+    }
+
+    // The next text up to and without end, or "<eof>" when the client is gone.
+    async upto(end is string) is string {
+        let mark = Utf8Encoded(end).bytes();
+        loop {
+            let held = buffer.value();
+            let found = SmtpTestFind(bytes: held, mark: mark).index();
+            if found >= 0 {
+                let text is @byte = (0..found).map() -> index {
+                    held[index];
+                };
+                let rest is @byte = (found + mark.size()..held.size()).map() -> index {
+                    held[index];
+                };
+                buffer.replace(rest);
+                return test_utf.Utf8Decoded(text).string();
+            }
+            let chunk = try {
+                await input.bytes(4096);
+            }
+            catch failure is Error {
+                let empty is @byte = [];
+                empty;
+            };
+            if chunk.size() == 0 {
+                return "<eof>";
+            }
+            buffer.replace(held + chunk);
+        }
+    }
+}
+
+hidden object SmtpTestFind {
+    has bytes, mark is @byte;
+
+    SmtpTestFind(bytes is @byte, mark is @byte) {
+        self.bytes = bytes;
+        self.mark = mark;
+    }
+
+    index() is int {
+        let final_start = bytes.size() - mark.size();
+        if final_start < 0 {
+            return -1;
+        }
+        for (0..final_start + 1) -> start {
+            let same = (0..mark.size()).reduce(true) -> equal, offset {
+                equal && bytes[start + offset] == mark[offset];
+            };
+            if same {
+                return start;
+            }
+        }
+        -1;
+    }
+}
+
+// A scripted SMTP server for one connection. script maps each command line
+// to its reply: "<close>" closes without a reply, "<hang>" never answers; a
+// line it lacks gets 500. "<greeting>" is the greeting, "." the reply after the
+// data, and "tls:" keys answer once TLS is up (STARTTLS answered with 220
+// starts it; implicit starts with it). serve() gives back what it heard.
+hidden object SmtpTestServer {
+    has listener is test_tcp.TcpListener;
+    has script is %string:string;
+    has implicit is bool;
+    has heard is Atomic<@string>;
+
+    SmtpTestServer(listener is test_tcp.TcpListener, script is %string:string, implicit is bool) {
+        self.listener = listener;
+        self.script = script;
+        self.implicit = implicit;
+        let empty is @string = [];
+        heard = Atomic(empty);
+    }
+
+    async serve() is string {
+        try {
+            let accepted = await listener.connection();
+            defer accepted.close();
+            if implicit {
+                let secure = await self.secured(accepted);
+                defer secure.close();
+                await self.talk(
+                    input: SmtpTestInput(secure.input()),
+                    output: secure.output(),
+                    secure: true,
+                    greet: true
+                );
+            }
+            else {
+                let input = SmtpTestInput(accepted.input());
+                let outcome = await self.talk(
+                    input: input,
+                    output: accepted.output(),
+                    secure: false,
+                    greet: true
+                );
+                if outcome == "starttls" {
+                    if input.pending() {
+                        heard.replace(heard.value() + ["<early bytes>"]);
+                    }
+                    let secure = await self.secured(accepted);
+                    defer secure.close();
+                    await self.talk(
+                        input: SmtpTestInput(secure.input()),
+                        output: secure.output(),
+                        secure: true,
+                        greet: false
+                    );
+                }
+            }
+        }
+        catch failure is Error {
+            heard.replace(heard.value() + ["<failed>"]);
+        }
+        heard.value().join("\n");
+    }
+
+    hidden async secured(accepted is TcpConnection) is TlsConnection {
+        let unnamed is @string = [];
+        await test_tls.TlsServerHandshake(
+            origin: accepted,
+            policy: test_tls.TlsServerPolicy(
+                identity: test_tls.TlsIdentity(
+                    certificates: SMTP_TEST_CERTIFICATE,
+                    key: SMTP_TEST_KEY
+                )
+            ),
+            protocols: unnamed
+        ).connection();
+    }
+
+    hidden reply(key is string) is string {
+        script[key] else "500 unknown command\r\n";
+    }
+
+    // The conversation until QUIT, the end of input, or STARTTLS accepted.
+    hidden async talk(input is SmtpTestInput, output is AsyncWriting, secure is bool, greet is bool) is string {
+        if greet {
+            let greeting = script["<greeting>"] else "220 test.example ESMTP\r\n";
+            await output.write(Utf8Encoded(greeting).bytes());
+        }
+        loop {
+            let line = await input.upto("\r\n");
+            if line == "<eof>" {
+                return "end";
+            }
+            heard.replace(heard.value() + [line]);
+            let shielded = script["tls:" + line] else "";
+            let answer = if secure && shielded != "" {
+                shielded;
+            }
+            else {
+                self.reply(line);
+            };
+            if answer == "<close>" {
+                return "end";
+            }
+            if answer != "<hang>" {
+                await output.write(Utf8Encoded(answer).bytes());
+            }
+            if line == "QUIT" {
+                return "end";
+            }
+            if line == "STARTTLS" && answer.starts_with("220") {
+                return "starttls";
+            }
+            if line == "DATA" && answer.starts_with("354") {
+                let body = await input.upto("\r\n.\r\n");
+                if body == "<eof>" {
+                    return "end";
+                }
+                heard.replace(heard.value() + ["<data>" + body + "</data>"]);
+                let ending = self.reply(".");
+                if ending == "<close>" {
+                    return "end";
+                }
+                if ending != "<hang>" {
+                    await output.write(Utf8Encoded(ending).bytes());
+                }
+            }
+        }
+        "end";
+    }
+}
+
+// What the tests send.
+hidden object SmtpTestMail {
+    SmtpTestMail() {}
+
+    message() is MailMessage {
+        fixtures.ParsedMail(
+            Utf8Encoded(
+                "From: Ada <ada@example.test>\r\nTo: grace@example.test\r\nBcc: hidden@example.test\r\nSubject: Lunch\r\n\r\nShall we?\r\n.hidden dot\r\n"
+            ).bytes()
+        ).message();
+    }
+
+    eight_bit() is MailMessage {
+        fixtures.ParsedMail(
+            Utf8Encoded(
+                "From: ada@example.test\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nbody é\r\n"
+            ).bytes()
+        ).message();
+    }
+}
+
+hidden const SMTP_TEST_EHLO = "250-test.example\r\n250-SIZE 1000000\r\n250 8BITMIME\r\n";
+
+async test "a submission: multiline greeting, EHLO, MAIL with SIZE, every recipient, dot-stuffed data without Bcc, QUIT" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let message = SmtpTestMail().message();
+    let size = PreparedSmtpData(
+        origin: message,
+        capabilities: SmtpCapabilities(SmtpReply(code: 250, lines: ["x", "SIZE 1000000"]))
+    ).message_size();
+    let mail = "MAIL FROM:<ada@example.test> SIZE=" + size.string();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "<greeting>": "220-test.example ESMTP\r\n220 ready\r\n",
+            "EHLO localhost": SMTP_TEST_EHLO,
+            mail: "250 2.1.0 ok\r\n",
+            "RCPT TO:<grace@example.test>": "250 2.1.5 ok\r\n",
+            "RCPT TO:<hidden@example.test>": "251 2.1.5 forwarded\r\n",
+            "DATA": "354 go ahead\r\n",
+            ".": "250 2.0.0 queued as 7F3A\r\n",
+            "QUIT": "221 2.0.0 bye\r\n",
+        ],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    test.ok(session.capabilities().features().membership(SmtpFeature.eight_bit_mime));
+    let submission = await session.submission(
+        message: message,
+        sender: "ada@example.test",
+        recipients: ["grace@example.test", "hidden@example.test"]
+    );
+    test.ok(submission.complete());
+    test.is(submission.accepted().size(), 2);
+    test.is(submission.reply().text(), "2.0.0 queued as 7F3A");
+    await session.quit();
+    test.ok(session.closed());
+    await session.quit();
+    session.close();
+    let heard = await serving;
+    test.is(
+        heard,
+        "EHLO localhost\n" + mail + "\nRCPT TO:<grace@example.test>\nRCPT TO:<hidden@example.test>\nDATA\n<data>From: Ada <ada@example.test>\r\nTo: grace@example.test\r\nSubject: Lunch\r\n\r\nShall we?\r\n..hidden dot</data>\nQUIT"
+    );
+}
+
+async test "refused recipients: a partial refusal is reported, a full one sends no data and keeps the session" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "EHLO localhost": "250 test.example\r\n",
+            "MAIL FROM:<ada@example.test>": "250 ok\r\n",
+            "RCPT TO:<grace@example.test>": "250 ok\r\n",
+            "RCPT TO:<nobody@example.test>": "550 5.1.1 no such user\r\n",
+            "RCPT TO:<later@example.test>": "450 4.2.1 try later\r\n",
+            "RSET": "250 reset\r\n",
+            "DATA": "354 go ahead\r\n",
+            ".": "250 queued\r\n",
+            "QUIT": "221 bye\r\n",
+        ],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    let message = SmtpTestMail().message();
+    let partial = await session.submission(
+        message: message,
+        sender: "ada@example.test",
+        recipients: ["nobody@example.test", "grace@example.test", "later@example.test"]
+    );
+    test.ok(!partial.complete());
+    test.is(partial.accepted().size(), 1);
+    test.is(partial.accepted().first(), "grace@example.test");
+    test.is(partial.refusals().size(), 2);
+    test.is(partial.refusals().first()::Refusal::recipient, "nobody@example.test");
+    test.is(partial.refusals().first()::Refusal::code, 550);
+    test.is(partial.refusals().last()::Refusal::code, 450);
+    test.is(partial.refusals().last()::Refusal::text, "4.2.1 try later");
+    test.ok(try {
+        await session.submission(
+            message: message,
+            sender: "ada@example.test",
+            recipients: ["nobody@example.test", "later@example.test"]
+        );
+        false;
+    }
+    catch SmtpFailure.rejected(step, code, text) {
+        step == SmtpStep.recipients && code == 550 && text == "5.1.1 no such user";
+    });
+    test.ok(!session.closed());
+    let again = await session.submission(
+        message: message,
+        sender: "ada@example.test",
+        recipients: ["grace@example.test"]
+    );
+    test.ok(again.complete());
+    await session.quit();
+    let heard = await serving;
+    test.is(
+        heard.split("\n").filter() -> line {
+            line == "DATA" || line == "RSET";
+        },
+        ["DATA", "RSET", "DATA"]
+    );
+}
+
+async test "STARTTLS: verified TLS, a fresh EHLO whose capabilities replace the old ones, then AUTH PLAIN" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "EHLO localhost": "250-test.example\r\n250-SIZE 1000000\r\n250 STARTTLS\r\n",
+            "STARTTLS": "220 2.0.0 ready for TLS\r\n",
+            "tls:EHLO localhost": "250-test.example\r\n250-AUTH LOGIN PLAIN\r\n250 8BITMIME\r\n",
+            "tls:AUTH PLAIN AGFkYQBzZWNyZXQ=": "235 2.7.0 accepted\r\n",
+            "tls:MAIL FROM:<ada@example.test>": "250 ok\r\n",
+            "tls:RCPT TO:<grace@example.test>": "250 ok\r\n",
+            "tls:DATA": "354 go ahead\r\n",
+            ".": "250 queued\r\n",
+            "tls:QUIT": "221 bye\r\n",
+        ],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        credentials: SmtpCredentials(user: "ada", password: SecretBytes("secret")),
+        port: listener::Local::port,
+        trust: test_trust.PemTrustStore(SMTP_TEST_CA)
+    ).session();
+    let offered = session.capabilities().features();
+    test.ok(offered.membership(SmtpFeature.eight_bit_mime));
+    test.ok(!offered.membership(SmtpFeature.start_tls));
+    test.ok(!offered.membership(SmtpFeature.size));
+    let submission = await session.submission(
+        message: SmtpTestMail().message(),
+        sender: "ada@example.test",
+        recipients: ["grace@example.test"]
+    );
+    test.ok(submission.complete());
+    await session.quit();
+    let heard = (await serving).split("\n");
+    test.is(
+        [heard[0], heard[1], heard[2], heard[3], heard[4]],
+        [
+            "EHLO localhost",
+            "STARTTLS",
+            "EHLO localhost",
+            "AUTH PLAIN AGFkYQBzZWNyZXQ=",
+            "MAIL FROM:<ada@example.test>"
+        ]
+    );
+    test.is(heard.last(), "QUIT");
+}
+
+async test "implicit TLS: a refused login closes the connection and the error holds no secret" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "tls:EHLO localhost": "250-test.example\r\n250 AUTH PLAIN\r\n",
+            "tls:AUTH PLAIN AGFkYQBzZWNyZXQ=": "535 5.7.8 authentication failed\r\n",
+        ],
+        implicit: true
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let refusal = try {
+        await SmtpConnecting(
+            host: "127.0.0.1",
+            credentials: SmtpCredentials(user: "ada", password: SecretBytes("secret")),
+            port: listener::Local::port,
+            security: SmtpSecurity.implicit_tls,
+            trust: test_trust.PemTrustStore(SMTP_TEST_CA)
+        ).session();
+        "connected";
+    }
+    catch failure is SmtpFailure {
+        failure.text();
+    };
+    test.ok(refusal.contains("authentication"));
+    test.ok(refusal.contains("535"));
+    test.ok(!refusal.contains("secret") && !refusal.contains("AGFkYQ"));
+    test.is(await serving, "EHLO localhost\nAUTH PLAIN AGFkYQBzZWNyZXQ=");
+}
+
+async test "TLS is never skipped: no STARTTLS offered, no PLAIN offered, a wrong host name, bytes after the STARTTLS reply" {
+    let names = test_dns.FixedResolution(
+        test_dns.HostAddresses(host: HostName("wrong.test"), addresses: [IpAddress("127.0.0.1")])
+    );
+    let cases = [
+        ["EHLO localhost": "250 test.example\r\n"],
+        [
+            "EHLO localhost": "250-test.example\r\n250 STARTTLS\r\n",
+            "STARTTLS": "220 ready\r\n",
+            "tls:EHLO localhost": "250-test.example\r\n250 AUTH LOGIN\r\n",
+        ],
+        ["EHLO localhost": "250-test.example\r\n250 STARTTLS\r\n", "STARTTLS": "220 ready\r\n"],
+        [
+            "EHLO localhost": "250-test.example\r\n250 STARTTLS\r\n",
+            "STARTTLS": "220 ready\r\n250 injected\r\n",
+        ],
+    ];
+    let empty is @string = [];
+    let outcomes = Atomic(empty);
+    for (0..cases.size()) -> index {
+        let listener = await test_tcp.TcpListening(port: 0).listener();
+        defer listener.close();
+        let server = SmtpTestServer(listener: listener, script: cases[index], implicit: false);
+        let serve is async () is string = server.serve;
+        let serving = spawn serve();
+        let host = if index == 2 {
+            "wrong.test";
+        }
+        else {
+            "127.0.0.1";
+        };
+        let outcome = try {
+            await SmtpConnecting(
+                host: host,
+                credentials: SmtpCredentials(user: "ada", password: SecretBytes("secret")),
+                port: listener::Local::port,
+                trust: test_trust.PemTrustStore(SMTP_TEST_CA),
+                resolver: names
+            ).session();
+            "connected";
+        }
+        catch MissingSmtpExtension.name(name) {
+            name;
+        }
+        catch failure is test_trust.CertificateVerificationFailed, TlsFailure {
+            "certificate";
+        }
+        catch failure is InvalidSmtpReply {
+            "injection";
+        };
+        let heard = await serving;
+        test.ok(!heard.contains("AUTH"));
+        outcomes.replace(outcomes.value() + [outcome]);
+    }
+    test.is(outcomes.value(), ["STARTTLS", "AUTH PLAIN", "certificate", "injection"]);
+}
+
+// One plaintext session with script, one submission of message to recipients:
+// what happened, whether the session stayed open, and what the server heard.
+hidden object SmtpTestTrial {
+    has script is %string:string;
+    has message is MailMessage;
+    has recipients is @string;
+
+    SmtpTestTrial(script is %string:string, message is MailMessage, recipients is @string) {
+        self.script = script;
+        self.message = message;
+        self.recipients = recipients;
+    }
+
+    async result() is string {
+        let listener = await test_tcp.TcpListening(port: 0).listener();
+        defer listener.close();
+        let server = SmtpTestServer(listener: listener, script: script, implicit: false);
+        let serve is async () is string = server.serve;
+        let serving = spawn serve();
+        let outcome = try {
+            let session = await SmtpConnecting(
+                host: "127.0.0.1",
+                port: listener::Local::port,
+                security: SmtpSecurity.plaintext,
+                timeout: Duration(milliseconds: 500)
+            ).session();
+            defer session.close();
+            let state = try {
+                let submission = await session.submission(
+                    message: message,
+                    sender: "ada@example.test",
+                    recipients: recipients
+                );
+                "accepted " + submission.accepted().size().string();
+            }
+            catch failure is Error {
+                failure.text();
+            };
+            let open = if session.closed() {
+                "closed";
+            }
+            else {
+                "open";
+            };
+            state + " | " + open;
+        }
+        catch failure is Error {
+            failure.text() + " | none";
+        };
+        outcome + " | " + await serving;
+    }
+}
+
+async test "server refusals keep the session open, 421 closes it, EHLO has no HELO fallback" {
+    let message = SmtpTestMail().message();
+    let base = "EHLO localhost";
+    let hello = "250 test.example\r\n";
+    let mail = "MAIL FROM:<ada@example.test>";
+    let rcpt = "RCPT TO:<grace@example.test>";
+    test.is(
+        await SmtpTestTrial(
+            script: ["<greeting>": "554 5.3.2 no service\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.rejected(SmtpStep.greeting, 554, \"5.3.2 no service\") | none | "
+    );
+    test.is(
+        await SmtpTestTrial(
+            script: [base: "502 5.5.1 not implemented\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.rejected(SmtpStep.hello, 502, \"5.5.1 not implemented\") | none | EHLO localhost"
+    );
+    test.is(
+        await SmtpTestTrial(
+            script: [base: hello, mail: "553 5.7.1 denied\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.rejected(SmtpStep.sender, 553, \"5.7.1 denied\") | open | EHLO localhost\n" + mail
+    );
+    test.is(
+        await SmtpTestTrial(
+            script: [base: hello, mail: "421 4.3.2 shutting down\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.rejected(SmtpStep.sender, 421, \"4.3.2 shutting down\") | closed | EHLO localhost\n" + mail
+    );
+    test.is(
+        await SmtpTestTrial(
+            script: [
+                base: hello,
+                mail: "250 ok\r\n",
+                rcpt: "250 ok\r\n",
+                "DATA": "554 5.5.1 no valid recipients\r\n",
+                "RSET": "250 ok\r\n"
+            ],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.rejected(SmtpStep.data, 554, \"5.5.1 no valid recipients\") | open | EHLO localhost\n" + mail + "\n" + rcpt + "\nDATA\nRSET"
+    );
+    let final = await SmtpTestTrial(
+        script: [
+            base: hello,
+            mail: "250 ok\r\n",
+            rcpt: "250 ok\r\n",
+            "DATA": "354 go\r\n",
+            ".": "552 5.3.4 too big\r\n"
+        ],
+        message: message,
+        recipients: ["grace@example.test"]
+    ).result();
+    test.ok(
+        final.starts_with(
+            "SmtpFailure.rejected(SmtpStep.message, 552, \"5.3.4 too big\") | open | "
+        )
+    );
+    test.ok(final.contains("<data>"));
+}
+
+async test "a reply that breaks the protocol, or a lost connection, closes the session; after the data it is uncertain" {
+    let message = SmtpTestMail().message();
+    let base = "EHLO localhost";
+    let hello = "250 test.example\r\n";
+    let mail = "MAIL FROM:<ada@example.test>";
+    let rcpt = "RCPT TO:<grace@example.test>";
+    test.is(
+        await SmtpTestTrial(
+            script: [base: hello, mail: "354 what\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.unexpected(SmtpStep.sender, 354, \"what\") | closed | EHLO localhost\n" + mail
+    );
+    test.ok(
+        (await SmtpTestTrial(
+            script: [base: hello, mail: "250 ok\r\n", rcpt: "hello\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result()).starts_with(
+            "InvalidSmtpReply.located("
+        )
+    );
+    test.is(
+        await SmtpTestTrial(
+            script: [base: hello, mail: "250 ok\r\n", rcpt: "<close>"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.disconnected(SmtpStep.recipients) | closed | EHLO localhost\n" + mail + "\n" + rcpt
+    );
+    test.is(
+        await SmtpTestTrial(
+            script: [base: hello, mail: "250 ok\r\n", rcpt: "250 ok\r\n", "DATA": "250 ok\r\n"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.unexpected(SmtpStep.data, 250, \"ok\") | closed | EHLO localhost\n" + mail + "\n" + rcpt + "\nDATA"
+    );
+    let lost = await SmtpTestTrial(
+        script: [
+            base: hello,
+            mail: "250 ok\r\n",
+            rcpt: "250 ok\r\n",
+            "DATA": "354 go\r\n",
+            ".": "<close>"
+        ],
+        message: message,
+        recipients: ["grace@example.test"]
+    ).result();
+    test.ok(lost.starts_with("SmtpFailure.uncertain("));
+    test.ok(lost.contains(" | closed | "));
+    test.ok(lost.ends_with("</data>"));
+}
+
+async test "a step over its timeout closes the session; cancelling a submission does too" {
+    let message = SmtpTestMail().message();
+    let mail = "MAIL FROM:<ada@example.test>";
+    test.is(
+        await SmtpTestTrial(
+            script: ["EHLO localhost": "250 test.example\r\n", mail: "<hang>"],
+            message: message,
+            recipients: ["grace@example.test"]
+        ).result(),
+        "SmtpFailure.timed_out(SmtpStep.sender) | closed | EHLO localhost\n" + mail
+    );
+    let late = await SmtpTestTrial(
+        script: [
+            "EHLO localhost": "250 test.example\r\n",
+            mail: "250 ok\r\n",
+            "RCPT TO:<grace@example.test>": "250 ok\r\n",
+            "DATA": "354 go\r\n",
+            ".": "<hang>"
+        ],
+        message: message,
+        recipients: ["grace@example.test"]
+    ).result();
+    test.ok(
+        late.starts_with(
+            "SmtpFailure.uncertain(\"SmtpFailure.timed_out(SmtpStep.message)\") | closed | "
+        )
+    );
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: ["EHLO localhost": "250 test.example\r\n", mail: "<hang>"],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    let submit is async (MailMessage, string, Sequencing<string>) is SmtpSubmission = session.submission;
+    let pending = spawn submit(message, "ada@example.test", ["grace@example.test"]);
+    await SystemClock().wait(Duration(milliseconds: 100));
+    pending.cancel();
+    test.ok(try {
+        await pending;
+        false;
+    }
+    catch stopped is Cancelled {
+        true;
+    });
+    test.ok(session.closed());
+    test.ok(try {
+        await session.submission(
+            message: message,
+            sender: "ada@example.test",
+            recipients: ["grace@example.test"]
+        );
+        false;
+    }
+    catch SmtpFailure.closed {
+        true;
+    });
+    test.is(await serving, "EHLO localhost\n" + mail);
+}
+
+async test "submissions started together run one after another" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "EHLO localhost": "250 test.example\r\n",
+            "MAIL FROM:<ada@example.test>": "250 ok\r\n",
+            "MAIL FROM:<grace@example.test>": "250 ok\r\n",
+            "RCPT TO:<linus@example.test>": "250 ok\r\n",
+            "DATA": "354 go\r\n",
+            ".": "250 queued\r\n",
+            "QUIT": "221 bye\r\n",
+        ],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    let message = SmtpTestMail().message();
+    let submit is async (MailMessage, string, Sequencing<string>) is SmtpSubmission = session.submission;
+    let first = spawn submit(message, "ada@example.test", ["linus@example.test"]);
+    let second = spawn submit(message, "grace@example.test", ["linus@example.test"]);
+    test.ok((await first).complete());
+    test.ok((await second).complete());
+    await session.quit();
+    let heard = await serving;
+    let ada = heard.find("MAIL FROM:<ada@example.test>") else -1;
+    let grace = heard.find("MAIL FROM:<grace@example.test>") else -1;
+    let data_end = heard.find("</data>") else -1;
+    test.ok(ada >= 0 && grace > data_end && data_end > ada);
+}
+
+async test "8BITMIME, SMTPUTF8 and SIZE are checked before anything is sent" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "EHLO localhost": "250-test.example\r\n250 SIZE 100\r\n",
+            "MAIL FROM:<ada@example.test> SIZE=90": "250 ok\r\n",
+            "RCPT TO:<grace@example.test>": "250 ok\r\n",
+            "DATA": "354 go\r\n",
+            ".": "250 queued\r\n",
+        ],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    let mail = SmtpTestMail();
+    test.ok(try {
+        await session.submission(
+            message: mail.eight_bit(),
+            sender: "ada@example.test",
+            recipients: ["grace@example.test"]
+        );
+        false;
+    }
+    catch MissingSmtpExtension.name(name) {
+        name == "8BITMIME";
+    });
+    test.ok(try {
+        await session.submission(
+            message: mail.message(),
+            sender: "ada@example.test",
+            recipients: ["jörg@example.test"]
+        );
+        false;
+    }
+    catch MissingSmtpExtension.name(name) {
+        name == "SMTPUTF8";
+    });
+    let big = fixtures.ParsedMail(
+        Utf8Encoded("Subject: big\r\n\r\n" + "x".repeat(200) + "\r\n").bytes()
+    ).message();
+    test.ok(try {
+        await session.submission(
+            message: big,
+            sender: "ada@example.test",
+            recipients: ["grace@example.test"]
+        );
+        false;
+    }
+    catch failure is SmtpLimitExceeded {
+        true;
+    });
+    test.ok(!session.closed());
+    let small = fixtures.ParsedMail(
+        Utf8Encoded("Subject: small\r\n\r\n" + "x".repeat(70) + "\r\n").bytes()
+    ).message();
+    let size = PreparedSmtpData(origin: small, capabilities: session.capabilities()).message_size();
+    test.ok(
+        (await session.submission(
+            message: small,
+            sender: "ada@example.test",
+            recipients: ["grace@example.test"]
+        )).complete()
+    );
+    session.close();
+    test.is(size, 90);
+    test.is((await serving).split("\n")[1], "MAIL FROM:<ada@example.test> SIZE=90");
+}
+
+async test "an international envelope and 8-bit data name SMTPUTF8 and BODY=8BITMIME" {
+    let listener = await test_tcp.TcpListening(port: 0).listener();
+    defer listener.close();
+    let server = SmtpTestServer(
+        listener: listener,
+        script: [
+            "EHLO localhost": "250-test.example\r\n250-8BITMIME\r\n250 SMTPUTF8\r\n",
+            "MAIL FROM:<> BODY=8BITMIME SMTPUTF8": "250 ok\r\n",
+            "RCPT TO:<jörg@bücher.example>": "250 ok\r\n",
+            "DATA": "354 go\r\n",
+            ".": "250 queued\r\n",
+        ],
+        implicit: false
+    );
+    let serve is async () is string = server.serve;
+    let serving = spawn serve();
+    let session = await SmtpConnecting(
+        host: "127.0.0.1",
+        port: listener::Local::port,
+        security: SmtpSecurity.plaintext
+    ).session();
+    let submission = await session.submission(
+        message: SmtpTestMail().eight_bit(),
+        sender: "",
+        recipients: ["jörg@bücher.example"]
+    );
+    test.ok(submission.complete());
+    session.close();
+    test.ok((await serving).contains("<data>From: ada@example.test\r\nMIME-Version: 1.0"));
+}
+
+test "envelope addresses are mailboxes and cannot carry a command" {
+    let good = [
+        "a@example.test",
+        "first.last+tag@sub.example.test",
+        "\"two words\"@example.test",
+        "a@[192.0.2.1]",
+        "jörg@bücher.example"
+    ];
+    for good -> address {
+        SmtpEnvelope(sender: address, recipients: [address]);
+    }
+    let bad = [
+        "",
+        "plain",
+        "@example.test",
+        "a@",
+        ".a@example.test",
+        "a.@example.test",
+        "a..b@example.test",
+        "a b@example.test",
+        "a@example.test>\r\nRSET",
+        "a@exa mple.test",
+        "a@-example.test",
+        "a@example-.test",
+        "a@example..test",
+        "\"open@example.test",
+        "\"a\"b\"@example.test",
+        "x".repeat(65) + "@example.test",
+        "a@" + "b".repeat(254),
+        "a\n@example.test"
+    ];
+    for bad -> address {
+        test.ok(try {
+            SmtpEnvelope(sender: "", recipients: [address]);
+            false;
+        }
+        catch failure is InvalidSmtpEnvelope {
+            true;
+        });
+    }
+    test.ok(try {
+        SmtpEnvelope(sender: "a@b@c", recipients: ["a@example.test"]);
+        false;
+    }
+    catch failure is InvalidSmtpEnvelope {
+        true;
+    });
+    let none_given is @string = [];
+    test.ok(try {
+        SmtpEnvelope(sender: "a@example.test", recipients: none_given);
+        false;
+    }
+    catch failure is InvalidSmtpEnvelope {
+        true;
+    });
+    test.ok(SmtpEnvelope(sender: "", recipients: ["jörg@example.test"]).international());
+    test.ok(!SmtpEnvelope(sender: "", recipients: ["a@example.test"]).international());
+}
+
+test "credentials need TLS, and the client name is a domain" {
+    test.throws(InvalidArgument) {
+        SmtpConnecting(
+            host: "smtp.example.test",
+            credentials: SmtpCredentials(user: "ada", password: SecretBytes("secret")),
+            security: SmtpSecurity.plaintext
+        );
+    };
+    test.throws(InvalidArgument) {
+        SmtpCredentials(user: "ada\r\nRSET", password: SecretBytes("secret"));
+    };
+    test.throws(InvalidArgument) {
+        SmtpConnecting(host: "smtp.example.test", client: "bad name\r\n");
+    };
+    test.throws(InvalidArgument) {
+        SmtpConnecting(host: "smtp.example.test", port: 0);
+    };
+    SmtpConnecting(host: "smtp.example.test", client: "[192.0.2.1]");
+    test.is(
+        test_utf.Utf8Decoded(
+            SmtpCredentials(user: "ada", password: SecretBytes("secret")).response().export_bytes()
+        ).string(),
+        "AGFkYQBzZWNyZXQ="
+    );
+}

@@ -14,6 +14,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   capitals, as Unicode's SpecialCasing.txt says; other languages take the default of `string.lower()` and
   `upper()`. `title()` starts each word with its title case (`"ǆemal"` → `"ǅemal"`, `"ßa"` → `"Ssa"`,
   Georgian unchanged), a word joined across an apostrophe or a full stop (`"don't"`).
+- **Sending e-mail: an SMTP submission client (#499).** `SmtpConnecting(host:, credentials:).session()` opens a
+  session (STARTTLS on 587 by default, implicit TLS or explicit plaintext, never a fallback; certificate checked
+  against the host; AUTH PLAIN only after TLS, the password in `SecretBytes`), and
+  `session.submission(message:, sender:, recipients:)` sends one message with an envelope separate from the
+  headers. Recipients are offered one by one; `complete()` and `refusals()` tell partial acceptance; a failure
+  after the data started is `SmtpFailure.uncertain`, never retried. Every step has a monotonic timeout
+  (`examples/mail/send.ok`).
 - **Month and year arithmetic, today and now (#198).** `date.plus_months(n)` and `date.plus_years(n)` keep the day
   where the target month has it and take the month's last day otherwise (2024-01-31 plus one month is
   2024-02-29; February 29 plus a year is February 28). `Today(zone: z).date()` is the date in a zone now and

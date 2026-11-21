@@ -1,0 +1,12 @@
+every recipient accepted: true
+accepted: 2
+the server said: queued as 1
+it heard:
+(greeting)
+  EHLO localhost
+  MAIL FROM:<ada@example.test>
+  RCPT TO:<grace@example.test>
+  RCPT TO:<linus@example.test>
+  DATA
+  (the message)
+  QUIT
