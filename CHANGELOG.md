@@ -6,6 +6,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-22
+
+0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.
+- **JIT.** Small static methods are inlined into their callers (#926, #927), and closure calls go straight to
+  the body (#928). Role devirtualization was measured and not adopted.
+- **Async ownership costs less** (#932): Futures join regions without graph walks, frames without resources are
+  0.5.8's size, and a temporary Future awaited at once belongs to the awaiting frame (owner's decisions).
+- **Collector.** It waits for 4 MB (#920), skips idle pages (#538), counts statistics without distorting (#918)
+  and caches return addresses in the root scan. A generational collector is no-go (#919).
+- **`okkama repl`** is back (#588): one live session with real ownership lifetimes and line editing.
+- **Language:** the compact `if c: a else: b` (#921).
+- **Speed.** Micro-benchmarks against 0.6.0: −10.8% by geometric mean over 35 reliable pairs (closure-call −50%,
+  closure-create −31%, method-call −30%, recursion −29%, role-call −23%); async-await, spawn and
+  cancel-async-cleanup −14…41%, inconclusive pairs. The ladder: 02-calls −26%, 09-closures 73 → 31 ms.
+- **Fixed before the release:** a callee with a loop is no longer inlined (micro `float` +55% on Linux).
+
 ### Added
 
 - **The collector's benchmark set, `bench/gc` (#917).** Six workloads (a large long-lived heap, big-integer
@@ -8104,7 +8120,8 @@ First release of the Rust implementation: the compiler (lexer, parser, analysis,
 IR, Sparrow (VM with JIT) and JVM engines, the standard library, LSP, `fmt`, `lint`, the
 `blade` project manager, and packages for macOS and Linux.
 
-[Unreleased]: https://github.com/shootnix/okkama/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/shootnix/okkama/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/shootnix/okkama/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/shootnix/okkama/compare/v0.5.8...v0.6.0
 [0.5.8]: https://github.com/shootnix/okkama/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/shootnix/okkama/compare/v0.5.6...v0.5.7

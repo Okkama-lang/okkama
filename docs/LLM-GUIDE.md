@@ -336,6 +336,12 @@ Since 0.5.5 the release report is the micro-benchmark A/B
 tag rebuilt and the candidate, one session, Linux containers. The
 cross-language ladder report is made on demand. Compare releases with a
 back-to-back A/B, not against an older report, and never against a PGO build.
+- Micro, 0.6.1 against 0.6.0 (report
+  `okkama-docs/benchmarks/reports/2026-11-22-v0.6.1/micro.html`): Sparrow
+  −10.8% by geometric mean over 35 reliable pairs; closure-call −50%, method-call
+  −30%, recursion −29%, role-call −23%. array-plus +25% is layout lottery: the
+  same machine code on another page (macOS instructions equal). The release
+  A/B found float +55% from inlining a callee with a loop, fixed before tagging.
 - Micro, 0.6.0 against 0.5.8 (report
   `okkama-docs/benchmarks/reports/2026-11-21-v0.6.0/micro.html`): Sparrow
   −18.7% by geometric mean over 49 reliable pairs; destroy −81%, float −72%,
