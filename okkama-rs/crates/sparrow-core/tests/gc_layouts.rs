@@ -70,16 +70,19 @@ fn gc_layout_mixed_objects_and_closures() {
 fn gc_layout_retained_arguments_survive_reused_async_registers() {
     let program = okkama_sparrow::assemble(
         "sparrow 16\nmodule \"gc-layout-frame\" \"1.0.0\"\n\
-         type t0 int\ntype t1 str\ntype t2 float\ntype t3 bool\n\
+         type t0 int\ntype t1 str\ntype t2 float\ntype t3 bool\ntype t4 object obj0\n\
+         object obj0 \"Lease\" {\n destroy f1\n}\n\
          function f0 \"pending\" async {\n\
-         registers [t0, t2, t1, t3]\nparams [r0, r2]\nresult t0\n0: ret r0\n}\n",
+         registers [t0, t2, t1, t3]\nparams [r0, r2]\nresult t0\n0: ret r0\n}\n\
+         function f1 \"Lease.destroy\" {\n registers [t4]\n params [r0]\n result void\n 0: ret _\n}\n",
     ).unwrap();
     let mut runtime = sparrow_core::runtime::Runtime::new(Loaded::new(program)).unwrap();
     runtime.heap.set_stress(true);
     let integer = runtime.heap.int(i64::MIN);
     let text = runtime.heap.allocate_text("retained argument");
     let frame = runtime.future_new(0, &[integer, text]);
-    // Field indices from the frame layout: registers, then the retained inputs.
+    // Field indices from the frame layout: registers, then the retained inputs (a program with resources: the
+    // destroy above).
     let register = (sparrow_core::tasks::REGISTERS / 8 - 1) as usize;
     let retained = register + 4;
     // The register copies die; the retained inputs must remain independently live.

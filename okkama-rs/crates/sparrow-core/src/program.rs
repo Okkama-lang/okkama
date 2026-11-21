@@ -228,8 +228,10 @@ impl Loaded {
                     if f.driver {
                         layout.push(Repr::Ref);
                     }
-                    layout.extend(source.params.iter().map(|param| f.kinds[param.0 as usize].repr()));
+                    // Retained arguments and the identity serve the resource walk only: a program without
+                    // resources has neither (#932).
                     if f.identity_at.is_some() {
+                        layout.extend(source.params.iter().map(|param| f.kinds[param.0 as usize].repr()));
                         layout.extend([Repr::Raw, Repr::Raw]); // identity serial and owner (#931)
                     }
                     layout

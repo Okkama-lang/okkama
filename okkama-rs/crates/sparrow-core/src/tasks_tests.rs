@@ -363,3 +363,52 @@ mod requested_walk {
         }
     }
 }
+
+/// #932: an action without inputs publishes its outcome as it completes; one with inputs waits for
+/// `finish_inputs` (#587).
+mod complete_action {
+    use crate::heap;
+    use crate::runtime::Runtime;
+    use crate::tasks::*;
+    use crate::word::{Repr, UNBOUND, Word};
+
+    fn running_frame(runtime: &mut Runtime) -> Word {
+        let frame = runtime.heap.allocate(1 + FIXED_WORDS);
+        // SAFETY: fresh storage of 1 + FIXED_WORDS words.
+        unsafe {
+            *(frame as *mut u64) = heap::header(heap::FRAME, Repr::Raw, 1);
+            std::ptr::write_bytes((frame + 8) as *mut u64, 0, FIXED_WORDS);
+        }
+        for word in [WAITER, AWAITING, INPUTS, OWNED, RESULT, FAILURE] {
+            set(frame, word, UNBOUND);
+        }
+        set(frame, STATE, RUNNING);
+        frame
+    }
+
+    #[test]
+    fn an_action_without_inputs_is_published_at_once_and_one_with_inputs_is_not() {
+        let program = okkama_sparrow::assemble(
+            "sparrow 16\nmodule \"complete\" \"1.0.0\"\ntype t0 int\n\
+             function f0 \"main\" {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
+             function f1 \"work\" async {\n registers [t0]\n params []\n result t0\n 0: const r0, int 0\n 1: ret r0\n}\n\
+             entry f0\n",
+        ).unwrap();
+        let mut runtime = Box::new(Runtime::new(crate::program::Loaded::new(program)).unwrap());
+        let future = running_frame(&mut runtime);
+        let waiter = running_frame(&mut runtime);
+        runtime.listen(future, waiter);
+        set(waiter, AWAITING, future);
+        runtime.complete_action(future, DONE, 7);
+        assert_eq!(get(future, STATE), DONE);
+        assert_eq!(get(future, RESULT), 7);
+        assert_eq!(get(future, FLAGS) & COMPLETING, 0);
+        assert_eq!(get(waiter, AWAITING), UNBOUND, "the waiter is woken");
+        let held = running_frame(&mut runtime);
+        let inputs = runtime.heap.allocate_array(Repr::Ref, &[UNBOUND; 5]);
+        set(held, INPUTS, inputs);
+        runtime.complete_action(held, DONE, 9);
+        assert_eq!(get(held, STATE), RUNNING, "published after finish_inputs");
+        assert_ne!(get(held, FLAGS) & COMPLETING, 0);
+    }
+}

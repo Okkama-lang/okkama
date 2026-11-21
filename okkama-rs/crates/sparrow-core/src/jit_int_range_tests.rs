@@ -153,9 +153,13 @@ fn pointer_free_operation_results_survive_await_and_keep_big_aliases_and_cleanup
                         .zip(&runtime.loaded.functions).zip(&layouts.frames)
                     {
                         let retained = crate::tasks::FIXED_WORDS + info.kinds.len() + usize::from(info.driver);
-                        // #931: a program with resources ends each frame with the Future's identity (two raw words).
-                        let identity = if info.identity_at.is_some() { 2 } else { 0 };
-                        assert_eq!(frame.len(), retained + source.params.len() + identity, "{}", source.symbol);
+                        // #931/#932: only a program with resources retains the arguments and ends each frame with
+                        // the Future's identity (two raw words).
+                        if info.identity_at.is_none() {
+                            assert_eq!(frame.len(), retained, "{}", source.symbol);
+                            continue;
+                        }
+                        assert_eq!(frame.len(), retained + source.params.len() + 2, "{}", source.symbol);
                         for (index, param) in source.params.iter().enumerate() {
                             assert_eq!(frame[retained + index], info.kinds[param.0 as usize].repr());
                         }

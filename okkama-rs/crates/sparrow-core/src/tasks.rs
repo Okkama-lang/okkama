@@ -135,8 +135,9 @@ impl Runtime {
         let source = &self.loaded.program.functions[function];
         let registers = source.registers.len();
         let retained = FIXED_WORDS + registers + usize::from(self.loaded.functions[function].driver);
-        // Programs with resources add the inline identity's two words (#931).
-        let words = 1 + retained + source.params.len() + if self.loaded.functions[function].identity_at.is_some() { 2 } else { 0 };
+        // Programs with resources add the retained arguments (#578) and the inline identity's two words (#931).
+        let resources = self.loaded.functions[function].identity_at.is_some();
+        let words = 1 + retained + if resources { source.params.len() + 2 } else { 0 };
         self.heap.counted("async frame", 0, words);
         let frame = self.heap.allocate(words);
         // SAFETY: fresh storage of `words` words.
@@ -152,7 +153,9 @@ impl Runtime {
         }
         for (index, (param, &argument)) in source.params.iter().zip(arguments).enumerate() {
             set(frame, REGISTERS + u64::from(param.0) * 8, argument);
-            set(frame, (1 + retained + index) as u64 * 8, argument);
+            if resources {
+                set(frame, (1 + retained + index) as u64 * 8, argument);
+            }
         }
         self.future_created(frame);
         self.own_inputs(frame, arguments);
@@ -257,7 +260,9 @@ impl Runtime {
         }
         self.running.push(frame);
         if get(frame, FLAGS) & COMPLETING == 0 {
-            let code = match crate::jit::compile(self, function) {
+            // A compiled body's address is in the invocation table: `compile`'s frame is not worth a call (#932).
+            let compiled = self.invocations[function].code;
+            let code = match if compiled != 0 { Ok(compiled) } else { crate::jit::compile(self, function) } {
                 Ok(code) => code,
                 Err(error) => {
                     self.running.pop();
@@ -279,7 +284,12 @@ impl Runtime {
                 return status != OK;
             }
         }
-        // The action is over: release its unretained inputs, then publish (#587).
+        // The action is over: release its unretained inputs, then publish (#587). Without inputs it is
+        // published already.
+        if get(frame, STATE) != RUNNING {
+            self.running.pop();
+            return true;
+        }
         self.finish_inputs(ctx, frame);
         self.running.pop();
         (unsafe { (*ctx).status } != OK) || get(frame, STATE) != RUNNING
@@ -288,6 +298,11 @@ impl Runtime {
     /// #587: the action of an async body is over with `value` (a result or a failure). Its outcome is owned now,
     /// with the inputs it retains; the Future publishes it after `finish_inputs`.
     pub(crate) fn complete_action(&mut self, frame: Word, state: u64, value: Word) {
+        // No inputs to release: "publish after the unretained inputs are released" holds at once (#932).
+        if get(frame, INPUTS) == UNBOUND {
+            self.settle(frame, state, value);
+            return;
+        }
         set(frame, if state == DONE { RESULT } else { FAILURE }, value);
         set(frame, FLAGS, get(frame, FLAGS) | COMPLETING | if state == DONE { RESERVED } else { 0 });
         self.own_outcome(frame, state == DONE, value);
@@ -670,6 +685,12 @@ pub const AWAIT_PENDING: u64 = 2;
 #[inline(never)]
 pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
     okkama_devtrace::count!("runtime", "rt_await");
+    await_future(ctx_ptr, this, future, false)
+}
+
+/// The await protocol; `take` consumes a delivered result (`rt_await_take`) in the same call (#932).
+#[inline(never)]
+fn await_future(ctx_ptr: *mut Ctx, this: Word, future: Word, take: bool) -> u64 {
     let (ctx, runtime) = unsafe { parts(ctx_ptr) };
     runtime.count(|_| "await".into());
     // Re-entry after the awaited Future settled first (#663): only a
@@ -702,6 +723,12 @@ pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
     match get(future, STATE) {
         DONE => {
             ctx.scratch = get(future, RESULT);
+            if take {
+                runtime.take_outcome(future);
+                set(future, RESULT, UNBOUND);
+                set(future, FAILURE, UNBOUND);
+                set(future, STATE, CONSUMED);
+            }
             AWAIT_READY
         }
         CONSUMED => {
@@ -730,16 +757,7 @@ pub extern "C" fn rt_await(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
 #[inline(never)]
 pub extern "C" fn rt_await_take(ctx_ptr: *mut Ctx, this: Word, future: Word) -> u64 {
     okkama_devtrace::count!("runtime", "rt_await_take");
-    let outcome = rt_await(ctx_ptr, this, future);
-    let (ctx, runtime) = unsafe { parts(ctx_ptr) };
-    let delivered = outcome == AWAIT_READY && get(future, STATE) == DONE && ctx.status == OK;
-    if delivered {
-        runtime.take_outcome(future);
-        set(future, RESULT, UNBOUND);
-        set(future, FAILURE, UNBOUND);
-        set(future, STATE, CONSUMED);
-    }
-    outcome
+    await_future(ctx_ptr, this, future, true)
 }
 
 /// `region.settle` / `region.settle_unwind` from frame `this` (#154): close
