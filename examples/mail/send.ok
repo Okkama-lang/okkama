@@ -19,7 +19,9 @@ import "io/stdout" take Stdout;
 //     )
 //
 // This one runs a tiny server on 127.0.0.1 that accepts everything, so it
-// speaks plaintext, which takes no password.
+// speaks plaintext, which takes no password. The server offers no 8BITMIME,
+// and the accented text still goes: MailMessage sends text beyond ASCII as
+// quoted-printable.
 
 async main() is int {
     let listener = await TcpListening(port: 0).listener();
@@ -32,7 +34,7 @@ async main() is int {
         from: "Ada <ada@example.test>",
         to: ["Grace <grace@example.test>"],
         subject: "Lunch on Thursday?",
-        text: "Shall we try the new place?\r\n"
+        text: "Shall we try the new café?\r\n"
     );
     let session = await SmtpConnecting(
         host: "127.0.0.1",

@@ -44,6 +44,13 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `TemporaryFile.replace(destination)` is the pair of `preserve()`. A binary write now finishes a short write
   instead of reporting it (`examples/fs/file/replace.ok`).
 
+### Fixed
+
+- **A UTF-8 mail text is sent quoted-printable (#935).** `MailMessage(text:)` with characters beyond ASCII
+  failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
+  `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
+  stays 7bit.
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.
