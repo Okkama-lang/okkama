@@ -40,12 +40,19 @@ fn has_reason(function: &FunctionReport, reason: &str) -> bool {
 
 #[test]
 fn local_object_is_scope_and_constructor_allocation_is_result() {
-    let report = census(&format!("{RES} main() is int {{ let r = Res(n: 1); r.read(); }}"));
+    let text = format!("{RES} main() is int {{ let r = Res(n: 1); r.read(); }}");
+    let report = census(&text);
     let main = function(&report, "main");
     assert_eq!(main.creations.len(), 1);
     assert_eq!(main.creations[0].owner, Owner::Scope);
-    assert!(main.region_ops.iter().all(|op| op.statically_owned));
-    assert!(main.totals.region_static > 0);
+    // #909 2b: a scope-owned leaf resource is pinned and destroyed directly,
+    // so its function keeps no region operations at all.
+    assert!(main.region_ops.is_empty(), "{:?}", main.region_ops);
+    assert_eq!(main.totals.region_static + main.totals.region_dynamic, 0);
+    let module = module(&text);
+    let main_ir = module.functions.iter().find(|function| function.symbol == "main").expect("main");
+    assert!(main_ir.blocks.iter().flat_map(|block| &block.insts)
+        .any(|inst| matches!(inst.kind, InstKind::ResourcePin { .. })), "main pins its resource");
     assert_eq!(function(&report, "Res.new#0").creations[0].owner, Owner::Result);
 }
 

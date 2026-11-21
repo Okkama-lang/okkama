@@ -26,7 +26,6 @@ object InvoiceLine {
         let monthly = match plan {
             case Plan.basic { 1000; }
             case Plan.pro { 2500; }
-            else { 0; }
         };
         HalfEven(value: monthly * seats * days_used / days_in_period).rounded();
     }
