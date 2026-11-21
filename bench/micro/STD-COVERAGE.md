@@ -1,6 +1,6 @@
 # std micro-benchmark targets
 
-51 of 435 non-runtime module files have an explicitly declared measured action.
+55 of 435 non-runtime module files have an explicitly declared measured action.
 
 This is not API, branch or test coverage. A benchmark targeting one action does not cover the entire module. Harness imports do not count. Builtin string operations are listed in manifest.json separately.
 
@@ -37,7 +37,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `collections/frequencies` | — |
 | `collections/heap` | heap-top |
 | `collections/iteration` | — |
-| `collections/list` | — |
+| `collections/list` | heap-top |
 | `collections/ordering` | sorted |
 | `collections/repetition` | — |
 | `collections/sequence` | — |
@@ -68,7 +68,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `crypto/hmac` | hmac-sha256 |
 | `crypto/jwt` | — |
 | `crypto/kdf` | — |
-| `crypto/key` | — |
+| `crypto/key` | ed25519-sign-verify |
 | `crypto/key_format` | — |
 | `crypto/nonce` | — |
 | `crypto/password` | — |
@@ -120,7 +120,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `encoding/pem` | — |
 | `encoding/quoted_printable` | — |
 | `encoding/single_byte` | — |
-| `encoding/utf` | utf8-encode, utf16-encode |
+| `encoding/utf` | utf8-encode, utf16-encode, form-parse |
 | `error` | — |
 | `fs/directory` | — |
 | `fs/entry` | — |
@@ -252,7 +252,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `io/stream` | — |
 | `io/text` | — |
 | `io/transfer` | — |
-| `json` | json-parse, json-round-trip, json-render |
+| `json` | json-parse, json-round-trip, json-render, template-render |
 | `locale/case` | locale-case |
 | `locale/collation` | — |
 | `locale/currency` | — |
@@ -274,7 +274,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `locale/match` | — |
 | `locale/number` | locale-decimal |
 | `locale/system` | — |
-| `locale/tag` | — |
+| `locale/tag` | locale-case, plural-ru, locale-decimal, locale-list |
 | `logging/enrichment` | — |
 | `logging/field` | — |
 | `logging/file` | — |
@@ -320,7 +320,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `mail/smtp_session` | — |
 | `math/aggregate` | — |
 | `math/constants` | — |
-| `math/decimal` | decimal-plus |
+| `math/decimal` | locale-decimal, decimal-plus |
 | `math/rounding` | — |
 | `message/header` | — |
 | `mime/disposition` | — |
@@ -366,7 +366,7 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `random/source` | — |
 | `regex/escape` | regex-escape |
 | `regex/match` | — |
-| `regex/pattern` | regex-first-match |
+| `regex/pattern` | regex-first-match, regex-replace |
 | `regex/range` | — |
 | `regex/replace` | regex-replace |
 | `regex/search` | regex-first-match |
@@ -410,21 +410,21 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `testing/time` | — |
 | `text/layout` | text-indent |
 | `time/clock` | — |
-| `time/date` | date-shift |
+| `time/date` | date-shift, date-format, iso-date |
 | `time/day` | — |
 | `time/duration` | — |
 | `time/format` | date-format |
-| `time/iso` | iso-date |
+| `time/iso` | — |
 | `time/local_datetime` | — |
 | `time/rfc3339` | — |
 | `time/zone` | — |
 | `toml/parse` | toml-parse |
-| `toml/value` | — |
+| `toml/value` | toml-parse |
 | `unicode/character` | unicode-category |
 | `unicode/normalization` | normalize-nfc |
 | `url/form` | form-parse |
 | `url/percent` | percent-encode, percent-decode |
-| `url/query` | query-parse |
+| `url/query` | query-parse, form-parse |
 | `url/value` | — |
 | `uuid/generation` | — |
 | `uuid/value` | uuid-parse |
@@ -438,6 +438,6 @@ This is not API, branch or test coverage. A benchmark targeting one action does 
 | `web/session` | — |
 | `web/testing` | — |
 | `xml/name` | — |
-| `xml/node` | — |
+| `xml/node` | xml-attribute |
 | `xml/parse` | xml-attribute |
 | `xml/write` | xml-escape |

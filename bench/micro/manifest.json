@@ -495,7 +495,11 @@
     "targets": [
       "encoding/base64"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/base64:Base64Encoded.new",
+      "encoding/base64:Base64Encoded.string"
+    ]
   },
   "hex-encode": {
     "path": "std/hex-encode.ok",
@@ -505,7 +509,11 @@
     "targets": [
       "encoding/hex"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/hex:HexEncoded.new",
+      "encoding/hex:HexEncoded.string"
+    ]
   },
   "int-parse": {
     "path": "std/int-parse.ok",
@@ -515,7 +523,11 @@
     "targets": [
       "strings/parse"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "strings/parse:Number.int",
+      "strings/parse:Number.new"
+    ]
   },
   "json-parse": {
     "path": "std/json-parse.ok",
@@ -525,7 +537,12 @@
     "targets": [
       "json"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "json:Json.int",
+      "json:ParsedJson.new",
+      "json:ParsedJson.root"
+    ]
   },
   "json-round-trip": {
     "path": "std/json-round-trip.ok",
@@ -535,7 +552,12 @@
     "targets": [
       "json"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "json:Json.string",
+      "json:ParsedJson.new",
+      "json:ParsedJson.root"
+    ]
   },
   "regex-first-match": {
     "path": "std/regex-first-match.ok",
@@ -546,7 +568,12 @@
       "regex/pattern",
       "regex/search"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "regex/pattern:Regex.new",
+      "regex/search:FirstRegexMatch.new",
+      "regex/search:FirstRegexMatch.text"
+    ]
   },
   "sha256": {
     "path": "std/sha256.ok",
@@ -556,7 +583,11 @@
     "targets": [
       "digest/sha2"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/sha2:Sha256.bytes",
+      "digest/sha2:Sha256.new"
+    ]
   },
   "sorted": {
     "path": "std/sorted.ok",
@@ -566,7 +597,11 @@
     "targets": [
       "collections/ordering"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/ordering:Sorted.first",
+      "collections/ordering:Sorted.new"
+    ]
   },
   "string-replace": {
     "path": "std/string-replace.ok",
@@ -576,7 +611,10 @@
     "targets": [
       "builtin:string-replace"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "builtin:string.replace"
+    ]
   },
   "string-split": {
     "path": "std/string-split.ok",
@@ -586,7 +624,10 @@
     "targets": [
       "builtin:string-split"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "builtin:string.split"
+    ]
   },
   "utf8-encode": {
     "path": "std/utf8-encode.ok",
@@ -596,7 +637,11 @@
     "targets": [
       "encoding/utf"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/utf:Utf8Encoded.bytes",
+      "encoding/utf:Utf8Encoded.new"
+    ]
   },
   "baseline-async": {
     "path": "lang/baseline-async.ok",
@@ -634,7 +679,11 @@
     "targets": [
       "encoding/hex"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/hex:HexDecoded.bytes",
+      "encoding/hex:HexDecoded.new"
+    ]
   },
   "crc32": {
     "path": "std/crc32.ok",
@@ -644,7 +693,11 @@
     "targets": [
       "checksum/crc"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "checksum/crc:Crc32.checksum",
+      "checksum/crc:Crc32.new"
+    ]
   },
   "adler32": {
     "path": "std/adler32.ok",
@@ -654,7 +707,11 @@
     "targets": [
       "checksum/adler32"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "checksum/adler32:Adler32.checksum",
+      "checksum/adler32:Adler32.new"
+    ]
   },
   "sha512": {
     "path": "std/sha512.ok",
@@ -664,7 +721,11 @@
     "targets": [
       "digest/sha2"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/sha2:Sha512.bytes",
+      "digest/sha2:Sha512.new"
+    ]
   },
   "percent-encode": {
     "path": "std/percent-encode.ok",
@@ -674,7 +735,11 @@
     "targets": [
       "url/percent"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "url/percent:PercentEncoded.new",
+      "url/percent:PercentEncoded.string"
+    ]
   },
   "percent-decode": {
     "path": "std/percent-decode.ok",
@@ -684,7 +749,11 @@
     "targets": [
       "url/percent"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "url/percent:PercentDecoded.new",
+      "url/percent:PercentDecoded.string"
+    ]
   },
   "date-shift": {
     "path": "std/date-shift.ok",
@@ -694,7 +763,11 @@
     "targets": [
       "time/date"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "time/date:Date.new",
+      "time/date:Date.shifted"
+    ]
   },
   "locale-case": {
     "path": "std/locale-case.ok",
@@ -702,9 +775,15 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "locale/case"
+      "locale/case",
+      "locale/tag"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "locale/case:LocalizedCase.new",
+      "locale/case:LocalizedCase.upper",
+      "locale/tag:Locale.new"
+    ]
   },
   "normalize-nfc": {
     "path": "std/normalize-nfc.ok",
@@ -714,7 +793,11 @@
     "targets": [
       "unicode/normalization"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "unicode/normalization:Normalized.new",
+      "unicode/normalization:Normalized.string"
+    ]
   },
   "json-render": {
     "path": "std/json-render.ok",
@@ -724,7 +807,12 @@
     "targets": [
       "json"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "json:Json.new",
+      "json:Json.string",
+      "json:JsonField.new"
+    ]
   },
   "template-render": {
     "path": "std/template-render.ok",
@@ -732,9 +820,15 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
+      "json",
       "template/engine"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "json:Json.new",
+      "json:JsonField.new",
+      "template/engine:Template.string"
+    ]
   },
   "base32-encode": {
     "path": "std/base32-encode.ok",
@@ -744,7 +838,11 @@
     "targets": [
       "encoding/base32"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/base32:Base32Encoded.new",
+      "encoding/base32:Base32Encoded.string"
+    ]
   },
   "ip-parse": {
     "path": "std/ip-parse.ok",
@@ -754,7 +852,11 @@
     "targets": [
       "net/ip"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "net/ip:IpAddress.new",
+      "net/ip:IpAddress.string"
+    ]
   },
   "hex-number-parse": {
     "path": "std/hex-number-parse.ok",
@@ -764,7 +866,11 @@
     "targets": [
       "strings/parse"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "strings/parse:Number.int",
+      "strings/parse:Number.new"
+    ]
   },
   "hmac-sha256": {
     "path": "std/hmac-sha256.ok",
@@ -774,7 +880,11 @@
     "targets": [
       "crypto/hmac"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/hmac:Hmac.bytes",
+      "crypto/hmac:Hmac.new"
+    ]
   },
   "sha3-256": {
     "path": "std/sha3-256.ok",
@@ -784,7 +894,11 @@
     "targets": [
       "digest/sha3"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/sha3:Sha3_256.bytes",
+      "digest/sha3:Sha3_256.new"
+    ]
   },
   "gzip-round-trip": {
     "path": "std/gzip-round-trip.ok",
@@ -794,7 +908,13 @@
     "targets": [
       "compression/gzip"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "compression/gzip:GzipCompressed.bytes",
+      "compression/gzip:GzipCompressed.new",
+      "compression/gzip:GzipDecompressed.bytes",
+      "compression/gzip:GzipDecompressed.new"
+    ]
   },
   "uuid-parse": {
     "path": "std/uuid-parse.ok",
@@ -804,7 +924,12 @@
     "targets": [
       "uuid/value"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "uuid/value:UuidText.new",
+      "uuid/value:UuidText.string",
+      "uuid/value:UuidText.version"
+    ]
   },
   "xml-attribute": {
     "path": "std/xml-attribute.ok",
@@ -812,9 +937,16 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "xml/parse"
+      "xml/parse",
+      "xml/node"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "xml/parse:ParsedXml.document",
+      "xml/parse:ParsedXml.new",
+      "xml/node:XmlDocument.root",
+      "xml/node:XmlElement.attribute"
+    ]
   },
   "toml-parse": {
     "path": "std/toml-parse.ok",
@@ -822,9 +954,15 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "toml/parse"
+      "toml/parse",
+      "toml/value"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "toml/parse:ParsedToml.new",
+      "toml/parse:ParsedToml.root",
+      "toml/value:TomlTable.text"
+    ]
   },
   "statistics-median": {
     "path": "std/statistics-median.ok",
@@ -834,7 +972,11 @@
     "targets": [
       "statistics"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "statistics:Sample.median",
+      "statistics:Sample.new"
+    ]
   },
   "text-indent": {
     "path": "std/text-indent.ok",
@@ -844,7 +986,11 @@
     "targets": [
       "text/layout"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "text/layout:Indented.new",
+      "text/layout:Indented.string"
+    ]
   },
   "html-escape": {
     "path": "std/html-escape.ok",
@@ -854,7 +1000,11 @@
     "targets": [
       "html/entities"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "html/entities:EscapedHtml.new",
+      "html/entities:EscapedHtml.string"
+    ]
   },
   "html-unescape": {
     "path": "std/html-unescape.ok",
@@ -864,7 +1014,11 @@
     "targets": [
       "html/entities"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "html/entities:UnescapedHtml.new",
+      "html/entities:UnescapedHtml.string"
+    ]
   },
   "query-parse": {
     "path": "std/query-parse.ok",
@@ -874,7 +1028,12 @@
     "targets": [
       "url/query"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "url/query:ParsedQuery.new",
+      "url/query:ParsedQuery.parameters",
+      "url/query:QueryParameters.text"
+    ]
   },
   "regex-replace": {
     "path": "std/regex-replace.ok",
@@ -882,9 +1041,16 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
+      "regex/pattern",
       "regex/replace"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "regex/pattern:Regex.new",
+      "regex/replace:LiteralRegexReplacement.new",
+      "regex/replace:RegexSubstitution.new",
+      "regex/replace:RegexSubstitution.string"
+    ]
   },
   "utf16-encode": {
     "path": "std/utf16-encode.ok",
@@ -894,7 +1060,11 @@
     "targets": [
       "encoding/utf"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/utf:Utf16Encoded.bytes",
+      "encoding/utf:Utf16Encoded.new"
+    ]
   },
   "plural-ru": {
     "path": "std/plural-ru.ok",
@@ -902,9 +1072,16 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "i18n/plural"
+      "i18n/plural",
+      "locale/tag"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "i18n/plural:PluralCategoryOf.category",
+      "i18n/plural:PluralCategoryOf.new",
+      "i18n/plural:PluralNumber.new",
+      "locale/tag:Locale.new"
+    ]
   },
   "date-format": {
     "path": "std/date-format.ok",
@@ -912,9 +1089,16 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
+      "time/date",
       "time/format"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "time/date:Date.new",
+      "time/date:Date.shifted",
+      "time/format:FormattedDate.new",
+      "time/format:FormattedDate.string"
+    ]
   },
   "locale-decimal": {
     "path": "std/locale-decimal.ok",
@@ -922,9 +1106,17 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "locale/number"
+      "locale/number",
+      "locale/tag",
+      "math/decimal"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "locale/number:LocalizedDecimal.new",
+      "locale/number:LocalizedDecimal.string",
+      "locale/tag:Locale.new",
+      "math/decimal:Decimal.new"
+    ]
   },
   "heap-top": {
     "path": "std/heap-top.ok",
@@ -932,9 +1124,16 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "collections/heap"
+      "collections/heap",
+      "collections/list"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "collections/heap:Heap.new",
+      "collections/heap:Heap.top",
+      "collections/list:EmptyList.new",
+      "collections/list:List.prefix"
+    ]
   },
   "decimal-plus": {
     "path": "std/decimal-plus.ok",
@@ -944,7 +1143,12 @@
     "targets": [
       "math/decimal"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "math/decimal:Decimal.new",
+      "math/decimal:Decimal.plus",
+      "math/decimal:Decimal.string"
+    ]
   },
   "md5": {
     "path": "std/md5.ok",
@@ -954,7 +1158,11 @@
     "targets": [
       "digest/legacy"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/legacy:Md5.bytes",
+      "digest/legacy:Md5.new"
+    ]
   },
   "sha1": {
     "path": "std/sha1.ok",
@@ -964,7 +1172,11 @@
     "targets": [
       "digest/legacy"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/legacy:Sha1.bytes",
+      "digest/legacy:Sha1.new"
+    ]
   },
   "blake2b": {
     "path": "std/blake2b.ok",
@@ -974,7 +1186,11 @@
     "targets": [
       "digest/blake2"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/blake2:Blake2b.bytes",
+      "digest/blake2:Blake2b.new"
+    ]
   },
   "shake128": {
     "path": "std/shake128.ok",
@@ -984,7 +1200,11 @@
     "targets": [
       "digest/shake"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "digest/shake:Shake128.bytes",
+      "digest/shake:Shake128.new"
+    ]
   },
   "zlib-round-trip": {
     "path": "std/zlib-round-trip.ok",
@@ -994,7 +1214,13 @@
     "targets": [
       "compression/zlib"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "compression/zlib:ZlibCompressed.bytes",
+      "compression/zlib:ZlibCompressed.new",
+      "compression/zlib:ZlibDecompressed.bytes",
+      "compression/zlib:ZlibDecompressed.new"
+    ]
   },
   "locale-list": {
     "path": "std/locale-list.ok",
@@ -1002,9 +1228,15 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "locale/list"
+      "locale/list",
+      "locale/tag"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "locale/list:LocalizedList.new",
+      "locale/list:LocalizedList.string",
+      "locale/tag:Locale.new"
+    ]
   },
   "joined": {
     "path": "std/joined.ok",
@@ -1014,7 +1246,11 @@
     "targets": [
       "strings/join"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "strings/join:Joined.new",
+      "strings/join:Joined.string"
+    ]
   },
   "form-parse": {
     "path": "std/form-parse.ok",
@@ -1022,9 +1258,18 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "url/form"
+      "encoding/utf",
+      "url/form",
+      "url/query"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "encoding/utf:Utf8Encoded.bytes",
+      "encoding/utf:Utf8Encoded.new",
+      "url/form:ParsedForm.new",
+      "url/form:ParsedForm.parameters",
+      "url/query:QueryParameters.text"
+    ]
   },
   "aes-gcm-round-trip": {
     "path": "std/aes-gcm-round-trip.ok",
@@ -1034,7 +1279,11 @@
     "targets": [
       "crypto/aes_gcm"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/aes_gcm:AesGcm.opened",
+      "crypto/aes_gcm:AesGcm.sealed"
+    ]
   },
   "ed25519-sign-verify": {
     "path": "std/ed25519-sign-verify.ok",
@@ -1042,9 +1291,15 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "crypto/ed25519"
+      "crypto/ed25519",
+      "crypto/key"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "crypto/ed25519:Ed25519PrivateKey.public_key",
+      "crypto/ed25519:Ed25519PrivateKey.signature",
+      "crypto/key:VerifyingKey.verified"
+    ]
   },
   "iso-date": {
     "path": "std/iso-date.ok",
@@ -1052,9 +1307,14 @@
     "scale": 1,
     "allocation_sensitive": false,
     "targets": [
-      "time/iso"
+      "time/date"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "time/date:Date.new",
+      "time/date:Date.shifted",
+      "time/date:Date.string"
+    ]
   },
   "regex-escape": {
     "path": "std/regex-escape.ok",
@@ -1064,7 +1324,11 @@
     "targets": [
       "regex/escape"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "regex/escape:EscapedRegex.new",
+      "regex/escape:EscapedRegex.string"
+    ]
   },
   "unicode-category": {
     "path": "std/unicode-category.ok",
@@ -1074,7 +1338,11 @@
     "targets": [
       "unicode/character"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "unicode/character:UnicodeCharacter.category",
+      "unicode/character:UnicodeCharacter.new"
+    ]
   },
   "xml-escape": {
     "path": "std/xml-escape.ok",
@@ -1084,7 +1352,11 @@
     "targets": [
       "xml/write"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "xml/write:EscapedXml.new",
+      "xml/write:EscapedXml.string"
+    ]
   },
   "csv-round-trip": {
     "path": "std/csv-round-trip.ok",
@@ -1094,7 +1366,12 @@
     "targets": [
       "csv"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "csv:CsvRows.new",
+      "csv:CsvString.new",
+      "csv:CsvString.string"
+    ]
   },
   "text-buffer": {
     "path": "std/text-buffer.ok",
@@ -1104,7 +1381,13 @@
     "targets": [
       "strings/buffer"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "strings/buffer:TextBuffer.new",
+      "strings/buffer:TextBuffer.string",
+      "strings/buffer:TextBuffer.write",
+      "strings/buffer:TextBuffer.writeln"
+    ]
   },
   "formatted": {
     "path": "std/formatted.ok",
@@ -1114,6 +1397,10 @@
     "targets": [
       "strings/format"
     ],
-    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency.",
+    "actions": [
+      "strings/format:Formatted.new",
+      "strings/format:Formatted.string"
+    ]
   }
 }

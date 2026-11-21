@@ -1,0 +1,2554 @@
+{
+  "encoding/hex": {
+    "node": "Program",
+    "module": {
+      "node": "ModuleDecl",
+      "path": [
+        "encoding",
+        "hex"
+      ],
+      "version": "v1.0.0"
+    },
+    "imports": [
+      {
+        "node": "ImportDecl",
+        "path": "runtime/hex",
+        "alias": null,
+        "take": [
+          "hex_encode",
+          "hex_valid_prefix",
+          "hex_decode"
+        ]
+      }
+    ],
+    "items": [
+      {
+        "node": "ObjectDecl",
+        "name": "HexEncoded",
+        "generics": [],
+        "roles": [],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "origin"
+            ],
+            "type": {
+              "node": "ArrayType",
+              "element": {
+                "node": "NamedType",
+                "path": [
+                  "byte"
+                ],
+                "args": []
+              }
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "HexEncoded",
+            "params": [
+              {
+                "node": "Param",
+                "name": "origin",
+                "variadic": false,
+                "type": {
+                  "node": "ArrayType",
+                  "element": {
+                    "node": "NamedType",
+                    "path": [
+                      "byte"
+                    ],
+                    "args": []
+                  }
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "string",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "string"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "hex_encode"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "origin"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "ObjectDecl",
+        "name": "HexDecoded",
+        "generics": [],
+        "roles": [],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "origin"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "string"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "HexDecoded",
+            "params": [
+              {
+                "node": "Param",
+                "name": "origin",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "string"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "bytes",
+            "params": [],
+            "result": {
+              "node": "ArrayType",
+              "element": {
+                "node": "NamedType",
+                "path": [
+                  "byte"
+                ],
+                "args": []
+              }
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "LetStatement",
+                  "name": "offset",
+                  "type": {
+                    "node": "NamedType",
+                    "path": [
+                      "int"
+                    ],
+                    "args": []
+                  },
+                  "value": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "hex_valid_prefix"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "origin"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "node": "ConfirmStatement",
+                  "condition": {
+                    "node": "Binary",
+                    "operator": "==",
+                    "left": {
+                      "node": "NameExpression",
+                      "name": "offset"
+                    },
+                    "right": {
+                      "node": "Call",
+                      "callee": {
+                        "node": "Get",
+                        "object": {
+                          "node": "NameExpression",
+                          "name": "origin"
+                        },
+                        "name": "length"
+                      },
+                      "arguments": []
+                    }
+                  },
+                  "fallback": {
+                    "node": "ConfirmThrow",
+                    "value": {
+                      "node": "Call",
+                      "callee": {
+                        "node": "Get",
+                        "object": {
+                          "node": "NameExpression",
+                          "name": "InvalidHex"
+                        },
+                        "name": "at"
+                      },
+                      "arguments": [
+                        {
+                          "node": "Argument",
+                          "name": null,
+                          "value": {
+                            "node": "NameExpression",
+                            "name": "offset"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "node": "ConfirmStatement",
+                  "condition": {
+                    "node": "Binary",
+                    "operator": "==",
+                    "left": {
+                      "node": "Binary",
+                      "operator": "%",
+                      "left": {
+                        "node": "Call",
+                        "callee": {
+                          "node": "Get",
+                          "object": {
+                            "node": "NameExpression",
+                            "name": "origin"
+                          },
+                          "name": "length"
+                        },
+                        "arguments": []
+                      },
+                      "right": {
+                        "node": "IntLiteral",
+                        "radix": "decimal",
+                        "digits": "2"
+                      }
+                    },
+                    "right": {
+                      "node": "IntLiteral",
+                      "radix": "decimal",
+                      "digits": "0"
+                    }
+                  },
+                  "fallback": {
+                    "node": "ConfirmThrow",
+                    "value": {
+                      "node": "Call",
+                      "callee": {
+                        "node": "Get",
+                        "object": {
+                          "node": "NameExpression",
+                          "name": "InvalidHex"
+                        },
+                        "name": "at"
+                      },
+                      "arguments": [
+                        {
+                          "node": "Argument",
+                          "name": null,
+                          "value": {
+                            "node": "Call",
+                            "callee": {
+                              "node": "Get",
+                              "object": {
+                                "node": "NameExpression",
+                                "name": "origin"
+                              },
+                              "name": "length"
+                            },
+                            "arguments": []
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "hex_decode"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "origin"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "EnumDecl",
+        "name": "InvalidHex",
+        "cases": [
+          "at"
+        ],
+        "role": "Error",
+        "generics": [],
+        "variants": [
+          {
+            "node": "EnumVariant",
+            "name": "at",
+            "fields": [
+              {
+                "node": "Param",
+                "name": "offset",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "int"
+                  ],
+                  "args": []
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "collections/list": {
+    "node": "Program",
+    "module": {
+      "node": "ModuleDecl",
+      "path": [
+        "collections",
+        "list"
+      ],
+      "version": "v1.0.0"
+    },
+    "imports": [
+      {
+        "node": "ImportDecl",
+        "path": "collections/iteration",
+        "alias": null,
+        "take": [
+          "Cursor",
+          "Iterating",
+          "IterationEnded"
+        ]
+      },
+      {
+        "node": "ImportDecl",
+        "path": "size",
+        "alias": null,
+        "take": [
+          "Sizing"
+        ]
+      }
+    ],
+    "items": [
+      {
+        "node": "RoleDecl",
+        "name": "List",
+        "generics": [
+          {
+            "node": "GenericParam",
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "members": [
+          {
+            "node": "ActionSignature",
+            "async": false,
+            "name": "cursor",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "Cursor"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionSignature",
+            "async": false,
+            "name": "size",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "int"
+              ],
+              "args": []
+            }
+          },
+          {
+            "node": "ActionSignature",
+            "async": false,
+            "name": "first",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            }
+          },
+          {
+            "node": "ActionSignature",
+            "async": false,
+            "name": "tail",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionSignature",
+            "async": false,
+            "name": "prefix",
+            "params": [
+              {
+                "node": "Param",
+                "name": "value",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "ObjectDecl",
+        "name": "EmptyList",
+        "generics": [
+          {
+            "node": "GenericParam",
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "roles": [
+          {
+            "node": "NamedType",
+            "path": [
+              "List"
+            ],
+            "args": [
+              {
+                "node": "NamedType",
+                "path": [
+                  "T"
+                ],
+                "args": []
+              }
+            ]
+          },
+          {
+            "node": "NamedType",
+            "path": [
+              "Iterating"
+            ],
+            "args": [
+              {
+                "node": "NamedType",
+                "path": [
+                  "T"
+                ],
+                "args": []
+              }
+            ]
+          },
+          {
+            "node": "NamedType",
+            "path": [
+              "Sizing"
+            ],
+            "args": []
+          }
+        ],
+        "members": [
+          {
+            "node": "ShorthandConstructor",
+            "name": "EmptyList",
+            "fields": [],
+            "body": null
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "cursor",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "Cursor"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "EmptyListCursor"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": "origin",
+                        "value": {
+                          "node": "SelfExpression"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "size",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "int"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "IntLiteral",
+                    "radix": "decimal",
+                    "digits": "0"
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "first",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ThrowStatement",
+                  "value": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "Get",
+                      "object": {
+                        "node": "NameExpression",
+                        "name": "EmptyListAccess"
+                      },
+                      "name": "operation"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "StringLiteral",
+                          "form": "quoted",
+                          "value": "first"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "tail",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ThrowStatement",
+                  "value": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "Get",
+                      "object": {
+                        "node": "NameExpression",
+                        "name": "EmptyListAccess"
+                      },
+                      "name": "operation"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "StringLiteral",
+                          "form": "quoted",
+                          "value": "tail"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "prefix",
+            "params": [
+              {
+                "node": "Param",
+                "name": "value",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "LinkedList"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": "value",
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "value"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": "following",
+                        "value": {
+                          "node": "SelfExpression"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": "size",
+                        "value": {
+                          "node": "IntLiteral",
+                          "radix": "decimal",
+                          "digits": "1"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "ObjectDecl",
+        "hidden": true,
+        "name": "LinkedList",
+        "generics": [
+          {
+            "node": "GenericParam",
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "roles": [
+          {
+            "node": "NamedType",
+            "path": [
+              "List"
+            ],
+            "args": [
+              {
+                "node": "NamedType",
+                "path": [
+                  "T"
+                ],
+                "args": []
+              }
+            ]
+          },
+          {
+            "node": "NamedType",
+            "path": [
+              "Iterating"
+            ],
+            "args": [
+              {
+                "node": "NamedType",
+                "path": [
+                  "T"
+                ],
+                "args": []
+              }
+            ]
+          },
+          {
+            "node": "NamedType",
+            "path": [
+              "Sizing"
+            ],
+            "args": []
+          }
+        ],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "origin"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "HasDecl",
+            "names": [
+              "following"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "default": null
+          },
+          {
+            "node": "HasDecl",
+            "names": [
+              "amount"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "int"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "LinkedList",
+            "params": [
+              {
+                "node": "Param",
+                "name": "value",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              },
+              {
+                "node": "Param",
+                "name": "following",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "List"
+                  ],
+                  "args": [
+                    {
+                      "node": "NamedType",
+                      "path": [
+                        "T"
+                      ],
+                      "args": []
+                    }
+                  ]
+                }
+              },
+              {
+                "node": "Param",
+                "name": "size",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "int"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "FieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "value"
+                  }
+                },
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "following",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "following"
+                  }
+                },
+                {
+                  "node": "FieldBindStatement",
+                  "name": "amount",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "size"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "cursor",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "Cursor"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "LinkedListCursor"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": "value",
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "origin"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": "following",
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "following"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "size",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "int"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "NameExpression",
+                    "name": "amount"
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "first",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "tail",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "NameExpression",
+                    "name": "following"
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "prefix",
+            "params": [
+              {
+                "node": "Param",
+                "name": "value",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "LinkedList"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": "value",
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "value"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": "following",
+                        "value": {
+                          "node": "SelfExpression"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": "size",
+                        "value": {
+                          "node": "Binary",
+                          "operator": "+",
+                          "left": {
+                            "node": "NameExpression",
+                            "name": "amount"
+                          },
+                          "right": {
+                            "node": "IntLiteral",
+                            "radix": "decimal",
+                            "digits": "1"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "ObjectDecl",
+        "hidden": true,
+        "name": "EmptyListCursor",
+        "generics": [
+          {
+            "node": "GenericParam",
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "roles": [
+          {
+            "node": "NamedType",
+            "path": [
+              "Cursor"
+            ],
+            "args": [
+              {
+                "node": "NamedType",
+                "path": [
+                  "T"
+                ],
+                "args": []
+              }
+            ]
+          }
+        ],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "origin"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "default": null
+          },
+          {
+            "node": "ShorthandConstructor",
+            "name": "EmptyListCursor",
+            "fields": [
+              "origin"
+            ],
+            "body": null
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "available",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "bool"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "BoolLiteral",
+                    "value": false
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "item",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ThrowStatement",
+                  "value": {
+                    "node": "Get",
+                    "object": {
+                      "node": "NameExpression",
+                      "name": "IterationEnded"
+                    },
+                    "name": "ended"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "successor",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "Cursor"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ThrowStatement",
+                  "value": {
+                    "node": "Get",
+                    "object": {
+                      "node": "NameExpression",
+                      "name": "IterationEnded"
+                    },
+                    "name": "ended"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "ObjectDecl",
+        "hidden": true,
+        "name": "LinkedListCursor",
+        "generics": [
+          {
+            "node": "GenericParam",
+            "name": "T",
+            "bound": null
+          }
+        ],
+        "roles": [
+          {
+            "node": "NamedType",
+            "path": [
+              "Cursor"
+            ],
+            "args": [
+              {
+                "node": "NamedType",
+                "path": [
+                  "T"
+                ],
+                "args": []
+              }
+            ]
+          }
+        ],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "origin"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "HasDecl",
+            "names": [
+              "following"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "List"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "LinkedListCursor",
+            "params": [
+              {
+                "node": "Param",
+                "name": "value",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              },
+              {
+                "node": "Param",
+                "name": "following",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "List"
+                  ],
+                  "args": [
+                    {
+                      "node": "NamedType",
+                      "path": [
+                        "T"
+                      ],
+                      "args": []
+                    }
+                  ]
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "FieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "value"
+                  }
+                },
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "following",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "following"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "available",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "bool"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "BoolLiteral",
+                    "value": true
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "item",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "T"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "successor",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "Cursor"
+              ],
+              "args": [
+                {
+                  "node": "NamedType",
+                  "path": [
+                    "T"
+                  ],
+                  "args": []
+                }
+              ]
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "Get",
+                      "object": {
+                        "node": "NameExpression",
+                        "name": "following"
+                      },
+                      "name": "cursor"
+                    },
+                    "arguments": []
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "EnumDecl",
+        "name": "EmptyListAccess",
+        "cases": [
+          "operation"
+        ],
+        "role": "Error",
+        "generics": [],
+        "variants": [
+          {
+            "node": "EnumVariant",
+            "name": "operation",
+            "fields": [
+              {
+                "node": "Param",
+                "name": "operation",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "string"
+                  ],
+                  "args": []
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "strings/buffer": {
+    "node": "Program",
+    "module": {
+      "node": "ModuleDecl",
+      "path": [
+        "strings",
+        "buffer"
+      ],
+      "version": "v1.0.0"
+    },
+    "imports": [
+      {
+        "node": "ImportDecl",
+        "path": "io/stream",
+        "alias": null,
+        "take": [
+          "WritingText"
+        ]
+      },
+      {
+        "node": "ImportDecl",
+        "path": "runtime/buffer",
+        "alias": null,
+        "take": [
+          "TextBufferState",
+          "text_buffer_create",
+          "text_buffer_append",
+          "text_buffer_text"
+        ]
+      }
+    ],
+    "items": [
+      {
+        "node": "ObjectDecl",
+        "name": "TextBuffer",
+        "generics": [],
+        "roles": [
+          {
+            "node": "NamedType",
+            "path": [
+              "WritingText"
+            ],
+            "args": []
+          }
+        ],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "state"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "TextBufferState"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "TextBuffer",
+            "params": [],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "FieldBindStatement",
+                  "name": "state",
+                  "value": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "text_buffer_create"
+                    },
+                    "arguments": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "write",
+            "params": [
+              {
+                "node": "Param",
+                "name": "values",
+                "variadic": true,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "string"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "result": {
+              "node": "VoidResult"
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "LetStatement",
+                  "name": "parts",
+                  "type": {
+                    "node": "ArrayType",
+                    "element": {
+                      "node": "NamedType",
+                      "path": [
+                        "string"
+                      ],
+                      "args": []
+                    }
+                  },
+                  "value": {
+                    "node": "Unpack",
+                    "operand": {
+                      "node": "NameExpression",
+                      "name": "values"
+                    }
+                  }
+                },
+                {
+                  "node": "ForStatement",
+                  "source": {
+                    "node": "NameExpression",
+                    "name": "parts"
+                  },
+                  "bindings": [
+                    {
+                      "node": "ForBinding",
+                      "name": "part",
+                      "batch": null
+                    }
+                  ],
+                  "body": {
+                    "node": "Block",
+                    "statements": [
+                      {
+                        "node": "ExpressionStatement",
+                        "expression": {
+                          "node": "Call",
+                          "callee": {
+                            "node": "NameExpression",
+                            "name": "text_buffer_append"
+                          },
+                          "arguments": [
+                            {
+                              "node": "Argument",
+                              "name": null,
+                              "value": {
+                                "node": "NameExpression",
+                                "name": "state"
+                              }
+                            },
+                            {
+                              "node": "Argument",
+                              "name": null,
+                              "value": {
+                                "node": "NameExpression",
+                                "name": "part"
+                              }
+                            }
+                          ]
+                        },
+                        "condition": null
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "writeln",
+            "params": [
+              {
+                "node": "Param",
+                "name": "values",
+                "variadic": true,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "string"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "result": {
+              "node": "VoidResult"
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "LetStatement",
+                  "name": "parts",
+                  "type": {
+                    "node": "ArrayType",
+                    "element": {
+                      "node": "NamedType",
+                      "path": [
+                        "string"
+                      ],
+                      "args": []
+                    }
+                  },
+                  "value": {
+                    "node": "Unpack",
+                    "operand": {
+                      "node": "NameExpression",
+                      "name": "values"
+                    }
+                  }
+                },
+                {
+                  "node": "ForStatement",
+                  "source": {
+                    "node": "NameExpression",
+                    "name": "parts"
+                  },
+                  "bindings": [
+                    {
+                      "node": "ForBinding",
+                      "name": "part",
+                      "batch": null
+                    }
+                  ],
+                  "body": {
+                    "node": "Block",
+                    "statements": [
+                      {
+                        "node": "ExpressionStatement",
+                        "expression": {
+                          "node": "Call",
+                          "callee": {
+                            "node": "NameExpression",
+                            "name": "text_buffer_append"
+                          },
+                          "arguments": [
+                            {
+                              "node": "Argument",
+                              "name": null,
+                              "value": {
+                                "node": "NameExpression",
+                                "name": "state"
+                              }
+                            },
+                            {
+                              "node": "Argument",
+                              "name": null,
+                              "value": {
+                                "node": "NameExpression",
+                                "name": "part"
+                              }
+                            }
+                          ]
+                        },
+                        "condition": null
+                      }
+                    ]
+                  }
+                },
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "text_buffer_append"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "state"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "StringLiteral",
+                          "form": "quoted",
+                          "value": "\n"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "string",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "string"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "text_buffer_text"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "state"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "node": "ObjectDecl",
+        "hidden": true,
+        "name": "TextBufferReport",
+        "generics": [],
+        "roles": [],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "out"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "WritingText"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "TextBufferReport",
+            "params": [
+              {
+                "node": "Param",
+                "name": "out",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "WritingText"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "out",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "out"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "print",
+            "params": [
+              {
+                "node": "Param",
+                "name": "name",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "string"
+                  ],
+                  "args": []
+                }
+              },
+              {
+                "node": "Param",
+                "name": "total",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "int"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "result": {
+              "node": "VoidResult"
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "Get",
+                      "object": {
+                        "node": "NameExpression",
+                        "name": "out"
+                      },
+                      "name": "write"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "name"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "StringLiteral",
+                          "form": "quoted",
+                          "value": ": "
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                },
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "Get",
+                      "object": {
+                        "node": "NameExpression",
+                        "name": "out"
+                      },
+                      "name": "writeln"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "Call",
+                          "callee": {
+                            "node": "Get",
+                            "object": {
+                              "node": "NameExpression",
+                              "name": "total"
+                            },
+                            "name": "string"
+                          },
+                          "arguments": []
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "checksum/adler32": {
+    "node": "Program",
+    "module": {
+      "node": "ModuleDecl",
+      "path": [
+        "checksum",
+        "adler32"
+      ],
+      "version": "v1.0.0"
+    },
+    "imports": [
+      {
+        "node": "ImportDecl",
+        "path": "checksum/state",
+        "alias": null,
+        "take": [
+          "Checksumming",
+          "InvalidChecksumInitial"
+        ]
+      },
+      {
+        "node": "ImportDecl",
+        "path": "runtime/checksum",
+        "alias": null,
+        "take": [
+          "checksum_adler32"
+        ]
+      }
+    ],
+    "items": [
+      {
+        "node": "ObjectDecl",
+        "name": "Adler32",
+        "generics": [],
+        "roles": [
+          {
+            "node": "NamedType",
+            "path": [
+              "Checksumming"
+            ],
+            "args": []
+          }
+        ],
+        "members": [
+          {
+            "node": "HasDecl",
+            "names": [
+              "origin"
+            ],
+            "type": {
+              "node": "ArrayType",
+              "element": {
+                "node": "NamedType",
+                "path": [
+                  "byte"
+                ],
+                "args": []
+              }
+            },
+            "default": null
+          },
+          {
+            "node": "HasDecl",
+            "names": [
+              "initial"
+            ],
+            "type": {
+              "node": "NamedType",
+              "path": [
+                "int"
+              ],
+              "args": []
+            },
+            "default": null
+          },
+          {
+            "node": "FullConstructor",
+            "name": "Adler32",
+            "params": [],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "FieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "ArrayLiteral",
+                    "elements": []
+                  }
+                },
+                {
+                  "node": "FieldBindStatement",
+                  "name": "initial",
+                  "value": {
+                    "node": "IntLiteral",
+                    "radix": "decimal",
+                    "digits": "1"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "FullConstructor",
+            "name": "Adler32",
+            "params": [
+              {
+                "node": "Param",
+                "name": "origin",
+                "variadic": false,
+                "type": {
+                  "node": "ArrayType",
+                  "element": {
+                    "node": "NamedType",
+                    "path": [
+                      "byte"
+                    ],
+                    "args": []
+                  }
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  }
+                },
+                {
+                  "node": "FieldBindStatement",
+                  "name": "initial",
+                  "value": {
+                    "node": "IntLiteral",
+                    "radix": "decimal",
+                    "digits": "1"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "FullConstructor",
+            "name": "Adler32",
+            "params": [
+              {
+                "node": "Param",
+                "name": "origin",
+                "variadic": false,
+                "type": {
+                  "node": "ArrayType",
+                  "element": {
+                    "node": "NamedType",
+                    "path": [
+                      "byte"
+                    ],
+                    "args": []
+                  }
+                }
+              },
+              {
+                "node": "Param",
+                "name": "initial",
+                "variadic": false,
+                "type": {
+                  "node": "NamedType",
+                  "path": [
+                    "int"
+                  ],
+                  "args": []
+                }
+              }
+            ],
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ConfirmStatement",
+                  "condition": {
+                    "node": "Binary",
+                    "operator": "&&",
+                    "left": {
+                      "node": "Binary",
+                      "operator": ">=",
+                      "left": {
+                        "node": "NameExpression",
+                        "name": "initial"
+                      },
+                      "right": {
+                        "node": "IntLiteral",
+                        "radix": "decimal",
+                        "digits": "0"
+                      }
+                    },
+                    "right": {
+                      "node": "Binary",
+                      "operator": "<=",
+                      "left": {
+                        "node": "NameExpression",
+                        "name": "initial"
+                      },
+                      "right": {
+                        "node": "IntLiteral",
+                        "radix": "decimal",
+                        "digits": "4294967295"
+                      }
+                    }
+                  },
+                  "fallback": {
+                    "node": "ConfirmThrow",
+                    "value": {
+                      "node": "Call",
+                      "callee": {
+                        "node": "Get",
+                        "object": {
+                          "node": "NameExpression",
+                          "name": "InvalidChecksumInitial"
+                        },
+                        "name": "detailed"
+                      },
+                      "arguments": [
+                        {
+                          "node": "Argument",
+                          "name": null,
+                          "value": {
+                            "node": "NameExpression",
+                            "name": "initial"
+                          }
+                        },
+                        {
+                          "node": "Argument",
+                          "name": null,
+                          "value": {
+                            "node": "IntLiteral",
+                            "radix": "decimal",
+                            "digits": "4294967295"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  }
+                },
+                {
+                  "node": "SelfFieldBindStatement",
+                  "name": "initial",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "initial"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "checksum",
+            "params": [],
+            "result": {
+              "node": "NamedType",
+              "path": [
+                "int"
+              ],
+              "args": []
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "ExpressionStatement",
+                  "expression": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "NameExpression",
+                      "name": "checksum_adler32"
+                    },
+                    "arguments": [
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "origin"
+                        }
+                      },
+                      {
+                        "node": "Argument",
+                        "name": null,
+                        "value": {
+                          "node": "NameExpression",
+                          "name": "initial"
+                        }
+                      }
+                    ]
+                  },
+                  "condition": null
+                }
+              ]
+            }
+          },
+          {
+            "node": "ActionDecl",
+            "async": false,
+            "visibility": "public",
+            "name": "state",
+            "params": [
+              {
+                "node": "Param",
+                "name": "origin",
+                "variadic": false,
+                "type": {
+                  "node": "ArrayType",
+                  "element": {
+                    "node": "NamedType",
+                    "path": [
+                      "byte"
+                    ],
+                    "args": []
+                  }
+                }
+              }
+            ],
+            "result": {
+              "node": "SuccessorResult",
+              "type": {
+                "node": "NamedType",
+                "path": [
+                  "Adler32"
+                ],
+                "args": []
+              }
+            },
+            "body": {
+              "node": "Block",
+              "statements": [
+                {
+                  "node": "SuccessorAssignStatement",
+                  "name": "initial",
+                  "value": {
+                    "node": "Call",
+                    "callee": {
+                      "node": "Get",
+                      "object": {
+                        "node": "SelfExpression"
+                      },
+                      "name": "checksum"
+                    },
+                    "arguments": []
+                  }
+                },
+                {
+                  "node": "SuccessorAssignStatement",
+                  "name": "origin",
+                  "value": {
+                    "node": "NameExpression",
+                    "name": "origin"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

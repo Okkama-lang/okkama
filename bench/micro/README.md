@@ -158,3 +158,80 @@ python3 run.py --image IMAGE --okkama /path/in/image/okkama --plan
 late-failure retention, bounded output, timeouts and failed subprocesses.
 See `REVIEW-2026-11-13.md` for findings, the full workload inventory and actual
 validation results. This suite does not replace conformance or release gates.
+
+## Public action inventory and scaffolds (#244)
+
+`manifest.json` keeps the existing module `targets` and adds optional `actions`:
+
+```json
+{
+  "hex-decode": {
+    "path": "std/hex-decode.ok",
+    "targets": ["encoding/hex"],
+    "actions": ["encoding/hex:HexDecoded.new", "encoding/hex:HexDecoded.bytes"]
+  }
+}
+```
+
+This example shows only the target fields; retain the protocol metadata when
+adding a real entry. Every existing std program declares its measured calls.
+Only calls inside the timed iteration count, including construction there;
+fixture construction before timing and transitive implementation calls do not.
+A supporting module called explicitly in the timed loop is also a target.
+Builtin string targets use `builtin:string.replace` and `builtin:string.split`
+and remain outside the std inventory.
+
+```sh
+python3 bench/micro/actions.py --okkama okkama --stdlib std
+python3 bench/micro/actions.py --okkama okkama --stdlib std --check
+```
+
+`STD-ACTIONS.md` lists public typed signatures, measuring benchmark names, and
+measured/total counts per module and overall. The generator discovers every
+non-runtime `.ok` file in the selected std directory and calls
+`okkama ast FILE --format json --mode production --prune-tests` for each.
+It uses this checkout's std by default, never the installed library. Missing
+compiler, parse failures and unknown/hidden manifest actions fail explicitly.
+`--check` compares the complete deterministic report without writing it and
+returns 1 for missing/stale output. Unmeasured actions are a work list and do
+not make `--check` fail once the report is current. `--output` and `--manifest`
+allow checking alternate reports/inventories.
+
+Identifiers are `module:Owner.action`. Explicit object constructors use
+`Owner.new`, payload enum constructors use `Enum.case`; role signatures are
+separate targets from concrete implementations. Overloads share one identifier,
+with every distinct signature shown; one measured identifier does **not** claim
+coverage of every overload. Hidden objects/actions, runtime modules, cap fields
+and non-callable enum constants are excluded. Generics and type bounds are
+preserved. Module-level `STD-COVERAGE.md` remains the output of `coverage.py`.
+
+```sh
+python3 bench/micro/actions.py --scaffold 'encoding/hex:HexDecoded.bytes'
+```
+
+The scaffold validates the public target and writes a new `action-*.ok` under
+`bench/micro/std/` plus a sibling `.oracle.py` stub. Existing files are never
+overwritten. The source preserves protocol v2: one Bench, tail-recursive batch,
+observable warmup, `N WARMUP`, and the shared Measurement harness. TODOs mark
+input generation, the measured call and checksum reduction; the unresolved
+`TODO_INPUT_AND_MEASURED_CALL` deliberately prevents accidental execution.
+The oracle stub raises `NotImplementedError`.
+
+**Real inputs and independent oracles stay hand-written.** Choose bounded,
+representative inputs varying with the iteration index, call the listed action,
+and derive expected checksums independently of VM output. Move the completed
+oracle logic into `oracles.py`, remove the sibling stub, then register the
+program and its `targets`/`actions` in `manifest.json`. The generator deliberately
+does not register unfinished scaffolds or count them as measured. Validate the
+new program with `check.py --only NAME` before collecting timings, then
+regenerate both coverage reports.
+
+Generator and runner unit tests need no installed Okkama or Docker:
+
+```sh
+python3 -m unittest discover -s bench/micro -p 'test_*.py'
+```
+
+`test_actions.py` uses recorded production AST JSON (see `fixtures/README.md`)
+to check parsing, visibility, constructors, overloads, typed signatures,
+determinism, stale checks, manifest errors and scaffold/oracle shape.

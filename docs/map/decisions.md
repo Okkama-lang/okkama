@@ -97,6 +97,21 @@ the session's memory; older rulings live in the commits and tickets named.
   inlined; an inlined entry still polls the budget. Inlining a callee that can fail waits for an inline-frame
   table, so that traces keep the callee's frame.
 
+## Std benchmark action inventory (#244, 2026-11-22)
+
+Implementation choices under the owner's generator-only task:
+
+- Read the current checkout's API via production/test-pruned AST JSON, excluding
+  runtime and hidden declarations. Include object constructors, role signatures
+  and payload enum constructors; exclude caps and non-callable enum constants.
+- Use `module:Owner.action`, `Owner.new` for object construction and `Enum.case`
+  for payload construction. Group overloads by target while displaying every
+  distinct signature; one benchmark does not establish all-overload coverage.
+- Count only explicitly called actions in the measured loop, including supporting
+  construction there, not fixture setup before timing or implementation internals.
+- Scaffolds preserve micro-v2 shape but remain unregistered until a person writes
+  representative inputs and independent oracles. No generated checksum guesses.
+
 ## URL transformation semantics (#133, 2026-11-22)
 
 Implementation choices under the owner's supplied review of 2026-11-21 and
