@@ -6,6 +6,15 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Documentation Phase D (#515).** The owner authorized the
+  entire supplied ticket without approval or language changes. Publishing
+  consumes the same compiler model and Phase B declaration identities:
+  man(7) section 3ok, static relative-link HTML, explicit JSON schema v1.
+  Full-std export uses one compiler graph; optional install/packages generate
+  pages from std. Site integration is a portable artifact directory within
+  the requested worktree. Choices and checks: [Phase D record](../std-docs-phase-d-515.md).
+
+
 - **2026-11-22. Documentation Phase C (#514).** The entire supplied ticket is
   authorized, without approval or language/API changes. Implementation choices
   under #512 §§12, 14, 16, 18: compile tagged Okkama examples by default; run

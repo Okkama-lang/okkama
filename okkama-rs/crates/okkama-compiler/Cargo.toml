@@ -13,11 +13,11 @@ okkama-runtime-core = { path = "../okkama-runtime-core" }
 okkama-sparrow = { path = "../okkama-sparrow" }
 # Doc comments are a CommonMark subset (#512).
 pulldown-cmark = { version = "0.13", default-features = false }
+serde_json = "1"
 
 [dev-dependencies]
 # Every SPB 17 liveness and allocation of the tests is checked against the algorithms before #755.
 okkama-sparrow = { path = "../okkama-sparrow", features = ["liveness-reference"] }
-serde_json = "1"
 # Compiler → verified SPB → runtime integration fixtures.
 sparrow-core = { path = "../sparrow-core" }
 

@@ -48,15 +48,15 @@ pub struct IndexEntry {
 }
 
 /// The overview split by the headings that name page sections.
-struct Overview {
-    synopsis: Option<String>,
-    description: String,
-    errors: String,
-    engines: String,
-    see_also: String,
+pub(super) struct Overview {
+    pub(super) synopsis: Option<String>,
+    pub(super) description: String,
+    pub(super) errors: String,
+    pub(super) engines: String,
+    pub(super) see_also: String,
 }
 
-fn overview(doc: &ModuleDoc) -> Overview {
+pub(super) fn overview(doc: &ModuleDoc) -> Overview {
     let text = doc.overview.as_ref().map(|overview| overview.markdown()).unwrap_or_default();
     let mut parts = Overview {
         synopsis: None,
@@ -82,31 +82,24 @@ fn overview(doc: &ModuleDoc) -> Overview {
             }
         }
     };
-    let mut fenced = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-        }
-        let heading = (!fenced && line.starts_with('#'))
-            .then(|| line.trim_start_matches('#').trim().to_lowercase());
-        let named = heading.as_deref().and_then(|title| match title {
-            "synopsis" => Some(Some("synopsis")),
-            "errors" => Some(Some("errors")),
-            "engine notes" | "engines" => Some(Some("engines")),
-            "see also" => Some(Some("see")),
-            _ => None,
-        });
-        match named {
-            Some(next) => {
-                flush(&mut parts, section, &mut current);
-                section = next;
-            }
-            None => {
-                current.push_str(line);
-                current.push('\n');
-            }
-        }
+    // Ask CommonMark which source ranges are headings: heading-looking lines
+    // in tilde fences or indented code must never split reference sections.
+    let mut cursor = 0;
+    for (event, range) in Parser::new_ext(&text, options()).into_offset_iter() {
+        if !matches!(event, Event::Start(Tag::Heading { .. })) { continue; }
+        let title: String = Parser::new(&text[range.clone()]).filter_map(|event| match event {
+            Event::Text(text) | Event::Code(text) => Some(text.to_string()), _ => None,
+        }).collect();
+        let next = match title.trim().to_lowercase().as_str() {
+            "synopsis" => "synopsis", "errors" => "errors",
+            "engine notes" | "engines" => "engines", "see also" => "see", _ => continue,
+        };
+        current.push_str(&text[cursor..range.start]);
+        flush(&mut parts, section, &mut current);
+        section = Some(next);
+        cursor = range.end;
     }
+    current.push_str(&text[cursor..]);
     flush(&mut parts, section, &mut current);
     if parts.synopsis.is_none()
         && let Some((code, range)) = first_code_block(&parts.description)

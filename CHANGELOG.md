@@ -8,6 +8,11 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Added
 
+- **The std reference as man pages, HTML and JSON (#515).** `okkama man --format man|html|json` renders a module from
+  the same documentation model as `okkama man`, the editor and doctests; `okkama man --all --format FORMAT --output
+  DIR` exports the whole std (section `3ok` man pages, a self-contained HTML site with relative links, versioned
+  JSON with schema 1). `make install MAN_PAGES=1` (or `install.sh --man-pages`) also installs the man pages, and
+  `make reference` builds the HTML site.
 - **A program stops cleanly on Ctrl-C or SIGTERM (#638).** `Interruption()` (`os/signal`) takes SIGINT and SIGTERM
   from when it is made; `check()` throws `Interrupted.signal(signal)` once one came, so a loop unwinds through its
   `defer` and `catch`; `status()` is 130, 143 or 129; `await arrival()` serves asynchronous programs, and a second

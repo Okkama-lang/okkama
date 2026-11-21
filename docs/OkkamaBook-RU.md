@@ -4951,6 +4951,33 @@ object Cart {
 страница переносится по его ширине, заголовки жирные, если не задан
 `NO_COLOR`, а при заданном `$PAGER` её показывает он. В трубу — простой текст.
 
+Публикация использует ту же публичную модель документации (#515):
+
+```sh
+okkama man io/stdout --format man | man -l -
+okkama man io/stdout --format html > stdout.html
+okkama man io/stdout --format json > stdout.json
+okkama man --all --format html --output reference
+okkama man --all --format man --output man3
+okkama man --all --format json --output reference-json
+```
+
+HTML содержит `index.html` и страницу каждого модуля (`io-stdout.html`).
+Ссылки относительные, а стабильные URI `okkama-doc:` сохранены в
+`data-okkama-target`. Справочник работает без сети и под любым путём сайта;
+`make reference DOC_OUTPUT=reference` собирает каталог для okkama-docs.
+HTML из комментариев экранируется. JSON содержит `schema_version: 1`, публичные
+объявления, байтовые диапазоны исходников и разрешённые ссылки. Полный экспорт
+также записывает `schema-v1.json` (JSON Schema 2020-12). Отсутствующая версия
+модуля — `null` в JSON, без выдуманной версии.
+
+Системные man-страницы опциональны: `make install MAN_PAGES=1` или
+`install.sh --man-pages` устанавливает `io-stdout.3ok` и остальные страницы в
+`PREFIX/share/man/man3`. `make dist MAN_PAGES=1` / `tools/package.sh --man-pages`
+включает их в архивы и системные пакеты. При кросс-сборке можно указать
+совместимый компилятор хоста через `OKKAMA_DOC_GENERATOR`. Страницы генерируются
+из std при сборке или установке; отдельной копии описаний API нет.
+
 ### 28.5 Примеры в документации и покрытие
 
 `okkama run -t FILE` проверяет примеры в комментариях документации перед

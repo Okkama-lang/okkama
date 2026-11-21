@@ -5,6 +5,7 @@
 #     tools/package.sh                                  # платформа этой машины
 #     tools/package.sh --target x86_64-apple-darwin     # кросс-сборка cargo
 #     tools/package.sh --no-build --out dist --version 0.1.0-nightly.20261029
+#     tools/package.sh --man-pages                      # добавить страницы std(3ok)
 #     tools/package.sh --installer                      # ещё .pkg (macOS) или .deb и .rpm (Linux)
 #
 # Версия по умолчанию — из okkama-rs/Cargo.toml. Результат —
@@ -28,6 +29,7 @@ TARGET=""
 OUT="$ROOT/dist"
 BUILD=1
 INSTALLER=0
+MAN_PAGES=0
 VERSION=""
 
 while [[ $# -gt 0 ]]; do
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
         --out) OUT="$2"; shift 2 ;;
         --no-build) BUILD=0; shift ;;
         --installer) INSTALLER=1; shift ;;
+        --man-pages) MAN_PAGES=1; shift ;;
         --version) VERSION="$2"; shift 2 ;;
         -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "package.sh: unknown option $1" >&2; exit 2 ;;
@@ -53,10 +56,10 @@ case "$triple" in
 esac
 
 if [[ -n "$TARGET" ]]; then
-    RELEASE="$ROOT/okkama-rs/target/$TARGET/release"
+    RELEASE="${CARGO_TARGET_DIR:-$ROOT/okkama-rs/target}/$TARGET/release"
     CARGO_TARGET=(--target "$TARGET")
 else
-    RELEASE="$ROOT/okkama-rs/target/release"
+    RELEASE="${CARGO_TARGET_DIR:-$ROOT/okkama-rs/target}/release"
     CARGO_TARGET=()
 fi
 
@@ -77,6 +80,12 @@ for tool in okkama sparrow blade; do
     install -m 755 "$RELEASE/$tool" "$DEST/bin/$tool"
 done
 cp -R "$ROOT/std" "$DEST/lib/okkama/std"
+if [[ $MAN_PAGES -eq 1 ]]; then
+    # A cross package needs a matching host compiler; never execute target code
+    # implicitly through a shell or assume emulation is installed.
+    GENERATOR="${OKKAMA_DOC_GENERATOR:-$RELEASE/okkama}"
+    bash "$ROOT/tools/install-man.sh" "$GENERATOR" "$ROOT/std" "$DEST"
+fi
 printf '%s\n' "$VERSION" > "$DEST/lib/okkama/VERSION"
 # The compiler the binaries were built with (#41).
 (cd "$ROOT/okkama-rs" && rustc -Vv) > "$DEST/lib/okkama/TOOLCHAIN"
@@ -98,6 +107,9 @@ case "${1:-}" in
 esac
 PREFIX="${PREFIX%/}"
 mkdir -p "$PREFIX/bin" "$PREFIX/lib"
+if [[ -f "$PREFIX/lib/okkama/man-pages.txt" ]]; then
+    while IFS= read -r page; do rm -f "$PREFIX/share/man/man3/$page"; done < "$PREFIX/lib/okkama/man-pages.txt"
+fi
 rm -rf "$PREFIX/lib/okkama"
 cp -R "$HERE/lib/okkama" "$PREFIX/lib/okkama"
 for tool in okkama sparrow blade; do
@@ -105,9 +117,18 @@ for tool in okkama sparrow blade; do
     cp "$HERE/bin/$tool" "$PREFIX/bin/.$tool.tmp"
     mv -f "$PREFIX/bin/.$tool.tmp" "$PREFIX/bin/$tool"
 done
+if [[ -d "$HERE/share/man/man3" ]]; then
+    mkdir -p "$PREFIX/share/man/man3"
+    while IFS= read -r page; do
+        install -m 644 "$HERE/share/man/man3/$page" "$PREFIX/share/man/man3/$page"
+    done < "$HERE/lib/okkama/man-pages.txt"
+fi
 cat > "$PREFIX/lib/okkama/uninstall.sh" <<UNINSTALL
 #!/usr/bin/env bash
 rm -f "$PREFIX/bin/okkama" "$PREFIX/bin/sparrow" "$PREFIX/bin/blade"
+if [[ -f "$PREFIX/lib/okkama/man-pages.txt" ]]; then
+    while IFS= read -r page; do rm -f "$PREFIX/share/man/man3/\$page"; done < "$PREFIX/lib/okkama/man-pages.txt"
+fi
 rm -rf "$PREFIX/lib/okkama"
 echo "Okkama removed from $PREFIX"
 UNINSTALL
@@ -137,6 +158,7 @@ if [[ $INSTALLER -eq 1 ]]; then
             ROOTFS="$STAGE/pkgroot"
             mkdir -p "$ROOTFS/usr/local"
             cp -R "$DEST/bin" "$DEST/lib" "$ROOTFS/usr/local/"
+            if [[ -d "$DEST/share" ]]; then cp -R "$DEST/share" "$ROOTFS/usr/local/"; fi
             # Версия pkg — только цифры и точки.
             PKG_VERSION="$(printf '%s' "$VERSION" | sed 's/[^0-9.].*//')"
             pkgbuild --quiet --root "$ROOTFS" --identifier dev.okkama.okkama \
@@ -151,6 +173,7 @@ if [[ $INSTALLER -eq 1 ]]; then
             ROOTFS="$STAGE/debroot"
             mkdir -p "$ROOTFS/usr" "$ROOTFS/DEBIAN"
             cp -R "$DEST/bin" "$DEST/lib" "$ROOTFS/usr/"
+            if [[ -d "$DEST/share" ]]; then cp -R "$DEST/share" "$ROOTFS/usr/"; fi
             mkdir -p "$ROOTFS/usr/share/doc/okkama"
             cp "$ROOT/LICENSE" "$ROOTFS/usr/share/doc/okkama/copyright"
             # Debian: `-` в версии — разделитель ревизии, пре-релиз — через `~`.
@@ -183,6 +206,8 @@ CONTROL
                 esac
                 # RPM: no `-` in a version; `~` sorts a pre-release first.
                 RPM_VERSION="$(printf '%s' "$VERSION" | sed 's/-/~/')"
+                MAN_RPM_FILES=""
+                if [[ $MAN_PAGES -eq 1 ]]; then MAN_RPM_FILES='/usr/share/man/man3/*.3ok'; fi
                 TOPDIR="$STAGE/rpmbuild"
                 mkdir -p "$TOPDIR/SPECS"
                 cat > "$TOPDIR/SPECS/okkama.spec" <<SPEC
@@ -213,6 +238,7 @@ cp -a $ROOTFS/usr %{buildroot}/
 /usr/bin/sparrow
 /usr/bin/blade
 /usr/lib/okkama
+$MAN_RPM_FILES
 %doc /usr/share/doc/okkama/copyright
 SPEC
                 rpmbuild --quiet --define "_topdir $TOPDIR" -bb "$TOPDIR/SPECS/okkama.spec"

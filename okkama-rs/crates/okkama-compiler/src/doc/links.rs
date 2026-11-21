@@ -125,6 +125,13 @@ impl Documentation {
 /// Reads a module and its imports with the compiler's resolver and symbol
 /// registry. No bodies are checked, lowered or executed.
 pub fn document(source: &SourceFile, loader: &mut dyn ModuleLoader) -> Result<ModuleDoc, String> {
+    document_graph(source, loader)?.modules.pop().ok_or_else(|| "no module to document".into())
+}
+
+/// The same read-only extraction for a root and its complete import graph.
+/// Batch publishers can import their catalogue once instead of rebuilding
+/// every dependency graph for each output page. The root is the last module.
+pub fn document_graph(source: &SourceFile, loader: &mut dyn ModuleLoader) -> Result<Documentation, String> {
     crate::lowering::document(source, loader)
 }
 

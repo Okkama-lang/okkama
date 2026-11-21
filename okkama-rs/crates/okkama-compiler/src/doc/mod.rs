@@ -27,10 +27,11 @@
 //! comment; a directly attached case comment takes precedence.
 
 pub mod render;
+pub mod publish;
 pub mod examples;
 pub mod coverage;
 mod links;
-pub use links::{DeclarationLink, Documentation, LinkDeclaration, LinkWarning, SearchEntry, document, target as declaration_target};
+pub use links::{DeclarationLink, Documentation, LinkDeclaration, LinkWarning, SearchEntry, document, document_graph, target as declaration_target};
 #[cfg(test)]
 mod tests;
 
