@@ -131,6 +131,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   failed with `InvalidTransferEncoding` (the body was declared 7bit); it now carries
   `Content-Transfer-Encoding: quoted-printable`, which every transport takes, and reads back whole. ASCII text
   stays 7bit.
+- **Five defects from the 0.6.2 runtime audit (#940).** A `Within` or `Before` cancelled while it waited for
+  its timer could lose a selection already taken from the channel; the taken message now wins. A signal that arrived while a
+  watch was being created was counted but never seen by that watch; the watch is now recorded under the same
+  lock that installs the handlers. A cancelled `signal_arrival` left a thread blocked until the signal came;
+  it now stops waiting. `okkama run -t --workers` no longer stalls the pool when a process the test started
+  holds the worker's output open: the parent reads for 500 ms more, then marks the stream cut. A parent test's
+  own skip next to a failing sub-case now survives the worker report, so totals keep the skip.
+
 ### Changed
 
 - **Format natives: rewritten where the numbers allow, measured where not (#13).** Dot-segment removal in URLs and
