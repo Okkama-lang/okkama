@@ -8,6 +8,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ### Changed
 
+- **JSON writing keeps scratch to the depth of the tree (#466).** `string()`, `pretty()` and `pointer()` walk
+  one frame per open container instead of queueing every child of a wide container, write escapes, numbers and
+  pointer tokens straight into the output (no `format!` per control character or per number) and copy unescaped
+  runs whole. A 2000-element document written compact and indented: about 19% faster; output is byte-identical.
 - **JSON parsing reads the UTF-8 text directly (#468).** The parser walks the source bytes instead of a
   `Vec<char>` copy (4 bytes per character, kept alongside the text), so a parse state holds a quarter of the
   memory for ASCII input, and a 100 KB document parses about 6% faster. Error offsets, lines and columns still

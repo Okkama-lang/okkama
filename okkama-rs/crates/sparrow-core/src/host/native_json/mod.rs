@@ -313,128 +313,180 @@ impl Heap {
         Ok(outcome)
     }
     fn json_write(&self, root: u64, indentation: Option<usize>) -> Result<String, Error> {
-        enum Part {
-            Node(u64, usize),
-            Char(char),
-            Line(usize),
-            Name(Rc<str>),
-        }
-        let mut pending = vec![Part::Node(root, 0)];
-        let mut out = String::new();
-        while let Some(part) = pending.pop() {
-            match part {
-                Part::Char(ch) => out.push(ch),
-                Part::Name(name) => {
-                    push_quoted(&mut out, &name);
-                    out.push(':');
-                    if indentation.is_some() {
-                        out.push(' ');
-                    }
-                }
-                Part::Line(level) => {
-                    if let Some(width) = indentation {
-                        let size = width
-                            .checked_mul(level)
-                            .ok_or_else(|| Error("JSON indentation exceeds host range".into()))?;
-                        out.try_reserve(
-                            size.checked_add(1)
-                                .ok_or_else(|| Error("JSON output exceeds host capacity".into()))?,
-                        )
-                        .map_err(|_| Error("JSON output exceeds host capacity".into()))?;
-                        out.push('\n');
-                        out.extend(std::iter::repeat_n(' ', size));
-                    }
-                }
-                Part::Node(id, level) => match self.json_nodes.get(id)? {
-                    Node::Null => out.push_str("null"),
-                    Node::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
-                    Node::Text(text) => push_quoted(&mut out, text),
-                    Node::Number(text) => {
-                        if let Some(parts) = crate::host::native_numbers::components(text) {
-                            out.push_str(&number_text(&parts));
-                        } else {
-                            out.push_str(text);
-                        }
-                    }
-                    node @ (Node::Array(_) | Node::Object(..)) => {
-                        let values = node.children();
-                        let object = matches!(node, Node::Object(..));
-                        out.push(if object { '{' } else { '[' });
-                        pending.push(Part::Char(if object { '}' } else { ']' }));
-                        if !values.is_empty() {
-                            pending.push(Part::Line(level));
-                        }
-                        for (index, &child) in values.iter().enumerate().rev() {
-                            pending.push(Part::Node(child, level + 1));
-                            if let Node::Object(names, _) = node {
-                                pending.push(Part::Name(names[index].clone()));
-                            }
-                            pending.push(Part::Line(level + 1));
-                            if index > 0 {
-                                pending.push(Part::Char(','));
-                            }
-                        }
-                    }
-                },
-            }
-        }
-        Ok(out)
+        write_tree(root, indentation, |id| self.json_nodes.get(id))
     }
     fn json_pointer(&self, root: u64, target: u64) -> Result<Option<String>, Error> {
-        let mut stack = vec![(root, 0usize)];
-        let mut path: Vec<String> = Vec::new();
-        let mut seen = HashSet::new();
-        seen.insert(root);
-        if root == target {
-            return Ok(Some(String::new()));
-        }
-        while let Some((id, index)) = stack.last_mut() {
-            let node = self.json_nodes.get(*id)?;
-            let children = node.children();
-            if *index == children.len() {
-                stack.pop();
-                path.pop();
-                continue;
-            }
-            let at = *index;
-            *index += 1;
-            let child = children[at];
-            if !seen.insert(child) {
-                continue;
-            }
-            let token = match node {
-                Node::Object(names, _) => names[at].to_string(),
-                _ => at.to_string(),
-            };
-            path.push(token);
-            if child == target {
-                return Ok(Some(
-                    path.iter()
-                        .map(|t| format!("/{}", t.replace('~', "~0").replace('/', "~1")))
-                        .collect(),
-                ));
-            }
-            stack.push((child, 0));
-        }
-        Ok(None)
+        tree_pointer(root, target, |id| self.json_nodes.get(id))
     }
 }
-fn push_quoted(quoted: &mut String, origin: &str) {
-    quoted.push('"');
-    for character in origin.chars() {
-        match character {
-            '"' => quoted.push_str("\\\""),
-            '\\' => quoted.push_str("\\\\"),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            control if (control as u32) < 0x20 => {
-                quoted.push_str(&format!("\\u{:04x}", control as u32));
+/// JSON text of the tree at `root`; compact, or indented by `indentation`
+/// spaces per level.
+fn write_tree<'a>(
+    root: u64,
+    indentation: Option<usize>,
+    get: impl Fn(u64) -> Result<&'a Node, Error>,
+) -> Result<String, Error> {
+    // One frame per open container: pending work is bounded by depth,
+    // not by the width of the containers on the way.
+    struct Frame<'n> {
+        node: &'n Node,
+        next: usize,
+    }
+    let mut out = String::new();
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut current = Some(get(root)?);
+    loop {
+        if let Some(node) = current.take() {
+            match node {
+                Node::Null => out.push_str("null"),
+                Node::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
+                Node::Text(text) => push_quoted(&mut out, text),
+                Node::Number(text) => {
+                    if let Some(parts) = crate::host::native_numbers::components(text) {
+                        push_number(&mut out, &parts);
+                    } else {
+                        out.push_str(text);
+                    }
+                }
+                Node::Array(_) | Node::Object(..) => {
+                    out.push(if matches!(node, Node::Object(..)) { '{' } else { '[' });
+                    frames.push(Frame { node, next: 0 });
+                }
             }
-            other => quoted.push(other),
+        }
+        let level = frames.len();
+        let Some(frame) = frames.last_mut() else { break };
+        let node = frame.node;
+        let children = node.children();
+        if frame.next == children.len() {
+            let object = matches!(node, Node::Object(..));
+            frames.pop();
+            if !children.is_empty() {
+                push_line(&mut out, indentation, level - 1)?;
+            }
+            out.push(if object { '}' } else { ']' });
+            continue;
+        }
+        let index = frame.next;
+        frame.next += 1;
+        if index > 0 {
+            out.push(',');
+        }
+        push_line(&mut out, indentation, level)?;
+        if let Node::Object(names, _) = node {
+            push_quoted(&mut out, &names[index]);
+            out.push(':');
+            if indentation.is_some() {
+                out.push(' ');
+            }
+        }
+        current = Some(get(children[index])?);
+    }
+    Ok(out)
+}
+
+/// The RFC 6901 pointer of `target` below `root`, if it is there.
+fn tree_pointer<'a>(
+    root: u64,
+    target: u64,
+    get: impl Fn(u64) -> Result<&'a Node, Error>,
+) -> Result<Option<String>, Error> {
+    let mut stack = vec![(root, 0usize)];
+    let mut path: Vec<(&Node, usize)> = Vec::new();
+    let mut seen = HashSet::new();
+    seen.insert(root);
+    if root == target {
+        return Ok(Some(String::new()));
+    }
+    while let Some((id, index)) = stack.last_mut() {
+        let node = get(*id)?;
+        let children = node.children();
+        if *index == children.len() {
+            stack.pop();
+            path.pop();
+            continue;
+        }
+        let at = *index;
+        *index += 1;
+        let child = children[at];
+        if !seen.insert(child) {
+            continue;
+        }
+        path.push((node, at));
+        if child == target {
+            let mut pointer = String::new();
+            for &(node, at) in &path {
+                pointer.push('/');
+                match node {
+                    Node::Object(names, _) => {
+                        for character in names[at].chars() {
+                            match character {
+                                '~' => pointer.push_str("~0"),
+                                '/' => pointer.push_str("~1"),
+                                other => pointer.push(other),
+                            }
+                        }
+                    }
+                    _ => {
+                        use std::fmt::Write;
+                        let _ = write!(pointer, "{at}");
+                    }
+                }
+            }
+            return Ok(Some(pointer));
+        }
+        stack.push((child, 0));
+    }
+    Ok(None)
+}
+
+fn push_quoted(quoted: &mut String, origin: &str) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    quoted.reserve(origin.len() + 2);
+    quoted.push('"');
+    // Runs that need no escape are copied whole; every escape is ASCII, so
+    // byte positions in `origin` are always character boundaries here.
+    let bytes = origin.as_bytes();
+    let mut run = 0;
+    for (at, &byte) in bytes.iter().enumerate() {
+        let escape = match byte {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            b'\t' => "\\t",
+            0..=0x1f => "",
+            _ => continue,
+        };
+        quoted.push_str(&origin[run..at]);
+        run = at + 1;
+        if escape.is_empty() {
+            quoted.push_str("\\u00");
+            quoted.push(HEX[(byte >> 4) as usize] as char);
+            quoted.push(HEX[(byte & 15) as usize] as char);
+        } else {
+            quoted.push_str(escape);
         }
     }
+    quoted.push_str(&origin[run..]);
     quoted.push('"');
+}
+
+/// A line break and `level` indentation steps, when the output is indented.
+fn push_line(out: &mut String, indentation: Option<usize>, level: usize) -> Result<(), Error> {
+    if let Some(width) = indentation {
+        let size = width
+            .checked_mul(level)
+            .ok_or_else(|| Error("JSON indentation exceeds host range".into()))?;
+        out.try_reserve(
+            size.checked_add(1)
+                .ok_or_else(|| Error("JSON output exceeds host capacity".into()))?,
+        )
+        .map_err(|_| Error("JSON output exceeds host capacity".into()))?;
+        out.push('\n');
+        out.extend(std::iter::repeat_n(' ', size));
+    }
+    Ok(())
 }
 
 /// A JSON string literal: `"` and `\` escaped, `\n`, `\r`, `\t` by name, the
@@ -450,23 +502,35 @@ fn quote(origin: &str) -> String {
 /// down to 1e-6, the thresholds of JavaScript's `Number#toString` — and the
 /// canonical scientific form beyond them, so the value is never expanded.
 fn number_text(parts: &crate::host::native_numbers::Decimal) -> String {
-    let sign = if parts.sign < 0 { "-" } else { "" };
+    let mut text = String::new();
+    push_number(&mut text, parts);
+    text
+}
+
+fn push_number(out: &mut String, parts: &crate::host::native_numbers::Decimal) {
     let digits = parts.digits.as_str();
     let length = digits.len() as i128;
-    if parts.exponent >= 0 {
-        if length + parts.exponent as i128 <= 21 {
-            return format!("{sign}{digits}{}", "0".repeat(parts.exponent as usize));
-        }
-        return crate::host::native_numbers::canonical(parts);
-    }
     let point = length + parts.exponent as i128;
-    if point > 0 {
+    let positional = if parts.exponent >= 0 { point <= 21 } else { point > -6 };
+    if !positional {
+        out.push_str(&crate::host::native_numbers::canonical(parts));
+        return;
+    }
+    if parts.sign < 0 {
+        out.push('-');
+    }
+    if parts.exponent >= 0 {
+        out.push_str(digits);
+        out.extend(std::iter::repeat_n('0', parts.exponent as usize));
+    } else if point > 0 {
         let (whole, fraction) = digits.split_at(point as usize);
-        format!("{sign}{whole}.{fraction}")
-    } else if -point <= 5 {
-        format!("{sign}0.{}{digits}", "0".repeat((-point) as usize))
+        out.push_str(whole);
+        out.push('.');
+        out.push_str(fraction);
     } else {
-        crate::host::native_numbers::canonical(parts)
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-point) as usize));
+        out.push_str(digits);
     }
 }
 
@@ -618,7 +682,7 @@ impl Heap {
                     JsonJsonOutputNumber => {
                         let parts = crate::host::native_numbers::components(self.text(args[1])?)
                             .ok_or_else(|| invalid("not a decimal number"))?;
-                        out.push_str(&number_text(&parts));
+                        push_number(&mut out, &parts);
                     }
                     JsonJsonOutputMember => {
                         if args[2].bits == 0 {
@@ -794,3 +858,79 @@ mod source_tests {
     }
 }
 
+
+#[cfg(test)]
+mod writer_tests {
+    use super::{parser, push_number, push_quoted, tree_pointer, write_tree, Node};
+    use crate::host::native_numbers::{canonical, components};
+
+    fn tree(text: &str) -> (Vec<Node>, u64) {
+        parser::parse(text, &num_bigint::BigInt::from(64)).unwrap()
+    }
+    fn write(text: &str, indentation: Option<usize>) -> String {
+        let (nodes, root) = tree(text);
+        write_tree(root, indentation, |id| Ok(&nodes[id as usize])).unwrap()
+    }
+
+    /// #466: compact and indented text, empty and nested containers, member order.
+    #[test]
+    fn writes_compact_and_indented_text() {
+        let source = r#"{"a": [1, [], {}, {"b": null}], "c": true, "d": "x"}"#;
+        assert_eq!(write(source, None), r#"{"a":[1,[],{},{"b":null}],"c":true,"d":"x"}"#);
+        assert_eq!(
+            write(source, Some(2)),
+            "{\n  \"a\": [\n    1,\n    [],\n    {},\n    {\n      \"b\": null\n    }\n  ],\n  \"c\": true,\n  \"d\": \"x\"\n}"
+        );
+        assert_eq!(write("[[[]]]", Some(1)), "[\n [\n  []\n ]\n]");
+        assert_eq!(write("[1,2]", Some(0)), "[\n1,\n2\n]");
+        assert_eq!(write("\"top\"", Some(4)), "\"top\"");
+    }
+
+    /// Escapes are written in place: named ones, `\u00xx` for other controls,
+    /// everything else (multi-byte characters, DEL) as is, around unescaped runs.
+    #[test]
+    fn quoting_escapes_in_place() {
+        let mut out = String::new();
+        push_quoted(&mut out, "a\"b\\c\nd\re\tf\u{0}\u{1f}\u{7f}é🏠/");
+        assert_eq!(out, "\"a\\\"b\\\\c\\nd\\re\\tf\\u0000\\u001f\u{7f}é🏠/\"");
+        out.clear();
+        push_quoted(&mut out, "");
+        assert_eq!(out, "\"\"");
+        out.clear();
+        push_quoted(&mut out, "\u{b}");
+        assert_eq!(out, "\"\\u000b\"");
+    }
+
+    /// RFC 6901: `~` becomes `~0` and `/` becomes `~1`; array steps are indices.
+    #[test]
+    fn pointer_escapes_tokens() {
+        let (nodes, root) = tree(r#"{"a/b": {"m~n": [0, {"": "x"}]}}"#);
+        let get = |id: u64| Ok(&nodes[id as usize]);
+        let target = nodes.iter().position(|node| matches!(node, Node::Text(text) if &**text == "x")).unwrap() as u64;
+        assert_eq!(tree_pointer(root, target, get).unwrap().as_deref(), Some("/a~1b/m~0n/1/"));
+        assert_eq!(tree_pointer(root, root, get).unwrap().as_deref(), Some(""));
+        let (other, other_root) = tree("[7]");
+        let _ = other;
+        assert_eq!(tree_pointer(root, other_root + 100, get).unwrap(), None);
+    }
+
+    /// The number spelling: positional up to 21 integer digits and down to
+    /// 1e-6, canonical scientific beyond — checked at every threshold.
+    #[test]
+    fn numbers_switch_to_scientific_at_the_thresholds() {
+        let spell = |text: &str| {
+            let mut out = String::new();
+            push_number(&mut out, &components(text).unwrap());
+            out
+        };
+        assert_eq!(spell("1e20"), "100000000000000000000");
+        assert_eq!(spell("-1e20"), "-100000000000000000000");
+        assert_eq!(spell("1e21"), canonical(&components("1e21").unwrap()));
+        assert_eq!(spell("12.5"), "12.5");
+        assert_eq!(spell("-0.5"), "-0.5");
+        assert_eq!(spell("1e-6"), "0.000001");
+        assert_eq!(spell("-15e-7"), "-0.0000015");
+        assert_eq!(spell("1e-7"), canonical(&components("1e-7").unwrap()));
+        assert_eq!(spell("0"), "0");
+    }
+}

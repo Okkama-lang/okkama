@@ -110,7 +110,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2034 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 686 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 30510 lines
+## sparrow — 63 files, 30628 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -160,7 +160,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_origin.rs` 188 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the
 - `sparrow-core/src/host/native_process.rs` 635 — Process ABI is a thin typed owner around Tokio children and OS pipes.
-- `sparrow-core/src/host/native_regex.rs` 1712 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
+- `sparrow-core/src/host/native_regex.rs` 1714 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
 - `sparrow-core/src/host/native_root.rs` 440 — Descriptor-relative rooted access. No child operation reconstructs an ambient
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
 - `sparrow-core/src/host/native_sqlite.rs` 2333 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
@@ -173,7 +173,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/path_regex.rs` 97 — Pure fixed-pattern compatibility helpers for portable lexical paths.
 - `sparrow-core/src/host/path_syntax.rs` 291 — Portable POSIX/Windows path syntax; no filesystem access or VM values.
 - `sparrow-core/src/host/process_host.rs` 387 — Rust process ownership: Tokio owns child readiness/reaping and async pipes.
-- `sparrow-core/src/host/native_json/mod.rs` 761 — JSON trees use a flat generational arena. Native handles retain node IDs;
+- `sparrow-core/src/host/native_json/mod.rs` 877 — JSON trees use a flat generational arena. Native handles retain node IDs;
 - `sparrow-core/src/host/native_json/parser.rs` 340 — Iterative JSON parser. Completed nodes are emitted in postorder; child
 
 ## devtrace — 1 files, 312 lines
