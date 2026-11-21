@@ -7,12 +7,16 @@ import "io/stream" take ByteSource, Reading, ReadingText, Closing, Writing, Writ
     IncompleteWrite, InvalidReadLimit;
 import "io/stdin" take EndOfInput;
 import "collections/iteration" take Batching;
+import "encoding/utf" take Utf8Encoded, Utf16Encoded, Utf32Encoded, ByteOrder;
+import "encoding/single_byte" take AsciiEncoded, Latin1Encoded, UnrepresentableAsciiCharacter,
+    UnrepresentableLatin1Character;
 import "runtime/fs" take FileState, file_state_open, file_state_lock, file_state_locked,
     path_encode, file_state_read_line, file_state_read_lines, file_state_read_text,
     file_state_closed, file_state_read, file_state_write, file_state_write_text,
-    file_state_rewrite_text, file_state_flush, file_state_close, file_state_position,
-    file_state_seek, file_state_truncate;
-import "fs/temp" take TemporaryDirectory;
+    file_state_rewrite_text, file_state_flush, file_state_sync, file_state_close,
+    file_state_position, file_state_seek, file_state_truncate, directory_entries, stat, chmod,
+    symlink, readlink, path_decode;
+import "fs/temp" take TemporaryDirectory, TemporaryFile;
 import "fs/directory" take Directory;
 
 // A file is a resource: File opens it lazily, owns the handle and closes it
@@ -45,6 +49,48 @@ import "fs/directory" take Directory;
 // | a piece | — | bytes(n) |
 // | where | — | offset(), seek(…), truncate(…) |
 // | write | write(…), writeln(…), rewrite(…) | write(source), <- |
+// | replace the whole file at once | replace(…) | replace(bytes) |
+// | make it durable | sync() | sync() |
+//
+// A whole file is one line each way, and the file closes when the File goes:
+//
+//     let notes = File(path: Path("notes.txt")).text().content();
+//     let image is @byte = File(path: Path("image.png")).binary().bytes();
+//     File(path: Path("notes.txt"), mode: FileMode.writing).text().write(notes);
+//     File(path: Path("image.png"), mode: FileMode.writing).binary().write(image);
+//
+// Writing so empties the file first, so a reader or a crash in the middle sees
+// a part. replace writes a temporary file beside it and renames it over the old
+// one, so the file at the path is the whole old content or the whole new one:
+//
+//     File(path: Path("config.json")).text().replace(json);
+//     File(path: Path("image.png")).binary().replace(image);
+//
+// replace is atomic and durable. Atomic: a reader, and a crash at any point,
+// finds the old file or the new one, never a part; two replaces at once leave
+// one of them whole. Durable: the new file is synchronized before the rename
+// and its directory after it, so once replace returns the new content survives
+// a crash or a power cut, as far as the system and the disk keep the promise of
+// fsync (F_FULLFSYNC on macOS); a disk that lies about its cache can still lose
+// it. Linux and macOS are supported; Windows is not.
+//
+// replace works on the path, whatever the File's mode, and neither opens nor
+// moves its handle: a File already open still reads the old file. The new file
+// keeps the permission bits of the file it replaces (owner, group, others;
+// through a link, the target's); a file that did not exist is made owner-only.
+// It is a new file: hard links to the old one keep the old content, and its
+// owner is whoever runs the program. A symbolic link at the path is itself
+// replaced by the file, and its target is left alone. A directory at the path
+// is refused. Any failure before the rename leaves the old file as it was and
+// removes the temporary one. When the rename is done but the directory could
+// not be synchronized, the new content is in place and the failure is
+// FileError.failed("not_durable", …).
+//
+// flush() hands written data to the operating system, which may still lose it
+// in a crash; sync() makes it durable.
+//
+// content(), lines(), bytes() and replace hold the whole file in memory. For a
+// file of unknown size read a bounded piece, bytes(limit), or walk it with for.
 //
 // A line loses its LF and one CR before it; a final unterminated line is a
 // line. line() and byte() throw EndOfInput at the end. Text is strict UTF-8
@@ -77,6 +123,7 @@ enum FileMode = (reading, writing, appending, reading_and_writing, reading_and_a
 object File does Closing {
     has state is FileState;
     has location is string;
+    has encoding is string;
 
     // A file at path, opened on first use; text is read and written as encoding
     // (UTF-8 unless told: `utf-16-le`, `utf-16-be`, `utf-32-le`, `utf-32-be`,
@@ -84,6 +131,7 @@ object File does Closing {
     File(path is Path, mode is FileMode = FileMode.reading, encoding is string = "utf-8") {
         state = FileOpening(mode: mode, path: path, encoding: encoding).state();
         location = path.string();
+        self.encoding = encoding;
     }
 
     destroy {
@@ -92,7 +140,7 @@ object File does Closing {
 
     // The text view; the first view used decides, and binary() then refuses.
     text() is FileText {
-        FileText(owner: self, state: state, location: location);
+        FileText(owner: self, state: state, location: location, encoding: encoding);
     }
 
     // The byte view; the first view used decides, and text() then refuses.
@@ -148,12 +196,14 @@ object FileText does ReadingText, WritingText, Batching<string> {
     has owner is File;
     has state is FileState;
     has location is string;
+    has encoding is string;
 
     // Made by File.text(); not constructed directly.
-    FileText(owner is File, state is FileState, location is string) {
+    FileText(owner is File, state is FileState, location is string, encoding is string) {
         self.owner = owner;
         self.state = state;
         self.location = location;
+        self.encoding = encoding;
     }
 
     // The next line without its LF and one CR before it; EndOfInput at the end.
@@ -231,10 +281,30 @@ object FileText does ReadingText, WritingText, Batching<string> {
         }
     }
 
-    // Sends written text on to the disk.
+    // Replaces the whole file, in one step, with the strings in the file's
+    // encoding; a reader sees the old file or the new one, never a part.
+    replace(values is ...string) is void {
+        let text is @string = values...;
+        FileReplacement(
+            path: Path(location),
+            content: EncodedFileText(text: text.join(""), encoding: encoding, location: location).bytes(),
+        ).replace();
+    }
+
+    // Hands written text to the operating system; sync() makes it durable.
     flush() is void {
         try {
             file_state_flush(state);
+        }
+        catch failure is NativeFailure {
+            throw FileFailure(failure: failure, path: location).error();
+        }
+    }
+
+    // Makes written text durable: it survives a crash once sync returns.
+    sync() is void {
+        try {
+            file_state_sync(state);
         }
         catch failure is NativeFailure {
             throw FileFailure(failure: failure, path: location).error();
@@ -302,10 +372,26 @@ object FileBytes does Reading, Writing, ByteSource, Batching<byte> {
         }
     }
 
-    // Sends written bytes on to the disk.
+    // Replaces the whole file with bytes in one step; a reader sees the old
+    // file or the new one, never a part.
+    replace(bytes is @byte) is void {
+        FileReplacement(path: Path(location), content: bytes).replace();
+    }
+
+    // Hands written bytes to the operating system; sync() makes them durable.
     flush() is void {
         try {
             file_state_flush(state);
+        }
+        catch failure is NativeFailure {
+            throw FileFailure(failure: failure, path: location).error();
+        }
+    }
+
+    // Makes written bytes durable: they survive a crash once sync returns.
+    sync() is void {
+        try {
+            file_state_sync(state);
         }
         catch failure is NativeFailure {
             throw FileFailure(failure: failure, path: location).error();
@@ -366,6 +452,74 @@ hidden object FileOpening {
         }
         catch failure is NativeFailure {
             throw FileFailure(failure: failure, path: path.string()).error();
+        }
+    }
+}
+
+// The whole new content of the file at path, written to a temporary file in
+// its directory and renamed over it (TemporaryFile.replace).
+hidden object FileReplacement {
+    has path is Path;
+    has content is @byte;
+
+    FileReplacement(path is Path, content is @byte) {
+        self.path = path;
+        self.content = content;
+    }
+
+    replace() is void {
+        let temporary = TemporaryFile(
+            directory: Directory(path: path.parent()),
+            prefix: "." + path.name() + ".",
+        );
+        defer temporary.close();
+        temporary.write(content);
+        temporary.replace(path);
+    }
+}
+
+// Text as the bytes of a file's encoding; a character it lacks is
+// FileError.invalid_text, as when the file is written.
+hidden object EncodedFileText {
+    has text, encoding, location is string;
+
+    EncodedFileText(text is string, encoding is string, location is string) {
+        self.text = text;
+        self.encoding = encoding;
+        self.location = location;
+    }
+
+    bytes() is @byte {
+        if encoding == "utf-8" {
+            Utf8Encoded(text).bytes();
+        }
+        else if encoding == "utf-16-le" {
+            Utf16Encoded(origin: text, order: ByteOrder.little).bytes();
+        }
+        else if encoding == "utf-16-be" {
+            Utf16Encoded(origin: text, order: ByteOrder.big).bytes();
+        }
+        else if encoding == "utf-32-le" {
+            Utf32Encoded(origin: text, order: ByteOrder.little).bytes();
+        }
+        else if encoding == "utf-32-be" {
+            Utf32Encoded(origin: text, order: ByteOrder.big).bytes();
+        }
+        else if encoding == "ascii" {
+            try {
+                AsciiEncoded(text).bytes();
+            }
+            catch failure is UnrepresentableAsciiCharacter {
+                throw FileError.invalid_text(location);
+            }
+        }
+        else {
+            try {
+                Latin1Encoded(text).bytes();
+            }
+            catch failure is UnrepresentableLatin1Character {
+                throw FileError.invalid_text(location);
+            }
         }
     }
 }
@@ -554,5 +708,211 @@ test "errors name the path; locks are taken without waiting and reported by mode
     shared.close();
     other.close();
     file.close();
+    scratch.close();
+}
+
+test "a whole file in one line each way: empty, text, bytes with zeros, large, invalid text" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let path = scratch.path().child("whole.txt");
+    File(path: path, mode: FileMode.writing).text().write("");
+    test.is(File(path: path).text().content(), "");
+    test.is(File(path: path).binary().bytes(), []);
+    File(path: path, mode: FileMode.writing).text().write("héllo\nworld");
+    test.is(File(path: path).text().content(), "héllo\nworld");
+    let zeros = [byte(0), byte(255), byte(0), byte(10), byte(0)];
+    File(path: path, mode: FileMode.writing).binary().write(zeros);
+    test.is(File(path: path).binary().bytes(), zeros);
+    let large = "abcdefg\n".repeat(131072);
+    File(path: path, mode: FileMode.writing).text().write(large);
+    test.is(File(path: path).text().content(), large);
+    test.is(File(path: path).binary().bytes().size(), 1048576);
+    File(path: path, mode: FileMode.writing).binary().write([byte(104), byte(255), byte(105)]);
+    test.ok(try {
+        File(path: path).text().content();
+        false;
+    }
+    catch FileError.invalid_text(failed) {
+        failed == path.string();
+    });
+    scratch.close();
+}
+
+test "replace: an existing file and a new one, as text in the file's encoding or as bytes" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let path = scratch.path().child("config.txt");
+    File(path: path, mode: FileMode.writing).text().write("old");
+    File(path: path).text().replace("new ", "config");
+    test.is(File(path: path).text().content(), "new config");
+    let fresh = scratch.path().child("fresh.bin");
+    File(path: fresh).binary().replace([byte(0), byte(1), byte(0)]);
+    test.is(File(path: fresh).binary().bytes(), [byte(0), byte(1), byte(0)]);
+    test.is(stat(path_encode(fresh.string()))["permissions"], 384);
+    File(path: fresh).binary().replace([]);
+    test.is(File(path: fresh).binary().bytes(), []);
+    File(path: path).text().replace();
+    test.is(File(path: path).text().content(), "");
+    let large = "0123456789abcdef".repeat(65536);
+    File(path: path).text().replace(large);
+    test.is(File(path: path).text().content(), large);
+    let wide = scratch.path().child("wide.txt");
+    File(path: wide, encoding: "utf-16-le").text().replace("hé");
+    test.is(File(path: wide).binary().bytes(), [byte(104), byte(0), byte(233), byte(0)]);
+    test.is(File(path: wide, encoding: "utf-16-le").text().content(), "hé");
+    File(path: wide, encoding: "utf-32-be").text().replace("h");
+    test.is(File(path: wide).binary().bytes(), [byte(0), byte(0), byte(0), byte(104)]);
+    File(path: wide, encoding: "latin-1").text().replace("é");
+    test.is(File(path: wide).binary().bytes(), [byte(233)]);
+    test.ok(try {
+        File(path: wide, encoding: "ascii").text().replace("é");
+        false;
+    }
+    catch FileError.invalid_text(failed) {
+        failed == wide.string();
+    });
+    test.is(File(path: wide).binary().bytes(), [byte(233)]);
+    test.is(
+        directory_entries(path_encode(scratch.path().string())),
+        ["config.txt", "fresh.bin", "wide.txt"]
+    );
+    scratch.close();
+}
+
+test "replace keeps permission bits, replaces a link itself, refuses a directory and names what failed" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let root = scratch.path();
+    let path = root.child("secret.txt");
+    File(path: path, mode: FileMode.writing).text().write("old");
+    chmod(path_encode(path.string()), 416);
+    File(path: path).text().replace("new");
+    test.is(stat(path_encode(path.string()))["permissions"], 416);
+    test.is(File(path: path).text().content(), "new");
+    let target = root.child("target.txt");
+    let link = root.child("link.txt");
+    File(path: target, mode: FileMode.writing).text().write("target");
+    symlink(path_encode(target.string()), path_encode(link.string()));
+    test.is(path_decode(readlink(path_encode(link.string()))), target.string());
+    File(path: link).text().replace("replaced");
+    test.ok(try {
+        readlink(path_encode(link.string()));
+        false;
+    }
+    catch failure is NativeFailure {
+        true;
+    });
+    test.is(File(path: link).text().content(), "replaced");
+    test.is(File(path: target).text().content(), "target");
+    let folder = root.child("folder");
+    Directory(path: folder).create();
+    test.ok(try {
+        File(path: folder).text().replace("x");
+        false;
+    }
+    catch FileError.invalid_operation(_) {
+        true;
+    });
+    test.ok(Directory(path: folder).existence());
+    let orphan = root.child("missing").child("file.txt");
+    test.ok(try {
+        File(path: orphan).binary().replace([byte(1)]);
+        false;
+    }
+    catch FileError.not_found(failed) {
+        failed == root.child("missing").string();
+    });
+    test.is(
+        directory_entries(path_encode(root.string())),
+        ["folder", "link.txt", "secret.txt", "target.txt"]
+    );
+    scratch.close();
+}
+
+test "a directory that refuses new files refuses replace and keeps the old file, unless run as root" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let locked = scratch.path().child("locked");
+    Directory(path: locked).create();
+    let path = locked.child("data.txt");
+    File(path: path, mode: FileMode.writing).text().write("old");
+    chmod(path_encode(locked.string()), 320);
+    let refused = try {
+        File(path: path).text().replace("new");
+        false;
+    }
+    catch FileError.permission_denied(failed) {
+        test.is(failed, locked.string());
+        true;
+    };
+    chmod(path_encode(locked.string()), 448);
+    let expected = if refused {
+        "old";
+    }
+    else {
+        "new";
+    };
+    test.is(File(path: path).text().content(), expected);
+    test.is(directory_entries(path_encode(locked.string())), ["data.txt"]);
+    scratch.close();
+}
+
+test "readers see a whole version: an open reader keeps the old file, a new reader gets the new one" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let path = scratch.path().child("lines.txt");
+    File(path: path, mode: FileMode.writing).text().write("old 1\nold 2\nold 3\n");
+    let reader = File(path: path);
+    test.is(reader.text().line(), "old 1");
+    File(path: path).text().replace("new 1\nnew 2\n");
+    test.is(reader.text().lines(), ["old 2", "old 3"]);
+    reader.close();
+    test.is(File(path: path).text().lines(), ["new 1", "new 2"]);
+    scratch.close();
+}
+
+test "sync makes written data durable; a file not open for writing or closed refuses it" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let path = scratch.path().child("log.txt");
+    let writer = File(path: path, mode: FileMode.writing);
+    writer.text().writeln("started");
+    writer.text().flush();
+    writer.text().sync();
+    writer.close();
+    test.is(File(path: path).text().content(), "started\n");
+    let bytes = File(path: path, mode: FileMode.appending);
+    bytes.binary().write([byte(0)]);
+    bytes.binary().sync();
+    bytes.close();
+    test.is(File(path: path).binary().bytes().size(), 9);
+    test.ok(try {
+        File(path: path).text().sync();
+        false;
+    }
+    catch FileError.invalid_operation(_) {
+        true;
+    });
+    test.ok(try {
+        writer.text().sync();
+        false;
+    }
+    catch FileError.invalid_operation(_) {
+        true;
+    });
+    scratch.close();
+}
+
+test "a directory that cannot be synchronized: the new content is in place and the failure says so, unless run as root" {
+    let scratch = TemporaryDirectory(parent: Directory(path: Path(".")), prefix: "fs-file-test-");
+    let unreadable = scratch.path().child("unreadable");
+    Directory(path: unreadable).create();
+    let path = unreadable.child("data.txt");
+    File(path: path, mode: FileMode.writing).text().write("old");
+    chmod(path_encode(unreadable.string()), 192);
+    try {
+        File(path: path).text().replace("new");
+    }
+    catch FileError.failed(code, message) {
+        test.is(code, "not_durable");
+        test.ok(message.starts_with(path.string() + " is replaced"));
+    }
+    chmod(path_encode(unreadable.string()), 448);
+    test.is(File(path: path).text().content(), "new");
+    test.is(directory_entries(path_encode(unreadable.string())), ["data.txt"]);
     scratch.close();
 }

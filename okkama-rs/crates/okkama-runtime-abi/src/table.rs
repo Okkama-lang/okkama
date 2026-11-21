@@ -655,5 +655,8 @@ natives! {
     ProcessProcessStateOutputReadAsync = 669, "runtime/process@1::process_state_output_read_async/2", "async (ProcessState, int) -> @byte";
     ProcessProcessStateErrorsReadAsync = 670, "runtime/process@1::process_state_errors_read_async/2", "async (ProcessState, int) -> @byte";
     ProcessProcessStateInputWriteAsync = 671, "runtime/process@1::process_state_input_write_async/2", "async (ProcessState, @byte) -> int";
+    FsFileStateSync = 672, "runtime/fs@1::file_state_sync/1", "(FileState) -> bool";
+    FsTemporaryFileReplace = 673, "runtime/fs@1::temporary_file_replace/2", "(FileState, @byte) -> bool";
+    FsDirectorySync = 674, "runtime/fs@1::directory_sync/1", "(@byte) -> bool";
 }
 // retired: 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258

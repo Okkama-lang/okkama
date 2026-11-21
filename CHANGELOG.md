@@ -28,6 +28,14 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   keeps the cookies replies set (site http://127.0.0.1) and sends them with later requests; a caller's own
   `Cookie` field goes instead. A guarded `DELETE` with `Authorization`, a session login-to-logout flow and
   `Accept` on `GET` are testable through the convenience methods.
+- **Files are replaced atomically and made durable (#122).** `file.text().replace(...)` and `file.binary().replace(bytes)`
+  write a temporary file beside the target, synchronize it, rename it over the old file and synchronize the
+  directory: a reader or a crash sees the whole old file or the whole new one. The new file keeps the old one's
+  permission bits (a new file is owner-only); a symbolic link at the path is itself replaced, a directory is
+  refused, and a rename whose directory could not be synchronized is `FileError.failed("not_durable", ...)`.
+  `sync()` on `FileText`, `FileBytes` and `TemporaryFile` is fsync (F_FULLFSYNC on macOS), and
+  `TemporaryFile.replace(destination)` is the pair of `preserve()`. A binary write now finishes a short write
+  instead of reporting it (`examples/fs/file/replace.ok`).
 
 ## [0.6.1] — 2026-11-22
 

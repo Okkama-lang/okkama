@@ -1,0 +1,20 @@
+module examples/fs/file/replace v1.0.0;
+
+import "fs/file" take File;
+import "fs/entry" take FileEntry;
+import "fs/path" take Path;
+import "io/stdout" take Stdout;
+
+// Replace a whole file in one step: a reader, or a crash at any point, finds
+// the old content or the new one, never a part, and the new content is on the
+// disk when replace returns. A file that was not there is created.
+
+main() is int {
+    let path = Path("settings.json");
+    File(path: path).text().replace("{\"theme\": \"light\"}\n");
+    File(path: path).text().replace("{\"theme\": \"dark\"}\n");
+    Stdout().write(File(path: path).text().content());
+
+    FileEntry(path: path).remove();
+    0;
+}

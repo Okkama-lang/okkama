@@ -111,7 +111,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2242 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 721 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 63 files, 31341 lines
+## sparrow — 63 files, 31476 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -143,13 +143,13 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_data.rs` 76 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
 - `sparrow-core/src/host/native_db.rs` 290 — Shared immutable database cells. Driver results own Rust data directly;
 - `sparrow-core/src/host/native_debug.rs` 156 — `any` values for the bridged origin natives, and the parts of a value for
-- `sparrow-core/src/host/native_directory.rs` 293 — Host paths and directory snapshots, scoped to each VM's working directory.
+- `sparrow-core/src/host/native_directory.rs` 328 — Host paths and directory snapshots, scoped to each VM's working directory.
 - `sparrow-core/src/host/native_dns.rs` 181 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
 - `sparrow-core/src/host/native_environment.rs` 200 — The program's environment is the run's host session
 - `sparrow-core/src/host/native_file.rs` 258 — Owned OS files; the VM stores a typed handle, never a legacy runtime object.
-- `sparrow-core/src/host/native_file_state.rs` 589 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
-- `sparrow-core/src/host/native_fs.rs` 207 — Filesystem native boundary. Lexical paths are portable and independent of
+- `sparrow-core/src/host/native_file_state.rs` 598 — Lazy files keep Rust buffers and OS resources outside the VM object graph.
+- `sparrow-core/src/host/native_fs.rs` 209 — Filesystem native boundary. Lexical paths are portable and independent of
 - `sparrow-core/src/host/native_glob.rs` 186 — Iterative glob matching and traversal. Symlinks are never followed as directories.
 - `sparrow-core/src/host/native_idna.rs` 568 — IDNA/PSL policy retains the language's pinned Unicode tables and error
 - `sparrow-core/src/host/native_input.rs` 185 — Input decorators own only undecoded bytes; standard input retains unread
@@ -165,7 +165,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_root.rs` 440 — Descriptor-relative rooted access. No child operation reconstructs an ambient
 - `sparrow-core/src/host/native_secret.rs` 87 — Explicitly closed native secrets, also wiped when their arena entry is swept.
 - `sparrow-core/src/host/native_sqlite.rs` 2333 — `runtime/database` SQLite provider on rusqlite with bundled SQLite. Each
-- `sparrow-core/src/host/native_temporary.rs` 198 — Temporary resources use exclusive OS creation and cryptographic random names.
+- `sparrow-core/src/host/native_temporary.rs` 287 — Temporary resources use exclusive OS creation and cryptographic random names.
 - `sparrow-core/src/host/native_text.rs` 370 — Pure codecs and exact numeric parsing at the independent native boundary.
 - `sparrow-core/src/host/native_tls.rs` 753 — `runtime/tls_transport`: a rustls client, and a server (#209), over a TCP stream taken from
 - `sparrow-core/src/host/native_udp.rs` 503 — Native UDP datagrams: one send/receive per request, Tokio readiness and
@@ -192,7 +192,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/repl.rs` 409 — `okkama repl` on Sparrow (#588): one long-lived session, one heap.
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 
-## other — 87 files, 36712 lines
+## other — 87 files, 36715 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -217,7 +217,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 656
+- `okkama-runtime-abi/src/table.rs` 659
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
