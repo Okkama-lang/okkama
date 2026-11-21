@@ -1,0 +1,52 @@
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "strings/parse" take Number;
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let text = HexDigits(i).text();
+        self.run(i + 1, n, acc + (Number(text).int(16)) % 7);
+    }
+}
+
+// Lowercase hex digits of a non-negative int.
+object HexDigits {
+    has value is int;
+
+    HexDigits(value is int) {
+        self.value = value;
+    }
+
+    text() is string {
+        let digits = "0123456789abcdef";
+        if value < 16 {
+            return digits.slice(value, value + 1);
+        }
+        HexDigits((value / 16).int()).text() + digits.slice(value % 16, value % 16 + 1);
+    }
+
+    pair() is string {
+        if value < 16 {
+            "0" + self.text();
+        }
+        else {
+            self.text();
+        }
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}
