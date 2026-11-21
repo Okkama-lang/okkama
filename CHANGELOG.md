@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
 
 ## [Unreleased]
 
+### Added
+
+- **URLs are built and changed without string concatenation (#133).** `UrlParts` gets immutable transformations,
+  each returning new validated parts: `path_replaced(path:)` (an encoded path, escapes canonicalized),
+  `joined("a", "b")` (plain segments, each encoded once: `/`, `?` and `#` stay data), `query_replaced(parameters:)`
+  (ordered `QueryParameters`, repeated names and empty values kept), `query_removed()`, and `port_replaced(port:)`
+  (add, replace or remove; no scheme default is invented). The structured `UrlParts(...)` constructor takes
+  defaults. The HTTP client examples build their URLs this way (`examples/http/client/build_url.ok`).
+
 ## [0.6.1] — 2026-11-22
 
 0.6.1 makes Sparrow faster where 0.6.0 paid for its rebuild, and brings the REPL back.

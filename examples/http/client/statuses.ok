@@ -11,6 +11,7 @@ import "http/endpoint" take LoopbackEndpoints;
 import "net/tcp" take TcpListening;
 import "time/duration" take Duration;
 import "io/stdout" take Stdout;
+import "url/value" take UrlParts;
 
 // Read a status: compare it with a case, match on it, take its class, its
 // number and its phrase. The server is a small one on 127.0.0.1 that knows
@@ -20,19 +21,28 @@ object NoPages does Handling {
     NoPages();
 
     async handling(request is Request, context is HttpRequestContext) is HandlingResult {
-        Stdout().writeln("server got: ", MethodName(request::Head::method), " ", request::Head::target.path());
+        Stdout().writeln(
+            "server got: ",
+            MethodName(request::Head::method),
+            " ",
+            request::Head::target.path()
+        );
         ResponseHandling(Response(status: Status.not_found));
     }
 }
 
 async main() is int {
     let listener = await TcpListening(port: 0).listener();
-    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let base = UrlParts(
+        scheme: "http",
+        host: Maybe.some("127.0.0.1"),
+        port: Maybe.some(listener::Local::port),
+    );
     let server = HttpServer(listener: listener, handling: NoPages()).started();
-        // A real program writes HttpClient(); this one may reach 127.0.0.1.
+    // A real program writes HttpClient(); this one may reach 127.0.0.1.
     let client = HttpClient(endpoints: LoopbackEndpoints());
 
-    let reply = await client.get(base + "/missing");
+    let reply = await client.get(base.joined("missing").string());
     let status = reply::Head::status;
     let said = match status {
         case Status.ok {

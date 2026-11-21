@@ -12,27 +12,44 @@ import "http/endpoint" take LoopbackEndpoints;
 import "net/tcp" take TcpListening;
 import "time/duration" take Duration;
 import "io/stdout" take Stdout;
+import "url/value" take UrlParts;
+import "url/query" take QueryParameters, QueryParameter, ParsedQuery;
 
 // GET a page and print it as text, decoded by its charset. The page comes
 // from a small server on 127.0.0.1 that this program starts and drains.
+// Build the path from segments and the query from plain parameter data.
 
 object Greeting does Handling {
     Greeting();
 
     async handling(request is Request, context is HttpRequestContext) is HandlingResult {
-        Stdout().writeln("server got: ", MethodName(request::Head::method), " ", request::Head::target.path());
+        let query = ParsedQuery(request::Head::target.query() else "").parameters();
+        confirm query.text("q") == "tea & coffee+milk" else panic "query data changed";
+        Stdout().writeln(
+            "server got: ",
+            MethodName(request::Head::method),
+            " ",
+            request::Head::target.path()
+        );
         ResponseHandling(Response(status: Status.ok, content: TextBody(text: "Hello, wörld!")));
     }
 }
 
 async main() is int {
     let listener = await TcpListening(port: 0).listener();
-    let base = "http://127.0.0.1:" + listener::Local::port.string();
+    let base = UrlParts(
+        scheme: "http",
+        host: Maybe.some("127.0.0.1"),
+        port: Maybe.some(listener::Local::port),
+    );
     let server = HttpServer(listener: listener, handling: Greeting()).started();
-        // A real program writes HttpClient(); this one may reach 127.0.0.1.
+    // A real program writes HttpClient(); this one may reach 127.0.0.1.
     let client = HttpClient(endpoints: LoopbackEndpoints());
 
-    let page = await client.get(base + "/hello");
+    let destination = base.joined("hello").query_replaced(
+        parameters: QueryParameters(QueryParameter(name: "q", value: "tea & coffee+milk"))
+    );
+    let page = await client.get(destination.string());
     if page::Head::status == Status.ok {
         Stdout().writeln(await page.text());
     }

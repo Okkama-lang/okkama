@@ -1,6 +1,6 @@
 module url/value v1.0.0;
 
-// URLs read and taken apart (RFC 3986).
+// URLs constructed, transformed and taken apart (RFC 3986).
 //
 //     let parts = ParsedUrl("https://user@example.org:8443/a/b?q=1#top").parts();
 //     parts::Parts::scheme;                    // "https"
@@ -10,9 +10,16 @@ module url/value v1.0.0;
 //     ParsedQuery(parts::Parts::query else "").parameters().text("q");   // "1"
 //     parts.resolved(ParsedUrl("../c").parts()).string();
 //
-// The parts are kept as written; string() writes the URL back, and resolved()
-// and normalized() follow RFC 3986.
+// Components have canonical spelling. string() writes the URL back;
+// resolved() and normalized() follow RFC 3986. Transformations return new
+// validated UrlParts, without changing the original or reparsing a whole URL.
+//
+//     let api = UrlParts(scheme: "https", host: Maybe.some("example.org"));
+//     api.joined("search").query_replaced(parameters:
+//         QueryParameters(QueryParameter(name: "q", value: "tea & coffee"))).string();
+//     // "https://example.org/search?q=tea%20%26%20coffee"
 
+import "url/query" take QueryParameters, QueryParameter, ParsedQuery;
 import "url/percent" take PercentEncoded, PercentDecoded, UrlComponent, InvalidPercentEncoding;
 import "encoding/utf" take InvalidUtf8;
 import "error" take InvalidArgument;
@@ -148,29 +155,36 @@ object UrlComponentText {
             }
             else {
                 let code = codes[index].code();
-                if (index >= 1 && codes[index - 1].code() == 37) || (index >= 2 && codes[index - 2].code() == 37) {
-                    true;
-                }
-                else {
-                    if code == 37 {
-                        index + 2 < size && self.capital(codes[index + 1].code()) && self.capital(codes[index + 2].code())
-                            && !self.unreserved(self.hex(codes[index + 1].code()) * 16 + self.hex(codes[index + 2].code()));
+                if (index >= 1 && codes[index - 1].code() == 37)
+                    || (index >= 2 && codes[index - 2].code() == 37) {
+                        true;
                     }
                     else {
-                        if code >= 128 {
-                            false;
+                        if code == 37 {
+                            index + 2 < size
+                                && self.capital(codes[index + 1].code())
+                                && self.capital(codes[index + 2].code())
+                                && !self.unreserved(
+                                    self.hex(codes[index + 1].code()) * 16 + self.hex(
+                                        codes[index + 2].code()
+                                    )
+                                );
                         }
                         else {
-                            if self.unreserved(code) {
-                                true;
+                            if code >= 128 {
+                                false;
                             }
                             else {
-                                let text = codes[index].string();
-                                PercentEncoded(origin: text, component: component).string() == text;
+                                if self.unreserved(code) {
+                                    true;
+                                }
+                                else {
+                                    let text = codes[index].string();
+                                    PercentEncoded(origin: text, component: component).string() == text;
+                                }
                             }
                         }
                     }
-                }
             }
         };
     }
@@ -189,12 +203,18 @@ object UrlComponentText {
                 if !self.unreserved(code) {
                     let text = character.string();
                     confirm PercentEncoded(origin: text, component: component).string() == text
-                        else throw InvalidUrl.located(offset + index, "character is not allowed in component");
+                        else throw InvalidUrl.located(
+                            offset + index,
+                            "character is not allowed in component"
+                        );
                 }
             }
             else {
                 confirm self.unicode_allowed(code)
-                    else throw InvalidUrl.located(offset + index, "character is not allowed in IRI component");
+                    else throw InvalidUrl.located(
+                        offset + index,
+                        "character is not allowed in IRI component"
+                    );
             }
         }
     }
@@ -835,7 +855,13 @@ hidden object UrlReading {
             };
             let path = after.slice(segments[0].length(), after.length());
             let parts = try {
-                UrlPieces(scheme: scheme, authority: authority, path: path, query: query, fragment: fragment);
+                UrlPieces(
+                    scheme: scheme,
+                    authority: authority,
+                    path: path,
+                    query: query,
+                    fragment: fragment
+                );
             }
             catch InvalidUrl.located(offset, reason) {
                 let offset = prefix + 2 + segments[0].length() + offset;
@@ -852,7 +878,13 @@ hidden object UrlReading {
             return parts;
         }
         try {
-            UrlPieces(scheme: scheme, authority: UrlAuthority(), path: path_authority, query: query, fragment: fragment);
+            UrlPieces(
+                scheme: scheme,
+                authority: UrlAuthority(),
+                path: path_authority,
+                query: query,
+                fragment: fragment
+            );
         }
         catch InvalidUrl.located(offset, reason) {
             throw InvalidUrl.located(prefix + offset, reason);
@@ -922,21 +954,21 @@ hidden object UrlResolution {
         let relative = reference;
         if relative.scheme() != "" {
             return UrlPieces(
-                    scheme: relative.scheme(),
-                    authority: relative.authority(),
-                    path: UrlDotSegments(relative.path()).path(),
-                    query: relative.query(),
-                    fragment: relative.fragment()
-                );
+                scheme: relative.scheme(),
+                authority: relative.authority(),
+                path: UrlDotSegments(relative.path()).path(),
+                query: relative.query(),
+                fragment: relative.fragment()
+            );
         }
         if relative.authority().present() {
             return UrlPieces(
-                    scheme: original.scheme(),
-                    authority: relative.authority(),
-                    path: UrlDotSegments(relative.path()).path(),
-                    query: relative.query(),
-                    fragment: relative.fragment()
-                );
+                scheme: original.scheme(),
+                authority: relative.authority(),
+                path: UrlDotSegments(relative.path()).path(),
+                query: relative.query(),
+                fragment: relative.fragment()
+            );
         }
         if relative.path() == "" {
             let query = if relative.query().present() {
@@ -946,12 +978,12 @@ hidden object UrlResolution {
                 original.query();
             };
             return UrlPieces(
-                    scheme: original.scheme(),
-                    authority: original.authority(),
-                    path: original.path(),
-                    query: query,
-                    fragment: relative.fragment()
-                );
+                scheme: original.scheme(),
+                authority: original.authority(),
+                path: original.path(),
+                query: query,
+                fragment: relative.fragment()
+            );
         }
         let merged = if relative.path().slice(0, 1) == "/" {
             relative.path();
@@ -974,12 +1006,12 @@ hidden object UrlResolution {
             }
         };
         UrlPieces(
-                scheme: original.scheme(),
-                authority: original.authority(),
-                path: UrlDotSegments(merged).path(),
-                query: relative.query(),
-                fragment: relative.fragment()
-            );
+            scheme: original.scheme(),
+            authority: original.authority(),
+            path: UrlDotSegments(merged).path(),
+            query: relative.query(),
+            fragment: relative.fragment()
+        );
     }
 }
 
@@ -1010,15 +1042,17 @@ object UrlParts {
     has fragment_text is Maybe<string>;
 
     // Every part is checked and brought to its canonical spelling, which `==`
-    // depends on.
+    // depends on. Defaults form an empty relative reference. Path, query,
+    // fragment and userinfo are URI/IRI component text, not plain field data;
+    // existing escapes are retained canonically. No dot segments are removed.
     UrlParts(
-        scheme is string,
-        userinfo is Maybe<string>,
-        host is Maybe<string>,
-        port is Maybe<int>,
-        path is string,
-        query is Maybe<string>,
-        fragment is Maybe<string>,
+        scheme is string = "",
+        userinfo is Maybe<string> = Maybe<string>.none,
+        host is Maybe<string> = Maybe<string>.none,
+        port is Maybe<int> = Maybe<int>.none,
+        path is string = "",
+        query is Maybe<string> = Maybe<string>.none,
+        fragment is Maybe<string> = Maybe<string>.none,
     ) {
         let canonical = UrlCanonical(pieces: UrlPiecesFrom(
             scheme: scheme,
@@ -1127,6 +1161,120 @@ object UrlParts {
                 "";
             }
         };
+    }
+
+    // Replaces an encoded URI/IRI path, preserving all other components.
+    // Existing escapes are canonicalized, not encoded again; malformed escapes
+    // and literal spaces or URI delimiters are InvalidUrl. Dot segments stay.
+    // Use joined() for plain text segments.
+    path_replaced(path is string) is UrlParts {
+        UrlParts(
+            scheme: scheme_text,
+            userinfo: userinfo_text,
+            host: host_text,
+            port: port_number,
+            path: path,
+            query: query_text,
+            fragment: fragment_text,
+        );
+    }
+
+    // Appends plain text segments, encoding each once. A literal `%2F` means
+    // the text "%2F" and becomes `%252F`; existing escapes in this path stay.
+    // `/`, `?` and `#` inside a segment are data, never URI separators.
+    //
+    //     page.joined("items", "tea/coffee"); // appends /items/tea%2Fcoffee
+    //
+    // No segments leaves the URL unchanged. One trailing slash in the base is
+    // reused; all other slashes and empty segments are retained. An empty base
+    // path starts at `/` with an authority, otherwise at a relative segment.
+    // A colon in the first relative segment is escaped to avoid a scheme.
+    // Paths that would introduce `//authority` are InvalidUrl. Dot segments
+    // stay literal: this appends segments, whereas resolved() resolves links.
+    // Existing URL (8192 characters) and path (1024 segments) limits apply.
+    joined(segments is ...string) is UrlParts {
+        let plain is @string = segments...;
+        if plain.size() == 0 {
+            return self;
+        }
+        confirm plain.size() <= 1024
+            else throw InvalidUrl.located(0, "path segment limit exceeded");
+        plain.reduce(0) -> length, segment {
+            let total = length + segment.length();
+            confirm total <= 8192
+                else throw InvalidUrl.located(8192, "path source limit exceeded");
+            total;
+        };
+        let encoded is @string = (0..plain.size()).map() -> index {
+            let segment = PercentEncoded(origin: plain[index], component: UrlComponent.path_segment).string();
+            if index == 0 && path_text == "" && scheme_text == "" && host_text == Maybe<string>.none {
+                segment.split(":").join("%3A");
+            }
+            else {
+                segment;
+            }
+        };
+        let prefix = if path_text == "" {
+            if host_text != Maybe<string>.none {
+                "/";
+            }
+            else {
+                "";
+            };
+        }
+        else {
+            if path_text.slice(path_text.length() - 1, path_text.length()) == "/" {
+                path_text;
+            }
+            else {
+                path_text + "/";
+            }
+        };
+        self.path_replaced(path: prefix + encoded.join("/"));
+    }
+
+    // Replaces the query using QueryParameters' ordered RFC 3986 encoding.
+    // Names may repeat; assigned empty values and unassigned flags stay distinct.
+    // An empty collection supplies `?`; query_removed() removes the component.
+    // Plain parameter data is encoded once, with `+` preserved as data (%2B).
+    query_replaced(parameters is QueryParameters) is UrlParts {
+        UrlParts(
+            scheme: scheme_text,
+            userinfo: userinfo_text,
+            host: host_text,
+            port: port_number,
+            path: path_text,
+            query: Maybe.some(parameters.string()),
+            fragment: fragment_text,
+        );
+    }
+
+    // Removes the query component, including its `?`, preserving the fragment.
+    query_removed() is UrlParts {
+        UrlParts(
+            scheme: scheme_text,
+            userinfo: userinfo_text,
+            host: host_text,
+            port: port_number,
+            path: path_text,
+            query: Maybe<string>.none,
+            fragment: fragment_text,
+        );
+    }
+
+    // Replaces an explicit port (0..65535), or removes it with Maybe<int>.none.
+    // A supplied port requires a host; scheme defaults are never inserted.
+    // Userinfo and bracketed IPv6 hosts are preserved. Invalid ports are InvalidUrl.
+    port_replaced(port is Maybe<int>) is UrlParts {
+        UrlParts(
+            scheme: scheme_text,
+            userinfo: userinfo_text,
+            host: host_text,
+            port: port,
+            path: path_text,
+            query: query_text,
+            fragment: fragment_text,
+        );
     }
 
     // The reference resolved against this URL (RFC 3986 §5.2); dot segments
@@ -1373,4 +1521,294 @@ test "explicit URL reference resolution preserves empty query and trailing slash
     let base = ParsedUrl("http://a/b/c?q#old").parts();
     test.is(base.resolved(ParsedUrl("../g/").parts()).string(), "http://a/g/");
     test.is(base.resolved(ParsedUrl("?").parts()).string(), "http://a/b/c?");
+}
+
+test "structured URL construction preserves canonical identity" {
+    let url = UrlParts(
+        scheme: "HTTPS",
+        userinfo: Maybe.some("u%3ap"),
+        host: Maybe.some("[::1]"),
+        port: Maybe.some(443),
+        path: "/%7e/%2f",
+        query: Maybe.some(""),
+        fragment: Maybe.some(""),
+    );
+    test.is(url.string(), "https://u%3Ap@[::1]:443/~/%2F?#");
+    test.is(ParsedUrl(url.string()).parts(), url);
+    test.is(ParsedUrl("https://example.org:").parts()::Parts::port, Maybe<int>.none);
+}
+
+test "raw path replacement canonicalizes escapes without changing other parts" {
+    let original = ParsedUrl("https://u:p@[::1]:8443/old?x=1#top").parts();
+    let changed = original.path_replaced(path: "/%7e/%2f/café/../end");
+    test.is(changed.string(), "https://u:p@[::1]:8443/~/%2F/caf%C3%A9/../end?x=1#top");
+    test.is(original.string(), "https://u:p@[::1]:8443/old?x=1#top");
+    test.is(changed.normalized()::Parts::path, "/~/%2F/end");
+    test.is(changed.path_replaced(path: "")::Parts::path, "");
+    test.is(ParsedUrl(changed.string()).parts(), changed);
+}
+
+test "raw paths reject malformed escapes and structural injection" {
+    let authority = ParsedUrl("https://example.org/").parts();
+    for ["/%", "/%2", "/%gg", "/a b", "/a?b", "/a#b", "relative"] -> path {
+        test.throws(InvalidUrl) {
+            authority.path_replaced(path: path);
+        };
+    }
+    let relative = ParsedUrl("a").parts();
+    for ["//evil/x", "a:b"] -> path {
+        test.throws(InvalidUrl) {
+            relative.path_replaced(path: path);
+        };
+    }
+}
+
+test "joining encodes plain segments once and retains existing escapes" {
+    let url = ParsedUrl("https://u@[::1]:443/root%2f?q#f").parts();
+    test.is(
+        url.joined("a/b", "a b", "café", "%2F", "?#", "@evil").string(),
+        "https://u@[::1]:443/root%2F/a%2Fb/a%20b/caf%C3%A9/%252F/%3F%23/@evil?q#f"
+    );
+    test.is(url.joined().string(), url.string());
+    test.is(url::Parts::path, "/root%2F");
+    test.is(ParsedUrl("a").parts().joined(".", "..").string(), "a/./..");
+    test.is(ParsedUrl("http://a/b/c").parts().joined("g").string(), "http://a/b/c/g");
+    test.is(
+        ParsedUrl("http://a/b/c").parts().resolved(ParsedUrl("g").parts()).string(),
+        "http://a/b/g"
+    );
+}
+
+test "joining defines empty segments roots and trailing separators" {
+    test.is(UrlParts().joined().string(), "");
+    test.is(UrlParts().joined("a", "b").string(), "a/b");
+    test.is(UrlParts().joined("a:b").string(), "a%3Ab");
+    test.is(UrlParts().joined("").string(), "");
+    test.is(UrlParts().joined("", "a").string(), "/a");
+    test.is(ParsedUrl("http://a").parts().joined("").string(), "http://a/");
+    test.is(ParsedUrl("//a").parts().joined("b").string(), "//a/b");
+    test.is(ParsedUrl("/").parts().joined("a").string(), "/a");
+    test.is(ParsedUrl("a/").parts().joined("b", "").string(), "a/b/");
+    test.is(ParsedUrl("a//").parts().joined("", "b").string(), "a///b");
+    test.is(ParsedUrl("a").parts().joined("", "b").string(), "a//b");
+    test.is(ParsedUrl("urn:a").parts().joined("b").string(), "urn:a/b");
+    test.throws(InvalidUrl) {
+        UrlParts().joined("", "", "evil");
+    };
+}
+
+test "query replacement retains order assignments and RFC data semantics" {
+    let original = ParsedUrl("https://u@[::1]:443/a?old#f").parts();
+    let query = QueryParameters(
+        QueryParameter(name: "a"),
+        QueryParameter(name: "a", value: ""),
+        QueryParameter(name: "a", value: "&=+#% café"),
+        QueryParameter(name: "&=+#%", value: "%2F"),
+    );
+    let changed = original.query_replaced(parameters: query);
+    test.is(
+        changed.string(),
+        "https://u@[::1]:443/a?a&a=&a=%26%3D%2B%23%25%20caf%C3%A9&%26%3D%2B%23%25=%252F#f"
+    );
+    test.is(ParsedQuery(changed::Parts::query else "").parameters(), query);
+    test.is(ParsedUrl(changed.string()).parts(), changed);
+    test.is(original::Parts::query, Maybe.some("old"));
+    test.is(
+        changed.query_replaced(parameters: ParsedQuery("a=%2F&b=+").parameters())::Parts::query,
+        Maybe.some("a=%2F&b=%2B")
+    );
+}
+
+test "query absence empty query and removal are explicit" {
+    let url = ParsedUrl("/a#f").parts();
+    let empty = url.query_replaced(parameters: QueryParameters());
+    test.is(url::Parts::query, Maybe<string>.none);
+    test.is(empty::Parts::query, Maybe.some(""));
+    test.is(empty.string(), "/a?#f");
+    test.ok(empty != url);
+    test.is(empty.query_removed(), url);
+    test.is(url.query_removed(), url);
+}
+
+test "ports can be added replaced and removed preserving authority" {
+    for ["127.0.0.1", "[::1]", "example.org"] -> host {
+        let url = UrlParts(
+            scheme: "https",
+            host: Maybe.some(host),
+            userinfo: Maybe.some("u:p"),
+            path: "/a",
+            query: Maybe.some(""),
+            fragment: Maybe.some("f")
+        );
+        test.is(url::Parts::port, Maybe<int>.none);
+        let explicit = url.port_replaced(port: Maybe.some(443));
+        test.is(explicit::Parts::port, Maybe.some(443));
+        test.ok(explicit != url);
+        test.is(explicit::Parts::host, url::Parts::host);
+        test.is(explicit::Parts::userinfo, url::Parts::userinfo);
+        test.is(explicit.port_replaced(port: Maybe<int>.none), url);
+        test.is(explicit.port_replaced(port: Maybe.some(0))::Parts::port, Maybe.some(0));
+        let high = explicit.port_replaced(port: Maybe.some(65535));
+        test.is(ParsedUrl(high.string()).parts(), high);
+        test.is(high::Parts::port, Maybe.some(65535));
+        for [-1, 65536] -> port {
+            test.throws(InvalidUrl) {
+                url.port_replaced(port: Maybe.some(port));
+            };
+        }
+    }
+    test.throws(InvalidUrl) {
+        UrlParts(path: "a").port_replaced(port: Maybe.some(80));
+    };
+    test.is(UrlParts().port_replaced(port: Maybe<int>.none), UrlParts());
+}
+
+test "transformations chain without modifying their source" {
+    let url = ParsedUrl("https://user@[::1]:443/a?old#f").parts();
+    let changed = url.path_replaced(path: "/api").joined("items/one")
+        .query_replaced(parameters: QueryParameters(QueryParameter(name: "q", value: "a+b")))
+        .port_replaced(port: Maybe.some(8443));
+    test.is(changed.string(), "https://user@[::1]:8443/api/items%2Fone?q=a%2Bb#f");
+    test.is(url.string(), "https://user@[::1]:443/a?old#f");
+    test.is(ParsedUrl(changed.string()).parts(), changed);
+}
+
+test "generated transformations preserve unrelated components and round trip" {
+    for (0..16) -> index {
+        for [Maybe<string>.none, Maybe.some(""), Maybe.some("a=1&a=2")] -> query {
+            for [Maybe<string>.none, Maybe.some(""), Maybe.some("top")] -> fragment {
+                let url = UrlParts(
+                    scheme: "https",
+                    host: Maybe.some("[::1]"),
+                    userinfo: Maybe.some("u%3Ap"),
+                    port: Maybe.some(index),
+                    path: "/a%2F/" + index.string(),
+                    query: query,
+                    fragment: fragment
+                );
+                let path = url.path_replaced(path: "/b/" + index.string());
+                test.is(path.path_replaced(path: url::Parts::path), url);
+                let joined = url.joined(index.string(), "a/b");
+                test.is(joined.path_replaced(path: url::Parts::path), url);
+                for [path, joined, url.port_replaced(port: Maybe<int>.none)] -> changed {
+                    test.is(changed::Parts::query, query);
+                    test.is(changed::Parts::fragment, fragment);
+                    test.is(changed::Parts::host, url::Parts::host);
+                    test.is(changed::Parts::userinfo, url::Parts::userinfo);
+                    test.is(ParsedUrl(changed.string()).parts(), changed);
+                }
+                test.is(
+                    url.port_replaced(port: Maybe<int>.none).port_replaced(port: url::Parts::port),
+                    url
+                );
+                let replaced = url.query_replaced(
+                    parameters: QueryParameters(QueryParameter(name: "q", value: index.string()))
+                );
+                test.is(replaced.query_removed(), url.query_removed());
+                test.is(replaced::Parts::path, url::Parts::path);
+                test.is(replaced::Parts::fragment, fragment);
+                test.is(replaced::Parts::port, url::Parts::port);
+                test.is(replaced::Parts::host, url::Parts::host);
+                test.is(ParsedUrl(replaced.string()).parts(), replaced);
+                test.is(url.query_removed()::Parts::fragment, fragment);
+            }
+        }
+    }
+}
+
+test "transformations enforce URL path and segment boundaries" {
+    let units is @string = (0..8192).map() -> index {
+        "x";
+    };
+    let full = units.join("");
+    test.is(UrlParts().path_replaced(path: full)::Parts::path.length(), 8192);
+    test.throws(InvalidUrl) {
+        UrlParts().path_replaced(path: full + "x");
+    };
+    test.throws(InvalidUrl) {
+        UrlParts().path_replaced(path: "/" + full);
+    };
+    test.throws(InvalidUrl) {
+        UrlParts().joined(full, "x");
+    };
+    let url = UrlParts(path: full);
+    test.throws(InvalidUrl) {
+        url.port_replaced(port: Maybe.some(80));
+    };
+    test.throws(InvalidUrl) {
+        url.query_replaced(parameters: QueryParameters(QueryParameter(name: "q")));
+    };
+    let near = UrlParts(scheme: "x", host: Maybe.some("a"), path: "/" + full.slice(0, 8186));
+    test.is(near.string().length(), 8192);
+    test.throws(InvalidUrl) {
+        near.port_replaced(port: Maybe.some(0));
+    };
+    let segments is @string = (0..1024).map() -> index {
+        "a";
+    };
+    let boundary = UrlParts(path: segments.join("/"));
+    test.is(boundary.joined(), boundary);
+    test.throws(InvalidUrl) {
+        boundary.joined("b");
+    };
+    test.throws(InvalidUrl) {
+        boundary.path_replaced(path: segments.join("/") + "/");
+    };
+    let unicode is @string = (0..1366).map() -> index {
+        "é";
+    };
+    test.throws(InvalidUrl) {
+        UrlParts().joined(unicode.join(""));
+    };
+}
+
+test "RFC 3986 normal and abnormal reference resolution stays distinct from joining" {
+    let base = ParsedUrl("http://a/b/c/d;p?q").parts();
+    let cases = [
+        ["g:h", "g:h"],
+        ["g", "http://a/b/c/g"],
+        ["./g", "http://a/b/c/g"],
+        ["g/", "http://a/b/c/g/"],
+        ["/g", "http://a/g"],
+        ["//g", "http://g"],
+        ["?y", "http://a/b/c/d;p?y"],
+        ["g?y", "http://a/b/c/g?y"],
+        ["#s", "http://a/b/c/d;p?q#s"],
+        ["g#s", "http://a/b/c/g#s"],
+        ["g?y#s", "http://a/b/c/g?y#s"],
+        [";x", "http://a/b/c/;x"],
+        ["g;x", "http://a/b/c/g;x"],
+        ["g;x?y#s", "http://a/b/c/g;x?y#s"],
+        ["", "http://a/b/c/d;p?q"],
+        [".", "http://a/b/c/"],
+        ["./", "http://a/b/c/"],
+        ["..", "http://a/b/"],
+        ["../", "http://a/b/"],
+        ["../g", "http://a/b/g"],
+        ["../..", "http://a/"],
+        ["../../", "http://a/"],
+        ["../../g", "http://a/g"],
+        ["../../../g", "http://a/g"],
+        ["../../../../g", "http://a/g"],
+        ["/./g", "http://a/g"],
+        ["/../g", "http://a/g"],
+        ["g.", "http://a/b/c/g."],
+        [".g", "http://a/b/c/.g"],
+        ["g..", "http://a/b/c/g.."],
+        ["..g", "http://a/b/c/..g"],
+        ["./../g", "http://a/b/g"],
+        ["./g/.", "http://a/b/c/g/"],
+        ["g/./h", "http://a/b/c/g/h"],
+        ["g/../h", "http://a/b/c/h"],
+        ["g;x=1/./y", "http://a/b/c/g;x=1/y"],
+        ["g;x=1/../y", "http://a/b/c/y"],
+        ["g?y/./x", "http://a/b/c/g?y/./x"],
+        ["g?y/../x", "http://a/b/c/g?y/../x"],
+        ["g#s/./x", "http://a/b/c/g#s/./x"],
+        ["g#s/../x", "http://a/b/c/g#s/../x"],
+        ["http:g", "http:g"],
+    ];
+    for cases -> pair {
+        test.is(base.resolved(ParsedUrl(pair[0]).parts()).string(), pair[1]);
+    }
 }

@@ -4151,6 +4151,53 @@ HostName uses bounded UTS46/IDNA; PublicSuffixList represents pinned ICANN+PRIVA
 policy. Current URL contract (okkama-docs `docs/std/url-value.md`),
 executable example (okkama-docs `examples/std-v4/url-resolution.ok`).
 
+
+`UrlParts(scheme: "https", host: Maybe.some("api.example.org"))` constructs
+an absolute URL from components. Omitted components default to empty scheme/path
+and absent optional parts; `UrlParts()` is an empty relative reference.
+Transformations return a new validated `UrlParts`, preserving unrelated
+components and the original value. They reuse component validation without
+serializing and reparsing the complete URL. `Parts` remains the component API.
+
+```okkama
+let base = UrlParts(scheme: "https", host: Maybe.some("api.example.org"));
+let destination = base.joined("items", "tea/coffee").query_replaced(parameters:
+    QueryParameters(QueryParameter(name: "q", value: "a+b & café")));
+// https://api.example.org/items/tea%2Fcoffee?q=a%2Bb%20%26%20caf%C3%A9
+```
+
+Import `UrlParts` from `url/value`, and `QueryParameters` and `QueryParameter`
+from `url/query`. Pass `destination.string()` to an HTTP client shortcut.
+See [the executable construction example](../examples/http/client/build_url.ok).
+
+- `path_replaced(path: "/a%2Fb")` accepts an encoded URI/IRI path. Existing
+  escapes are canonicalized, not double-encoded; malformed escapes, literal
+  spaces and structural delimiters fail with `InvalidUrl`.
+- `joined("a", "b/c")` appends plain text segments. Slash, question mark and
+  hash within a segment are escaped. Percent is plain data: `%2F` becomes
+  `%252F`; escapes already in the base path stay intact. No arguments is an
+  identity operation. One trailing slash of the base is reused; other slashes
+  and empty segments are retained. An empty base path gains a leading slash
+  when it has an authority, otherwise it starts relative. A colon in the first
+  relative segment is escaped. Structural constraints still apply, including
+  rejection of a path that would introduce an undeclared `//authority`.
+- Neither path operation removes dot segments. Use `normalized()` explicitly;
+  `resolved()` retains RFC 3986 reference-resolution semantics.
+- `query_replaced(parameters: query)` uses ordered `QueryParameters` encoding,
+  retaining repeated names, empty assignments and unassigned flags. Data cannot
+  inject `&`, `=`, `#` or `+` semantics; `+` is encoded as `%2B`, never a space.
+  Parsed parameter values can be passed back without double-encoding. An empty
+  collection means a present empty query (`?`); `query_removed()` means no query.
+- `port_replaced(port: Maybe.some(8443))` accepts 0..65535 and requires an
+  authority. `Maybe<int>.none` removes the explicit port. Scheme defaults are
+  never inferred. Userinfo and IPv6 brackets are retained.
+
+All operations enforce the existing limits: 8192 source path characters,
+1024 slash-separated path segments (empty segments count), and 8192 canonical
+URL characters including encoded Unicode. Query construction keeps
+`QueryParameters`' parameter limit (10000 by default, explicitly configurable).
+Encoding URL paths does not provide filesystem traversal protection.
+
 Cookie values remain immutable. CookieExpiry() means session, never an epoch
 sentinel. Cookie/Attributes validate grammar, prefixes and Secure/SameSite/
 Partitioned policy. string() deliberately projects wire data; diagnostic() redacts
