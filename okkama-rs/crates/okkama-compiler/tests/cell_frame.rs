@@ -749,3 +749,37 @@ fn reject_cell_role_narrowing() {
     );
     assert!(found.iter().any(|m| restriction(m)), "{found:?}");
 }
+
+/// The `once let` effect pass (#998): a kept value that reaches a host native, directly or through an
+/// action of its own object, is refused, including runtime/locale, signal, snapshot and input_state;
+/// a call through a role is trusted.
+#[test]
+fn once_let_refuses_values_that_reach_effects() {
+    let refused = |imports: &str, value: &str, native: &str, module: &str| {
+        let code = format!(
+            "{imports} object W {{ W(); first() is int {{ once let v = {value}; 0; }} }} main() is int {{ W().first(); }}"
+        );
+        let found = std_messages(&code);
+        assert!(
+            found.iter().any(|m| m.contains("once let cannot depend on effects")
+                && m.contains(native) && m.contains(module)),
+            "{value}: {found:?}"
+        );
+    };
+    refused("import \"runtime/locale\" take preferred_language_tags;", "preferred_language_tags()",
+        "preferred_language_tags", "runtime/locale");
+    refused("import \"runtime/time\" take monotonic_clock;", "monotonic_clock()", "monotonic_clock", "runtime/time");
+    // Through an action of the same object.
+    let transitive = std_messages(
+        "import \"runtime/time\" take wall_clock; object W { W(); now() is int { wall_clock(); } \
+         first() is int { once let v = self.now(); v; } } main() is int { W().first(); }",
+    );
+    assert!(transitive.iter().any(|m| m.contains("once let cannot depend on effects") && m.contains("wall_clock")),
+        "{transitive:?}");
+    // A role's answer is trusted.
+    let trusted = std_messages(
+        "role Source { value() is int; } object W { has source is Source; W(:source); \
+         first() is int { once let v = source.value(); v; } } main() is int { 0; }",
+    );
+    assert!(trusted.is_empty(), "{trusted:?}");
+}

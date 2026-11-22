@@ -491,8 +491,8 @@ pub enum Callee {
         receiver: Box<Expr>,
         op: Builtin,
     },
-    /// `test.ok(...)`, `test.is(...)`, `test.isnt(...)`, `test.fail(...)`,
-    /// `test.skip(...)`.
+    /// `test.ok`, `is`, `isnt`, `fail`, `skip`, `close`, `text`, `bytes`, `case` and the parser's
+    /// `case#end` (the actions of `check/call.rs` `test_call`).
     Test(String),
 }
 
@@ -1146,7 +1146,7 @@ pub(crate) fn each_child<'e>(expr: &'e Expr, visit: &mut dyn FnMut(&'e Expr)) {
 }
 
 /// Whether any constructor publishes `self` before construction finishes (§11.4).
-/// Both OIR producers use this rule to select the hidden pending field.
+/// Lowering (`lowering/ctx.rs`) uses this rule to select the hidden pending field.
 pub(crate) fn escapes_self(bodies: &[Body], object: ObjectId) -> bool {
     bodies.iter().any(|body| {
         matches!(body.owner, BodyOwner::Ctor { object: owner, .. } if owner == object)
