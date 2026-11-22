@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 34455 lines
+## other — 85 files, 34469 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -255,7 +255,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/encoding.rs` 958 — `runtime/hex`, `runtime/base32`, `runtime/base64`, `runtime/base85`,
 - `okkama-runtime-core/src/native/formats.rs` 421 — Natives форматов данных: `runtime/io_decorators`,
 - `okkama-runtime-core/src/native/fs.rs` 1995 — `runtime/fs`: лексические пути (File::Spec Unix/Win32), файлы, каталоги,
-- `okkama-runtime-core/src/native/host.rs` 347 — Natives часов, ожидания, случайности и сведений хоста — перенос
+- `okkama-runtime-core/src/native/host.rs` 361 — Natives часов, ожидания, случайности и сведений хоста — перенос
 - `okkama-runtime-core/src/native/host_crypto.rs` 81 — `runtime/host_crypto`: криптография хоста для native bridge Sparrow —
 - `okkama-runtime-core/src/native/hpack_table.rs` 131
 - `okkama-runtime-core/src/native/idna.rs` 525 — `runtime/idna` и `runtime/public_suffix`:
