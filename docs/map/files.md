@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 87 files, 35536 lines
+## other — 87 files, 35579 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -224,7 +224,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-persistent/src/trie.rs` 272 — A persistent vector: a 32-way trie of leaves plus a tail of the last
 - `okkama-runtime-abi/src/catalogue.rs` 266 — Companion catalogue of the native table (#569 C7; OIR-2 §11, P2.4 §4.7).
 - `okkama-runtime-abi/src/lib.rs` 211 — Native ABI metadata only: no compiler, VM, runtime values, or host I/O.
-- `okkama-runtime-abi/src/table.rs` 601
+- `okkama-runtime-abi/src/table.rs` 603
 - `okkama-runtime-core/examples/sqlite_sync.rs` 85 — Direct rusqlite baseline: no Okkama VM, scheduler or DB object wrappers.
 - `okkama-runtime-core/src/bignum.rs` 96 — Целые произвольной точности поверх `num-bigint` (двоичные разряды,
 - `okkama-runtime-core/src/budget.rs` 49 — Allocation accounting and memory scope shared with Sparrow.
@@ -248,7 +248,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/application.rs` 854 — `runtime/application` (POSIX-терминал) и `runtime/account` — перенос
 - `okkama-runtime-core/src/native/buffer.rs` 118 — `runtime/buffer`: изменяемый байтовый буфер `BufferState` — перенос
 - `okkama-runtime-core/src/native/bytes.rs` 85 — `runtime/bytes`: views of a byte range (`encoding/bytes`), the same
-- `okkama-runtime-core/src/native/cldr.rs` 91 — `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
+- `okkama-runtime-core/src/native/cldr.rs` 132 — `runtime/cldr`: таблицы CLDR как данные рантайма (#223). Генераторы
 - `okkama-runtime-core/src/native/collation.rs` 286 — `runtime/collation` и `runtime/locale` — перенос `CollationNatives` и
 - `okkama-runtime-core/src/native/compression.rs` 753 — `runtime/compression`: потоковые DEFLATE (RFC 1951), zlib (RFC 1950) и
 - `okkama-runtime-core/src/native/db.rs` 300 — Immutable database cells. External DbValue protocols are checked by stdlib

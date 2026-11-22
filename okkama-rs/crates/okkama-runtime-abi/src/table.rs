@@ -600,5 +600,7 @@ natives! {
     SignalSignalArrived = 676, "runtime/signal@1::signal_arrived/1", "(int) -> string";
     SignalSignalUnwatch = 677, "runtime/signal@1::signal_unwatch/1", "(int) -> bool";
     SignalSignalArrival = 678, "runtime/signal@1::signal_arrival/1", "async (int) -> string";
+    CldrCldrField = 679, "runtime/cldr@1::cldr_field/3", "(string, string, int) -> string";
+    CldrCldrSize = 680, "runtime/cldr@1::cldr_size/2", "(string, string) -> int";
 }
 // retired: 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 52, 99, 100, 101, 102, 103, 104, 105, 106, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 289, 291, 441, 442, 443, 444, 445, 446, 447, 448, 449, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 509, 510, 511, 512, 513, 514, 515, 517, 539, 540, 541, 542, 543, 544, 545, 546

@@ -179,7 +179,8 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   canonical text, so cookies, proxies, WebSocket origins, HTTP/2 fields and redirects stop re-parsing it (cookie
   jar store 110 → 46 µs, HTTP/2 request fields 31 → 17 µs); the HPACK static table builds only the row asked for
   (28 → 3.7 µs per decoded block); XML-RPC, IMAP responses and X.509 names lose repeated scans and per-call
-  regexes. `JUnitTestReport` writes its fixed XML directly instead of building and re-checking an XML tree
+  regexes. `LocalizedDate` reads the few CLDR fields a format uses instead of all 179 of its profile (35 → 27 µs).
+  `JUnitTestReport` writes its fixed XML directly instead of building and re-checking an XML tree
   (250 → 33 µs for two cases). SQLite reuses idle worker threads for new connections, sets foreign keys in
   one call, and its replies no longer make the waiting scheduler turn the event loop: an INSERT takes 7.5 µs
   instead of 19.6 µs, opening and closing an in-memory database 27 µs instead of 41 µs.
