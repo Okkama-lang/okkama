@@ -922,6 +922,15 @@ impl<'a> Registry<'a> {
                         );
                         continue;
                     }
+                    // A value of an enum is one of its cases, so an enum needs at
+                    // least one (#966). Reported at the name; the enum is still
+                    // registered, so its uses do not cascade into more errors.
+                    if decl.cases.is_empty() {
+                        self.error(
+                            decl.name.span,
+                            format!("Enum \"{name}\" has no cases; an enum needs at least one"),
+                        );
+                    }
                     // Ordinals follow `cases`; `seen` answers "declared already?" (#475).
                     let mut cases: Vec<String> = Vec::with_capacity(decl.cases.len());
                     let mut seen: HashSet<&str> = HashSet::with_capacity(decl.cases.len());

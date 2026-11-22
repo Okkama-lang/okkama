@@ -138,3 +138,27 @@ fn enum_and_match_rule_violations_are_semantic_errors() {
         assert_eq!(error.message(), expected, "{text}");
     }
 }
+
+/// #966: a value of an enum is one of its cases, so an enum with no cases is
+/// a semantic error at its name, plain or `is Error`, before any IR exists.
+#[test]
+fn an_enum_without_cases_is_rejected_at_its_name() {
+    for decl in ["enum E = ();", "enum E is Error = ();", "enum E<T> = ();"] {
+        let text = format!("module app v1.0.0; {decl} main() is int {{ 0; }}");
+        let error = lower(&text).unwrap_err();
+        assert!(matches!(error, LoweringError::Invalid { .. }), "{decl}: {error:?}");
+        assert_eq!(error.message(), "Enum \"E\" has no cases; an enum needs at least one", "{decl}");
+        let name = text.find("enum E").unwrap() + 5;
+        assert_eq!((error.span().start as usize, error.span().end as usize), (name, name + 1), "{decl}");
+    }
+}
+
+/// #966: one case is enough; such an enum lowers to verified IR.
+#[test]
+fn an_enum_with_one_case_lowers() {
+    for decl in ["enum E = (only);", "enum E is Error = (failed(message is string));", "enum E = (only,);"] {
+        let text = format!("module app v1.0.0; {decl} main() is int {{ 0; }}");
+        let module = lower(&text).unwrap_or_else(|error| panic!("{decl}: {error}"));
+        ir::verify(&module).unwrap_or_else(|error| panic!("{decl}: {error}"));
+    }
+}
