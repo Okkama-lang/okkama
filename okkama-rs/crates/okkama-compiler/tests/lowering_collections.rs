@@ -221,3 +221,37 @@ fn a_literal_if_keeps_the_analyzed_collection_type() {
     let main = main_listing("let c = true; let ok = (if c { [1]; } else { []; }) == [3]; 0;");
     assert!(main.contains("cond "), "{main}");
 }
+
+/// #969: `join` reads no element, so an untyped `[]` (a literal or a variable
+/// bound to one) is joined as an empty `@string`: the IR retags it to
+/// `array<str>` before `array.join` and verifies.
+#[test]
+fn join_of_an_untyped_empty_array_joins_an_empty_string_array() {
+    for body in [
+        "let s = [].join(\",\"); s.length();",
+        "let e = []; let s = e.join(\", \"); s.length();",
+    ] {
+        let listing = main_listing(body);
+        let join = listing.lines().find(|line| line.contains("array.join")).unwrap_or_else(|| panic!("{body}:\n{listing}"));
+        let array = join.split("array.join ").nth(1).unwrap().split(',').next().unwrap().trim();
+        assert!(
+            listing.lines().any(|line| line.trim_start().starts_with(&format!("{array}: array<str> = "))),
+            "{body}: the joined array is array<str>\n{listing}"
+        );
+    }
+}
+
+/// #969: the typed empty array joins as before, and an array that is not of
+/// string is still rejected: the retag covers only the untyped `[]`.
+#[test]
+fn join_keeps_typed_receivers_and_rejects_non_string_elements() {
+    main_listing("let xs is @string = []; let s = xs.join(\",\"); s.length();");
+    for (body, expected) in [
+        ("let s = [1, 2].join(\",\"); 0;", "Builtin action \"join\" requires an array of string, got @int"),
+        ("let s = [[]].join(\",\"); 0;", "Builtin action \"join\" requires an array of string"),
+    ] {
+        let error = lower(body).unwrap_err();
+        assert!(matches!(error, LoweringError::Invalid { .. }), "{body}: {error:?}");
+        assert!(error.message().starts_with(expected), "{body}: {}", error.message());
+    }
+}

@@ -464,6 +464,16 @@ impl Checker<'_, '_> {
                     self.error(span, message);
                     return Self::poisoned(span);
                 }
+        // #969: `join` reads no element, so an untyped `[]` is an empty
+        // `@string` (the retag of #297), as `contains` and `ordering` accept an
+        // untyped `[]`; only element reads (`item`, `first`, `last`,
+        // `replaced`) need a type. The receiver is retagged below, so the IR
+        // never joins an `array<never>`.
+        let receiver = if op == Builtin::ArrayJoin && receiver.is_untagged_array() {
+            Ty::Array(Box::new(Ty::Str))
+        } else {
+            receiver
+        };
         if op == Builtin::ArrayOrdering
             && let Ty::Array(element) = &receiver {
                 let comparing = self
