@@ -1,0 +1,34 @@
+// #244: HTTP/2 HEADERS с indexed HPACK GET.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/internal/http2_headers" take Http2EncodedHeaderFrames;
+import "http/internal/hpack_tables" take HpackField;
+import "http/internal/hpack" take HpackBudget;
+import "http/internal/http2_frame" take Http2Frame;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let frames = Http2EncodedHeaderFrames(v,[HpackField(":method","GET")],HpackBudget(),16384,true).frames();
+        let contribution = frames[0].bytes().reduce(0) -> s, b { s + b.int(); };
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

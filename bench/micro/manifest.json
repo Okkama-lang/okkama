@@ -2915,5 +2915,2299 @@
       "collections/views:Chunked.new",
       "collections/views:Filtered.new"
     ]
+  },
+  "http-auth-authorization": {
+    "path": "std/http-auth-authorization.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/auth",
+      "http/header",
+      "crypto/secret"
+    ],
+    "actions": [
+      "http/auth:BasicCredentials.authorization",
+      "http/auth:BasicCredentials.new",
+      "http/header:Header.value",
+      "crypto/secret:SecretBytes.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-auth-challenge-values": {
+    "path": "std/http-auth-challenge-values.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/auth_challenge"
+    ],
+    "actions": [
+      "http/auth_challenge:AuthenticationChallenges.values",
+      "http/auth_challenge:AuthenticationChallenges.new",
+      "http/auth_challenge:AuthenticationChallenge.parameter"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-body-opening": {
+    "path": "std/http-body-opening.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body"
+    ],
+    "actions": [
+      "http/body:TextBody.opening",
+      "http/body:TextBody.new",
+      "http/body:BodyOpening.length"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cache-admission-join": {
+    "path": "std/http-cache-admission-join.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_admission"
+    ],
+    "actions": [
+      "http/cache_admission:CacheAdmissionSlot.join",
+      "http/cache_admission:CacheAdmissionSlot.new",
+      "http/cache_admission:CacheAdmissionSlot.users",
+      "http/cache_admission:CacheAdmissionSlot.key"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cache-control-seconds": {
+    "path": "std/http-cache-control-seconds.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_control",
+      "http/header"
+    ],
+    "actions": [
+      "http/cache_control:CacheControl.seconds",
+      "http/cache_control:CacheControl.new",
+      "http/header:Headers.new",
+      "http/header:Header.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cache-memory-headers": {
+    "path": "std/http-cache-memory-headers.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_memory",
+      "http/header"
+    ],
+    "actions": [
+      "http/cache_memory:CacheStoredHeaders.headers",
+      "http/cache_memory:CacheStoredHeaders.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "http/header:Headers.text"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-client-policy-http1": {
+    "path": "std/http-client-policy-http1.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/client_policy"
+    ],
+    "actions": [
+      "http/client_policy:HttpLimits.http1",
+      "http/client_policy:HttpLimits.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-client-request": {
+    "path": "std/http-client-request.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/client_request",
+      "http/message",
+      "http/target"
+    ],
+    "actions": [
+      "http/client_request:HttpDirectRequest.request",
+      "http/client_request:HttpDirectRequest.new",
+      "http/message:Request.new",
+      "http/target:RequestTarget.path"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-content-coding-string": {
+    "path": "std/http-content-coding-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/content_coding"
+    ],
+    "actions": [
+      "http/content_coding:ContentCoding.string",
+      "http/content_coding:ContentCoding.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cookie-pair": {
+    "path": "std/http-cookie-pair.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie"
+    ],
+    "actions": [
+      "http/cookie:Cookie.pair",
+      "http/cookie:Cookie.new",
+      "http/cookie:CookieAttributes.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cookie-policy-matches": {
+    "path": "std/http-cookie-policy-matches.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie_policy"
+    ],
+    "actions": [
+      "http/cookie_policy:CookiePathMatch.matches",
+      "http/cookie_policy:CookiePathMatch.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-exchange-string": {
+    "path": "std/http-exchange-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/exchange",
+      "url/value"
+    ],
+    "actions": [
+      "http/exchange:HttpClientKey.string",
+      "http/exchange:HttpClientKey.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-header-int": {
+    "path": "std/http-header-int.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/header"
+    ],
+    "actions": [
+      "http/header:Headers.int",
+      "http/header:Headers.new",
+      "http/header:Header.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-chunk-size": {
+    "path": "std/http1-chunk-size.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_chunk"
+    ],
+    "actions": [
+      "http/http1_chunk:ParsedHttp1ChunkLine.size",
+      "http/http1_chunk:ParsedHttp1ChunkLine.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-head": {
+    "path": "std/http1-head.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_head",
+      "http/target"
+    ],
+    "actions": [
+      "http/http1_head:ParsedHttp1RequestHead.head",
+      "http/http1_head:ParsedHttp1RequestHead.new",
+      "http/http1_head:Http1RequestHead.target",
+      "http/target:RequestTarget.path"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-framing-plan": {
+    "path": "std/http1-framing-plan.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_framing",
+      "http/http1_head"
+    ],
+    "actions": [
+      "http/http1_framing:Http1RequestFraming.plan",
+      "http/http1_framing:Http1RequestFraming.new",
+      "http/http1_framing:Http1BodyPlan.length",
+      "http/http1_head:ParsedHttp1RequestHead.new",
+      "http/http1_head:ParsedHttp1RequestHead.head"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-settings-bytes": {
+    "path": "std/http2-settings-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http2_settings"
+    ],
+    "actions": [
+      "http/http2_settings:Http2SettingsWire.bytes",
+      "http/http2_settings:Http2SettingsWire.new",
+      "http/http2_settings:Http2Settings.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "hpack-primitives-bytes": {
+    "path": "std/hpack-primitives-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack_primitives"
+    ],
+    "actions": [
+      "http/internal/hpack_primitives:HpackInteger.bytes",
+      "http/internal/hpack_primitives:HpackInteger.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "hpack-static-names": {
+    "path": "std/hpack-static-names.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack_static"
+    ],
+    "actions": [
+      "http/internal/hpack_static:HpackStaticEntries.names",
+      "http/internal/hpack_static:HpackStaticEntries.new",
+      "http/internal/hpack_static:HpackStaticEntries.values"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "hpack-tables-added": {
+    "path": "std/hpack-tables-added.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack_tables"
+    ],
+    "actions": [
+      "http/internal/hpack_tables:HpackDynamicTable.added",
+      "http/internal/hpack_tables:HpackDynamicTable.new",
+      "http/internal/hpack_tables:HpackDynamicTable.used",
+      "http/internal/hpack_tables:HpackField.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-body-known": {
+    "path": "std/http2-body-known.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_body",
+      "http/header"
+    ],
+    "actions": [
+      "http/internal/http2_body:Http2BodyLength.known",
+      "http/internal/http2_body:Http2BodyLength.new",
+      "http/header:Headers.new",
+      "http/header:Header.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-frame-bytes": {
+    "path": "std/http2-frame-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_frame"
+    ],
+    "actions": [
+      "http/internal/http2_frame:Http2FrameHeader.bytes",
+      "http/internal/http2_frame:Http2FrameHeader.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-controls-frame": {
+    "path": "std/http2-controls-frame.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_controls",
+      "http/internal/http2_frame"
+    ],
+    "actions": [
+      "http/internal/http2_controls:Http2ResetFrame.frame",
+      "http/internal/http2_controls:Http2ResetFrame.new",
+      "http/internal/http2_frame:Http2Frame.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-flow-sent": {
+    "path": "std/http2-flow-sent.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_flow"
+    ],
+    "actions": [
+      "http/internal/http2_flow:Http2FlowWindow.sent",
+      "http/internal/http2_flow:Http2FlowWindow.new",
+      "http/internal/http2_flow:Http2FlowWindow.remaining"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-life-allocated": {
+    "path": "std/http2-life-allocated.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_life"
+    ],
+    "actions": [
+      "http/internal/http2_life:Http2ClientStreamIds.allocated",
+      "http/internal/http2_life:Http2ClientStreamIds.new",
+      "http/internal/http2_life:Http2ClientStreamIds.next_stream"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-settings-setting": {
+    "path": "std/http2-settings-setting.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_settings"
+    ],
+    "actions": [
+      "http/internal/http2_settings:Http2PeerSettings.setting",
+      "http/internal/http2_settings:Http2PeerSettings.new",
+      "http/internal/http2_settings:Http2PeerSettings.initial_window"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-frame-bytes": {
+    "path": "std/websocket-frame-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_frame"
+    ],
+    "actions": [
+      "http/internal/websocket_frame:WebSocketMaskedBytes.bytes",
+      "http/internal/websocket_frame:WebSocketMaskedBytes.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-wire-bytes": {
+    "path": "std/http-wire-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/wire_bytes"
+    ],
+    "actions": [
+      "http/internal/wire_bytes:HttpWireBytes.bytes",
+      "http/internal/wire_bytes:HttpWireBytes.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-message-new": {
+    "path": "std/http-message-new.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/message",
+      "http/body"
+    ],
+    "actions": [
+      "http/message:Response.new",
+      "http/body:TextBody.new",
+      "http/message:Response.body",
+      "http/body:BodyOpening.length"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-proxy-policy-url": {
+    "path": "std/http-proxy-policy-url.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/proxy_policy",
+      "url/value"
+    ],
+    "actions": [
+      "http/proxy_policy:ProxyPolicy.url",
+      "http/proxy_policy:ProxyPolicy.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts",
+      "url/value:UrlParts.string"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-proxy-request": {
+    "path": "std/http-proxy-request.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/proxy_request",
+      "url/value",
+      "http/header"
+    ],
+    "actions": [
+      "http/proxy_request:HttpConnectRequest.request",
+      "http/proxy_request:HttpConnectRequest.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts",
+      "http/header:Headers.text"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-robots-allowed": {
+    "path": "std/http-robots-allowed.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/robots",
+      "url/value"
+    ],
+    "actions": [
+      "http/robots:RobotsPolicy.allowed",
+      "http/robots:RobotsPolicy.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-routing-match": {
+    "path": "std/http-routing-match.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/routing"
+    ],
+    "actions": [
+      "http/routing:RoutePattern.match",
+      "http/routing:RoutePattern.new",
+      "http/routing:RouteMatch.parameters"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-server-policy-handling-timeout": {
+    "path": "std/http-server-policy-handling-timeout.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/server_policy",
+      "time/duration"
+    ],
+    "actions": [
+      "http/server_policy:ServerTimeouts.handling_timeout",
+      "http/server_policy:ServerTimeouts.new",
+      "time/duration:Duration.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-sse-retry": {
+    "path": "std/http-sse-retry.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/sse",
+      "time/duration"
+    ],
+    "actions": [
+      "http/sse:ServerEvent.retry",
+      "http/sse:ServerEvent.new",
+      "time/duration:Duration.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-static-indexes": {
+    "path": "std/http-static-indexes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/static",
+      "collections/sequence"
+    ],
+    "actions": [
+      "http/static:StaticPolicy.indexes",
+      "http/static:StaticPolicy.new",
+      "collections/sequence:Sequencing.first"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-token-string": {
+    "path": "std/http-token-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/token"
+    ],
+    "actions": [
+      "http/token:HttpToken.string",
+      "http/token:HttpToken.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-transport-observation-begin": {
+    "path": "std/http-transport-observation-begin.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/transport_observation"
+    ],
+    "actions": [
+      "http/transport_observation:HttpResponseObservation.begin",
+      "http/transport_observation:HttpResponseObservation.new",
+      "http/transport_observation:HttpResponseObservation.receive",
+      "http/transport_observation:HttpResponseObservation.received"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-version": {
+    "path": "std/http-version.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/version"
+    ],
+    "actions": [
+      "http/version:ParsedHttp1Version.version",
+      "http/version:ParsedHttp1Version.new",
+      "http/version:Http1VersionText.new",
+      "http/version:Http1VersionText.string"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-handshake-string": {
+    "path": "std/websocket-handshake-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_handshake"
+    ],
+    "actions": [
+      "http/websocket_handshake:WebSocketProtocols.string",
+      "http/websocket_handshake:WebSocketProtocols.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-origin-allowed": {
+    "path": "std/websocket-origin-allowed.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_origin",
+      "http/message",
+      "http/header",
+      "url/value"
+    ],
+    "actions": [
+      "http/websocket_origin:SameOriginWebSockets.allowed",
+      "http/websocket_origin:SameOriginWebSockets.new",
+      "http/message:Request.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-xmlrpc-bytes": {
+    "path": "std/http-xmlrpc-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/xmlrpc"
+    ],
+    "actions": [
+      "http/xmlrpc:XmlRpcCallWire.bytes",
+      "http/xmlrpc:XmlRpcCallWire.new",
+      "http/xmlrpc:XmlRpcCall.new",
+      "http/xmlrpc:XmlRpcInteger.new",
+      "http/xmlrpc:XmlRpcLimits.new",
+      "http/xmlrpc:ParsedXmlRpcCall.new",
+      "http/xmlrpc:ParsedXmlRpcCall.call",
+      "http/xmlrpc:XmlRpcCall.parameter",
+      "http/xmlrpc:XmlRpcValue.int"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-command-bytes": {
+    "path": "std/imap-command-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_command",
+      "mail/imap_name",
+      "mail/imap_command_reading"
+    ],
+    "actions": [
+      "mail/imap_command:ImapCommand.bytes",
+      "mail/imap_command:ImapCommand.new",
+      "mail/imap_name:ImapMailboxName.new",
+      "mail/imap_command_reading:ImapTag.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-command-reading-string": {
+    "path": "std/imap-command-reading-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_command_reading"
+    ],
+    "actions": [
+      "mail/imap_command_reading:ImapTag.string",
+      "mail/imap_command_reading:ImapTag.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-data-tokens": {
+    "path": "std/imap-data-tokens.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_data"
+    ],
+    "actions": [
+      "mail/imap_data:ImapDataLexing.tokens",
+      "mail/imap_data:ImapDataLexing.new",
+      "mail/imap_data:ImapDataTokens.new",
+      "mail/imap_data:ImapDataLimits.new",
+      "mail/imap_data:ImapDataTokens.entries",
+      "mail/imap_data:ImapDataToken.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-name-wire-name": {
+    "path": "std/imap-name-wire-name.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_name"
+    ],
+    "actions": [
+      "mail/imap_name:ImapMailboxName.wire_name",
+      "mail/imap_name:ImapMailboxName.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-metadata-uids": {
+    "path": "std/imap-metadata-uids.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_metadata",
+      "mail/imap_uid",
+      "collections/sequence"
+    ],
+    "actions": [
+      "mail/imap_metadata:ImapUidRanges.uids",
+      "mail/imap_metadata:ImapUidRanges.new",
+      "mail/imap_uid:ImapUidSetLimits.new",
+      "mail/imap_uid:ImapUidSet.entries",
+      "collections/sequence:Sequencing.size"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-response": {
+    "path": "std/imap-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_response",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/imap_response:ParsedImapResponse.response",
+      "mail/imap_response:ParsedImapResponse.new",
+      "mail/imap_response:ImapResponse.tag",
+      "mail/imap_response:ImapResponse.name",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-uid-argument": {
+    "path": "std/imap-uid-argument.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_uid"
+    ],
+    "actions": [
+      "mail/imap_uid:ImapUidSet.argument",
+      "mail/imap_uid:ImapUidSet.new",
+      "mail/imap_uid:ImapUid.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-search-key": {
+    "path": "std/imap-search-key.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_search",
+      "time/date"
+    ],
+    "actions": [
+      "mail/imap_search:SinceMail.key",
+      "mail/imap_search:SinceMail.new",
+      "mail/imap_search:ImapSearchKey.string",
+      "time/date:Date.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "mail-mailbox-membership": {
+    "path": "std/mail-mailbox-membership.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/mailbox"
+    ],
+    "actions": [
+      "mail/mailbox:MailFlags.membership",
+      "mail/mailbox:MailFlags.new",
+      "mail/mailbox:KeywordFlag.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "mbox-string": {
+    "path": "std/mbox-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/mbox"
+    ],
+    "actions": [
+      "mail/mbox:MboxSeparator.string",
+      "mail/mbox:MboxSeparator.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "mail-message-string": {
+    "path": "std/mail-message-string.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/message"
+    ],
+    "actions": [
+      "mail/message:MessageId.string",
+      "mail/message:MessageId.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "pop3-size": {
+    "path": "std/pop3-size.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3",
+      "mail/pop3_reply",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/pop3:PopMailboxState.size",
+      "mail/pop3:PopMailboxState.new",
+      "mail/pop3:PopListingLimits.new",
+      "mail/pop3_reply:ParsedPopReply.new",
+      "mail/pop3_reply:ParsedPopReply.reply",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "pop3-reply": {
+    "path": "std/pop3-reply.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3_reply",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/pop3_reply:ParsedPopReply.reply",
+      "mail/pop3_reply:ParsedPopReply.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "pop3-session-bytes": {
+    "path": "std/pop3-session-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3_session",
+      "mail/pop3"
+    ],
+    "actions": [
+      "mail/pop3_session:PopCommand.bytes",
+      "mail/pop3_session:PopCommand.new",
+      "mail/pop3:PopNumber.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "smtp-maximum-size": {
+    "path": "std/smtp-maximum-size.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp",
+      "mail/smtp_reply"
+    ],
+    "actions": [
+      "mail/smtp:SmtpCapabilities.maximum_size",
+      "mail/smtp:SmtpCapabilities.new",
+      "mail/smtp_reply:SmtpReply.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "smtp-reply-fed": {
+    "path": "std/smtp-reply-fed.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp_reply",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/smtp_reply:SmtpReplyDecoder.fed",
+      "mail/smtp_reply:SmtpReplyDecoder.new",
+      "mail/smtp_reply:SmtpReplyDecoder.finish",
+      "mail/smtp_reply:SmtpReply.text",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "smtp-session-response": {
+    "path": "std/smtp-session-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp_session",
+      "crypto/secret"
+    ],
+    "actions": [
+      "mail/smtp_session:SmtpCredentials.response",
+      "mail/smtp_session:SmtpCredentials.new",
+      "crypto/secret:SecretBytes.new",
+      "crypto/secret:ExportedSecret.new",
+      "crypto/secret:ExportedSecret.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-reply-response": {
+    "path": "std/web-reply-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/reply",
+      "http/header"
+    ],
+    "actions": [
+      "web/reply:TextReply.response",
+      "web/reply:TextReply.new",
+      "http/header:Headers.int"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-internal-reply-response": {
+    "path": "std/web-internal-reply-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/internal/reply",
+      "http/header"
+    ],
+    "actions": [
+      "web/internal/reply:ReplyResponse.response",
+      "web/internal/reply:ReplyResponse.new",
+      "http/header:Headers.new",
+      "http/header:Headers.int"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-exception-response": {
+    "path": "std/web-exception-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/exception",
+      "http/header"
+    ],
+    "actions": [
+      "web/exception:ProblemReply.response",
+      "web/exception:ProblemReply.new",
+      "http/header:Headers.int"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-request-link": {
+    "path": "std/web-request-link.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/request"
+    ],
+    "actions": [
+      "web/request:WebLinks.link",
+      "web/request:WebLinks.new",
+      "web/request:RouteParameter.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-session-text": {
+    "path": "std/web-session-text.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/session",
+      "http/cookie"
+    ],
+    "actions": [
+      "web/session:Session.text",
+      "web/session:Session.new",
+      "http/cookie:SetCookie.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-text": {
+    "path": "std/websocket-text.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket"
+    ],
+    "actions": [
+      "http/websocket:TextWebSocketMessage.text",
+      "http/websocket:TextWebSocketMessage.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-name": {
+    "path": "std/imap-name.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap"
+    ],
+    "actions": [
+      "mail/imap:ImapCapability.name",
+      "mail/imap:ImapCapability.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cache-freshness-age": {
+    "path": "std/http-cache-freshness-age.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_freshness",
+      "http/header",
+      "time/clock",
+      "time/duration"
+    ],
+    "actions": [
+      "http/cache_freshness:CacheFreshness.age",
+      "http/cache_freshness:CacheFreshness.new",
+      "http/cache_freshness:CacheResponseTiming.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "time/clock:Instant.new",
+      "time/clock:MonotonicInstant.new",
+      "time/duration:Duration.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cookie-client-context": {
+    "path": "std/http-cookie-client-context.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie_client",
+      "http/message",
+      "http/cookie_policy",
+      "url/value"
+    ],
+    "actions": [
+      "http/cookie_client:FirstPartyCookies.context",
+      "http/cookie_client:FirstPartyCookies.new",
+      "http/message:Request.new",
+      "http/cookie_policy:CookieContext.site",
+      "url/value:UrlParts.string"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-environment-proxy": {
+    "path": "std/http-environment-proxy.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/environment_proxy",
+      "os/environment",
+      "url/value",
+      "http/proxy_policy"
+    ],
+    "actions": [
+      "http/environment_proxy:EnvironmentProxy.proxy",
+      "http/environment_proxy:EnvironmentProxy.new",
+      "os/environment:Environment.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts",
+      "http/proxy_policy:ProxyPolicy.url",
+      "url/value:UrlParts.string"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-endpoint-allowed": {
+    "path": "std/http-endpoint-allowed.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/endpoint",
+      "url/value",
+      "net/endpoint",
+      "net/ip"
+    ],
+    "actions": [
+      "http/endpoint:LoopbackEndpoints.allowed",
+      "http/endpoint:LoopbackEndpoints.new",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts",
+      "net/endpoint:IpEndpoint.new",
+      "net/ip:IpAddress.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-tls-version": {
+    "path": "std/http2-tls-version.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http2_tls"
+    ],
+    "actions": [
+      "http/http2_tls:Http2TlsProtocol.version",
+      "http/http2_tls:Http2TlsProtocol.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-tls-session-version": {
+    "path": "std/http-tls-session-version.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/tls_session"
+    ],
+    "actions": [
+      "http/tls_session:Http1TlsProtocol.version",
+      "http/tls_session:Http1TlsProtocol.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-client-protocols-selected": {
+    "path": "std/http-client-protocols-selected.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/client_protocols",
+      "http/client_policy",
+      "net/tls",
+      "crypto/x509/trust"
+    ],
+    "actions": [
+      "http/client_protocols:HttpClientProtocols.selected",
+      "http/client_protocols:HttpClientProtocols.new",
+      "http/client_policy:ClientPolicy.new",
+      "net/tls:TlsClientPolicy.new",
+      "crypto/x509/trust:TrustedCertificates.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-handler-response": {
+    "path": "std/http-handler-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/handler",
+      "http/message",
+      "http/status"
+    ],
+    "actions": [
+      "http/handler:ResponseHandling.response",
+      "http/handler:ResponseHandling.new",
+      "http/message:Response.new",
+      "http/status:StatusCode.new",
+      "http/status:StatusCode.status"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-body-check-known": {
+    "path": "std/http1-body-check-known.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_body_check",
+      "http/body",
+      "http/http1_framing",
+      "http/http1_head"
+    ],
+    "actions": [
+      "http/http1_body_check:Http1BodyCheck.known",
+      "http/http1_body_check:Http1BodyCheck.new",
+      "http/body:TextBody.new",
+      "http/body:TextBody.opening",
+      "http/http1_framing:Http1BodyPlan.new",
+      "http/http1_head:Http1Limits.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-writing-bytes": {
+    "path": "std/http1-writing-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_writing",
+      "http/http1_head"
+    ],
+    "actions": [
+      "http/http1_writing:Http1RequestHeadWire.bytes",
+      "http/http1_writing:Http1RequestHeadWire.new",
+      "http/http1_head:ParsedHttp1RequestHead.new",
+      "http/http1_head:ParsedHttp1RequestHead.head",
+      "http/http1_head:Http1Limits.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "hpack-decoded": {
+    "path": "std/hpack-decoded.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/hpack",
+      "http/internal/hpack_tables"
+    ],
+    "actions": [
+      "http/internal/hpack:HpackDecoder.decoded",
+      "http/internal/hpack:HpackDecoder.new",
+      "http/internal/hpack:HpackBudget.new",
+      "http/internal/hpack:HpackEncoded.new",
+      "http/internal/hpack:HpackEncoded.bytes",
+      "http/internal/hpack:HpackDecodedBlock.fields",
+      "http/internal/hpack_tables:HpackField.new",
+      "http/internal/hpack_tables:HpackField.name",
+      "http/internal/hpack_tables:HpackField.value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-fields": {
+    "path": "std/http2-fields.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_fields",
+      "http/message",
+      "http/internal/hpack_tables"
+    ],
+    "actions": [
+      "http/internal/http2_fields:Http2RequestFields.fields",
+      "http/internal/http2_fields:Http2RequestFields.new",
+      "http/message:Request.new",
+      "http/internal/hpack_tables:HpackField.name",
+      "http/internal/hpack_tables:HpackField.value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-headers-frames": {
+    "path": "std/http2-headers-frames.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_headers",
+      "http/internal/hpack_tables",
+      "http/internal/hpack",
+      "http/internal/http2_frame"
+    ],
+    "actions": [
+      "http/internal/http2_headers:Http2EncodedHeaderFrames.frames",
+      "http/internal/http2_headers:Http2EncodedHeaderFrames.new",
+      "http/internal/hpack_tables:HpackField.new",
+      "http/internal/hpack:HpackBudget.new",
+      "http/internal/http2_frame:Http2Frame.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-trailers-check": {
+    "path": "std/http-trailers-check.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/trailers",
+      "http/header"
+    ],
+    "actions": [
+      "http/internal/trailers:HttpTrailerRules.check",
+      "http/internal/trailers:HttpTrailerRules.new",
+      "http/header:Header.new",
+      "http/header:Header.value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-receiving-bodies": {
+    "path": "std/http2-receiving-bodies.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_receiving"
+    ],
+    "actions": [
+      "http/internal/http2_receiving:Http2ReceivingSlot.bodies",
+      "http/internal/http2_receiving:Http2ReceivingSlot.new",
+      "http/internal/http2_receiving:Http2ReceivingSlot.stream"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-sending-close": {
+    "path": "std/http2-sending-close.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_sending"
+    ],
+    "actions": [
+      "http/internal/http2_sending:Http2SendingSlot.close",
+      "http/internal/http2_sending:Http2SendingSlot.new",
+      "http/internal/http2_sending:Http2SendingSlot.closed",
+      "http/internal/http2_sending:Http2SendingSlot.stream"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-server-protocols": {
+    "path": "std/websocket-server-protocols.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_server",
+      "http/websocket",
+      "http/websocket_origin",
+      "time/duration"
+    ],
+    "actions": [
+      "http/websocket_server:WebSocketUpgrade.protocols",
+      "http/websocket_server:WebSocketUpgrade.new",
+      "http/websocket:WebSocketLimits.new",
+      "http/websocket_origin:SameOriginWebSockets.new",
+      "time/duration:Duration.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-client-limits": {
+    "path": "std/websocket-client-limits.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/websocket_client",
+      "http/websocket",
+      "http/endpoint",
+      "time/duration"
+    ],
+    "actions": [
+      "http/websocket_client:WebSocketPolicy.limits",
+      "http/websocket_client:WebSocketPolicy.new",
+      "http/websocket:WebSocketLimits.new",
+      "http/websocket:WebSocketLimits.message_bytes",
+      "http/endpoint:LoopbackEndpoints.new",
+      "time/duration:Duration.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-reading-head": {
+    "path": "std/http1-reading-head.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_reading",
+      "http/body",
+      "encoding/utf"
+    ],
+    "actions": [
+      "http/http1_reading:Http1RequestHeadReading.head",
+      "http/http1_reading:Http1RequestHeadReading.new",
+      "http/http1_reading:Http1HeadRead.consumed",
+      "http/body:ByteBodyInput.close",
+      "http/body:ByteBodyInput.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-reading-frame": {
+    "path": "std/http2-reading-frame.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_reading",
+      "http/body",
+      "http/internal/http2_frame"
+    ],
+    "actions": [
+      "http/internal/http2_reading:Http2FrameReading.frame",
+      "http/internal/http2_reading:Http2FrameReading.new",
+      "http/body:ByteBodyInput.new",
+      "http/body:ByteBodyInput.close",
+      "http/internal/http2_frame:Http2FrameHeader.new",
+      "http/internal/http2_frame:Http2FrameHeader.bytes",
+      "http/internal/http2_frame:Http2Frame.header",
+      "http/internal/http2_frame:Http2Frame.payload",
+      "http/internal/http2_frame:Http2FrameHeader.stream"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-reading-frame": {
+    "path": "std/websocket-reading-frame.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_reading",
+      "http/body",
+      "http/internal/websocket_frame"
+    ],
+    "actions": [
+      "http/internal/websocket_reading:WebSocketFrameReading.frame",
+      "http/internal/websocket_reading:WebSocketFrameReading.new",
+      "http/body:ByteBodyInput.new",
+      "http/body:ByteBodyInput.close",
+      "http/internal/websocket_frame:WebSocketFrame.new",
+      "http/internal/websocket_frame:WebSocketFrame.bytes",
+      "http/internal/websocket_frame:WebSocketFrame.payload"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-upgrade-bytes": {
+    "path": "std/websocket-upgrade-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_upgrade",
+      "http/body"
+    ],
+    "actions": [
+      "http/internal/websocket_upgrade:WebSocketPrefixedInput.bytes",
+      "http/internal/websocket_upgrade:WebSocketPrefixedInput.new",
+      "http/body:ByteBodyInput.new",
+      "http/body:ByteBodyInput.close"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-reading-read": {
+    "path": "std/imap-reading-read.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_reading",
+      "http/body",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/imap_reading:ImapResponseReading.read",
+      "mail/imap_reading:ImapResponseReading.new",
+      "mail/imap_reading:ImapResponseRead.consumed",
+      "http/body:ByteBodyInput.close",
+      "http/body:ByteBodyInput.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "smtp-reading-read": {
+    "path": "std/smtp-reading-read.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp_reading",
+      "http/body",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/smtp_reading:SmtpReplyReading.read",
+      "mail/smtp_reading:SmtpReplyReading.new",
+      "mail/smtp_reading:SmtpReplyRead.consumed",
+      "http/body:ByteBodyInput.close",
+      "http/body:ByteBodyInput.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "pop3-reading-read": {
+    "path": "std/pop3-reading-read.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/pop3_reading",
+      "http/body",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/pop3_reading:PopReplyReading.read",
+      "mail/pop3_reading:PopReplyReading.new",
+      "mail/pop3_reading:PopReplyRead.consumed",
+      "http/body:ByteBodyInput.close",
+      "http/body:ByteBodyInput.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-form-parameters": {
+    "path": "std/http-form-parameters.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/form",
+      "http/body",
+      "url/query"
+    ],
+    "actions": [
+      "http/form:ParsedUrlEncodedForm.parameters",
+      "http/form:ParsedUrlEncodedForm.new",
+      "http/form:ParsedUrlEncodedForm.close",
+      "http/form:FormLimits.new",
+      "http/body:TextBody.new",
+      "http/body:TextBody.opening",
+      "http/body:BodyOpening.reading",
+      "url/query:QueryParameters.int"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-messages-accept": {
+    "path": "std/websocket-messages-accept.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_messages",
+      "http/internal/websocket_frame",
+      "http/websocket"
+    ],
+    "actions": [
+      "http/internal/websocket_messages:WebSocketMessageAssembly.accept",
+      "http/internal/websocket_messages:WebSocketMessageAssembly.new",
+      "http/internal/websocket_messages:WebSocketMessageAssembly.close",
+      "http/internal/websocket_frame:WebSocketFrame.new",
+      "http/websocket:WebSocketLimits.new",
+      "http/websocket:WebSocketMessage.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-body-coding-contained": {
+    "path": "std/http-body-coding-contained.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/body_coding",
+      "http/body",
+      "compression/gzip"
+    ],
+    "actions": [
+      "http/body_coding:GzipEncodedBody.contained",
+      "http/body_coding:GzipEncodedBody.new",
+      "http/body:TextBody.new",
+      "http/body:TextBody.opening",
+      "compression/gzip:GzipDecompressed.new",
+      "compression/gzip:GzipDecompressed.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-digest-response-digest": {
+    "path": "std/http-digest-response-digest.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/digest",
+      "http/auth_challenge",
+      "crypto/secret"
+    ],
+    "actions": [
+      "http/digest:DigestCredentials.response_digest",
+      "http/digest:DigestCredentials.new",
+      "http/digest:DigestChallenge.new",
+      "http/auth_challenge:AuthenticationChallenges.new",
+      "http/auth_challenge:AuthenticationChallenges.values",
+      "crypto/secret:SecretBytes.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-message-uid": {
+    "path": "std/imap-message-uid.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_message",
+      "mail/imap_response",
+      "encoding/utf",
+      "mail/imap_uid"
+    ],
+    "actions": [
+      "mail/imap_message:ImapFetch.uid",
+      "mail/imap_message:ImapFetch.new",
+      "mail/imap_response:ParsedImapResponse.new",
+      "mail/imap_response:ParsedImapResponse.response",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes",
+      "mail/imap_uid:ImapUid.number"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-session-expire": {
+    "path": "std/imap-session-expire.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_session",
+      "mail/imap_name"
+    ],
+    "actions": [
+      "mail/imap_session:ImapSelectionToken.expire",
+      "mail/imap_session:ImapSelectionToken.new",
+      "mail/imap_session:ImapSelectionToken.closed",
+      "mail/imap_session:ImapSelectionToken.generation",
+      "mail/imap_name:ImapMailboxName.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-state-messages": {
+    "path": "std/imap-state-messages.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_state",
+      "mail/imap_command_reading",
+      "mail/imap_response",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/imap_state:ImapMailboxState.messages",
+      "mail/imap_state:ImapMailboxState.new",
+      "mail/imap_command_reading:ImapCommandRead.new",
+      "mail/imap_response:ParsedImapResponse.new",
+      "mail/imap_response:ParsedImapResponse.response",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "smtp-data-bytes": {
+    "path": "std/smtp-data-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/smtp_data",
+      "mail/message",
+      "mail/smtp",
+      "mail/smtp_reply",
+      "encoding/utf"
+    ],
+    "actions": [
+      "mail/smtp_data:PreparedSmtpData.bytes",
+      "mail/smtp_data:PreparedSmtpData.new",
+      "mail/message:ParsedMail.new",
+      "mail/message:ParsedMail.message",
+      "mail/smtp:SmtpCapabilities.new",
+      "mail/smtp_reply:SmtpReply.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-around-routes": {
+    "path": "std/web-around-routes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/around"
+    ],
+    "actions": [
+      "web/around:Cors.routes",
+      "web/around:Cors.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-routing-routes": {
+    "path": "std/web-routing-routes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/routing",
+      "http/routing"
+    ],
+    "actions": [
+      "web/routing:Get.routes",
+      "web/routing:Get.new",
+      "http/routing:Route.pattern",
+      "http/routing:RoutePattern.string"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "web-testing-get": {
+    "path": "std/web-testing-get.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "web/testing",
+      "web/routing",
+      "http/exchange",
+      "web/reply"
+    ],
+    "actions": [
+      "web/testing:WebTestClient.get",
+      "web/testing:WebTestClient.new",
+      "web/routing:WebRoutes.new",
+      "web/routing:Get.new",
+      "http/exchange:ClientResponse.text",
+      "web/reply:TextReply.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cookie-jar-store": {
+    "path": "std/http-cookie-jar-store.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cookie_jar",
+      "url/value",
+      "http/header",
+      "http/cookie_policy",
+      "collections/sequence",
+      "http/cookie"
+    ],
+    "actions": [
+      "http/cookie_jar:MemoryCookieJar.store",
+      "http/cookie_jar:MemoryCookieJar.new",
+      "http/cookie_jar:MemoryCookieJar.cookies",
+      "http/cookie_jar:MemoryCookieJar.close",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "http/cookie_policy:CookieContext.new",
+      "collections/sequence:Sequencing.first",
+      "http/cookie:Cookie.value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-continue-begun": {
+    "path": "std/http1-continue-begun.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_continue",
+      "time/duration"
+    ],
+    "actions": [
+      "http/http1_continue:Http1ContinueState.begun",
+      "http/http1_continue:Http1ContinueState.new",
+      "http/http1_continue:Http1ContinueState.body_sent",
+      "time/duration:Duration.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-body-writing-output": {
+    "path": "std/http1-body-writing-output.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_body_writing",
+      "http/body",
+      "http/header",
+      "http/http1_framing",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "http/http1_body_writing:Http1BodyWriting.output",
+      "http/http1_body_writing:Http1BodyWriting.new",
+      "http/body:TextBody.new",
+      "http/body:TextBody.opening",
+      "http/header:Headers.new",
+      "http/http1_framing:Http1BodyPlan.new",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-message-writing-output": {
+    "path": "std/http1-message-writing-output.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_message_writing",
+      "http/message",
+      "http/body",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "http/http1_message_writing:Http1ResponseWriting.output",
+      "http/http1_message_writing:Http1ResponseWriting.new",
+      "http/message:Response.new",
+      "http/body:TextBody.new",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-body-bytes": {
+    "path": "std/http1-body-bytes.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_body",
+      "http/body",
+      "http/http1_framing",
+      "http/header",
+      "encoding/utf"
+    ],
+    "actions": [
+      "http/http1_body:Http1BodyReading.bytes",
+      "http/http1_body:Http1BodyReading.new",
+      "http/http1_body:Http1BodyReading.close",
+      "http/body:ByteBodyInput.new",
+      "http/http1_framing:Http1BodyPlan.new",
+      "http/header:Headers.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-request-context-parameters": {
+    "path": "std/http-request-context-parameters.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/request_context",
+      "async/cancellation",
+      "net/endpoint",
+      "net/ip",
+      "net/stream",
+      "http/exchange"
+    ],
+    "actions": [
+      "http/request_context:HttpRequestContext.parameters",
+      "http/request_context:HttpRequestContext.new",
+      "async/cancellation:Cancellation.new",
+      "async/cancellation:Cancellation.cancelling",
+      "net/endpoint:IpEndpoint.new",
+      "net/ip:IpAddress.new",
+      "net/stream:ConnectionEndpoints.new",
+      "http/exchange:ExchangeDetails.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http1-session-response": {
+    "path": "std/http1-session-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http1_session",
+      "http/message",
+      "http/status"
+    ],
+    "actions": [
+      "http/http1_session:Http1Exchange.response",
+      "http/http1_session:Http1Exchange.new",
+      "http/message:Request.new",
+      "http/message:Response.new",
+      "http/status:StatusCode.new",
+      "http/status:StatusCode.status"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-session-response": {
+    "path": "std/http2-session-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/http2_session",
+      "http/message",
+      "http/status"
+    ],
+    "actions": [
+      "http/http2_session:Http2Exchange.response",
+      "http/http2_session:Http2Exchange.new",
+      "http/message:Request.new",
+      "http/message:Response.new",
+      "http/status:StatusCode.new",
+      "http/status:StatusCode.status"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-conversation-response": {
+    "path": "std/http-conversation-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/conversation",
+      "http/message",
+      "http/status",
+      "http/body"
+    ],
+    "actions": [
+      "http/conversation:HttpConversationExchange.response",
+      "http/conversation:HttpConversationExchange.new",
+      "http/conversation:HttpConversationExchange.close",
+      "http/message:Request.new",
+      "http/message:Response.new",
+      "http/status:StatusCode.new",
+      "http/status:StatusCode.status",
+      "http/body:ByteBodyInput.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-retry-response": {
+    "path": "std/http-retry-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/retry",
+      "http/message",
+      "http/header",
+      "net/endpoint",
+      "net/ip",
+      "net/stream",
+      "http/exchange"
+    ],
+    "actions": [
+      "http/retry:Retrying.response",
+      "http/retry:Retrying.new",
+      "http/message:Request.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "http/header:Headers.int",
+      "net/endpoint:IpEndpoint.new",
+      "net/ip:IpAddress.new",
+      "net/stream:ConnectionEndpoints.new",
+      "http/exchange:ExchangeDetails.new",
+      "http/exchange:ClientResponse.new",
+      "http/message:Response.new",
+      "http/header:Headers.text"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-redirect-response": {
+    "path": "std/http-redirect-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/redirect",
+      "http/message",
+      "http/header",
+      "net/endpoint",
+      "net/ip",
+      "net/stream",
+      "http/exchange"
+    ],
+    "actions": [
+      "http/redirect:Redirecting.response",
+      "http/redirect:Redirecting.new",
+      "http/message:Request.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "http/header:Headers.int",
+      "net/endpoint:IpEndpoint.new",
+      "net/ip:IpAddress.new",
+      "net/stream:ConnectionEndpoints.new",
+      "http/exchange:ExchangeDetails.new",
+      "http/redirect:Redirects.new",
+      "http/exchange:ClientResponse.new",
+      "http/message:Response.new",
+      "http/header:Headers.text"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cache-response": {
+    "path": "std/http-cache-response.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache",
+      "http/message",
+      "http/header",
+      "net/endpoint",
+      "net/ip",
+      "net/stream",
+      "http/exchange",
+      "http/cache_memory"
+    ],
+    "actions": [
+      "http/cache:Caching.response",
+      "http/cache:Caching.new",
+      "http/message:Request.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "http/header:Headers.int",
+      "net/endpoint:IpEndpoint.new",
+      "net/ip:IpAddress.new",
+      "net/stream:ConnectionEndpoints.new",
+      "http/exchange:ExchangeDetails.new",
+      "http/cache_memory:MemoryHttpCache.new",
+      "http/cache_memory:MemoryHttpCache.close",
+      "http/exchange:ClientResponse.new",
+      "http/message:Response.new",
+      "http/header:Headers.text"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-cache-validation-request": {
+    "path": "std/http-cache-validation-request.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/cache_validation",
+      "http/cache_memory",
+      "http/cache_freshness",
+      "http/message",
+      "http/exchange",
+      "http/header",
+      "time/clock",
+      "time/duration",
+      "net/endpoint",
+      "net/ip",
+      "net/stream"
+    ],
+    "actions": [
+      "http/cache_validation:CacheValidation.request",
+      "http/cache_validation:CacheValidation.new",
+      "http/cache_memory:CachedHttpEntry.new",
+      "http/cache_freshness:CacheResponseTiming.new",
+      "http/message:Request.new",
+      "http/message:Response.new",
+      "http/exchange:ClientResponse.new",
+      "http/header:Headers.new",
+      "http/header:Header.new",
+      "http/header:Headers.text",
+      "time/clock:Instant.new",
+      "time/clock:MonotonicInstant.new",
+      "time/duration:Duration.new",
+      "net/endpoint:IpEndpoint.new",
+      "net/ip:IpAddress.new",
+      "net/stream:ConnectionEndpoints.new",
+      "http/exchange:ExchangeDetails.new"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-output-submit": {
+    "path": "std/http2-output-submit.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_output",
+      "http/internal/http2_frame",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "http/internal/http2_output:Http2ConnectionOutput.submit",
+      "http/internal/http2_output:Http2ConnectionOutput.new",
+      "http/internal/http2_output:Http2ConnectionOutput.take",
+      "http/internal/http2_output:Http2ConnectionOutput.abort",
+      "http/internal/http2_output:Http2OutputTicket.size",
+      "http/internal/http2_frame:Http2Frame.new",
+      "http/internal/http2_frame:Http2FrameHeader.new",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "websocket-output-message": {
+    "path": "std/websocket-output-message.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/websocket_output",
+      "http/websocket",
+      "random/source",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "http/internal/websocket_output:WebSocketOutput.message",
+      "http/internal/websocket_output:WebSocketOutput.new",
+      "http/internal/websocket_output:WebSocketOutput.abort",
+      "http/internal/websocket_output:WebSocketOutputTicket.payload",
+      "http/internal/websocket_output:WebSocketOutputTicket.opcode",
+      "http/websocket:TextWebSocketMessage.new",
+      "http/websocket:WebSocketLimits.new",
+      "random/source:PcgRandom.new",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-preface-settings": {
+    "path": "std/http2-preface-settings.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_preface",
+      "http/body",
+      "http/http2_settings",
+      "http/internal/http2_frame",
+      "http/internal/http2_settings",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "http/internal/http2_preface:Http2ClientPreface.settings",
+      "http/internal/http2_preface:Http2ClientPreface.new",
+      "http/body:ByteBodyInput.new",
+      "http/body:ByteBodyInput.close",
+      "http/http2_settings:Http2Settings.new",
+      "http/internal/http2_frame:Http2Frame.new",
+      "http/internal/http2_frame:Http2Frame.bytes",
+      "http/internal/http2_frame:Http2FrameHeader.new",
+      "http/internal/http2_settings:Http2PeerSettings.initial_window",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http-proxy-tunnel-ready": {
+    "path": "std/http-proxy-tunnel-ready.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/proxy_tunnel",
+      "http/body",
+      "url/value",
+      "encoding/utf",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "http/proxy_tunnel:HttpProxyTunnel.ready",
+      "http/proxy_tunnel:HttpProxyTunnel.new",
+      "http/body:ByteBodyInput.close",
+      "url/value:ParsedUrl.new",
+      "url/value:ParsedUrl.parts",
+      "http/body:ByteBodyInput.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "imap-exchange-perform": {
+    "path": "std/imap-exchange-perform.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "mail/imap_exchange",
+      "mail/imap_command",
+      "mail/imap_name",
+      "mail/imap_command_reading",
+      "http/body",
+      "encoding/utf",
+      "async/atomic",
+      "io/stream"
+    ],
+    "actions": [
+      "mail/imap_exchange:ImapCommandChannel.perform",
+      "mail/imap_exchange:ImapCommandChannel.new",
+      "mail/imap_exchange:ImapCommandChannel.close",
+      "mail/imap_command:ImapCommand.new",
+      "mail/imap_name:ImapMailboxName.new",
+      "mail/imap_command_reading:ImapCommandLimits.new",
+      "mail/imap_command_reading:ImapCommandRead.successful",
+      "http/body:ByteBodyInput.new",
+      "encoding/utf:Utf8Encoded.new",
+      "encoding/utf:Utf8Encoded.bytes",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value",
+      "io/stream:ByteSource.bytes"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
+  },
+  "http2-input-run": {
+    "path": "std/http2-input-run.ok",
+    "unit": "iteration",
+    "scale": 1,
+    "allocation_sensitive": true,
+    "targets": [
+      "http/internal/http2_input",
+      "http/body",
+      "http/http2_settings",
+      "http/internal/http2_frame",
+      "http/internal/http2_settings",
+      "async/atomic"
+    ],
+    "actions": [
+      "http/internal/http2_input:Http2ConnectionInput.run",
+      "http/internal/http2_input:Http2ConnectionInput.new",
+      "http/body:ByteBodyInput.new",
+      "http/body:ByteBodyInput.close",
+      "http/http2_settings:Http2Settings.new",
+      "http/internal/http2_frame:Http2Frame.new",
+      "http/internal/http2_frame:Http2Frame.bytes",
+      "http/internal/http2_frame:Http2FrameHeader.new",
+      "http/internal/http2_frame:Http2Frame.header",
+      "http/internal/http2_frame:Http2FrameHeader.flags",
+      "http/internal/http2_settings:Http2PeerSettings.new",
+      "http/internal/http2_settings:Http2PeerSettings.initial_window",
+      "async/atomic:Atomic.new",
+      "async/atomic:Atomic.replace",
+      "async/atomic:Atomic.value"
+    ],
+    "interpretation": "Optimized composite iteration, including checksum, loop and listed setup; not the isolated primitive latency."
   }
 }

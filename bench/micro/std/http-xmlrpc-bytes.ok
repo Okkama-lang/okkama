@@ -1,0 +1,33 @@
+// #244: XML-RPC сериализация и парсинг integer call.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/xmlrpc" take ParsedXmlRpcCall, XmlRpcCall, XmlRpcCallWire, XmlRpcInteger, XmlRpcLimits, XmlRpcValue;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let value = XmlRpcCall("sum",[XmlRpcInteger(v)]);
+        let data = XmlRpcCallWire(value,XmlRpcLimits()).bytes();
+        let parsed = ParsedXmlRpcCall(data,XmlRpcLimits()).call();
+        let contribution = parsed.parameter(0).int();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

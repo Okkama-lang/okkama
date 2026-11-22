@@ -1,0 +1,41 @@
+// #244: Асинхронный frame reader на памяти.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/internal/http2_reading" take Http2FrameReading;
+import "http/body" take ByteBodyInput;
+import "http/internal/http2_frame" take Http2Frame, Http2FrameHeader;
+
+
+
+object Sum { has total is int; Sum(:total); add(value is int) is ^Sum { ^total = total + value; } total() is int { total; } }
+
+object Bench {
+    Bench();
+    async run(n is int) is int {
+        let sum = Sum(total: 0);
+        for 0..n -> i {
+            let v = i % 251 + 1;
+            let x = v.string();
+            let data = Http2FrameHeader(byte(0),byte(1),v,1).bytes()+[byte(7)];
+            let input = ByteBodyInput(data);
+            let frame = await Http2FrameReading(input).frame();
+            let contribution = frame.header().stream()+frame.payload()[0].int();
+            input.close();
+            sum = sum.add(contribution);
+        }
+        sum.total();
+    }
+}
+
+async main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = await bench.run(measure.warmup());
+    let before = measure.start();
+    let check = await bench.run(n);
+    measure.finish(before, check, warm);
+    0;
+}
