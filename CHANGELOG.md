@@ -51,12 +51,22 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   longer silently wins. `m + [k: v]` still replaces. The runtime's key text for an object key no longer reads
   the object as an integer (it crashed "Map key not found" for object keys).
 
+### Security
+- **Both Cargo lockfiles are audited (#960).** The fuzz workspace's lockfile is regenerated from the current
+  manifests (it no longer resolved under `--locked`, and its old SQLite and RSA versions matched RustSec
+  advisories). The Audit workflow checks `okkama-rs/Cargo.lock` and `okkama-rs/fuzz/Cargo.lock` with the same
+  `--deny warnings` policy, and the fuzz job builds, runs and measures coverage on the checked-in graph.
+
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,
   builtin actions, std index, glossary, references), as Markdown and as PDF with listings coloured from the
   compiler's tokens. Every chapter was checked against the 0.6.2 source, and its 246 examples run with
   `build.py --check`. The defects and doubts found are in the milestone "Bible findings" (#952–#959,
   #964–#970).
+- **The security model** (`docs/security-model.md`) describes Sparrow 0.6.3, each boundary with the code and
+  the test that hold it (#962): exact payload agreement of channel endpoints and its scope, the permissive
+  native default and an explicitly restricted configuration, process- and runtime-scoped memory budgets, and
+  why cancellation inside a native call is cooperative. OS isolation stays the boundary for hostile code.
 - **The Okkama Book (EN/RU)** checked against the 0.6.2 source as well: the Rust implementation and Sparrow
   instead of the retired Perl interpreter, static errors no longer called runtime errors, removed modules and
   natives replaced by the current std (`math/decimal`, `regex/pattern`, `debug/dumper`, `testing/check`),

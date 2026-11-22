@@ -23,6 +23,10 @@ COVERAGE=0
 [[ "${2:-}" == "--coverage" ]] && COVERAGE=1
 FUZZ="$ROOT/okkama-rs/fuzz"
 TARGETS=(lex parse analyze ir_verify spb exec)
+# cargo-fuzz does not expose --locked; its child Cargo invocations use PATH.
+# Keep every build/check/metadata invocation on the checked-in graph.
+export OKKAMA_FUZZ_CARGO="$(command -v cargo)"
+export PATH="$ROOT/tools/fuzz/locked-cargo:$PATH"
 cd "$FUZZ"
 
 # Seeds: every Okkama source of the repository for the source targets.

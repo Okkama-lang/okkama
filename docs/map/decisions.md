@@ -6,6 +6,14 @@ the session's memory; older rulings live in the commits and tickets named.
 
 ## Direction (owner)
 
+- **2026-11-22. Security refresh #960/#963/#962 (owner task).** Keep one
+  advisory failure policy for main/fuzz lockfiles. cargo-fuzz lacks a locked
+  option, so its child Cargo build/check/metadata commands are wrapped with
+  --locked. Coverage references identify the inspected source revision; runtime
+  records separately identify binary provenance and never turn external guard
+  stops or excluded scenarios into PASS. Document channel payload matching only
+  within its verified scope; budgets and native groups are not OS isolation.
+
 - **2026-11-22. #949 HTTP/2 session startup (supplied ticket).**
   `FutureGroup.start` is eager and `close` seals the loops group. Hold the
   reader and idle loop on a local Event, register/start the writer last, then

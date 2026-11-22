@@ -1,5 +1,18 @@
 # State (update at the end of every task)
 
+## Security release 0.6.3 (#960, #963, #962; 2026-11-22)
+
+- [x] #960: fuzz lockfile regenerated from the current manifests; both
+  lockfiles pass `cargo audit --deny warnings`. Audit CI checks both graphs;
+  tools/fuzz/locked-cargo puts `--locked` on cargo-fuzz's child
+  build/check/metadata calls (cargo-fuzz has no such option).
+- [x] #963: the Security audit kit (outside the repo) is Sparrow-only; #382/#399
+  point at okkama-cli; structural check 64/64; runs record source and binary
+  revisions separately.
+- [x] #962: docs/security-model.md checked against implementation and tests:
+  exact channel payload scope, permissive native default, explicit
+  restrictions, memory scopes, cooperative native cancellation.
+
 ## #965 data_dump diagnostics (2026-11-22, feature/965-data-dump)
 
 - [x] Preserve primitive formatting; unsupported values raise the existing
