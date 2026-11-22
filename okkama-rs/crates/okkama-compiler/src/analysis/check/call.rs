@@ -1710,6 +1710,20 @@ impl Checker<'_, '_> {
             };
             values.push(value);
         }
+        // `is`/`isnt` compare their operands like `==` (#991): the same type after an untagged
+        // literal takes its sibling's, or the call is refused here instead of aborting the run.
+        if matches!(name.text.as_str(), "is" | "isnt")
+            && let (Some(right), Some(left)) = (values.pop(), values.pop())
+        {
+            let (left, right) = self.retag_operands(left, right);
+            let (lt, rt) = (Self::ty_of(&left).taken(), Self::ty_of(&right).taken());
+            if lt != rt && !lt.is_error() && !rt.is_error() && !left.diverges && !right.diverges {
+                let message = format!("Cannot compare {} and {}", self.type_name(&lt), self.type_name(&rt));
+                self.error(span, message);
+                return Self::poisoned(span);
+            }
+            values = vec![left, right];
+        }
         let call = ExprKind::Call {
             callee: Callee::Test(name.text.clone()),
             args: values,

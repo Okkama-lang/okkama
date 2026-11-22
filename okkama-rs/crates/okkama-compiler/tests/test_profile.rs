@@ -88,3 +88,20 @@ fn removed_intrinsics_are_rejected_at_the_oir_boundary() {
         assert!(error.to_string().contains(&expected), "{error}");
     }
 }
+
+/// `test.is` and `test.isnt` compare like `==` (#991): operands of different types are a
+/// semantic error at the call instead of a run that aborts; an untagged literal still takes its
+/// sibling's type.
+#[test]
+fn test_is_and_isnt_operands_must_be_comparable() {
+    for call in ["test.is(1, \"x\")", "test.isnt(1, \"x\")", "test.is([1], [\"x\"])"] {
+        let text = format!("module app v1.0.0; main() is int {{ 0; }} test \"mixed\" {{ {call}; }}");
+        let error = lower(&text, "mixed.ok").expect_err(call);
+        assert!(error.contains("Cannot compare"), "{call}: {error}");
+    }
+    for call in ["test.is(1, 1)", "test.isnt(\"a\", \"b\")", "test.is([[1]], [[]])", "test.is([], [1])"] {
+        let text = format!("module app v1.0.0; main() is int {{ 0; }} test \"same\" {{ {call}; }}");
+        let module = lower(&text, "same.ok").unwrap_or_else(|error| panic!("{call}: {error}"));
+        ir::verify(&module).unwrap_or_else(|error| panic!("{call}: {error:?}"));
+    }
+}
