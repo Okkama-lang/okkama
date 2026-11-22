@@ -221,10 +221,13 @@ class Program:
         lines += ["}", ""]
         lines.append(f"{prefix}main() is int {{")
         lines.append("    let checks = Checks();")
-        lines.append(f"    let t = Tap({len(self.checks)});")
+        # A part returns the Tap it was given, but not as a successor of it: a
+        # rebind takes only a successor of the same object (#984), so each
+        # part's result gets its own binding.
+        lines.append(f"    let t0 = Tap({len(self.checks)});")
         for index in range(len(parts)):
-            lines.append(f"    t = {'await ' if self.asynchronous else ''}checks.part{index}(t);")
-        lines += ["    t.done();", "}", ""]
+            lines.append(f"    let t{index + 1} = {'await ' if self.asynchronous else ''}checks.part{index}(t{index});")
+        lines += [f"    t{len(parts)}.done();", "}", ""]
         return "\n".join(lines)
 
 

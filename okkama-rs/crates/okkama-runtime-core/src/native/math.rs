@@ -824,7 +824,7 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
         }
         "distribution_sqrt" => {
             let value = float(&args[0])?;
-            if !(value >= 0.0) {
+            if value.is_nan() || value < 0.0 {
                 return Err(failed(native));
             }
             Ok(Value::Float(value.sqrt()))
