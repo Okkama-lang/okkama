@@ -70,7 +70,45 @@ class _HtmlEventCount(HTMLParser):
     def handle_comment(self,data):
         self.events+=1
 
+# The http, web and mail programs (#244), answered by http244_contribution.
+HTTP244_PROGRAMS = frozenset({
+    'hpack-decoded', 'hpack-primitives-bytes', 'hpack-static-names', 'hpack-tables-added',
+    'http-auth-authorization', 'http-auth-challenge-values', 'http-body-coding-contained',
+    'http-body-opening', 'http-cache-admission-join', 'http-cache-control-seconds',
+    'http-cache-freshness-age', 'http-cache-memory-headers', 'http-cache-response',
+    'http-cache-validation-request', 'http-client-policy-http1', 'http-client-protocols-selected',
+    'http-client-request', 'http-content-coding-string', 'http-conversation-response',
+    'http-cookie-client-context', 'http-cookie-jar-store', 'http-cookie-pair', 'http-cookie-policy-matches',
+    'http-digest-response-digest', 'http-endpoint-allowed', 'http-environment-proxy', 'http-exchange-string',
+    'http-form-parameters', 'http-handler-response', 'http-header-int', 'http-message-new',
+    'http-proxy-policy-url', 'http-proxy-request', 'http-proxy-tunnel-ready', 'http-redirect-response',
+    'http-request-context-parameters', 'http-retry-response', 'http-robots-allowed', 'http-routing-match',
+    'http-server-policy-handling-timeout', 'http-sse-retry', 'http-static-indexes',
+    'http-tls-session-version', 'http-token-string', 'http-trailers-check',
+    'http-transport-observation-begin', 'http-version', 'http-wire-bytes', 'http-xmlrpc-bytes',
+    'http1-body-bytes', 'http1-body-check-known', 'http1-body-writing-output', 'http1-chunk-size',
+    'http1-continue-begun', 'http1-framing-plan', 'http1-head', 'http1-message-writing-output',
+    'http1-reading-head', 'http1-session-response', 'http1-writing-bytes', 'http2-body-known',
+    'http2-controls-frame', 'http2-fields', 'http2-flow-sent', 'http2-frame-bytes', 'http2-headers-frames',
+    'http2-input-run', 'http2-life-allocated', 'http2-output-submit', 'http2-preface-settings',
+    'http2-reading-frame', 'http2-receiving-bodies', 'http2-sending-close', 'http2-session-response',
+    'http2-settings-bytes', 'http2-settings-setting', 'http2-tls-version', 'imap-command-bytes',
+    'imap-command-reading-string', 'imap-data-tokens', 'imap-exchange-perform', 'imap-message-uid',
+    'imap-metadata-uids', 'imap-name', 'imap-name-wire-name', 'imap-reading-read', 'imap-response',
+    'imap-search-key', 'imap-session-expire', 'imap-state-messages', 'imap-uid-argument',
+    'mail-mailbox-membership', 'mail-message-string', 'mbox-string', 'pop3-reading-read', 'pop3-reply',
+    'pop3-session-bytes', 'pop3-size', 'smtp-data-bytes', 'smtp-maximum-size', 'smtp-reading-read',
+    'smtp-reply-fed', 'smtp-session-response', 'web-around-routes', 'web-exception-response',
+    'web-internal-reply-response', 'web-reply-response', 'web-request-link', 'web-routing-routes',
+    'web-session-text', 'web-testing-get', 'websocket-client-limits', 'websocket-frame-bytes',
+    'websocket-handshake-string', 'websocket-messages-accept', 'websocket-origin-allowed',
+    'websocket-output-message', 'websocket-reading-frame', 'websocket-server-protocols', 'websocket-text',
+    'websocket-upgrade-bytes',
+})
+
 def contribution(name, i):
+    if name in HTTP244_PROGRAMS:
+        return http244_contribution(name, i)
     if name in {'baseline','constructor-generic','destroy','defer','async-await','spawn','channel','cancel','cancel-async-cleanup','event-wake','map-bigint-key','map-long-key','map-replace','map-empty','rat-add','rat-int-round-trip','json-parse','map-plus','array-plus','map-literal','map-literal-8','map-literal-12'}: return i % 7
     if name=='baseline-async':return i%7
     if name in {'defer-observed','destroy-observed'}:return i%7+1
@@ -382,3 +420,253 @@ def pcg_integer16(seed):
 def expected(name,n):
     if n<0:raise ValueError('negative iteration count')
     return sum(contribution(name,i) for i in range(n))
+
+
+# BEGIN #244 HTTP / WEB / MAIL (independent, hand-written formulas)
+def http244_contribution(name, i):
+    v = i % 251 + 1
+    x = str(v)
+    # Basic: сборка Authorization и Base64
+    if name == 'http-auth-authorization': return sum(b"Basic " + base64.b64encode(("user"+x+":pw"+x).encode()))
+    # Разбор Basic challenge и quoted realm
+    if name == 'http-auth-challenge-values': return len("area"+x)
+    # Текстовое тело: UTF-8 и длина
+    if name == 'http-body-opening': return len("body"+x)
+    # Счётчик участников cache admission
+    if name == 'http-cache-admission-join': return 2+len("key"+x)
+    # Разбор Cache-Control max-age
+    if name == 'http-cache-control-seconds': return v
+    # Копирование сохраняемых cache headers
+    if name == 'http-cache-memory-headers': return len(x)
+    # Преобразование лимитов HTTP/1
+    if name == 'http-client-policy-http1': return 1024+v
+    # Подготовка прямого HTTP request
+    if name == 'http-client-request': return len("/a"+x)
+    # Валидация и lowercase content coding
+    if name == 'http-content-coding-string': return ord("x")+len("x-coding"+x)
+    # Рендеринг cookie pair
+    if name == 'http-cookie-pair': return len("sid="+x)
+    # Граница сегмента пути cookie
+    if name == 'http-cookie-policy-matches': return v
+    # Ключ origin соединения
+    if name == 'http-exchange-string': return len("https://example.test:"+str(8000+v))
+    # Case-insensitive поиск и целочисленный header
+    if name == 'http-header-int': return v
+    # Размер chunk и extension (цифры трактуются как hex)
+    if name == 'http1-chunk-size': return int(x,16)
+    # Парсинг request line и Host
+    if name == 'http1-head': return len("/a"+x)
+    # Выбор fixed-length framing
+    if name == 'http1-framing-plan': return v
+    # Сериализация SETTINGS
+    if name == 'http2-settings-bytes': return sum(bytes.fromhex("0001000010000002000000000003000000640004")+(65535+v).to_bytes(4,"big")+bytes.fromhex("000500004000"))
+    # HPACK prefix integer (RFC 7541 §5.1)
+    if name == 'hpack-primitives-bytes': return 127 + (v if v<128 else (v%128+128)+(v//128))
+    # HPACK static table первые семь записей
+    if name == 'hpack-static-names': return len([":authority",":method",":method",":path",":path",":scheme",":scheme"][i%7])+len(["","GET","POST","/","/index.html","http","https"][i%7])
+    # Вставка HPACK dynamic entry и accounting
+    if name == 'hpack-tables-added': return 32+len("x-id")+len(x)
+    # Проверка HTTP/2 Content-Length
+    if name == 'http2-body-known': return v
+    # Девятибайтовый HTTP/2 frame header
+    if name == 'http2-frame-bytes': return 4+sum(v.to_bytes(4,"big"))
+    # RST_STREAM frame
+    if name == 'http2-controls-frame': return 4+3+8+sum(v.to_bytes(4,"big"))
+    # Flow-control списание window
+    if name == 'http2-flow-sent': return 65535-v
+    # Выделение нечётного client stream id
+    if name == 'http2-life-allocated': return 2*v+3
+    # Применение INITIAL_WINDOW_SIZE
+    if name == 'http2-settings-setting': return 65535+v
+    # XOR WebSocket masking
+    if name == 'websocket-frame-bytes': return (v%256)^1
+    # Ограниченная конкатенация wire chunks
+    if name == 'http-wire-bytes': return v%256+5
+    # Сборка response и длина тела
+    if name == 'http-message-new': return len("body"+x)
+    # Валидация proxy URL
+    if name == 'http-proxy-policy-url': return len("http://proxy"+x+".test:8080")
+    # Сборка CONNECT request
+    if name == 'http-proxy-request': return len("example.test:"+str(8000+v))
+    # Robots longest-match allow/disallow
+    if name == 'http-robots-allowed': return v
+    # Извлечение именованного route parameter
+    if name == 'http-routing-match': return len(x)
+    # Валидация server timeout policy
+    if name == 'http-server-policy-handling-timeout': return v
+    # Создание SSE event с retry
+    if name == 'http-sse-retry': return v
+    # Проверка имён index в static policy без файлов
+    if name == 'http-static-indexes': return len("index"+x+".html")
+    # Проверка HTTP token
+    if name == 'http-token-string': return len("X-token-"+x)
+    # Состояние наблюдения первых response bytes
+    if name == 'http-transport-observation-begin': return v if i%2==0 else 0
+    # Парсинг и рендеринг HTTP version
+    if name == 'http-version': return ord(str(i%2))
+    # UTF-8 WebSocket text message
+    if name == 'websocket-text': return sum(("text"+x).encode())
+    # Рендеринг списка WebSocket subprotocols
+    if name == 'websocket-handshake-string': return len("chat"+x+", binary")
+    # Проверка same-origin WebSocket
+    if name == 'websocket-origin-allowed': return v
+    # XML-RPC сериализация и парсинг integer call
+    if name == 'http-xmlrpc-bytes': return v
+    # Канонизация IMAP capability
+    if name == 'imap-name': return ord("X")
+    # Сериализация IMAP CREATE
+    if name == 'imap-command-bytes': return sum(('A1 CREATE "box'+x+'"\r\n').encode())
+    # Валидация IMAP command tag
+    if name == 'imap-command-reading-string': return len("A"+x)
+    # Лексинг IMAP списка number/NIL
+    if name == 'imap-data-tokens': return 4+len(x)
+    # IMAP modified UTF-7 с Unicode и ampersand (RFC 3501)
+    if name == 'imap-name-wire-name': return sum(("&"+base64.b64encode("Папка".encode("utf-16-be")).decode().rstrip("=").replace("/",",")+"-&-"+x).encode())
+    # Разворачивание диапазона IMAP UID
+    if name == 'imap-metadata-uids': return 3
+    # Разбор tagged IMAP response
+    if name == 'imap-response': return len("A"+x)+2
+    # Сортировка, дедупликация и рендеринг IMAP UID set
+    if name == 'imap-uid-argument': return len(str(v)+","+str(v+2))
+    # Рендеринг IMAP SINCE date
+    if name == 'imap-search-key': return len("SINCE "+str(i%28+1)+"-Nov-2026")
+    # Набор mail flags и поиск keyword
+    if name == 'mail-mailbox-membership': return v
+    # Валидация mbox separator без файлов
+    if name == 'mbox-string': return len("From user"+x+"@example.test Sat Jan  1 00:00:00 2022")
+    # Валидация RFC 5322 Message-ID
+    if name == 'mail-message-string': return len("<id"+x+"@example.test>")
+    # Разбор POP3 STAT
+    if name == 'pop3-size': return v
+    # POP3 multiline и dot-unstuffing
+    if name == 'pop3-reply': return len(".line"+x+"\r\n")
+    # Рендеринг POP3 TOP
+    if name == 'pop3-session-bytes': return sum(("TOP "+x+" 3\r\n").encode())
+    # Парсинг SMTP SIZE extension
+    if name == 'smtp-maximum-size': return v
+    # Парсинг SMTP multiline reply
+    if name == 'smtp-reply-fed': return len("test\nvalue"+x)
+    # SMTP AUTH PLAIN response (RFC 4616)
+    if name == 'smtp-session-response': return sum(base64.b64encode(("\0u"+x+"\0pw"+x).encode()))
+    # TextReply response с framing
+    if name == 'web-reply-response': return len("body"+x)
+    # Общая сборка web response
+    if name == 'web-internal-reply-response': return 201
+    # RFC 9457 problem JSON
+    if name == 'web-exception-response': return len(json.dumps({"type":"about:blank","title":"Not Found","status":404,"detail":"missing"+x},separators=(",",":")))
+    # Обратный routing и percent encoding
+    if name == 'web-request-link': return len("/notes/a%20"+x)
+    # Lookup session value без random/clock
+    if name == 'web-session-text': return len("u"+x)
+    # RFC 9111 age: Age + response delay + residence
+    if name == 'http-cache-freshness-age': return v+12
+    # First-party cookie context
+    if name == 'http-cookie-client-context': return len("https://site"+x+".test/a")
+    # Proxy из явно заданного изолированного Environment
+    if name == 'http-environment-proxy': return len("http://proxy"+x+".test:8080")
+    # Endpoint policy: loopback IPv4 без DNS
+    if name == 'http-endpoint-allowed': return v
+    # Точная проверка h2 ALPN, включая отказ
+    if name == 'http2-tls-version': return v if i%2==0 else 0
+    # HTTP/1 ALPN и отсутствие ALPN без TLS socket
+    if name == 'http-tls-session-version': return v
+    # Выбор разрешённого ALPN с пустым explicit trust store
+    if name == 'http-client-protocols-selected': return v
+    # Обёртка результата HTTP handler
+    if name == 'http-handler-response': return 200+v%50
+    # Проверка тела против fixed framing
+    if name == 'http1-body-check-known': return len(x)
+    # Рендеринг HTTP/1 request head
+    if name == 'http1-writing-bytes': return len("GET /a"+x+" HTTP/1.1\r\nHost: example.test\r\n\r\n")
+    # HPACK literal header encode/decode
+    if name == 'hpack-decoded': return 4+len(x)
+    # HTTP/2 request pseudo-fields
+    if name == 'http2-fields': return len(":methodGET:schemehttps:authorityexample.test:path/a"+x)
+    # HTTP/2 HEADERS с indexed HPACK GET
+    if name == 'http2-headers-frames': return 2+1+5+sum(v.to_bytes(4,"big"))+32+130
+    # Проверка разрешённого trailer field
+    if name == 'http-trailers-check': return len(x)
+    # Пустой receiving slot с stream id
+    if name == 'http2-receiving-bodies': return v
+    # Закрытие sending slot
+    if name == 'http2-sending-close': return v
+    # Валидация server upgrade policy
+    if name == 'websocket-server-protocols': return len("chat"+x)
+    # Валидация WebSocket client limits без подключения
+    if name == 'websocket-client-limits': return 1024+v
+    # Асинхронный HTTP/1 reader на памяти
+    if name == 'http1-reading-head': return len("GET /a"+x+" HTTP/1.1\r\nHost: example.test\r\n\r\n")
+    # Асинхронный frame reader на памяти
+    if name == 'http2-reading-frame': return v+7
+    # WebSocket frame reader на памяти
+    if name == 'websocket-reading-frame': return v%256
+    # Чтение сохранённого prefix и следующего input
+    if name == 'websocket-upgrade-bytes': return v%256+7
+    # Асинхронный ImapResponseReading на памяти
+    if name == 'imap-reading-read': return len("A"+x+" OK done\r\n")
+    # Асинхронный SmtpReplyReading на памяти
+    if name == 'smtp-reading-read': return len("250 value"+x+"\r\n")
+    # Асинхронный PopReplyReading на памяти
+    if name == 'pop3-reading-read': return len("+OK value"+x+"\r\n")
+    # URL-encoded form parser на памяти
+    if name == 'http-form-parameters': return v
+    # Сборка binary WebSocket message
+    if name == 'websocket-messages-accept': return v%256
+    # Gzip body в памяти с проверкой распакованных байтов
+    if name == 'http-body-coding-contained': return sum(("body"+x).encode())
+    # RFC 7616 SHA-256 Digest response, фиксированный cnonce
+    if name == 'http-digest-response-digest': return sum(hashlib.sha256((hashlib.sha256(("user"+x+":realm:pw").encode()).hexdigest()+":nonce:00000001:fixed:auth:"+hashlib.sha256(b"GET:/path").hexdigest()).encode()).hexdigest().encode())
+    # Разбор FETCH UID
+    if name == 'imap-message-uid': return v
+    # Инвалидация selection token без соединения
+    if name == 'imap-session-expire': return v
+    # Сборка SELECT state из EXISTS/FLAGS/UIDVALIDITY
+    if name == 'imap-state-messages': return v
+    # SMTP DATA dot-stuffing и terminator
+    if name == 'smtp-data-bytes': return sum(("Subject: x\r\n\r\n..line"+x+"\r\n.\r\n").encode())
+    # Построение CORS preflight route
+    if name == 'web-around-routes': return 1
+    # Компиляция web route с prefix
+    if name == 'web-routing-routes': return len("/api/a"+x)
+    # In-process web dispatch без TCP
+    if name == 'web-testing-get': return 202
+    # Cookie jar store/select с фиксированным clock
+    if name == 'http-cookie-jar-store': return len(x)
+    # 100-continue deadline state с фиксированным clock
+    if name == 'http1-continue-begun': return v if i%2 else 0
+    # Запись chunked body в checksum sink
+    if name == 'http1-body-writing-output': return sum((format(len(x),"x")+"\r\n"+x+"\r\n0\r\n\r\n").encode())
+    # Запись полного HTTP/1 response в checksum sink
+    if name == 'http1-message-writing-output': return sum(("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"+x).encode())
+    # Чтение fixed body из памяти
+    if name == 'http1-body-bytes': return sum(x.encode())
+    # Обновление route parameters в request context
+    if name == 'http-request-context-parameters': return len(x)
+    # Снимок Http1Exchange и response без session I/O
+    if name == 'http1-session-response': return 200+v%50
+    # Снимок Http2Exchange и response без session I/O
+    if name == 'http2-session-response': return 200+v%50
+    # Conversation exchange snapshot и освобождение lease
+    if name == 'http-conversation-response': return 200+v%50
+    # Локальный Retrying decorator без сетевого origin
+    if name == 'http-retry-response': return v
+    # Локальный Redirecting decorator без сетевого origin
+    if name == 'http-redirect-response': return v
+    # Локальный Caching decorator без сетевого origin
+    if name == 'http-cache-response': return v
+    # Условный запрос из ETag cached entry
+    if name == 'http-cache-validation-request': return len('"tag'+x+'"')
+    # Очередь frame group и byte accounting
+    if name == 'http2-output-submit': return 11
+    # Подготовка WebSocket output ticket с seeded random
+    if name == 'websocket-output-message': return len("data"+x)+1
+    # HTTP/2 client preface и SETTINGS ACK на памяти
+    if name == 'http2-preface-settings': return v
+    # CONNECT exchange с заданным ответом в памяти
+    if name == 'http-proxy-tunnel-ready': return sum(("CONNECT site"+x+".test:443 HTTP/1.1\r\nHost: site"+x+".test:443\r\n\r\n").encode())
+    # IMAP command exchange с ответом в памяти
+    if name == 'imap-exchange-perform': return sum(('O1 CREATE "box'+x+'"\r\n').encode())
+    # Диспетчер SETTINGS, ACK и EOF на памяти
+    if name == 'http2-input-run': return v+2
+    raise ValueError("No independent HTTP oracle: " + name)
+# END #244 HTTP / WEB / MAIL

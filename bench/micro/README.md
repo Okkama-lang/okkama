@@ -1,6 +1,6 @@
 # Micro-benchmarks (protocol v2)
 
-The suite contains **64 language programs** and **159 std/builtin programs**.
+The suite contains **64 language programs** and **280 std/builtin programs**.
 `manifest.json` is the machine-readable inventory. `coverage.py` reports declared
 measurement targets, not incidental imports or whole-module API coverage.
 
@@ -235,3 +235,5 @@ python3 -m unittest discover -s bench/micro -p 'test_*.py'
 `test_actions.py` uses recorded production AST JSON (see `fixtures/README.md`)
 to check parsing, visibility, constructors, overloads, typed signatures,
 determinism, stale checks, manifest errors and scaffold/oracle shape.
+
+The #244 http/web/mail addition is documented in [review-244-http/REPORT.txt](review-244-http/REPORT.txt): 121 new workloads, independent checksums, direct timings and explicit resource-dependent exclusions.

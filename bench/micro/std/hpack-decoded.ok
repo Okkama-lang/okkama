@@ -1,0 +1,33 @@
+// #244: HPACK literal header encode/decode.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/internal/hpack" take HpackBudget, HpackDecodedBlock, HpackDecoder, HpackEncoded;
+import "http/internal/hpack_tables" take HpackField;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let data = HpackEncoded([HpackField("x-id",x)],HpackBudget()).bytes();
+        let value = HpackDecoder().decoded(data,HpackBudget()).fields()[0];
+        let contribution = value.name().length()+value.value().length();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}

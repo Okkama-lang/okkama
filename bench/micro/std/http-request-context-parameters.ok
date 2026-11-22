@@ -1,0 +1,44 @@
+// #244: Обновление route parameters в request context.
+module bench/micro v1.0.0;
+
+import "../support/harness" take Measurement;
+
+import "http/request_context" take HttpRequestContext;
+import "async/cancellation" take Cancellation;
+import "net/endpoint" take IpEndpoint;
+import "net/ip" take IpAddress;
+import "net/stream" take ConnectionEndpoints;
+import "http/exchange" take ClientResponse, ExchangeDetails;
+import "http/message" take Request, Response;
+import "http/status" take Status;
+import "http/header" take Header, Headers;
+import "http/version" take HttpVersion;
+
+
+
+object Bench {
+    Bench();
+    run(i is int, n is int, acc is int) is int {
+        if i == n { return acc; }
+        let v = i % 251 + 1;
+        let x = v.string();
+        let endpoint = IpEndpoint(IpAddress("127.0.0.1"),80);
+        let ends is ConnectionEndpoints<IpEndpoint> = ConnectionEndpoints(endpoint,endpoint);
+        let details = ExchangeDetails(ends,HttpVersion.http_1_1);
+        let cancel = Cancellation();
+        let context = HttpRequestContext(details,cancel.cancelling()).parameters(["id":x]);
+        let contribution = context.parameters()["id"].length();
+        self.run(i + 1, n, acc + contribution);
+    }
+}
+
+main() is int {
+    let measure = Measurement();
+    let bench = Bench();
+    let n = measure.n();
+    let warm = bench.run(0, measure.warmup(), 0);
+    let before = measure.start();
+    let check = bench.run(0, n, 0);
+    measure.finish(before, check, warm);
+    0;
+}
