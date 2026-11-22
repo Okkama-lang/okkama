@@ -106,7 +106,8 @@ fn collection_rule_violations_are_semantic_errors() {
         ("int(\"9\");", "Cannot convert string to int"),
         (
             "let m = [\"a\": 1]; for m -> k { 0; } 0;",
-            "For source must be an array or range",
+            // #955: the message of every other source, and a map's way in.
+            "For source must be an array, range, Iterating or Batching, got %string:int; iterate a map through keys() or values()",
         ),
         (
             "let m = [\"a\": 1]; m.map() -> v { v; }; 0;",
