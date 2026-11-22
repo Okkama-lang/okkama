@@ -1450,11 +1450,7 @@ fn execute(runtime: &mut Runtime, function: usize, instruction: &I, operands: &O
                 let k = runtime.checked_key(key, key_kind, key_type)?;
                 let bytes = MAP_ENTRY_BYTES + k.owned_bytes();
                 if !map.entries.upsert(k, (key, item)) {
-                    return Err(format!(
-                        "Duplicate key in map literal: {} (entry {} repeats an earlier key)",
-                        key_text(runtime, key, key_kind, key_type),
-                        index + 1
-                    ));
+                    return Err(duplicate_literal_key(runtime, key, key_kind, key_type, index));
                 }
                 owned += bytes;
             }
@@ -1689,6 +1685,15 @@ fn map_for(runtime: &Runtime, function: usize, register: okkama_sparrow::Registe
         }),
         _ => Err("map instruction needs a map type".into()),
     }
+}
+
+/// The failure of a map literal whose entry `index` repeats an earlier key
+/// (#954). Kept out of line: `execute` is one large function whose hot paths
+/// are sensitive to code size.
+#[cold]
+#[inline(never)]
+fn duplicate_literal_key(runtime: &Runtime, key: Word, kind: Kind, ty: Option<&Type>, index: usize) -> String {
+    format!("Duplicate key in map literal: {} (entry {} repeats an earlier key)", key_text(runtime, key, kind, ty), index + 1)
 }
 
 fn key_text(runtime: &Runtime, word: Word, kind: Kind, ty: Option<&Type>) -> String {
