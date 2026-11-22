@@ -257,3 +257,60 @@ fn variant_accesses_must_match_the_case_layouts() {
     program.variants[0].cases[0].1 = ObjectRef(1);
     assert!(message(&program).contains("needs its own plain object"), "{}", message(&program));
 }
+
+/// #974: a global's type outside the type table is a verification error, not a panic in typing.
+#[test]
+fn rejects_a_global_whose_type_is_out_of_bounds() {
+    let text = "sparrow 16\nmodule \"bad\" \"1\"\ntype t0 int\nglobal g0 t99 f0\n\
+                function f0 \"main\" { registers [t0] params [] result t0  0: const r0, int 0  1: ret r0 }\nentry f0\n";
+    let error = okkama_sparrow::assemble(text).expect_err("must be rejected").to_string();
+    assert!(error.contains("global g0 has type t99, which is out of bounds"), "{error}");
+}
+
+/// #974: the contracts of floats, `val.cmp`, `resource.settle` and `destroy`.
+#[test]
+fn rejects_nonfinite_floats_ordered_value_comparisons_sync_resource_settles_and_destroys_with_results() {
+    for bits in [0x7ff8_0000_0000_0000_u64, 0x7ff0_0000_0000_0000, 0xfff0_0000_0000_0000] {
+        let mut program = sample();
+        program.functions[0].code[0] = I::Const { dst: d(0), value: okkama_sparrow::Constant::Float(bits) };
+        assert!(message(&program).contains("is not finite"), "{}", message(&program));
+    }
+
+    let mut program = sample();
+    program.functions[0].code[1] =
+        I::ValCmp { op: okkama_sparrow::Cmp::Lt, dst: d(1), left: r(0), right: r(0) };
+    assert!(message(&program).contains("val.cmp lt is not an equality comparison"), "{}", message(&program));
+
+    for instruction in [
+        I::ResourceSettle { value: r(0) },
+        I::ResourceSettleUnwind { dst: d(1), value: r(0), failure: r(0) },
+    ] {
+        let mut program = sample();
+        program.functions[0].code[1] = instruction;
+        program.functions[0].code[2] = I::Return { value: Some(r(0)) };
+        assert!(message(&program).contains("is allowed only in async functions"), "{}", message(&program));
+    }
+
+    // A destroy that takes its object but returns a value.
+    let mut program = sample();
+    program.types.push(okkama_sparrow::Type::Object(ObjectRef(0)));
+    let object = okkama_sparrow::TypeRef(program.types.len() as u32 - 1);
+    let mut destroy = function("drop", 2, vec![0], true, vec![
+        I::Const { dst: d(1), value: int("0") },
+        I::Return { value: Some(r(1)) },
+    ]);
+    destroy.registers[0] = object;
+    program.functions.push(destroy);
+    program.objects = vec![okkama_sparrow::ObjectDecl {
+        name: "app::Thing".into(),
+        fields: vec![],
+        does: vec![],
+        destroy: Some(FuncRef(2)),
+        builtin: false,
+    }];
+    assert!(message(&program).contains("is not a destroy of app::Thing"), "{}", message(&program));
+    // The same destroy without a result is accepted.
+    program.functions[2].result = None;
+    program.functions[2].code[1] = I::Return { value: None };
+    assert_eq!(program.verify(), Ok(()));
+}

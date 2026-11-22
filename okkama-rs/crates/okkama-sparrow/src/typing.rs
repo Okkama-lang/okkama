@@ -5,7 +5,7 @@
 //! параметров. Ядро Sparrow выбирает машинное представление регистра по его
 //! типу, поэтому программа с ложными типами отвергается до исполнения.
 use crate::{
-    CatchKind, Constant, Data, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
+    CatchKind, Cmp, Constant, Data, FutOp, Function, Instruction, Program, Register, StrFn, Target, Type, TypeRef,
 };
 
 type Rule = Result<(), String>;
@@ -280,6 +280,12 @@ impl<'a> Typing<'a> {
                 None => Err(format!("global g{global} does not exist")),
             },
             I::Const { dst, value } => {
+                // Floats are finite binary64 (#974): no NaN or infinity in the constant table.
+                if let Constant::Float(bits) = value
+                    && !f64::from_bits(*bits).is_finite()
+                {
+                    return Err(format!("float constant 0x{bits:016x} is not finite"));
+                }
                 let ty = match value {
                     Constant::Int(_) => Type::Int,
                     Constant::Bool(_) => Type::Bool,
@@ -525,7 +531,11 @@ impl<'a> Typing<'a> {
                     _ => self.define(dst.0, &str_, "str.fn"),
                 }
             }
-            I::ValCmp { dst, left, right, .. } => {
+            I::ValCmp { op, dst, left, right } => {
+                // Values compare for equality only (#974), as in OIR (`equality_only`).
+                if !matches!(op, Cmp::Eq | Cmp::Ne) {
+                    return Err(format!("val.cmp {} is not an equality comparison", op.name()));
+                }
                 let ty = self.ty(*left);
                 self.expect(*right, ty)?;
                 if matches!(
@@ -972,13 +982,23 @@ impl<'a> Typing<'a> {
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "region.settle_unwind")
             }
-            I::ResourcePin { value } | I::ResourceLeave { value } | I::ResourceSettle { value } => self.ownable(*value),
+            I::ResourcePin { value } | I::ResourceLeave { value } => self.ownable(*value),
+            I::ResourceSettle { value } => {
+                // Settling awaits an async destroy, like region.settle (#974).
+                if !self.function.is_async {
+                    return Err("resource.settle is allowed only in async functions".into());
+                }
+                self.ownable(*value)
+            }
             I::ResourceUnwind { dst, value, failure } => {
                 self.ownable(*value)?;
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "resource.unwind")
             }
             I::ResourceSettleUnwind { dst, value, failure } => {
+                if !self.function.is_async {
+                    return Err("resource.settle_unwind is allowed only in async functions".into());
+                }
                 self.ownable(*value)?;
                 self.expect(*failure, &Type::Failure)?;
                 self.define(dst.0, &Type::Failure, "resource.settle_unwind")
@@ -1147,7 +1167,8 @@ pub(crate) fn tables(program: &Program) -> Result<(), String> {
         if let Some(destroy) = object.destroy {
             let (function, params) = signature(destroy);
             // An async destroy (#154) is awaited by `region.settle`.
-            if params.len() != 1 || !first(function, &params) {
+            // A destroy takes its object and returns nothing (#974).
+            if params.len() != 1 || !first(function, &params) || function.result.is_some() {
                 return Err(format!("@{} is not a destroy of {}", function.symbol, object.name));
             }
         }

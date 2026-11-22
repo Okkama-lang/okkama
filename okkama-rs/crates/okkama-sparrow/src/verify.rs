@@ -174,7 +174,11 @@ fn check_tables(program: &Program) -> Result<(), VerifyError> {
             check_function_ref(program, function.0)?;
         }
     }
-    for global in &program.globals {
+    for (index, global) in program.globals.iter().enumerate() {
+        // The type is resolved by typing; an index past the table panicked there (#974).
+        if global.ty.0 as usize >= program.types.len() {
+            return Err(program_error(format!("global g{index} has type t{}, which is out of bounds", global.ty.0)));
+        }
         check_function_ref(program, global.init.0)?;
     }
     if let Some(entry) = program.entry {
