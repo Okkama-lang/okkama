@@ -54,7 +54,7 @@ the instruction table in `okkama-sparrow`); everything else lives outside the re
 - **Restoring files**: `git checkout`-style reverts may be blocked; keep a
   copy in the scratchpad before temporary instrumentation and restore from it.
 
-### 1.1 The 0.6.0 Tweed release: how work runs (owner, 2026-11-20)
+### 1.1 How work runs (owner, 2026-11-15 … 2026-11-22)
 
 Re-read this section at the start of every session and after every context
 summary.
@@ -70,14 +70,25 @@ summary.
 - **One rule, one place.** An ownership rule lives in the lowering, in one
   elaboration pass and in the runtime; a checker runs in debug and CI only,
   and nothing re-derives it (`docs/map/rules.md` shows any duplication).
-- **Roles.** Claude writes the code (owner, 2026-11-16: no implementer
-  agents). Fable is consulted only for a new model rule or a runtime design
-  question, in one compact message (owner, 2026-11-20).
+- **Roles** (owner, 2026-11-22, replacing "no implementer agents" of
+  2026-11-16). A team of three:
+  - **Claude (the lead session):** manager, reviewer and implementer. Plans
+    the work, writes task specifications, reviews every diff, applies
+    patches, commits, merges, and keeps the board and the CHANGELOG; does the
+    work itself where a helper would not pay.
+  - **Implementers:** one Anthropic agent (Opus) and Codex. Claude chooses
+    their models and effort. They never commit or edit the CHANGELOG; their
+    patches are applied and committed in a clean worktree, never in the
+    agent's own lane.
+  - **Codex quota:** check its usage before every launch; near the limit give
+    it only short single-item tasks.
+  - **Fable:** consulted only for a new model rule or a runtime design
+    question, in one compact message (owner, 2026-11-20).
 - **Tests locally: only the change's own** (owner, 2026-11-17): `cargo
   check`, `cargo test -p <crate> --lib <filter>`, or at most two `--test`
   files. Whole suites and clippy run in the Wave CI; a hook refuses broad
   local runs. A red CI is fixed forward on the wave, and a wave merges into
-  `release/0.6.0` only after a green CI.
+  the current release branch (`release/0XY`) only after a green CI.
 - **Parallel lanes.** Every build runs on this machine (12 cores, 32 GB).
   - Each lane gets its own branch and its own worktree under
     `../okkama-work`.
@@ -98,7 +109,7 @@ summary.
     check that on the old code (mutation). End-to-end and conformance runs
     do not replace unit tests.
 - **Board.** Every slice is a sub-issue of its epic, with the milestone and
-  Release v0.6.0. Set it In Progress when taken and Done with its commit.
+  the current Release. Set it In Progress when taken and Done with its commit.
   Deferred items become Todo sub-issues right away.
 - **Docker disk.** Per-worktree target volumes take several GB each. When a
   build fails on space, run `docker system df`.
