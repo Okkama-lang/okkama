@@ -26,7 +26,8 @@ main() is int {
     out.writeln(if more.has(Card(2, Suit.spades)) && !more.has(Card(3, Suit.spades)) { "has"; } else { "wrong"; });
     for more.keys() -> card { out.writeln(card.label()); }
     out.writeln((more - [Card(2, Suit.spades): 0]).size().string());
-    let seats is %Seat:string = [Seat(Card(1, Suit.hearts), 1.rat() / 3.rat()): "a", Seat(Card(1, Suit.hearts), 2.rat() / 6.rat()): "b"];
+    // Equal keys meet through an explicit merge: a literal names each key once (#954).
+    let seats is %Seat:string = [Seat(Card(1, Suit.hearts), 1.rat() / 3.rat()): "a"] + [Seat(Card(1, Suit.hearts), 2.rat() / 6.rat()): "b"];
     out.writeln(seats.size().string() + " " + (seats[Seat(Card(1, Suit.hearts), 1.rat() / 3.rat())] else "none"));
     0;
 }

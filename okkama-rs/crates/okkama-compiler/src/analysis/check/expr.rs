@@ -1663,15 +1663,15 @@ impl Checker<'_, '_> {
         for ((key, value), entry) in pairs.into_iter().zip(entries) {
             let key = self.coerce(key, &key_type, entry.key.span, "Map key");
             let value = self.coerce(value, &value_type, entry.value.span, "Map value");
-            if !key_type.is_error() {
-                if let Some(constant) = super::consts::constant_key(self.reg, &key) {
-                    let text = super::consts::key_text(&constant);
-                    if let Some(&first) = seen.get(&constant) {
-                        self.error(entry.key.span, format!("Duplicate key in map literal: {text}"));
-                        self.error(first, format!("Map key {text} first appears here"));
-                    } else {
-                        seen.insert(constant, entry.key.span);
-                    }
+            if !key_type.is_error()
+                && let Some(constant) = super::consts::constant_key(self.reg, &key)
+            {
+                let text = super::consts::key_text(&constant);
+                if let Some(&first) = seen.get(&constant) {
+                    self.error(entry.key.span, format!("Duplicate key in map literal: {text}"));
+                    self.error(first, format!("Map key {text} first appears here"));
+                } else {
+                    seen.insert(constant, entry.key.span);
                 }
             }
             checked.push((key, value));

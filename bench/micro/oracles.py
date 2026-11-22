@@ -152,7 +152,7 @@ def contribution(name, i):
     if name=='int-big':return ((2*(9223372036854775807+i))%1000)%7
     if name=='int-small':return rem(i*3+i%5-7,7)
     if name=='map-index':return (i+2)%7
-    if name=='map-int-literal':return (i+(2 if i in (2,3) else 3))%7
+    if name=='map-int-literal':return (i+3)%7
     if name=='map-keys':return 2
     if name=='map-merge-overlap':return (i+3)%7
     if name=='map-reduce':return (i+66)%7
