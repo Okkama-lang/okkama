@@ -497,9 +497,9 @@ signature, and nothing converts it to a role or to a wider function type.
   compiler's check for recursion that cannot end.
 - **Equality by identity only**, and an action value is never a map key.
 - **Positional calls only**, exactly the declared number of arguments; no
-  variadic anonymous parameters, no defaults. A default is not rejected yet,
-  only ignored: `(n is int = 1) is int { n; }` compiles and `f()` still fails
-  for want of an argument (issue #958).
+  variadic anonymous parameters, no defaults: `(n is int = 1) is int { n; }`
+  is the syntax error "Anonymous action parameters cannot declare default
+  values" (issue #958).
 - **No currying or partial application.** `make_adder` has to be written
   out.
 - **No async anonymous actions.** An action that awaits must be a named
