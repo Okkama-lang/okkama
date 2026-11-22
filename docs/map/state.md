@@ -1,5 +1,23 @@
 # State (update at the end of every task)
 
+## #965 data_dump diagnostics (2026-11-22, feature/965-data-dump)
+
+- [x] Preserve primitive formatting; unsupported values raise the existing
+  NativeFailure with core.debug / unsupported_type, kind/type and Dumper guidance.
+- [x] Reuse inspection metadata. Sparrow's dump-only bridge preserves future and
+  failure categories and does not traverse object fields; other inspection calls
+  keep their existing conversion. Existing native-failure reporting retains the message.
+- [x] Core regressions cover supported scalars/enums/collections, unsupported
+  categories, nested arrays/maps and object keys. Sparrow regressions cover the
+  displayed error, uncaught metadata, category bridging and supported arrays.
+- [x] Targeted `data_dump` lib tests: runtime-core 2/2, sparrow-core 3/3.
+  Restoring the old failure branch makes the negative test fail while the positive
+  test passes. `cargo check -p sparrow-core --offline -j 4` passes (including core).
+- [x] Update runtime/debug doc comments and code maps. Bible §19.2 already uses
+  Order.less (an enum); §21.2 needs no correction for this diagnostic change.
+- Scope limits: no full std/conformance suites or Bible builds under the owner's
+  command restrictions; no commits, remote edits or CHANGELOG changes.
+
 ## The Okkama Bible (2026-11-22)
 
 `docs/OkkamaBible` is on develop (fast-forward of feature/okkama-bible, owner 2026-11-22). Every chapter was

@@ -11,6 +11,10 @@ and versions follow [Semantic Versioning](https://semver.org/). A release versio
   `[].join(",")` joins an untyped empty array as an empty `@string` instead of producing invalid IR (#969); a
   `...any` (or other) spread into a `...string` constructor is rejected at the spread (#970). All three used
   to stop the compiler with "internal compiler error: lowering produced invalid IR".
+- **`data_dump` says what it cannot dump (#965).** `runtime/debug`'s `data_dump` of an object, an action, a
+  future or another value it does not format, alone or inside an array or a map, failed with a bare "Native
+  invocation … failed". It now fails with a `core.debug`/`unsupported_type` native failure that names the
+  kind and the type and points to `debug/dumper`'s `Dumper`. Supported values print as before.
 
 ### Documentation
 - **The Okkama Bible (EN/RU)** moves into `docs/OkkamaBible`: 27 chapters and appendices A–E (grammar,

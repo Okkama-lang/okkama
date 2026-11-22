@@ -79,7 +79,13 @@ impl Heap {
         let values = args
             .iter()
             .zip(native.parameters())
-            .map(|(&slot, ty)| self.to_origin(slot, ty))
+            .map(|(&slot, ty)| {
+                if native == Native::DebugDataDump {
+                    self.dump_to_origin(slot)
+                } else {
+                    self.to_origin(slot, ty)
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let mut context = std::mem::take(&mut self.origin);
         let result = okkama_runtime_core::native::execute(native, &values, &mut ArrayHeap, &mut context);

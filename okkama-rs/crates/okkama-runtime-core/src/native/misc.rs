@@ -118,7 +118,17 @@ pub(super) fn dump(native: Native, context: &Context, value: &Value) -> Result<S
                 .collect::<Result<Vec<_>, Error>>()?;
             format!("[{}]", parts.join(", "))
         }
-        _ => return Err(super::support::failed(native)),
+        _ => return Err(failure(
+            "core.debug",
+            "unsupported_type",
+            native,
+            format!(
+                "data_dump does not support {} values ({}), including inside arrays or maps. \
+                 Use debug/dumper::Dumper for structured inspection.",
+                super::inspect::kind(value),
+                super::inspect::type_name(context, value),
+            ),
+        )),
     })
 }
 
@@ -501,6 +511,59 @@ pub fn execute(native: Native, args: &[Value], context: &Context) -> Result<Valu
 #[cfg(test)]
 mod tests {
     use super::{shorten_text, wrap_text};
+
+    #[test]
+    fn data_dump_supported_values_are_unchanged() {
+        use super::*;
+        use crate::{IntValue, heap::ArrayHeap, rat::Rat};
+        use std::rc::Rc;
+        let context = Context { enums: vec![("Color".into(), vec!["red".into()])], ..Context::default() };
+        let values = vec![
+            int_value(42), Value::Float(2.0),
+            Value::Rat(Rc::new(Rat::new(&IntValue::from_i64(1), &IntValue::from_i64(3)).unwrap())),
+            Value::Bool(true), Value::Byte(7), Value::Char('\n'), text("a\n\t\r\\\"\x01"),
+            Value::Enum { declaration: 0, case: 0 },
+            super::super::support::map([("x".into(), ArrayHeap.allocate(vec![int_value(1), int_value(2)]))]),
+        ];
+        assert_eq!(dump(Native::DebugDataDump, &context, &ArrayHeap.allocate(values)).unwrap(),
+            r#"[42, 2.0, 1/3, true, byte(7), '\n', "a\n\t\r\\\"\x{01}", Color.red, ["x": [1, 2]]]"#);
+    }
+
+    #[test]
+    fn data_dump_unsupported_values_name_kind_type_and_alternative() {
+        use super::*;
+        use crate::heap::{ArrayHeap, Closure, ObjectHeap, maps};
+        use std::rc::Rc;
+        let context = Context { objects: vec![("app::O".into(), vec!["private".into()])], ..Context::default() };
+        let object = ObjectHeap.allocate(0, vec![text("SECRET")]);
+        let values = [
+            (object.clone(), "object", "O"),
+            (Value::Fn(Rc::new(Closure { function: 0, captures: vec![], worker: None })), "action", "action"),
+            (Value::Future(crate::sched::resolved(Ok(int_value(1)))), "future", "future"),
+            (Value::Failure(crate::sched::cancelled_failure()), "failure", "failure"),
+            (Value::Handle(Rc::new(())), "native", "native"),
+            (Value::Undef, "native", "native"),
+            (Value::NativeFailure(Rc::new(crate::abi::NativeFailure {
+                domain: "example".into(), code: "example".into(), operation: "example".into(),
+                message: "SECRET".into(),
+            })), "object", "NativeFailure"),
+        ];
+        for (value, kind, ty) in values {
+            for input in [value.clone(), ArrayHeap.allocate(vec![value.clone()]),
+                super::super::support::map([("x".into(), value.clone())]), Value::Any(Rc::new(value))] {
+                let error = dump(Native::DebugDataDump, &context, &input).unwrap_err();
+                let Error::Failure(failure) = error else { panic!("expected NativeFailure, got {error:?}") };
+                assert_eq!(failure.domain, "core.debug");
+                assert_eq!(failure.code, "unsupported_type");
+                assert_eq!(failure.operation, Native::DebugDataDump.symbol());
+                assert!(failure.message.contains(&format!("does not support {kind} values ({ty})")), "{}", failure.message);
+                assert!(failure.message.contains("debug/dumper::Dumper"));
+                assert!(!failure.message.contains("SECRET"));
+            }
+        }
+        let map = maps::from_entries([(object, int_value(1))]).unwrap();
+        assert!(matches!(dump(Native::DebugDataDump, &context, &map), Err(Error::Failure(_))));
+    }
 
     #[test]
     fn layout_wrap_packs_whole_words_by_characters() {

@@ -39,7 +39,7 @@ fn boxed(value: Value) -> Value {
     }
 }
 
-fn kind(value: &Value) -> &'static str {
+pub(super) fn kind(value: &Value) -> &'static str {
     match plain(value) {
         Value::Int(_) => "int",
         Value::Float(_) => "float",
@@ -59,7 +59,7 @@ fn kind(value: &Value) -> &'static str {
     }
 }
 
-fn type_name(context: &Context, value: &Value) -> String {
+pub(super) fn type_name(context: &Context, value: &Value) -> String {
     match plain(value) {
         Value::Enum { declaration, .. } => context
             .enums

@@ -115,7 +115,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/failures.rs` 2335 — Failures, resource regions and the text of a failure that reaches the top.
 - `sparrow-core/src/tasks.rs` 787 — Stackless async: the heap frame of an async call is also its Future.
 
-## sparrow — 64 files, 32772 lines
+## sparrow — 64 files, 32903 lines
 
 - `sparrow-core/src/budget.rs` 285 — Execution budgets (hardening H-04): steps, memory, output and external
 - `sparrow-core/src/code_memory.rs` 129 — Memory for machine code: one reserved region per kind, filled in order.
@@ -147,7 +147,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_crypto.rs` 105 — Thin RustCrypto adapter; cryptographic state stays in Rust, independently
 - `sparrow-core/src/host/native_data.rs` 76 — Таблицы рантайма (`okkama-runtime-core/data/*.dat`): gzip
 - `sparrow-core/src/host/native_db.rs` 290 — Shared immutable database cells. Driver results own Rust data directly;
-- `sparrow-core/src/host/native_debug.rs` 156 — `any` values for the bridged origin natives, and the parts of a value for
+- `sparrow-core/src/host/native_debug.rs` 281 — `any` values for the bridged origin natives, and the parts of a value for
 - `sparrow-core/src/host/native_directory.rs` 329 — Host paths and directory snapshots, scoped to each VM's working directory.
 - `sparrow-core/src/host/native_dns.rs` 181 — System resolution on Tokio's blocking pool with shared admission. A started
 - `sparrow-core/src/host/native_encoding.rs` 852 — Portable wire encodings. Pure codec algorithms preserve the established
@@ -163,7 +163,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `sparrow-core/src/host/native_net.rs` 126 — Numeric addresses only: no resolver, network I/O or ambient DNS access.
 - `sparrow-core/src/host/native_network.rs` 732 — TCP ownership is native Rust state; Tokio supplies readiness, connect and
 - `sparrow-core/src/host/native_numbers.rs` 171 — Exact BigInt native operations use the same Rust arithmetic as VM integers.
-- `sparrow-core/src/host/native_origin.rs` 188 — Synchronous natives that no core provider implements yet, run by the
+- `sparrow-core/src/host/native_origin.rs` 194 — Synchronous natives that no core provider implements yet, run by the
 - `sparrow-core/src/host/native_postgres.rs` 162 — `runtime/postgres`: the DataRow messages of one result portion, in the
 - `sparrow-core/src/host/native_process.rs` 635 — Process ABI is a thin typed owner around Tokio children and OS pipes.
 - `sparrow-core/src/host/native_regex.rs` 1714 — Regex policy bridge: pinned Unicode, leftmost-longest matching and scalar
@@ -199,7 +199,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-cli/src/trace.rs` 87 — Место и стек вызовов неперехваченного отказа — для диагностики запуска.
 - `okkama-cli/src/workers.rs` 344 — `okkama run -t --workers N` (#938): every selected test in a process of its
 
-## other — 85 files, 34469 lines
+## other — 85 files, 34530 lines
 
 - `blade/src/install.rs` 1460 — Installing the dependencies of a project into its `pkg/`.
 - `blade/src/lib.rs` 374 — Core library for the Blade command-line tool.
@@ -265,7 +265,7 @@ Lines of code (no blank or comment lines) and the first line of each file's `//!
 - `okkama-runtime-core/src/native/json.rs` 798 — `runtime/json`: строгий разбор JSON (RFC 8259) в дерево узлов — перенос
 - `okkama-runtime-core/src/native/json_split.rs` 256 — JSON items cut from a stream (#136): the elements of one top-level array,
 - `okkama-runtime-core/src/native/math.rs` 786 — Числовые natives: `runtime/format::sprintf_values`
-- `okkama-runtime-core/src/native/misc.rs` 494 — Небольшие natives std: `runtime/crypto`,
+- `okkama-runtime-core/src/native/misc.rs` 555 — Небольшие natives std: `runtime/crypto`,
 - `okkama-runtime-core/src/native/net.rs` 193 — `runtime/net` (числовые IP-адреса): текст
 - `okkama-runtime-core/src/native/network.rs` 1677 — `runtime/network`: TCP-слушатели и потоки, UDP, multicast, Unix-сокеты и
 - `okkama-runtime-core/src/native/numbers.rs` 216 — `runtime/bigint` и `runtime/decimal` — перенос `BigIntNatives` и части
