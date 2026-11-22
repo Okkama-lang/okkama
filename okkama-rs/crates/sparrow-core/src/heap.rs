@@ -139,6 +139,21 @@ const EMPTY_PAGES_SLACK: usize = 16;
 pub fn header(kind: u8, repr: Repr, payload: u32) -> u64 {
     u64::from(kind) | (u64::from(repr as u8) << 9) | (u64::from(payload) << 32)
 }
+/// A length as the 32-bit payload of a header (#985). Strings, byte arrays and arrays hold at
+/// most `u32::MAX` bytes or elements; a longer one used to be truncated silently (a wrong length,
+/// and for an array of references a tail the collector would not trace). Operations that can grow
+/// a value check first and fail the program (`join`, `+`); this is the last line of defence.
+#[inline]
+pub(crate) fn length(len: usize) -> u32 {
+    u32::try_from(len).unwrap_or_else(|_| too_long(len))
+}
+
+#[cold]
+#[inline(never)]
+fn too_long(len: usize) -> ! {
+    panic!("a heap object of {len} bytes or elements passes the 4 GiB limit of its length")
+}
+
 #[inline]
 pub fn kind(header: u64) -> u8 {
     header as u8
@@ -795,7 +810,7 @@ impl Heap {
         let ascii = parts.iter().all(|part| part.is_ascii());
         // SAFETY: room for the header and `bytes` bytes.
         unsafe {
-            *(string as *mut u64) = header(STRING, Repr::Raw, bytes as u32) | if ascii { ASCII } else { 0 };
+            *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
             let mut at = (string + 8) as *mut u8;
             for part in parts {
                 std::ptr::copy_nonoverlapping(part.as_ptr(), at, part.len());
@@ -835,7 +850,7 @@ impl Heap {
         // SAFETY: room for the header and `bytes` bytes; the parts are other
         // strings, written once and never mutated.
         unsafe {
-            *(string as *mut u64) = header(STRING, Repr::Raw, bytes as u32) | if ascii { ASCII } else { 0 };
+            *(string as *mut u64) = header(STRING, Repr::Raw, length(bytes)) | if ascii { ASCII } else { 0 };
             let mut at = (string + 8) as *mut u8;
             for (index, &item) in items.iter().enumerate() {
                 if index != 0 {
@@ -884,7 +899,7 @@ impl Heap {
         let buffer = self.allocate(words);
         // SAFETY: room for two words and `capacity` bytes.
         unsafe {
-            *(buffer as *mut u64) = header(STRING, Repr::Raw, (front + used) as u32)
+            *(buffer as *mut u64) = header(STRING, Repr::Raw, length(front + used))
                 | BUFFER
                 | (u64::from(capacity.trailing_zeros()) << CAPACITY_SHIFT);
             *((buffer + 8) as *mut u64) = front as u64;
@@ -935,7 +950,7 @@ impl Heap {
                 *((buffer + 8) as *mut u64) = at as u64;
             } else {
                 let header = &mut *(buffer as *mut u64);
-                *header = (*header & 0xffff_ffff) | (((high + text.len()) as u64) << 32);
+                *header = (*header & 0xffff_ffff) | (u64::from(length(high + text.len())) << 32);
             }
         }
     }
@@ -946,7 +961,7 @@ impl Heap {
         let view = self.allocate(3);
         // SAFETY: three words.
         unsafe {
-            *(view as *mut u64) = header(STRING, Repr::Raw, length as u32) | SHARED | if ascii { ASCII } else { 0 };
+            *(view as *mut u64) = header(STRING, Repr::Raw, self::length(length)) | SHARED | if ascii { ASCII } else { 0 };
             *((view + 8) as *mut u64) = buffer + 16 + start as u64;
             *((view + 16) as *mut u64) = buffer;
         }
@@ -1028,7 +1043,7 @@ impl Heap {
         let array = self.allocate(elements.len() + 1);
         // SAFETY: room for the header and the elements.
         unsafe {
-            *(array as *mut u64) = header(ARRAY, repr, elements.len() as u32);
+            *(array as *mut u64) = header(ARRAY, repr, length(elements.len()));
             std::ptr::copy_nonoverlapping(
                 elements.as_ptr(),
                 (array + 8) as *mut u64,
@@ -1082,7 +1097,7 @@ impl Heap {
         let buffer = self.allocate(capacity + 1);
         // SAFETY: room for the header and `capacity` elements.
         unsafe {
-            *(buffer as *mut u64) = header(ARRAY, repr, used as u32)
+            *(buffer as *mut u64) = header(ARRAY, repr, length(used))
                 | BUFFER
                 | (u64::from(capacity.trailing_zeros()) << CAPACITY_SHIFT);
             std::slice::from_raw_parts_mut((buffer + 8) as *mut u64, front).fill(free_slot(repr));
@@ -1132,7 +1147,7 @@ impl Heap {
         unsafe {
             std::ptr::copy_nonoverlapping(items.as_ptr(), (buffer + 8 + used as Word * 8) as *mut u64, items.len());
             let header = &mut *(buffer as *mut u64);
-            *header = (*header & 0xffff_ffff) | (((used + items.len()) as u64) << 32);
+            *header = (*header & 0xffff_ffff) | (u64::from(length(used + items.len())) << 32);
         }
     }
 
@@ -1142,7 +1157,7 @@ impl Heap {
         let view = self.allocate(3);
         // SAFETY: three words.
         unsafe {
-            *(view as *mut u64) = header(ARRAY, repr, length as u32) | SHARED;
+            *(view as *mut u64) = header(ARRAY, repr, self::length(length)) | SHARED;
             *((view + 8) as *mut u64) = buffer + 8 + start as u64 * 8;
             *((view + 16) as *mut u64) = buffer;
         }
@@ -1206,7 +1221,7 @@ impl Heap {
         let object = self.allocate(4);
         // SAFETY: four words.
         unsafe {
-            *(object as *mut u64) = header(ARRAY, repr, length as u32) | TRIE;
+            *(object as *mut u64) = header(ARRAY, repr, self::length(length)) | TRIE;
             *((object + 8) as *mut u64) = root;
             *((object + 16) as *mut u64) = tail;
             *((object + 24) as *mut u64) = u64::from(shift);
@@ -1340,7 +1355,7 @@ impl Heap {
         let array = self.allocate(1 + bytes.len().div_ceil(8));
         // SAFETY: room for the header and the bytes.
         unsafe {
-            *(array as *mut u64) = header(ARRAY, Repr::Raw, bytes.len() as u32) | PACKED;
+            *(array as *mut u64) = header(ARRAY, Repr::Raw, length(bytes.len())) | PACKED;
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), (array + 8) as *mut u8, bytes.len());
         }
         array
@@ -2002,6 +2017,22 @@ fn utf8_width(lead: u8) -> usize {
         0xC0..=0xDF => 2,
         0xE0..=0xEF => 3,
         _ => 4,
+    }
+}
+
+#[cfg(test)]
+mod length_tests {
+    use super::length;
+
+    /// #985: a header length is checked, not truncated.
+    #[test]
+    fn header_lengths_up_to_u32_max_pass_and_longer_ones_stop() {
+        assert_eq!(length(0), 0);
+        assert_eq!(length(u32::MAX as usize), u32::MAX);
+        let longer = std::panic::catch_unwind(|| length(u32::MAX as usize + 1));
+        let message = longer.expect_err("must stop");
+        let text = message.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(text.contains("passes the 4 GiB limit"), "{text}");
     }
 }
 

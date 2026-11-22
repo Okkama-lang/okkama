@@ -803,6 +803,10 @@ pub extern "C" fn rt_int_order(ctx: *mut Ctx, left: Word, right: Word) -> i64 {
 pub extern "C" fn rt_concat(ctx: *mut Ctx, left: Word, right: Word) -> Word {
     let frame = frame_pointer!();
     let (ctx, runtime) = unsafe { runtime(ctx) };
+    // A string holds at most 4 GiB (#985), as `join` already checked.
+    if let Some(message) = crate::ops::concat_too_long(runtime, left, right) {
+        return fail(ctx, runtime, FailureKind::Program(message));
+    }
     // The size of what is allocated is known before the copy (#72): a
     // memory budget stops it here.
     let Some(word) = crate::ops::concat_text(runtime, left, right, |runtime, bytes| !runtime.would_exceed(bytes as u64)) else {

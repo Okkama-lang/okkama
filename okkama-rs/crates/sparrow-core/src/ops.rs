@@ -487,6 +487,40 @@ pub(crate) fn shared_strings() -> bool {
 /// its next `+` starts a buffer, and loses the mark, so that more versions
 /// made from it (branches) copy instead of each taking a buffer twice its
 /// size (x86-64 made that +80…375%).
+/// The failure text of a `+` whose result would pass the 4 GiB a string can hold (#985).
+#[cold]
+fn concat_limit() -> String {
+    "concatenation: the result would pass the 4 GiB a string can hold".to_string()
+}
+
+/// `Some(message)` when `left + right` would be longer than a string can be (#985).
+pub(crate) fn concat_too_long(runtime: &Runtime, left: Word, right: Word) -> Option<String> {
+    concat_passes_limit(runtime.heap.header_of(left), runtime.heap.header_of(right)).then(concat_limit)
+}
+
+/// Would two strings with these headers make one longer than `u32::MAX` bytes?
+fn concat_passes_limit(left: u64, right: u64) -> bool {
+    use crate::heap::payload;
+    u64::from(payload(left)) + u64::from(payload(right)) > u64::from(u32::MAX)
+}
+
+#[cfg(test)]
+mod concat_limit_tests {
+    use super::concat_passes_limit;
+    use crate::heap::{STRING, header};
+    use crate::word::Repr;
+
+    /// #985: `+` fails before it builds a string past 4 GiB; up to the limit it goes on.
+    #[test]
+    fn a_concatenation_past_four_gib_is_refused() {
+        let text = |bytes: u32| header(STRING, Repr::Raw, bytes);
+        assert!(!concat_passes_limit(text(u32::MAX - 1), text(1)));
+        assert!(concat_passes_limit(text(u32::MAX), text(1)));
+        assert!(concat_passes_limit(text(u32::MAX), text(u32::MAX)));
+        assert!(!concat_passes_limit(text(3), text(4)));
+    }
+}
+
 pub(crate) fn concat_text(runtime: &mut Runtime, left: Word, right: Word, fits: impl Fn(&Runtime, usize) -> bool) -> Option<Word> {
     use crate::heap::{APPENDED, ASCII, PREPENDED, SHARED, TEXT_CHAIN_MIN, payload};
     let (lh, rh) = (runtime.heap.header_of(left), runtime.heap.header_of(right));
